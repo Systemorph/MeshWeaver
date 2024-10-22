@@ -23,7 +23,7 @@ public interface ISynchronizationStream : IAsyncDisposable
     ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         object subscriber,
-        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> config
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
     )
         where TReference2 : WorkspaceReference;
 

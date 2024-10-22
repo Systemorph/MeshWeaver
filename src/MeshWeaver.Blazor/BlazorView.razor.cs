@@ -7,6 +7,7 @@ using Json.Patch;
 using Json.Pointer;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -221,16 +222,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                 Stream.UpdateAsync(ci =>
                 {
                     var patch = GetPatch(value, reference, ci);
+                    var updated = patch?.Apply(ci) ?? ci;
 
-                    return new ChangeItem<JsonElement>(
-                        Stream.Owner,
-                        Stream.Reference,
-                        patch?.Apply(ci) ?? ci,
-                        Hub.Address,
-                        ChangeType.Patch,
-                        Hub.Version,
-                        patch
-                    );
+                    return Stream.ToChangeItem(ci, updated, patch);
                 });
 
         }

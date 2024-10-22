@@ -68,14 +68,15 @@ public record ReduceManager<TStream>
 
             )
             .AddWorkspaceReferenceStream<TReduced, TReference>(
-                (workspace, reference, subscriber) =>
-                   
+                (workspace, reference, subscriber, config) =>
+                   reference is TReference tReference ?
                     (ISynchronizationStream<TReduced>)
                     WorkspaceStreams.CreateWorkspaceStream<TStream, TReduced, TReference>(
                         workspace, 
-                        reference, 
+                        tReference, 
                         subscriber,
-                        (s, r) => reducer.Invoke(s, r))
+                        (s, r) => reducer.Invoke(s, r),
+                        config) : null
             );
 
         return ret;
@@ -100,7 +101,7 @@ public record ReduceManager<TStream>
         };
     }
     public ReduceManager<TStream> AddWorkspaceReferenceStream<TReduced, TReference>(
-        ReducedStreamProjection<TReduced, TReference> reducer
+        ReducedStreamProjection<TReduced> reducer
     )
         where TReference : WorkspaceReference
     {
@@ -108,7 +109,7 @@ public record ReduceManager<TStream>
         {
             ReduceStreams = ReduceStreams.Insert(
                 0,
-                (ReduceStream<TReference>)(reducer.Invoke)
+                (ReduceWorkspaceStream<TReduced>)(reducer.Invoke)
             ),
         };
     }
@@ -124,13 +125,12 @@ public record ReduceManager<TStream>
         return first.Value(workspaceState, reference, first);
     }
 
-    public ISynchronizationStream<TReduced> ReduceStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced> ReduceStream<TReduced>(
         ISynchronizationStream<TStream> stream,
-        TReference reference,
+        object reference,
         object subscriber,
-        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
     )
-        where TReference : WorkspaceReference
     {
         var reduced = ReduceStreams
             .OfType<ReduceStream<TStream, TReduced>>()
@@ -146,20 +146,19 @@ public record ReduceManager<TStream>
 
         return reduced;
     }
-    public ISynchronizationStream<TReduced> ReduceStream<TReduced, TReference>(
+    public ISynchronizationStream<TReduced> ReduceStream<TReduced>(
         IWorkspace workspace,
-        TReference reference,
-        object subscriber
+        object reference,
+        object subscriber,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
     )
-        where TReference : WorkspaceReference
     {
-        var reduced = (ISynchronizationStream<TReduced>)
-            ReduceStreams
-                .OfType<ReduceStream<TReference>>()
-                .Select(reduceStream =>
-                    reduceStream.Invoke(workspace, reference, subscriber)
-                )
-                .FirstOrDefault(x => x != null);
+        var reduced = ReduceStreams
+            .OfType<ReduceWorkspaceStream<TReduced>>()
+            .Select(reduceStream =>
+                reduceStream.Invoke(workspace, reference, subscriber, configuration)
+            )
+            .FirstOrDefault(x => x != null);
 
         return reduced;
     }
@@ -190,11 +189,14 @@ internal delegate ISynchronizationStream<TReduced> ReduceStream<TStream, TReduce
     ISynchronizationStream<TStream> parentStream,
     object reference,
     object subscriber,
-    Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration);
-internal delegate ISynchronizationStream ReduceStream<in TReference>(
+    Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+    );
+
+internal delegate ISynchronizationStream<TReduced> ReduceWorkspaceStream<TReduced>(
     IWorkspace workspace,
-    TReference reference,
-    object subscriber
+    object reference,
+    object subscriber,
+    Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
 );
 
 public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<
@@ -204,10 +206,12 @@ public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<
 >(ISynchronizationStream<TStream> parentStream, 
     TReference reference, 
     object subscriber, 
-    Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration)
+    Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
     where TReference : WorkspaceReference<TReduced>;
 
 
-public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<TReduced, in TReference>
-    (IWorkspace workspace, TReference reference, object subscriber)
-    where TReference : WorkspaceReference;
+public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<TReduced>
+(IWorkspace workspace, object reference, object subscriber,
+    Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>
+        configuration
+);

@@ -55,7 +55,6 @@ public static class DataPluginExtensions
                 typeof(WorkspaceStoreReference),
                 typeof(JsonPointerReference),
                 typeof(JsonPatch),
-                typeof(JsonElementReference),
                 typeof(DataChangedEvent),
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
@@ -126,12 +125,7 @@ public static class DataPluginExtensions
             })
             .WithHandler<SubscribeRequest>((hub, request) =>
             {
-                hub.GetWorkspace().SubscribeToClient(request.Sender, (dynamic)request.Message.Reference);
-                return request.Processed();
-            })
-            .WithHandler<UnsubscribeDataRequest>(async (hub, request,_) =>
-            {
-                await hub.GetWorkspace().UnsubscribeAsync(request.Sender, request.Message.Reference);
+                hub.GetWorkspace().SubscribeToClient(request.Sender, request.Message);
                 return request.Processed();
             });
 

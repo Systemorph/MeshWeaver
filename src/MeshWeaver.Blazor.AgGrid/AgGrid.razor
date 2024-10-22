@@ -1,6 +1,5 @@
 ﻿@using Microsoft.JSInterop
 @inherits BlazorView<GridControl, AgGrid>
-@implements IAsyncDisposable
 
 <HeadContent>
     <link href="_content/MeshWeaver.Blazor.AgGrid/style.css" rel="stylesheet" />
@@ -42,7 +41,7 @@
 
     private object Options { get; set; }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (jsModule is not null)
         {
