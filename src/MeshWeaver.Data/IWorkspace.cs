@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Activities;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -15,7 +16,6 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(IReadOnlyCollection<object> instances, Activity activity);
     void Delete(object instance, Activity activity) => Delete([instance], activity);
 
-    Task UnsubscribeAsync(object address, WorkspaceReference reference);
     public void RequestChange(DataChangeRequest change, Activity activity);
 
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
@@ -25,7 +25,9 @@ public interface IWorkspace : IAsyncDisposable
         object owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced> GetStream<TReduced>(WorkspaceReference<TReduced> reference, object subscriber = null);
+    ISynchronizationStream<TReduced> GetStream<TReduced>(
+        WorkspaceReference<TReduced> reference, object subscriber = null, 
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration = null);
 
     IObservable<IReadOnlyCollection<T>> GetStream<T>();
 
@@ -37,9 +39,9 @@ public interface IWorkspace : IAsyncDisposable
 
 
 
-    internal void SubscribeToClient<TReference>(
+    internal void SubscribeToClient(
         object sender,
-        WorkspaceReference<TReference> reference
+        SubscribeRequest request
     );
 
     void AddDisposable(IDisposable disposable);

@@ -38,7 +38,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
                     { "MyId2", "22394" },
                 }
             );
-        var subscribeRequest = new SubscribeRequest(new CollectionReference("TestCollection"));
+        var subscribeRequest = new SubscribeRequest("123", new CollectionReference("TestCollection"));
         var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
 
         // act
@@ -64,48 +64,48 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
     }
 
-    //[Fact]
-    //public void WayBack()
-    //{
-    //    var client = GetClient();
-    //    // arrange
-    //    var postOptions = new PostOptions(client.Address)
-    //        .WithTarget(new HostAddress())
-    //        .WithProperties(
-    //            new Dictionary<string, object>
-    //            {
-    //                { "MyId", "394" },
-    //                { "MyAddress", new ClientAddress() },
-    //                { "MyId2", "22394" },
-    //            }
-    //        );
-    //    var entityStore = new EntityStore();
-    //    var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
-    //    var dataChanged = new DataChangedEvent(new HostAddress(), new CollectionsReference(), 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
-    //    var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions);
-    //    var packedDelivery = delivery.Package(Router.JsonSerializerOptions);
+    [Fact]
+    public void WayBack()
+    {
+        var client = GetClient();
+        // arrange
+        var postOptions = new PostOptions(client.Address)
+            .WithTarget(new HostAddress())
+            .WithProperties(
+                new Dictionary<string, object>
+                {
+                    { "MyId", "394" },
+                    { "MyAddress", new ClientAddress() },
+                    { "MyId2", "22394" },
+                }
+            );
+        var entityStore = new EntityStore();
+        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
+        var dataChanged = new DataChangedEvent("123", 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
+        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions);
+        var packedDelivery = delivery.Package(Router.JsonSerializerOptions);
 
-    //    // act
-    //    var serialized = JsonSerializer.Serialize(packedDelivery, Router.JsonSerializerOptions);
+        // act
+        var serialized = JsonSerializer.Serialize(packedDelivery, Router.JsonSerializerOptions);
 
-    //    // assert
-    //    var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
-    //    var actualMessage = actual.Should().HaveElement("message").Which;
-    //    actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+        // assert
+        var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
+        var actualMessage = actual.Should().HaveElement("message").Which;
+        actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
 
-    //    // act
-    //    var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, client.JsonSerializerOptions);
+        // act
+        var deserialized = JsonSerializer.Deserialize<IMessageDelivery>(serialized, client.JsonSerializerOptions);
 
-    //    // assert
-    //    deserialized.Should().NotBeNull()
-    //        .And.NotBeSameAs(delivery)
-    //        .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
-    //    var rawJsonContent = deserialized.Message.Should().NotBeNull()
-    //        .And.Subject.As<RawJson>()
-    //            .Content.Should().NotBeNullOrWhiteSpace()
-    //            .And.Subject;
-    //    var jContent = rawJsonContent.Should().BeValidJson().Which;
-    //    jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
-    //    jContent.Should().HaveElement("version").Which.Should().HaveValue("10");
-    //}
+        // assert
+        deserialized.Should().NotBeNull()
+            .And.NotBeSameAs(delivery)
+            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+        var rawJsonContent = deserialized.Message.Should().NotBeNull()
+            .And.Subject.As<RawJson>()
+                .Content.Should().NotBeNullOrWhiteSpace()
+                .And.Subject;
+        var jContent = rawJsonContent.Should().BeValidJson().Which;
+        jContent.Should().HaveElement("$type").Which.Should().HaveValue(typeof(DataChangedEvent).FullName);
+        jContent.Should().HaveElement("version").Which.Should().HaveValue("10");
+    }
 }

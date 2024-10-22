@@ -7,6 +7,7 @@ using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -194,15 +195,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     2025
                 )
             );
-            return new ChangeItem<JsonElement>(
-                stream.Owner,
-                stream.Reference,
-                patch.Apply(ci),
-                hub.Address,
-                ChangeType.Patch,
-                hub.Version,
-                patch
-            );
+            var updated = patch.Apply(ci);
+            return stream.ToChangeItem(ci, updated, patch);
         });
 
         var updatedControls = await stream
@@ -437,15 +431,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             var patch = new JsonPatch(
                 PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)
             );
-            return new ChangeItem<JsonElement>(
-                stream.Owner,
-                stream.Reference,
-                patch.Apply(ci),
-                hub.Address,
-                ChangeType.Patch,
-                hub.Version,
-                patch
-            );
+            var updated = patch.Apply(ci);
+            return stream.ToChangeItem(ci, updated, patch);
         });
 
         resultsControl = await stream

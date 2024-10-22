@@ -68,9 +68,9 @@ public record DataChangedEvent(
     string ChangedBy
 );
 
-public record SubscribeRequest(WorkspaceReference Reference) : IRequest<DataChangedEvent>;
+public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>;
 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
-public record UnsubscribeDataRequest(WorkspaceReference Reference);
+public record UnsubscribeDataRequest(string StreamId);

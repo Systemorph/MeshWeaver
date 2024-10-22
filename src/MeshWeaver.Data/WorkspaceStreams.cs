@@ -10,12 +10,13 @@ public static class WorkspaceStreams
         IWorkspace workspace,
         TReference reference,
         object subscriber,
-        ReduceFunction<TStream, TReference, TReduced> reducer
+        ReduceFunction<TStream, TReference, TReduced> reducer,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
     )
         where TReference : WorkspaceReference<TReduced>
     {
 
-        return workspace.GetStreamFromDataSource(reference, reference.GetCollections(), subscriber);
+        return workspace.GetStreamFromDataSource(reference, reference.GetCollections(), subscriber, configuration);
     }
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
@@ -30,11 +31,12 @@ public static class WorkspaceStreams
     };
 
 
-    private static ISynchronizationStream GetStreamFromDataSource(
-        this IWorkspace workspace,
+    private static ISynchronizationStream<TReduced> GetStreamFromDataSource<TReduced>(this IWorkspace workspace,
         WorkspaceReference reference,
         IReadOnlyCollection<string> collections,
-        object subscriber)
+        object subscriber,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        )
     {
         var groups = collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
@@ -48,7 +50,7 @@ public static class WorkspaceStreams
         var dataSource = groups[0].Key;
         if(dataSource == null)
             throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-        return groups[0].Key.GetStream(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference, subscriber);
+        return (ISynchronizationStream<TReduced>)groups[0].Key.GetStream(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference, subscriber);
 
     }
 
@@ -70,7 +72,7 @@ public static class WorkspaceStreams
         TReference reference,
         object subscriber,
         ReduceFunction<TStream, TReference, TReduced> reducer,
-        Func<SynchronizationStream<TReduced>.StreamConfiguration, SynchronizationStream<TReduced>.StreamConfiguration> configuration)
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced>(
