@@ -4,6 +4,7 @@ using System.Reflection;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -13,11 +14,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// The stream reference, i.e. the unique identifier of the stream.
     /// </summary>
     public StreamIdentity StreamIdentity { get; }
-
-    /// <summary>
-    /// The subscriber of the stream, e.g. the Hub Address or Id of the subscriber.
-    /// </summary>
-    public object Subscriber { get; init; }
 
     /// <summary>
     /// The owner of the stream. Changes are to be made as update request to the owner.
@@ -45,34 +41,32 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public ISynchronizationStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
-        object subscriber, 
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
     ) =>
         (ISynchronizationStream<TReduced>)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [reference, subscriber, config]);
+                .Invoke(this, [reference, config]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null, null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
-        TReference2 reference,
-        object subscriber)
+        TReference2 reference)
         where TReference2 : WorkspaceReference =>
-        Reduce<TReduced, TReference2>(reference, subscriber, x => x);
+        Reduce<TReduced, TReference2>(reference,  x => x);
 
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference, object subscriber)
-        => Reduce(reference, subscriber, x => x);
+    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference)
+        => Reduce(reference,  x => x);
+
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
-        object subscriber,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config)
         where TReference2 : WorkspaceReference =>
-        ReduceManager.ReduceStream(this, reference, subscriber, config);
+        ReduceManager.ReduceStream(this, reference, config);
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {
@@ -163,7 +157,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
-        string StreamId,
         IMessageHub Hub,
         object Reference,
         ReduceManager<TStream> ReduceManager,
@@ -172,14 +165,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
-        this.StreamId = StreamId;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
         synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
         synchronizationHub.WithDisposeAction(_ => Store.Dispose());
     }
 
-    public string StreamId { get; }
+    public string StreamId => Configuration.StreamId;
 
 
     private StreamConfiguration<TStream> Configuration { get; }
@@ -217,6 +209,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
+    internal string StreamId { get; init; } = Guid.NewGuid().AsString();
+    public StreamConfiguration<TStream> WithStreamId(string streamId) =>
+        this with { StreamId = streamId };
+
     internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
         [];
     public StreamConfiguration<TStream> ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>

@@ -163,7 +163,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
         var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
-        var stream = workspace.GetStream(new LayoutAreaReference(ViewName), new HostAddress());
+        var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlAsync(controlName);
         var grid = control.Should().BeOfType<GridControl>().Subject;
@@ -211,7 +211,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
         var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
-        var stream = workspace.GetStream(new LayoutAreaReference(ViewName), new HostAddress());
+        var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlAsync(controlName);
         var grid = control.Should().BeOfType<GridControl>().Subject;

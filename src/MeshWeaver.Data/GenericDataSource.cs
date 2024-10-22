@@ -5,7 +5,6 @@ using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
-using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -17,7 +16,7 @@ public interface IDataSource : IAsyncDisposable
     CollectionsReference Reference { get; }
     void Initialize();
 
-    ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference, object subscriber);
+    ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
 
     ISynchronizationStream<EntityStore> GetStream(object partition);
 }
@@ -82,11 +81,12 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
             foreach (var subscription in changesSubscriptions)
                 subscription.Dispose();
     }
-    public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference, object subscriber)
+    public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
         var stream = GetStream(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
-        return (ISynchronizationStream<EntityStore>)stream.Reduce(reference, subscriber);
+        return stream.Reduce(reference);
     }
+
 
     public ISynchronizationStream<EntityStore> GetStream(object partition)
     {
@@ -103,7 +103,6 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 
         var stream = new SynchronizationStream<EntityStore>(
             identity,
-            Guid.NewGuid().AsString(),
             Hub,
             reference,
             Workspace.ReduceManager.ReduceTo<EntityStore>(),
@@ -139,7 +138,7 @@ public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorksp
     public override void Initialize()
     {
         base.Initialize();
-        GetStream(GetReference(), Id);
+        GetStream(GetReference());
     }
 
 
