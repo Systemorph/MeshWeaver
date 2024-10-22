@@ -6,7 +6,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -45,7 +44,6 @@ public record LayoutAreaHost : IDisposable
         LayoutDefinition = layoutDefinition;
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
-            Guid.NewGuid().AsString(),
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),

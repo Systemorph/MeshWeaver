@@ -94,7 +94,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         dataContext.Should().NotBeNullOrWhiteSpace();
 
         var pointer = JsonPointer.Parse(dataContext);
-        var data = await stream.Reduce(new JsonPointerReference(dataContext), stream.Subscriber)
+        var data = await stream.Reduce(new JsonPointerReference(dataContext))
             .Timeout(3.Seconds())
             .FirstAsync();
         data.Should().NotBeNull();

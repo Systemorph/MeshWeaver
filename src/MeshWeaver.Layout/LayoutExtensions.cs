@@ -26,8 +26,8 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.Configure(reduction =>
                     reduction
-                        .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
-                            (workspace, reference, _, _) =>
+                        .AddWorkspaceReferenceStream<LayoutAreaReference>(
+                            (workspace, reference) =>
                                 new LayoutAreaHost(workspace, (LayoutAreaReference)reference, workspace.Hub.GetLayoutDefinition())
                                     .RenderLayoutArea()
                         )
@@ -144,18 +144,18 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference, stream.Hub.Address)
+            .Reduce(reference)
             .Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
 
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id), stream.Subscriber);
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id));
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id), stream.Subscriber).Cast<T>();
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id)).Cast<T>();
 
     public static T GetData<T>(
         this ISynchronizationStream<EntityStore> stream,
@@ -189,7 +189,7 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference, stream.Hub.Address)
+            .Reduce(reference)
             .Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
 
     public static IObservable<T> GetDataStream<T>(
@@ -197,7 +197,7 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference, stream.Hub.Address)
+            .Reduce(reference)
             .Select(x =>
                 x.Value == null
                     ? default

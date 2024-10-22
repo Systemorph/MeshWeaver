@@ -54,7 +54,7 @@
         public override void Initialize()
         {
             foreach (var partition in InitializePartitions)
-                GetStream(new PartitionedWorkspaceReference<EntityStore>(partition, GetReference()), partition);
+                GetStream(new PartitionedWorkspaceReference<EntityStore>(partition, GetReference()));
         }
 
     }

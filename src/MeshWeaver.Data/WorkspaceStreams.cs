@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data.Serialization;
-using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -9,14 +8,12 @@ public static class WorkspaceStreams
     internal static ISynchronizationStream CreateWorkspaceStream<TStream, TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
-        object subscriber,
-        ReduceFunction<TStream, TReference, TReduced> reducer,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
 
-        return workspace.GetStreamFromDataSource(reference, reference.GetCollections(), subscriber, configuration);
+        return workspace.GetStreamFromDataSource(reference, reference.GetCollections());
     }
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
@@ -31,11 +28,9 @@ public static class WorkspaceStreams
     };
 
 
-    private static ISynchronizationStream<TReduced> GetStreamFromDataSource<TReduced>(this IWorkspace workspace,
+    private static ISynchronizationStream GetStreamFromDataSource(this IWorkspace workspace,
         WorkspaceReference reference,
-        IReadOnlyCollection<string> collections,
-        object subscriber,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        IReadOnlyCollection<string> collections
         )
     {
         var groups = collections.Select(c => (Collection: c,
@@ -50,7 +45,7 @@ public static class WorkspaceStreams
         var dataSource = groups[0].Key;
         if(dataSource == null)
             throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-        return (ISynchronizationStream<TReduced>)groups[0].Key.GetStream(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference, subscriber);
+        return groups[0].Key.GetStream(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference);
 
     }
 
@@ -70,14 +65,12 @@ public static class WorkspaceStreams
     internal static ISynchronizationStream CreateReducedStream<TStream, TReference, TReduced>(
         this ISynchronizationStream<TStream> stream,
         TReference reference,
-        object subscriber,
         ReduceFunction<TStream, TReference, TReduced> reducer,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var reducedStream = new SynchronizationStream<TReduced>(
             stream.StreamIdentity,
-            Guid.NewGuid().AsString(),
             stream.Hub,
             reference,
             stream.ReduceManager.ReduceTo<TReduced>(),

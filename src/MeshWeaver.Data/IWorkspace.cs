@@ -26,7 +26,7 @@ public interface IWorkspace : IAsyncDisposable
         WorkspaceReference<TReduced> reference
     );
     ISynchronizationStream<TReduced> GetStream<TReduced>(
-        WorkspaceReference<TReduced> reference, object subscriber = null, 
+        WorkspaceReference<TReduced> reference,  
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration = null);
 
     IObservable<IReadOnlyCollection<T>> GetStream<T>();
@@ -40,7 +40,6 @@ public interface IWorkspace : IAsyncDisposable
 
 
     internal void SubscribeToClient(
-        object sender,
         SubscribeRequest request
     );
 
