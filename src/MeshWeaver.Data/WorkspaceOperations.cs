@@ -1,101 +1,134 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using Json.Patch;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static void Change(this IWorkspace workspace, DataChangeRequest dataChange, Activity activity)
+    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity)
     {
-
-        if(dataChange.Updates.Any())
-            workspace.MergeUpdate(dataChange, activity);
-        if (dataChange.Deletions.Any())
-            workspace.MergeDelete(dataChange, activity);
-    }
-
-    public static void MergeUpdate(
-        this IWorkspace workspace,
-        DataChangeRequest change,
-        Activity activity
-    )
-    {
-        var (isValid, results) = workspace.ValidateUpdate(change.Updates);
-        if (!isValid)
+        if (change.Creations.Any())
         {
-            foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
-                    validationResult.ErrorMessage);
-            activity.Complete(status:ActivityStatus.Failed);
-            return;
-        }
-
-        var storesByStream =
-            workspace.GroupByStream(change.Updates, activity, workspace.Hub);
-
-        foreach (var kvp in storesByStream)
-        {
-            var stream = workspace.GetStream(kvp.Key);
-            stream.UpdateAsync(s =>
+            var (isValid, results) = workspace.ValidateCreation(change.Creations);
+            if (!isValid)
             {
-                var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-                try
-                {
-                    activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
-                    var ret = stream.ApplyChanges(s.MergeWithUpdates(kvp.Value, change.ChangedBy, change.Options));
-                    activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
-                    activityPart.Complete();
-                    return ret;
-                }
-                catch (Exception ex)
-                {
-                    activityPart.LogError("Error updating Stream {identity}: {exception}", stream.StreamIdentity,
-                        ex.Message);
-                    activityPart.Complete();
-                    return null;
-                }
-            });
+                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                    activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
+                        validationResult.ErrorMessage);
+            }
+
         }
 
-
-    }
-    private static void MergeDelete(
-        this IWorkspace workspace,
-        DataChangeRequest deletion,
-        Activity activity
-    )
-    {
-        var hub = workspace.Hub;
-        var (isValid, results) = workspace.ValidateDeletion(deletion.Deletions);
-        if (!isValid)
+        if (change.Updates.Any())
         {
-            foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
-                    validationResult.ErrorMessage);
-            activity.Complete(status:ActivityStatus.Failed);
+            var (isValid, results) = workspace.ValidateUpdate(change.Updates);
+            if (!isValid)
+            {
+                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                    activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
+                        validationResult.ErrorMessage);
+            }
+
+        }
+
+        if (change.Deletions.Any())
+        {
+            var (isValid, results) = workspace.ValidateDeletion(change.Updates);
+            if (!isValid)
+            {
+                foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
+                    activity.LogError("{members} invalid: {error}", validationResult.MemberNames,
+                        validationResult.ErrorMessage);
+            }
+        }
+
+        if (activity.HasErrors())
+        {
+            activity.Complete(status: ActivityStatus.Failed);
             return;
         }
+        workspace.UpdateStreams(change, activity);
+    }
 
-        var storesByStream =
-            workspace.GroupByStream(deletion.Deletions, activity, hub);
 
-        foreach (var kvp in storesByStream)
+
+
+    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity)
+    {
+        foreach (var group in
+                 change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
+                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
+                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType())))
+                     .Concat(change.Updates.Select(i => (Instance: i, Op: OperationType.Replace,
+                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
+                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType()))))
+                     .Concat(change.Deletions.Select(i => (Instance: i, Op: OperationType.Remove,
+                         TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
+                         DataSource: workspace.DataContext.GetDataSourceForType(i.GetType()))))
+                     .GroupBy(x => (x.DataSource,
+                         Partition: (x.TypeSource as IPartitionedTypeSource)?.GetPartition(x.Instance))))
         {
-            var stream = workspace.GetStream(kvp.Key);
+            if (group.Key.DataSource is null)
+            {
+                activity.LogWarning("Types {types} could not be mapped to data source", string.Join(", ", group.Select(i => i.Instance.GetType().Name).Distinct()));
+                continue;
+            }
+
+            var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-            stream.UpdateAsync(s =>
+            stream.UpdateAsync(store =>
             {
+                activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
                 try
                 {
-                    activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
-                    var ret = stream.ApplyChanges(s.DeleteWithUpdates(kvp.Value, deletion.ChangedBy));
+
+                    var updates = group.GroupBy(x => (x.Op, x.TypeSource))
+                        .Aggregate(new EntityStoreAndUpdates(store, [], change.ChangedBy),
+                            (storeAndUpdates, g) =>
+                            {
+                                if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
+                                {
+                                    var instances =
+                                        new InstanceCollection(g.Select(x => x.Instance)
+                                            .ToDictionary(g.Key.TypeSource.TypeDefinition.GetKey))
+                                        {
+                                            GetKey = g.Key.TypeSource.TypeDefinition.GetKey
+                                        };
+                                    var updated = change.Options?.Snapshot == true
+                                        ? instances
+                                        : storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName)
+                                            ?.Merge(instances) ?? instances;
+                                    var updates =
+                                        storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated);
+                                    return new EntityStoreAndUpdates(
+                                        storeAndUpdates.Store.WithCollection(g.Key.TypeSource.CollectionName, updated),
+                                        storeAndUpdates.Updates.Concat(updates), change.ChangedBy);
+
+                                }
+
+                                if (g.Key.Op == OperationType.Remove)
+                                {
+                                    var instances = g.Select(i => (i.Instance,
+                                        Key: g.Key.TypeSource.TypeDefinition.GetKey(i.Instance))).ToArray();
+                                    var newStore = store.Update(g.Key.TypeSource.CollectionName,
+                                        c => c.Remove(instances.Select(x => x.Key)));
+                                    return new EntityStoreAndUpdates(newStore,
+                                        storeAndUpdates.Updates.Concat(instances.Select(i =>
+                                            new EntityUpdate(g.Key.TypeSource.CollectionName, i.Key, null)
+                                            {
+                                                OldValue = i.Instance
+                                            })), change.ChangedBy);
+                                }
+
+                                throw new NotSupportedException($"Operation {g.Key.Op} not supported");
+                            });
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
                     activityPart.Complete();
-                    return ret;
+                    return stream.ApplyChanges(updates);
                 }
                 catch (Exception ex)
                 {
@@ -104,77 +137,11 @@ public static class WorkspaceOperations
                     activityPart.Complete();
                     return null;
                 }
+
             });
         }
-
-
-
     }
 
-
-    private static ImmutableDictionary<StreamIdentity, EntityStore> GroupByStream(this IWorkspace workspace, IEnumerable<object> instances, Activity activity, IMessageHub hub)
-    {
-        return instances.GroupBy(e => e.GetType())
-            .Select(group =>
-            {
-                var ts = workspace.DataContext.GetTypeSource(group.Key);
-                if (ts is null)
-                {
-                    activity.LogWarning(
-                        "Trying to update entities of type {type}, but this type is not mapped to the workspace of {address}",
-                        group.Key.Name, hub.Address);
-                    return default;
-                }
-
-                var ds = workspace.DataContext.DataSourcesByType.GetValueOrDefault(group.Key);
-                if (ds is null)
-                {
-                    activity.LogWarning(
-                        "Trying to update entities of type {type}, but this type is not mapped to a data source of {address}",
-                        group.Key.Name, hub.Address);
-                    return default;
-                }
-
-                return (TypeSource: ts,
-                    Instances: new InstanceCollection(group.ToDictionary(ts.TypeDefinition.GetKey))
-                    {
-                        GetKey = ts.TypeDefinition.GetKey
-                    }, DataSource: workspace.DataContext.GetDataSourceByType(ts.TypeDefinition.Type));
-            })
-            .GroupBy(x => x.DataSource)
-            .Where(x => x.Key != null)
-            .SelectMany(group =>
-                group.SelectMany(g =>
-                    g.TypeSource is not IPartitionedTypeSource partitionedTypeSource
-                        ?
-                        [
-                            new KeyValuePair<StreamIdentity, EntityStore>(new(g.DataSource.Id, null), new EntityStore().WithCollection(g.TypeSource.CollectionName, g.Instances))
-                        ]
-                        : GetPartitioned(g.Instances, g.DataSource, partitionedTypeSource)))
-            .GroupBy(x => x.Key)
-            .Select(x => new KeyValuePair<StreamIdentity, EntityStore>(x.Key, x.Aggregate(new EntityStore(), (s, t) => s.Merge(t.Value))))
-            .ToImmutableDictionary();
-    }
-
-    private static IEnumerable<KeyValuePair<StreamIdentity, EntityStore>> GetPartitioned(
-        InstanceCollection instances, IDataSource dataSource, IPartitionedTypeSource partitionedTypeSource)
-    {
-        return instances.Instances
-            .GroupBy(i => partitionedTypeSource.GetPartition(i.Value))
-            .Select(g =>
-                new KeyValuePair<StreamIdentity, EntityStore>(
-                    new(dataSource.Id, g.Key),
-                    new()
-                    {
-                        Collections = ImmutableDictionary<string, InstanceCollection>.Empty.Add(
-                            partitionedTypeSource.CollectionName,
-                            instances with { Instances = g.ToImmutableDictionary() })
-                    })
-            );
-    }
-
-    private static Activity GetActivity(IMessageHub hub) =>
-        new(ActivityCategory.DataUpdate, hub);
 
     public static EntityStore Merge(this EntityStore store, EntityStore updated) =>
         store.Merge(updated, UpdateOptions.Default);
@@ -273,6 +240,14 @@ public static class WorkspaceOperations
         }
 
         return (isValid, validationResults);
+    }
+    private static (bool IsValid, List<ValidationResult> Results) ValidateCreation(
+        this IWorkspace workspace,
+        IReadOnlyCollection<object> instances
+    )
+    {
+        //TODO: Validate that instances can be created.
+        return workspace.ValidateUpdate(instances);
     }
 
     public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, object changedBy,
