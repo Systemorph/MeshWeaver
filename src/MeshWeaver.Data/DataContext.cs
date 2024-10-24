@@ -33,10 +33,9 @@ public sealed record DataContext : IAsyncDisposable
     private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
-    public IDataSource GetDataSource(object id) => DataSourcesById.GetValueOrDefault(id);
+    public IDataSource GetDataSourceForId(object id) => DataSourcesById.GetValueOrDefault(id);
 
-    public IDataSource GetDataSourceById(object id) => DataSourcesById.GetValueOrDefault(id);
-    public IDataSource GetDataSourceByType(Type type) => DataSourcesByType.GetValueOrDefault(type);
+    public IDataSource GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type);
 
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
     public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; }
@@ -85,9 +84,9 @@ public sealed record DataContext : IAsyncDisposable
         DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key), kvp.Value)).ToDictionary();
         TypeSources = DataSourcesById
             .Values
-            .SelectMany(ds => ds.TypeSources.Values)
+            .SelectMany(ds => ds.TypeSources)
             .ToDictionary(x => x.CollectionName);
-        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary();
+        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary(ts => ts.TypeDefinition.Type);
 
 
 

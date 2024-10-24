@@ -20,7 +20,7 @@ public static class TestDomain
         this TDataSource dataSource,
         IDictionary<Type, IEnumerable<object>> typeAndInstance
     )
-        where TDataSource : DataSource<TDataSource> =>
+        where TDataSource : DataSource<TDataSource, ITypeSource> =>
         typeAndInstance.Aggregate(
             dataSource,
             (ds, kvp) => ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value))

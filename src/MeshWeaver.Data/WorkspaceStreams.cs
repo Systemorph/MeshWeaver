@@ -45,7 +45,7 @@ public static class WorkspaceStreams
         var dataSource = groups[0].Key;
         if(dataSource == null)
             throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-        return groups[0].Key.GetStream(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference);
+        return groups[0].Key.GetStreamForPartition(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference);
 
     }
 
