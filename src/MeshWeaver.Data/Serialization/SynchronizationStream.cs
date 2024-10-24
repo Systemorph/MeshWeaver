@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Disposables;
@@ -167,7 +168,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Configuration.StreamId, Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
         synchronizationHub.WithDisposeAction(_ => Store.Dispose());
     }
 
@@ -183,18 +184,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void InvokeAsync(Func<CancellationToken, Task> action)
         => synchronizationHub.InvokeAsync(action);
 
-    IMessageHub ISynchronizationStream<TStream>.SynchronizationHub => synchronizationHub;
 
 
-    private record SynchronizationStreamAddress(object Host) : IHostedAddress
-    {
-        /// <summary>
-        /// This id is not meant to be accessed.
-        /// Rather, it brings uniqueness to multiple instances.
-        /// </summary>
-        // ReSharper disable once UnusedMember.Local
-        public Guid Id { get; init; } = Guid.NewGuid();
-    }
+    private record SynchronizationStreamAddress(string Id, object Host) : IHostedAddress;
 
 
     public void Revert<TReduced>(ChangeItem<TReduced> change)
@@ -206,6 +198,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         return synchronizationHub.DisposeAsync();
     }
+    private ConcurrentDictionary<string, object> Properties { get; } = new();
+    public T Get<T>(string key) => (T)Properties.GetValueOrDefault(key);
+    public T Get<T>() => (T)Properties.GetValueOrDefault(typeof(T).FullName);
+    public void Set<T>(string key, T value) => Properties[key] = value;
+    public void Set<T>(T value) => Properties[typeof(T).FullName!] = value;
+
+
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {

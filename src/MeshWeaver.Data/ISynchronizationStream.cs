@@ -26,6 +26,11 @@ public interface ISynchronizationStream : IAsyncDisposable
         where TReference2 : WorkspaceReference;
 
     IMessageHub Hub { get; }
+    T Get<T>(string key);
+    T Get<T>();
+    void Set<T>(string key, T value);
+    void Set<T>(T value);
+
 
 }
 
@@ -43,7 +48,6 @@ public interface ISynchronizationStream<TStream>
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);
     void InvokeAsync(Action action);
     void InvokeAsync(Func<CancellationToken, Task> action);
-    internal IMessageHub SynchronizationHub { get; }
 
 }
 

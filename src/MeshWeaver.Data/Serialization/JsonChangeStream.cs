@@ -1,24 +1,219 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
+using MeshWeaver.Activities;
+using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
-
 
 public static class JsonSynchronizationStream
 {
 
-    public static IObservable<DataChangedEvent> ToDataChanged<TReduced>(
-        this ISynchronizationStream<TReduced> stream) =>
+    internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
+        this IWorkspace workspace,
+    object owner,
+    TReference reference
+)
+    where TReference : WorkspaceReference
+    {
+        var hub = workspace.Hub;
+        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(JsonSynchronizationStream));
+        // link to deserialized world. Will also potentially link to workspace.
+        if (owner is JsonObject obj)
+            owner = obj.Deserialize<object>(hub.JsonSerializerOptions);
+        var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
+
+        TaskCompletionSource<TReduced> tcs2 = null;
+        var reduced = new SynchronizationStream<TReduced>(
+                new(owner, partition),
+                hub,
+                reference,
+                workspace.ReduceManager.ReduceTo<TReduced>(),
+                GetJsonConfig
+            );
+        reduced.Initialize(ct => (tcs2 = new(ct)).Task);
+        reduced.AddDisposable(
+                reduced
+                .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
+        .Subscribe(e =>
+        {
+                    logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
+                        reduced.StreamId, reduced.Owner);
+
+                    hub.Post(e, o => o.WithTarget(reduced.Owner));
+                })
+        );
+
+
+        var request = hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
+        var first = true;
+        reduced.AddDisposable(
+            reduced.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    if (first)
+                    {
+                        first = false;
+                        var jsonElement = JsonDocument.Parse(delivery.Message.Change.Content).RootElement;
+                        ((ISynchronizationStream)reduced).Set<JsonElement?>(jsonElement);
+                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
+                        return request.Processed();
+                    }
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                d => reduced.StreamId.Equals(d.Message.StreamId)
+            )
+        );
+        reduced.AddDisposable(
+            reduced.Hub.Register<UnsubscribeDataRequest>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                d => reduced.StreamId.Equals(d.Message.StreamId)
+            )
+        );
+
+        reduced.AddDisposable(
+            new AnonymousDisposable(
+                () => hub.Post(new UnsubscribeDataRequest(reduced.StreamId), o => o.WithTarget(owner))
+            )
+        );
+
+
+
+
+        return reduced;
+    }
+
+    internal static  ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
+        this IWorkspace workspace,
+    SubscribeRequest request
+)
+    where TReference : WorkspaceReference
+    {
+        var hub = workspace.Hub;
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(JsonSynchronizationStream));
+
+        var fromWorkspace = workspace
+            .ReduceManager
+            .ReduceStream<TReduced>(
+                workspace,
+                request.Reference, config => GetJsonConfig(config).WithStreamId(request.StreamId)
+            );
+
+        var reduced =
+            (ISynchronizationStream<TReduced>)fromWorkspace
+            ?? throw new DataSourceConfigurationException(
+                $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
+            );
+
+        // forwarding unsubscribe
+        reduced.AddDisposable(
+            reduced.Hub.Register<UnsubscribeDataRequest>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                x => reduced.StreamId.Equals(x.Message.StreamId)
+            )
+        );
+
+        // Incoming data changed register and dispatch to synchronization stream
+        reduced.AddDisposable(
+            reduced.Hub.Register<DataChangedEvent>(
+                delivery =>
+                {
+                    reduced.DeliverMessage(delivery);
+                    return delivery.Forwarded();
+                },
+                x => reduced.StreamId.Equals(x.Message.StreamId)
+            )
+        );
+
+        // outgoing data changed
+        reduced.AddDisposable(
+            reduced
+                .ToDataChanged(c => !reduced.StreamId.Equals(c.ChangedBy))
+                .Subscribe(e =>
+                {
+                    logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+                    hub.Post(e, o => o.WithTarget(request.Subscriber));
+                })
+        );
+        // outgoing data changed
+        reduced.AddDisposable(
+            reduced
+                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.ChangedBy))
+                .Subscribe(e =>
+                {
+                    logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
+                    var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
+                    reduced.Hub.GetWorkspace().RequestChange(e, activity);
+                })
+        );
+
+        return reduced;
+    }
+    private static StreamConfiguration<TStream> GetJsonConfig<TStream>(
+        StreamConfiguration<TStream> stream) =>
+        stream.ConfigureHub(config =>
+            config.WithHandler<DataChangedEvent>(
+                (hub, delivery) =>
+                {
+                    var currentJson = stream.Stream.Get<JsonElement?>();
+                    if (delivery.Message.ChangeType == ChangeType.Full)
+                    {
+                        currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
+                        stream.Stream.Update(
+                            _ => new ChangeItem<TStream>(
+                                currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions),
+                                stream.Stream.Hub.Version));
+
+                    }
+                    else
+                    {
+                        (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
+                        stream.Stream.Update(
+                            state =>
+                                stream.Stream.ToChangeItem(state,
+                                    currentJson.Value,
+                                    patch)
+                        );
+
+                    }
+                    stream.Stream.Set(currentJson);
+                    return delivery.Processed();
+                }
+            ).WithHandler<UnsubscribeDataRequest>(
+                (hub, delivery) =>
+                {
+                    hub.Dispose();
+                    return delivery.Processed();
+                })
+        );
+
+    private static IObservable<DataChangedEvent> ToDataChanged<TReduced>(
+        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) =>
         stream
+            .Where(predicate)
             .Select(x =>
             {
-                var currentJson = stream.SynchronizationHub.Configuration.Get<JsonElement?>();
+                var currentJson = stream.Get<JsonElement?>();
                 if(currentJson is null || x.ChangeType == ChangeType.Full)
                 {
-                    stream.SynchronizationHub.Configuration.Set(currentJson = JsonSerializer.SerializeToElement(x.Value, stream.Hub.JsonSerializerOptions));
+                    currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value.GetType(), stream.Hub.JsonSerializerOptions);
+                    stream.Set(currentJson);
                     return new(
                         stream.StreamId, 
                         x.Version, 
@@ -30,7 +225,7 @@ public static class JsonSynchronizationStream
                 {
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions);
                     currentJson = patch.Apply(currentJson.Value);
-                    stream.SynchronizationHub.Configuration.Set(currentJson);
+                    stream.Set(currentJson);
                     return new DataChangedEvent
                     (
                         stream.StreamId,
@@ -54,7 +249,7 @@ public static class JsonSynchronizationStream
         JsonElement currentJson,
         JsonPatch patch)
     {
-        return stream.ReduceManager.PatchFunction.Invoke(stream,currentState, currentJson, patch);
+        return stream.ReduceManager.PatchFunction.Invoke(stream, currentState, currentJson, patch);
     }
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement(this DataChangedEvent request, JsonElement? currentJson, JsonSerializerOptions options)
@@ -70,96 +265,15 @@ public static class JsonSynchronizationStream
         return (patch.Apply(currentJson.Value), patch);
     }
 
-    //internal static ChangeItem<TReduced> SetValue<TStream, TReduced>(
-    //    this ChangeItem<TStream> change, 
-    //    TReduced reduced, 
-    //    ref TReduced currentValue, 
-    //    object reference, 
-    //    JsonSerializerOptions options)
-    //{
-    //    var (changeType, patch) = change.GetChangeTypeAndPatch(reduced, currentValue, options);
-    //    ChangeItem<TReduced> ret = changeType switch
-    //    {
-    //        ChangeType.NoUpdate => null,
-    //        ChangeType.Full => new( reduced, change.ChangedBy, ChangeType.Full, change.Version),
-    //        ChangeType.Patch => new(reduced, change.ChangedBy, ChangeType.Patch, change.Version, patch, change.Updates),
-    //        _ => throw new ArgumentException("Unknown change type}"),
-    //    };
-    //    currentValue = reduced;
-    //    return ret;
-    //}
+    internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
+        this ISynchronizationStream<TStream> stream, Func<ChangeItem<TStream>, bool> predicate)
+        => stream
+            .Where(predicate)
+            .Select(x => x.Updates.ToDataChangeRequest());
 
 
-    //private static (ChangeType Type, Lazy<JsonPatch> Patch) GetChangeTypeAndPatch<TStream, TReduced>(
-    //    this ChangeItem<TStream> changeItem,
-    //    TReduced change,
-    //    TReduced current,
-    //    JsonSerializerOptions options)
-    //{
-    //    if (changeItem.ChangeType == ChangeType.Full)
-    //        return (ChangeType.Full, null);
-    //    if (change is null)
-    //        return (current is null ? ChangeType.NoUpdate : ChangeType.Full, null);
-    //    if (current is null)
-    //        return (ChangeType.Full, null);
-    //    if (current.Equals(change))
-    //        return (ChangeType.NoUpdate, null);
-    //    if (change is EntityStore store && changeItem.Updates is { } patch)
-    //    {
-    //        return (ChangeType.Patch,
-    //            new(() =>
-    //                new JsonPatch(patch.Operations.Where(op =>
-    //                    store.Collections.ContainsKey(op.Path.Segments.First().Value)))));
-    //    }
 
-
-    //    return (ChangeType.Patch, new(() => current.CreatePatch(change, options)));
-    //}
     internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates)
-    {
-        return updates
-            .GroupBy(x => new { x.Collection, x.Id })
-            .Aggregate(new DataChangeRequest(), (e, g) =>
-                {
-                    var first = g.First().OldValue;
-                    var last = g.Last().Value;
-
-                    if (last is null && first is null)
-                        return e;
-
-                    if (g.Key.Id is null)
-                        return last is null
-                            ? e.WithDeletions(first)
-                            : e.WithUpdates(last);
-
-                    if (last == null)
-                        return e.WithDeletions(first);
-
-                    return e.WithUpdates(last);
-                }
-            );
-    }
-
-    internal static DataChangeRequest ToChangeRequest(
-        this IEnumerable<EntityUpdate> updates)
-    {
-        return updates
-            .GroupBy(x => new { x.Collection, x.Id })
-            .Aggregate(new DataChangeRequest(), (e, g) =>
-            {
-                var first = g.First().OldValue;
-                var last = g.Last().Value;
-                if (last == null && first == null)
-                    return e;
-                if (last == null)
-                    return e.WithDeletions(first);
-                return e.WithUpdates(last);
-
-            });
-    }
-
-    internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates,
-        JsonSerializerOptions options)
     {
         return updates
             .GroupBy(x => new { x.Collection, x.Id })
