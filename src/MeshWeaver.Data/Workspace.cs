@@ -15,19 +15,13 @@ public class Workspace : IWorkspace
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
-        this.logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
         //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.Hub.Version));
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
-
-
     }
-
-    private readonly ILogger<Workspace> logger;
-
 
 
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
@@ -175,8 +169,8 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
     {
-        var ds = DataContext.GetDataSource(identity.Owner);
-        return ds.GetStream(identity.Partition);
+        var ds = DataContext.GetDataSourceForId(identity.Owner);
+        return ds.GetStreamForPartition(identity.Partition);
     }
 
 

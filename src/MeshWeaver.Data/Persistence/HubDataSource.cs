@@ -4,7 +4,7 @@ using MeshWeaver.Data.Serialization;
 namespace MeshWeaver.Data.Persistence;
 
 public abstract record HubDataSourceBase<TDataSource>(object Id, IWorkspace Workspace)
-    : DataSource<TDataSource>(Id, Workspace)
+    : DataSource<TDataSource, ITypeSource>(Id, Workspace)
     where TDataSource : HubDataSourceBase<TDataSource>
 {
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;

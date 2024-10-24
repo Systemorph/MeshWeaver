@@ -9,12 +9,13 @@ public interface IDataSourceWithStorage
     IDataStorage Storage { get; }
 }
 
-public abstract record DataSourceWithStorage<TDataSource>(
+public abstract record DataSourceWithStorage<TDataSource, TTypeSource>(
     object Id,
     IWorkspace Workspace,
     IDataStorage Storage
-) : TypeSourceBasedDataSource<TDataSource>(Id, Workspace), IDataSourceWithStorage
-    where TDataSource : DataSourceWithStorage<TDataSource>
+) : TypeSourceBasedDataSource<TDataSource, TTypeSource>(Id, Workspace), IDataSourceWithStorage
+    where TDataSource : DataSourceWithStorage<TDataSource, TTypeSource> 
+    where TTypeSource : ITypeSource
 {
     private readonly IMessageHub persistenceHub = Workspace.Hub.ServiceProvider.CreateMessageHub(
         new PersistenceAddress(Workspace.Hub.Address),

@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 
 public interface IDataSource : IAsyncDisposable
 {
-    IReadOnlyDictionary<Type, ITypeSource> TypeSources { get; }
+    ITypeSource GetTypeSource(Type type);
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     CollectionsReference Reference { get; }
@@ -18,21 +18,24 @@ public interface IDataSource : IAsyncDisposable
 
     ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
 
-    ISynchronizationStream<EntityStore> GetStream(object partition);
+    ISynchronizationStream<EntityStore> GetStreamForPartition(object partition);
+    IEnumerable<ITypeSource> TypeSources { get; }
 }
 
-public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) : IDataSource
-    where TDataSource : DataSource<TDataSource>
+
+public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace) : IDataSource
+    where TDataSource : DataSource<TDataSource, TTypeSource>
+    where TTypeSource : ITypeSource
 {
     protected virtual TDataSource This => (TDataSource)this;
     protected IMessageHub Hub => Workspace.Hub;
 
-    IReadOnlyDictionary<Type, ITypeSource> IDataSource.TypeSources => TypeSources;
+    IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values.Cast<ITypeSource>();
 
-    protected ImmutableDictionary<Type, ITypeSource> TypeSources { get; init; } =
-        ImmutableDictionary<Type, ITypeSource>.Empty;
+    protected ImmutableDictionary<Type, TTypeSource> TypeSources { get; init; } =
+        ImmutableDictionary<Type, TTypeSource>.Empty;
 
-    public TDataSource WithTypeSource(Type type, ITypeSource typeSource) =>
+    public TDataSource WithTypeSource(Type type, TTypeSource typeSource) =>
         This with
         {
             TypeSources = TypeSources.SetItem(type, typeSource)
@@ -49,7 +52,7 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
         (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
 
     private static readonly MethodInfo WithTypeMethod = ReflectionHelper.GetMethodGeneric<
-        DataSource<TDataSource>
+        DataSource<TDataSource, TTypeSource>
     >(x => x.WithType<object>(default));
 
     public TDataSource WithType<T>()
@@ -83,12 +86,12 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
     }
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
-        var stream = GetStream(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
+        var stream = GetStreamForPartition(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
         return stream.Reduce(reference);
     }
 
 
-    public ISynchronizationStream<EntityStore> GetStream(object partition)
+    public ISynchronizationStream<EntityStore> GetStreamForPartition(object partition)
     {
         var identity = new StreamIdentity(Id, partition);
         return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
@@ -118,10 +121,14 @@ public abstract record DataSource<TDataSource>(object Id, IWorkspace Workspace) 
 }
 
 public record GenericDataSource(object Id, IWorkspace Workspace)
-    : GenericDataSource<GenericDataSource>(Id, Workspace);
+    : GenericDataSource<GenericDataSource>(Id, Workspace)
+{
+    public ISynchronizationStream<EntityStore> GetStream()
+        => GetStreamForPartition(null);
+}
 
 public record GenericDataSource<TDataSource>(object Id, IWorkspace Workspace)
-    : TypeSourceBasedDataSource<TDataSource>(Id, Workspace)
+    : TypeSourceBasedDataSource<TDataSource, ITypeSource>(Id, Workspace)
     where TDataSource : GenericDataSource<TDataSource>
 {
     protected override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
@@ -131,9 +138,10 @@ public record GenericDataSource<TDataSource>(object Id, IWorkspace Workspace)
         where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Workspace, Id)));
 }
 
-public abstract record TypeSourceBasedDataSource<TDataSource>(object Id, IWorkspace Workspace)
-    : DataSource<TDataSource>(Id, Workspace)
-    where TDataSource : TypeSourceBasedDataSource<TDataSource>
+public abstract record TypeSourceBasedDataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace)
+    : DataSource<TDataSource, TTypeSource>(Id, Workspace)
+    where TDataSource : TypeSourceBasedDataSource<TDataSource, TTypeSource> 
+    where TTypeSource : ITypeSource
 {
     public override void Initialize()
     {
