@@ -62,14 +62,14 @@ public static class TestHubSetup
     ) =>
         config
             .AddData(data =>
-                data.FromPartitionedHubs(
+                data.FromPartitionedHubs<TransactionalDataAddress>(
                         nameof(TransactionalData),
                         c =>
-                            c
+                            c.WithType<TransactionalData>(td => new TransactionalDataAddress(td.Year, td.BusinessUnit))
                     )
-                    .FromPartitionedHubs(
+                    .FromPartitionedHubs<ComputedDataAddress>(
                         nameof(ComputedData),
-                        c => c
+                        c => c.WithType<ComputedData>(cd => new(cd.Year, cd.BusinessUnit))
                     )
                     .FromHub(
                         new ReferenceDataAddress(),

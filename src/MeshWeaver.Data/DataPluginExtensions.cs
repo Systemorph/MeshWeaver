@@ -83,34 +83,34 @@ public static class DataPluginExtensions
         return ret;
     }
 
-    public static DataContext FromPartitionedHubs(
+    public static DataContext FromPartitionedHubs<TPartition>(
         this DataContext dataContext,
         object id,
-        Func<PartitionedHubDataSource, PartitionedHubDataSource> configuration
+        Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration
     ) =>
         dataContext.WithDataSourceBuilder(
             id,
-            _ => configuration.Invoke(new PartitionedHubDataSource(id, dataContext.Workspace))
+            _ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id, dataContext.Workspace))
         );
 
     public static DataContext FromHub(
         this DataContext dataContext,
         object address,
-        Func<HubDataSource, HubDataSource> configuration
+        Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
     ) =>
         dataContext.WithDataSourceBuilder(
             address,
-            _ => configuration.Invoke(new HubDataSource(address, dataContext.Workspace))
+            _ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace))
         );
 
     public static DataContext FromConfigurableDataSource(
         this DataContext dataContext,
         object address,
-        Func<GenericDataSource, GenericDataSource> configuration
+        Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration
     ) =>
         dataContext.WithDataSourceBuilder(
             address,
-            _ => configuration.Invoke(new GenericDataSource(address, dataContext.Workspace))
+            _ => configuration.Invoke(new GenericUnpartitionedDataSource(address, dataContext.Workspace))
         );
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration

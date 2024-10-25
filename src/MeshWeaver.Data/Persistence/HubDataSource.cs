@@ -1,21 +1,15 @@
 ﻿using System.Text.Json;
-using MeshWeaver.Data.Serialization;
 
 namespace MeshWeaver.Data.Persistence;
 
-public abstract record HubDataSourceBase<TDataSource>(object Id, IWorkspace Workspace)
-    : DataSource<TDataSource, ITypeSource>(Id, Workspace)
-    where TDataSource : HubDataSourceBase<TDataSource>
+
+public record UnpartitionedHubDataSource(object Id, IWorkspace Workspace) : UnpartitionedDataSource<UnpartitionedHubDataSource,ITypeSource>(Id, Workspace)
 {
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
-}
-
-public record HubDataSource(object Id, IWorkspace Workspace) : HubDataSourceBase<HubDataSource>(Id, Workspace)
-{
-    protected override HubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) =>
+    public override UnpartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) =>
         WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
 
-    public HubDataSource WithType<T>(
+    public UnpartitionedHubDataSource WithType<T>(
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
     ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 

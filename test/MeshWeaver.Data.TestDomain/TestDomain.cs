@@ -16,11 +16,10 @@ public static class TestDomain
             { typeof(MyRecord2), new MyRecord2[] { } }
         };
 
-    public static TDataSource ConfigureCategory<TDataSource>(
-        this TDataSource dataSource,
+    public static IUnpartitionedDataSource ConfigureCategory(
+        this IUnpartitionedDataSource dataSource,
         IDictionary<Type, IEnumerable<object>> typeAndInstance
-    )
-        where TDataSource : DataSource<TDataSource, ITypeSource> =>
+    ) =>
         typeAndInstance.Aggregate(
             dataSource,
             (ds, kvp) => ds.WithType(kvp.Key, t => t.WithInitialData(kvp.Value))

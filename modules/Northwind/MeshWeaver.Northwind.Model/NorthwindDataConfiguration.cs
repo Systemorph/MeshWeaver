@@ -135,14 +135,12 @@ public static class NorthwindDataConfiguration
             );
     }
 
-    public static TDataSource AddNorthwindDomain<TDataSource>(this TDataSource dataSource)
-        where TDataSource : DataSource<TDataSource> =>
-        NorthwindDomain
+    public static IUnpartitionedDataSource AddNorthwindDomain(this IUnpartitionedDataSource dataSource)
+=>        NorthwindDomain
             .ReferenceDataTypes.Concat(NorthwindDomain.OperationalTypes)
             .Aggregate(dataSource, (ds, t) => ds.WithType(t, x => x));
 
-    public static TDataSource AddNorthwindReferenceData<TDataSource>(this TDataSource dataSource)
-        where TDataSource : DataSource<TDataSource>
+    public static IUnpartitionedDataSource AddNorthwindReferenceData(this IUnpartitionedDataSource dataSource)
     {
         return dataSource.WithType<Category>().WithType<Region>().WithType<Territory>();
     }

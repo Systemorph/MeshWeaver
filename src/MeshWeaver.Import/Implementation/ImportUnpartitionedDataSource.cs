@@ -6,12 +6,12 @@ using MeshWeaver.Import.Configuration;
 
 namespace MeshWeaver.Import.Implementation;
 
-public record ImportDataSource(Source Source, ImportManager importManager)
-    : GenericDataSource<ImportDataSource>(Source, importManager.Workspace)
+public record ImportUnpartitionedDataSource(Source Source, ImportManager importManager)
+    : GenericUnpartitionedDataSource<ImportUnpartitionedDataSource>(Source, importManager.Workspace)
 {
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
-    public ImportDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
+    public ImportUnpartitionedDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
         this with
         {
             ImportRequest = config.Invoke(ImportRequest)
@@ -45,7 +45,7 @@ public record ImportDataSource(Source Source, ImportManager importManager)
     > Configurations { get; init; } =
         ImmutableList<Func<ImportConfiguration, ImportConfiguration>>.Empty;
 
-    public ImportDataSource WithImportConfiguration(
+    public ImportUnpartitionedDataSource WithImportConfiguration(
         Func<ImportConfiguration, ImportConfiguration> config
     ) => this with { Configurations = Configurations.Add(config) };
 }

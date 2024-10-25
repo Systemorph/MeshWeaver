@@ -22,7 +22,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
         return base.ConfigureHost(configuration)
             .AddData(data =>
                 data.FromConfigurableDataSource(
-                    nameof(GenericDataSource),
+                    nameof(GenericUnpartitionedDataSource),
                     source =>
                         source.ConfigureCategory(TestDomain.ContractDomain).WithType<ActivityLog>()
                 )

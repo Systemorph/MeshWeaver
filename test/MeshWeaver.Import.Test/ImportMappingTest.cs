@@ -19,7 +19,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         base.ConfigureHost(configuration)
             .AddData(data =>
                 data.FromConfigurableDataSource(
-                    nameof(GenericDataSource),
+                    nameof(GenericUnpartitionedDataSource),
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
