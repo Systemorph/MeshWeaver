@@ -2,9 +2,9 @@
 
 namespace MeshWeaver.Data;
 
-public record PartitionedTypeSourceWithType<T>(
+public record PartitionedTypeSourceWithType<T, TPartition>(
     IWorkspace Workspace,
-    Func<T, object> PartitionFunction,
+    Func<T, TPartition> PartitionFunction,
     object DataSource
 ) : TypeSourceWithType<T>(Workspace, DataSource), IPartitionedTypeSource
 {
