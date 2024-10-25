@@ -146,17 +146,13 @@ public record ReduceManager<TStream>
         IWorkspace workspace,
         WorkspaceReference reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
-    )
-    {
-        var workspaceStream = ReduceStreams
+    ) =>
+        ReduceStreams
             .OfType<ReduceWorkspaceStream>()
             .Select(reduceStream =>
                 reduceStream.Invoke(workspace, reference)
             )
             .FirstOrDefault(x => x != null);
-
-        return workspaceStream?.Reduce(reference, configuration);
-    }
 
     public ReduceManager<TReduced> ReduceTo<TReduced>() =>
         typeof(TReduced) == typeof(TStream)
