@@ -34,11 +34,10 @@ public record LayoutAreaHost : IDisposable
 
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
-    public LayoutAreaHost(
-        IWorkspace workspace,
+    public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
-        LayoutDefinition layoutDefinition
-    )
+        LayoutDefinition layoutDefinition,
+        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration)
     {
         Workspace = workspace;
         LayoutDefinition = layoutDefinition;
@@ -47,8 +46,7 @@ public record LayoutAreaHost : IDisposable
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
-            x => x
-        );
+            configuration);
         Reference = reference;
         Stream.AddDisposable(this);
         Stream.AddDisposable(

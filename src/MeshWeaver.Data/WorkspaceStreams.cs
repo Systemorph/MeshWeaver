@@ -8,11 +8,12 @@ public static class WorkspaceStreams
     internal static ISynchronizationStream CreateWorkspaceStream<TStream, TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration,
         ReduceFunction<TStream, TReference, TReduced> reducer
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        return workspace.GetStreamFromDataSource(reference, reference.GetCollections());
+        return workspace.GetStreamFromDataSource(reference, reference.GetCollections()).Reduce(reference, configuration);
     }
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
@@ -29,8 +30,7 @@ public static class WorkspaceStreams
 
     private static ISynchronizationStream<EntityStore> GetStreamFromDataSource(this IWorkspace workspace,
         WorkspaceReference reference,
-        IReadOnlyCollection<string> collections
-        )
+        IReadOnlyCollection<string> collections)
     {
         var groups = collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))

@@ -7,7 +7,7 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Data;
 
-public sealed record DataContext : IAsyncDisposable
+public sealed record DataContext : IDisposable
 {
     public ITypeRegistry TypeRegistry { get; }
 
@@ -94,11 +94,11 @@ public sealed record DataContext : IAsyncDisposable
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
         foreach (var dataSource in DataSourcesById.Values)
         {
-            await dataSource.DisposeAsync();
+            dataSource.Dispose();
         }
     }
 

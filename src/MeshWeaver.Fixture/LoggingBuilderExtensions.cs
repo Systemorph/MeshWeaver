@@ -104,10 +104,9 @@ public class XUnitLogger : ILogger
 
         var sb = new StringBuilder();
         sb.Append(GetLogLevelString(logLevel))
-            .Append($" {DateTime.UtcNow:hh:mm:ss.fff tt}")
-            .Append(" [")
+            .Append($",{DateTime.UtcNow:hh:mm:ss.fff tt},")
             .Append(categoryName)
-            .AppendLine("] ")
+            .Append(",")
             .Append(formatter(state, exception));
 
         if (exception != null)

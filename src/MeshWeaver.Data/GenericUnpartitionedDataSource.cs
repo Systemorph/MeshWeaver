@@ -8,7 +8,7 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Data;
 
-public interface IDataSource : IAsyncDisposable
+public interface IDataSource : IDisposable
 {
     ITypeSource GetTypeSource(Type type);
     IReadOnlyCollection<Type> MappedTypes { get; }
@@ -110,10 +110,10 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     protected virtual CollectionsReference GetReference() =>
         new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
 
-    public virtual async ValueTask DisposeAsync()
+    public virtual void Dispose()
     {
         foreach (var stream in Streams.Values)
-            await stream.DisposeAsync();
+            stream.Dispose();
 
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
