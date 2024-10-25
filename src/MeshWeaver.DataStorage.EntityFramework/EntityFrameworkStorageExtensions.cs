@@ -7,8 +7,8 @@ public static class EntityFrameworkStorageExtensions
 {
     public static DataContext FromEntityFramework(this DataContext context, string name,
         Action<DbContextOptionsBuilder> database,
-        Func<EntityFrameworkDataSource, EntityFrameworkDataSource> dataSource) =>
-        context.WithDataSourceBuilder(name, hub => dataSource.Invoke(new EntityFrameworkDataSource(name, context.Workspace, new EntityFrameworkDataStorage(database))));
+        Func<EntityFrameworkUnpartitionedDataSource, EntityFrameworkUnpartitionedDataSource> dataSource) =>
+        context.WithDataSourceBuilder(name, hub => dataSource.Invoke(new EntityFrameworkUnpartitionedDataSource(name, context.Workspace, new EntityFrameworkDataStorage(database))));
 
 
 }

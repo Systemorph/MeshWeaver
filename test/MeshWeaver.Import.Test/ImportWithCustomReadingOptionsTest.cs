@@ -20,7 +20,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         base.ConfigureHost(configuration)
             .AddData(data =>
                 data.FromConfigurableDataSource(
-                    nameof(GenericDataSource),
+                    nameof(GenericUnpartitionedDataSource),
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )

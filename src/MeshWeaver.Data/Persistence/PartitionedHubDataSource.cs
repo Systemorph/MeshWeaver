@@ -1,36 +1,19 @@
 ﻿namespace MeshWeaver.Data.Persistence
 {
-    public record PartitionedHubDataSource(object Id, IWorkspace Workspace)
-        : HubDataSourceBase<PartitionedHubDataSource>(Id, Workspace)
+    public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
+        : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
     {
-        public PartitionedHubDataSource WithType<T>(Func<T, object> partitionFunction) =>
-            WithType(partitionFunction, x => x);
-
-        public PartitionedHubDataSource WithType<T>(
-            Func<T, object> partitionFunction,
-            Func<ITypeSource, ITypeSource> config
-        ) => WithType(partitionFunction, x => (PartitionedTypeSourceWithType<T>)config.Invoke(x));
-
-        public PartitionedHubDataSource WithType<T>(
-            Func<T, object> partitionFunction,
-            Func<PartitionedTypeSourceWithType<T>, PartitionedTypeSourceWithType<T>> typeSource
-        ) =>
-            WithTypeSource(
+        public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config = null)
+=>            WithTypeSource(
                 typeof(T),
-                typeSource.Invoke(
-                    new PartitionedTypeSourceWithType<T>(Workspace, partitionFunction, Id)
+                (config ?? (x => x)).Invoke(
+                    new PartitionedTypeSourceWithType<T, TPartition>(Workspace, partitionFunction, Id)
                 )
             );
-
-        protected override PartitionedHubDataSource WithType<T>(
-            Func<ITypeSource, ITypeSource> config
-        )
-        {
-            throw new NotSupportedException("Please use method with partition");
-        }
+  
 
 
-        public PartitionedHubDataSource InitializingPartitions(IEnumerable<object> partitions) =>
+        public PartitionedHubDataSource<TPartition> InitializingPartitions(IEnumerable<object> partitions) =>
             this with
             {
                 InitializePartitions = InitializePartitions.Concat(partitions).ToArray()

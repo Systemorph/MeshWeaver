@@ -54,7 +54,7 @@ public static class ImportExtensions
     public static DataContext FromEmbeddedResource<T>(
         this DataContext dataContext,
         string resource,
-        Func<ImportDataSource, ImportDataSource> configuration = null
+        Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource> configuration = null
     ) where T : class
     {
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
@@ -67,7 +67,7 @@ public static class ImportExtensions
     public static DataContext FromEmbeddedResource(
         this DataContext dataContext,
         EmbeddedResource resource,
-        Func<ImportDataSource, ImportDataSource> configuration
+        Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource> configuration
     )
     {
         return dataContext.WithDataSourceBuilder(
@@ -76,13 +76,13 @@ public static class ImportExtensions
         );
     }
 
-    private static ImportDataSource ConfigureDataSource(
-        Func<ImportDataSource, ImportDataSource> configuration,
+    private static ImportUnpartitionedDataSource ConfigureDataSource(
+        Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource> configuration,
         IWorkspace workspace,
         EmbeddedResource source
     )
     {
-        var ret = new ImportDataSource(source, workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>());
+        var ret = new ImportUnpartitionedDataSource(source, workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>());
         if(configuration != null)
             ret = configuration.Invoke(ret);
 
