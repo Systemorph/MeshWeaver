@@ -170,7 +170,7 @@ public static class StandardWorkspaceReferenceImplementations
                     default:
                         throw new NotSupportedException($"Operation {eg.Key.Op} is not supported for instances.");
                 }
-                currentStore = currentStore.Update(collection, current => current.Merge(currentCollection));
+                currentStore = currentStore.Update(collection, _ => currentCollection);
             }
 
         }

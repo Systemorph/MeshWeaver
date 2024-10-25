@@ -29,6 +29,8 @@ public record DataChangeRequest
     public DataChangeRequest WithDeletions(params object[] deletions)
     => this with { Deletions = Deletions.AddRange(deletions) };
 
+    public static DataChangeRequest Create(IReadOnlyCollection<object> creations, object changedBy) =>
+        new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
     public static DataChangeRequest Update(IReadOnlyCollection<object> updates, object changedBy) =>
         new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, object changedBy) =>

@@ -139,12 +139,19 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
 
-        await Task.Delay(200);
 
         // asserts
-        data = await GetClient().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
+        data = await GetClient()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Timeout(1.Seconds())
+            .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
-        data = await GetHost().GetWorkspace().GetObservable<MyData>().FirstOrDefaultAsync();
+        data = await GetHost()
+            .GetWorkspace()
+            .GetObservable<MyData>()
+            .Timeout(1.Seconds())
+            .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
 
         storage.Values.Should().BeEquivalentTo(expectedItems);
