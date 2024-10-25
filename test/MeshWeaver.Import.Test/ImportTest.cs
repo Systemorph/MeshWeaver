@@ -67,14 +67,14 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
         var transactionalItems1 = await GetWorkspace(
-                host.GetHostedHub(new TransactionalDataAddress(2024, "1"))
+                Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
             )
             .GetObservable<TransactionalData>()
             .Timeout(timeout)
             .FirstAsync(x => x.Count > 1);
 
         var computedItems1 = await GetWorkspace(
-                host.GetHostedHub(new ComputedDataAddress(2024, "1"))
+                Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
             )
             .GetObservable<ComputedData>()
             .Timeout(timeout)
@@ -154,7 +154,7 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         await Task.Delay(100);
         var workspace = GetWorkspace(
-            GetHost().GetHostedHub(new ReferenceDataAddress(), null)
+            Router.GetHostedHub(new ReferenceDataAddress(), null)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();
