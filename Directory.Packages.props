@@ -8,8 +8,8 @@
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="0.17.1" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.2.0" />
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Hosting.Orleans" Version="8.2.0" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="9.0.0-rc.1.24511.1" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.0.0-rc.1.24511.1" />
     <PackageVersion Include="Autofac" Version="8.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.8.3" />
@@ -56,12 +56,12 @@
     <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.24229.4" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="8.5.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="$(MicrosoftExtensionsVersion)" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="8.2.0" />
@@ -88,14 +88,14 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2" />
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.7.2" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
-    <PackageVersion Include="Aspire.Hosting.Redis" Version="8.2.0" />
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="9.0.0-rc.1.24511.1" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="8.2.0" />
-    <PackageVersion Include="Aspire.StackExchange.Redis" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="8.2.0" />
-    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="8.2.0" />
+    <PackageVersion Include="Aspire.StackExchange.Redis" Version="9.0.0-rc.1.24511.1" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="9.0.0-rc.1.24511.1" />
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="9.0.0-rc.1.24511.1" />
     <PackageVersion Include="xunit.abstractions" Version="2.0.3" />
     <PackageVersion Include="xunit.extensibility.core" Version="2.6.6" />
   </ItemGroup>
