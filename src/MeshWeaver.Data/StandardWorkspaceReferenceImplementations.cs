@@ -21,7 +21,6 @@ public static class StandardWorkspaceReferenceImplementations
             .AddPatchFunction(PatchEntityStore2)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
-                        .AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
             );
 
     }

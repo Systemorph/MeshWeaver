@@ -12,11 +12,7 @@ public static class WorkspaceStreams
     )
         where TReference : WorkspaceReference<TReduced>
     {
-
-        var storeStream =  workspace.GetStreamFromDataSource(reference, reference.GetCollections());
-        if (storeStream == null)
-            return null;
-        return storeStream.Reduce(reference);
+        return workspace.GetStreamFromDataSource(reference, reference.GetCollections());
     }
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
