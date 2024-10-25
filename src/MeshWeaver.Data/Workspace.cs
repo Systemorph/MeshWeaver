@@ -152,7 +152,7 @@ public class Workspace : IWorkspace
 
 
 
-        await DataContext.DisposeAsync();
+        DataContext.Dispose();
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
     private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();

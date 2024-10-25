@@ -359,6 +359,7 @@ public sealed class MessageHub
         {
             if (IsDisposing)
                 return;
+            logger.LogDebug("Starting disposing of hub {address}", Address);
             disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
         }
 
@@ -380,17 +381,21 @@ public sealed class MessageHub
             switch (request.Message.RunLevel)
             {
                 case MessageHubRunLevel.DisposeHostedHubs:
+                    logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
                     RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                     await hostedHubs.DisposeAsync();
                     Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
+                    logger.LogDebug("Finish disposing hosted hubs of hub {address}", Address);
                     return request.Processed();
                 case MessageHubRunLevel.ShutDown:
+                    logger.LogDebug("Starting shutdown of hub {address}", Address);
                     RunLevel = MessageHubRunLevel.ShutDown;
                     await ShutdownAsync();
                     RunLevel = MessageHubRunLevel.Dead;
                     disposingTaskCompletionSource.SetResult();
                     await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
+                    logger.LogDebug("Finished shutdown of hub {address}", Address);
                     return request.Processed();
             }
 

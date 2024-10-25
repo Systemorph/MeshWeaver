@@ -55,9 +55,9 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
         }
     }
 
-    public override async ValueTask DisposeAsync()
+    public override void Dispose()
     {
-        await persistenceHub.DisposeAsync();
-        await base.DisposeAsync();
+        persistenceHub.Dispose();
+        base.Dispose();
     }
 }
