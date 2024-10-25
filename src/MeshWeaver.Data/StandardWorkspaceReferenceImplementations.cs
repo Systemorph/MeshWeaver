@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using Json.More;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Messaging;
@@ -22,6 +21,7 @@ public static class StandardWorkspaceReferenceImplementations
             .AddPatchFunction(PatchEntityStore2)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
+                        .AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
             );
 
     }
@@ -79,27 +79,6 @@ public static class StandardWorkspaceReferenceImplementations
         ReduceEntityStoreTo(current, (dynamic)reference.Reference);
     private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, PartitionedWorkspaceReference<object> reference) =>
         ReduceEntityStoreTo(current, (dynamic)reference.Reference);
-
-
-    private static JsonElement UpdateJsonPointer(JsonElement element, ChangeItem<JsonElement?> change, JsonPointerReference reference)
-    {
-        var pointer = JsonPointer.Parse(reference.Pointer);
-        var patch = new JsonPatch(change.Value.HasValue
-            ? pointer.Evaluate(element).HasValue
-                ? PatchOperation.Replace(pointer, change.Value.Value.AsNode())
-                : PatchOperation.Add(pointer, change.Value.Value.AsNode())
-            : PatchOperation.Remove(pointer));
-
-        return patch.Apply(element);
-    }
-
-
-    private static JsonElement? ReduceJsonPointer(JsonElement obj, JsonPointerReference pointer)
-    {
-        var parsed = JsonPointer.Parse(pointer.Pointer);
-        var result = parsed.Evaluate(obj);
-        return result;
-    }
 
 
     private static ChangeItem<EntityStore> PatchEntityStore2(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch)
