@@ -24,7 +24,7 @@ public static class ImportExtensions
         var ret = configuration.Set(lambdas.Add(importConfiguration));
         if (lambdas.Any())
             return ret;
-        return configuration
+        return ret
             .AddActivities()
             .WithServices(x => x.AddScoped<ImportManager>())
             .AddHandlers()
