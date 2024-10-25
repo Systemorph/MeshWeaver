@@ -72,7 +72,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var data = (
             await clientWorkspace
                 .GetObservable<MyData>()
-                //.Timeout(3.Seconds())
+                .Timeout(3.Seconds())
                 .FirstOrDefaultAsync()
                 
         )
