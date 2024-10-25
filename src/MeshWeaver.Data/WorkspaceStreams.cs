@@ -13,7 +13,10 @@ public static class WorkspaceStreams
         where TReference : WorkspaceReference<TReduced>
     {
 
-        return workspace.GetStreamFromDataSource(reference, reference.GetCollections());
+        var storeStream =  workspace.GetStreamFromDataSource(reference, reference.GetCollections());
+        if (storeStream == null)
+            return null;
+        return storeStream.Reduce(reference);
     }
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
@@ -28,7 +31,7 @@ public static class WorkspaceStreams
     };
 
 
-    private static ISynchronizationStream GetStreamFromDataSource(this IWorkspace workspace,
+    private static ISynchronizationStream<EntityStore> GetStreamFromDataSource(this IWorkspace workspace,
         WorkspaceReference reference,
         IReadOnlyCollection<string> collections
         )
@@ -45,7 +48,7 @@ public static class WorkspaceStreams
         var dataSource = groups[0].Key;
         if(dataSource == null)
             throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-        return groups[0].Key.GetStreamForPartition(reference is IPartitionedWorkspaceReference part ? part.Partition : null).Reduce(reference);
+        return groups[0].Key.GetStreamForPartition(reference is IPartitionedWorkspaceReference part ? part.Partition : null);
 
     }
 
