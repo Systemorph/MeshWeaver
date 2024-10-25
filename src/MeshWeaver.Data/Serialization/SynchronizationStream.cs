@@ -137,7 +137,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public void AddDisposable(IDisposable disposable) => Hub.WithDisposeAction(_ => disposable.Dispose());
-    public void AddDisposable(IAsyncDisposable disposable) => Hub.WithDisposeAction(_ => disposable.DisposeAsync());
 
     public IMessageDelivery DeliverMessage(
         IMessageDelivery delivery
@@ -194,9 +193,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // TODO V10: Implement revert mechanism (20.10.2024, Roland Bürgi)
     }
 
-    public ValueTask DisposeAsync()
+    public void Dispose()
     {
-        return synchronizationHub.DisposeAsync();
+        synchronizationHub.Dispose();
     }
     private ConcurrentDictionary<string, object> Properties { get; } = new();
     public T Get<T>(string key) => (T)Properties.GetValueOrDefault(key);
