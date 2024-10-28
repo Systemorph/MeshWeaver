@@ -298,12 +298,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Title.ToString()
             .Should()
             .Contain("Count");
-        hub.Post(new ClickedEvent(buttonArea));
+        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(new HostAddress()));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
             .FirstAsync(x => x is HtmlControl { Data: not "0" })
-            .Timeout(TimeSpan.FromSeconds(5))
+            .Timeout(TimeSpan.FromSeconds(3))
             ;
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }

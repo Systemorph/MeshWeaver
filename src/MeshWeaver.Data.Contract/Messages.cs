@@ -4,11 +4,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public record WorkspaceMessage
-{
-    public virtual object Owner { get; init; }
-    public virtual object Reference { get; init; }
-}
+public record StreamMessage(string StreamId);
 
 public record DataChangeRequest
     : IRequest<DataChangeResponse>
