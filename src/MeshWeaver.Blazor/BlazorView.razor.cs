@@ -271,7 +271,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected void OnClick()
     {
-        Stream.Hub.Post(new ClickedEvent(Area) { Reference = Stream.Reference, Owner = Stream.Owner }, o => o.WithTarget(Stream.Owner));
+        Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
 
 

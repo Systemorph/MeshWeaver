@@ -52,7 +52,7 @@ public record LayoutAreaHost : IDisposable
         Stream.AddDisposable(
             Stream.Hub.Register<ClickedEvent>(
                 OnClick,
-                delivery => Stream.Reference.Equals(delivery.Message.Reference)
+                delivery => Stream.StreamId.Equals(delivery.Message.StreamId)
             )
         );
         executionHub = Stream.Hub.GetHostedHub(
