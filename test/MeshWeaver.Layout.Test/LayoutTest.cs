@@ -196,7 +196,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             );
             var updated = patch.Apply(ci);
-            return stream.ToChangeItem(ci, updated, patch);
+            return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
         });
 
         var updatedControls = await stream
@@ -432,7 +432,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)
             );
             var updated = patch.Apply(ci);
-            return stream.ToChangeItem(ci, updated, patch);
+            return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
         });
 
         resultsControl = await stream

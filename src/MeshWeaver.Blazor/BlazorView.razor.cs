@@ -224,7 +224,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                     var patch = GetPatch(value, reference, ci);
                     var updated = patch?.Apply(ci) ?? ci;
 
-                    return Stream.ToChangeItem(ci, updated, patch);
+                    return Stream.ToChangeItem(ci, updated, patch, Stream.StreamId);
                 });
 
         }

@@ -47,10 +47,10 @@ public record ReduceManager<TStream>
         };
 
     public ReduceManager<TStream> AddPatchFunction(
-        Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, ChangeItem<TStream>> patchFunction)
+        Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, string, ChangeItem<TStream>> patchFunction)
         => this with { PatchFunction = patchFunction };
 
-    public Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, ChangeItem<TStream>> PatchFunction { get; init; }
+    public Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, string, ChangeItem<TStream>> PatchFunction { get; init; }
 
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
         ReduceFunction<TStream, TReference, TReduced> reducer
@@ -173,8 +173,8 @@ public record ReduceManager<TStream>
         LinkedListNode<ReduceDelegate> node
     );
 
-    public ChangeItem<TStream> ApplyPatch(ISynchronizationStream<TStream> stream, TStream current, JsonElement updatedJson, JsonPatch patch) => 
-        PatchFunction.Invoke(stream, current, updatedJson, patch);
+    public ChangeItem<TStream> ApplyPatch(ISynchronizationStream<TStream> stream, TStream current, JsonElement updatedJson, JsonPatch patch, string changedBy) => 
+        PatchFunction.Invoke(stream, current, updatedJson, patch, changedBy);
 }
 
 internal delegate ISynchronizationStream<TReduced> ReduceStream<TStream, TReduced>(

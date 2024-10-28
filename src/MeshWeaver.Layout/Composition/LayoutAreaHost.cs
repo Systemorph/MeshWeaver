@@ -118,9 +118,12 @@ public record LayoutAreaHost : IDisposable
             var changes = DisposeExistingAreas(store, context);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
-                new(updates.Store,
-                changes.Updates.Concat(updates.Updates), Hub.Address)
-            );
+                new(
+                    updates.Store,
+                changes.Updates.Concat(updates.Updates), 
+                Hub.Address
+                    )
+            ) with {ChangedBy = Reference.HostId};
         });
     }
 
@@ -310,15 +313,13 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.OnNext(
-                new(
+            Stream.Initialize(
                     LayoutDefinition
                         .Render(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
                         )
-                        .Store,
-                    Stream.Hub.Version));
+                        .Store);
             logger.LogDebug("End re-rendering");
         });
         return Stream;
