@@ -27,8 +27,9 @@ public static class LayoutExtensions
                 data.Configure(reduction =>
                     reduction
                         .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
-                            (workspace, reference, config) =>
-                                new LayoutAreaHost(workspace, (LayoutAreaReference)reference, workspace.Hub.GetLayoutDefinition(), config)
+                            (workspace, reference, configuration) =>
+                                reference is not LayoutAreaReference layoutArea ? null : 
+                                new LayoutAreaHost(workspace, layoutArea, workspace.Hub.GetLayoutDefinition(), configuration)
                                     .RenderLayoutArea()
                         )
                 )

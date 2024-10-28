@@ -1,7 +1,9 @@
 ﻿using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Primitives;
 
 namespace MeshWeaver.Data;
 
@@ -18,11 +20,17 @@ public static class StandardWorkspaceReferenceImplementations
             .AddWorkspaceReference<PartitionedWorkspaceReference<InstanceCollection>, InstanceCollection>(
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
-            .AddPatchFunction(PatchEntityStore2)
+            .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
-            );
+            )
+            .ForReducedStream<JsonElement>(reduced => reduced.AddPatchFunction(PatchJsonElement));
 
+    }
+
+    private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
+    {
+        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, EntityReference reference)
@@ -80,7 +88,7 @@ public static class StandardWorkspaceReferenceImplementations
         ReduceEntityStoreTo(current, (dynamic)reference.Reference);
 
 
-    private static ChangeItem<EntityStore> PatchEntityStore2(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch)
+    private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch, string changedBy)
     {
         var updates = new List<EntityUpdate>();
         foreach (var g in 
@@ -153,7 +161,7 @@ public static class StandardWorkspaceReferenceImplementations
 
         }
 
-        return new(currentStore, stream.StreamId, ChangeType.Patch, stream.Hub.Version, updates);
+        return new(currentStore, changedBy, ChangeType.Patch, stream.Hub.Version, updates);
     }
 
     private static object GetEntity(this ISynchronizationStream<EntityStore> stream, JsonPointer entityPointer, JsonElement updatedJson)
@@ -164,41 +172,6 @@ public static class StandardWorkspaceReferenceImplementations
     private static InstanceCollection DeserializeCollection(this ISynchronizationStream<EntityStore> stream, JsonElement updatedJson, JsonPointer pointer)
     {
         return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
-    }
-
-    public static EntityStore PatchEntityStore(
-        this EntityStore current,
-        JsonElement change,
-        JsonPatch patch,
-        JsonSerializerOptions options
-    )
-    {
-        if (patch is not null)
-            foreach (var op in patch.Operations)
-            {
-                switch (op.Path.Segments.Length)
-                {
-                    case 0:
-                        throw new NotSupportedException();
-                    case 1:
-                        current = UpdateCollection(current, op, op.Path.Segments[0].Value, options);
-                        break;
-                    default:
-                        current = UpdateInstance(
-                            current,
-                            change,
-                            op,
-                            op.Path.Segments[0].Value,
-                            op.Path.Segments[1].Value,
-                            options
-                        );
-                        break;
-                }
-            }
-        else
-            current = change.Deserialize<EntityStore>(options);
-
-        return current;
     }
 
     private static EntityStore UpdateInstance(

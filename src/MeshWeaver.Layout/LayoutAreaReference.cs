@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using Json.Pointer;
 using MeshWeaver.Data;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Layout;
 
@@ -10,6 +11,7 @@ namespace MeshWeaver.Layout;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object Id { get; init; }
+    public string HostId { get; init; } = Guid.NewGuid().AsString();
     public string Layout { get; init; }
 
     public const string Data = "data";

@@ -192,7 +192,8 @@ public static class JsonSynchronizationStream
                             state =>
                                 stream.Stream.ToChangeItem(state,
                                     currentJson.Value,
-                                    patch)
+                                    patch,
+                                    delivery.Message.ChangedBy ?? stream.StreamId)
                         );
 
                     }
@@ -251,10 +252,30 @@ public static class JsonSynchronizationStream
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
         JsonElement currentJson,
-        JsonPatch patch)
+        JsonPatch patch,
+        string changedBy)
     {
-        return stream.ReduceManager.PatchFunction.Invoke(stream, currentState, currentJson, patch);
+        return stream.ReduceManager.PatchFunction.Invoke(stream, currentState, currentJson, patch, changedBy);
     }
+
+
+    public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
+        this JsonElement current,
+        JsonElement updated,
+        JsonPatch patch)
+        => patch.Operations.Select(p =>
+        {
+            var id = p.Path.Segments.Skip(1).FirstOrDefault()?.Value;
+            var collection = p.Path.Segments.First().Value;
+            var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
+            return new EntityUpdate(
+                collection,
+                id,
+                pointer.Evaluate(current)
+            ) { OldValue = pointer.Evaluate(updated) };
+        })
+        .DistinctBy(x => new{x.Id, x.Collection})
+        .ToArray();
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement(this DataChangedEvent request, JsonElement? currentJson, JsonSerializerOptions options)
     {
