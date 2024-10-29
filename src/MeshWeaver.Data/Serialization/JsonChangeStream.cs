@@ -35,7 +35,8 @@ public static class JsonSynchronizationStream
                 hub,
                 reference,
                 workspace.ReduceManager.ReduceTo<TReduced>(),
-                GetJsonConfig
+                config => GetJsonConfig(config)
+                    .WithClientId(config.Stream.StreamId)
             );
         reduced.Initialize(ct => (tcs2 = new(ct)).Task);
         reduced.AddDisposable(
@@ -108,7 +109,7 @@ public static class JsonSynchronizationStream
             .ReduceManager
             .ReduceStream<TReduced>(
                 workspace,
-                request.Reference, config => GetJsonConfig(config).WithStreamId(request.StreamId)
+                request.Reference, config => GetJsonConfig(config).WithClientId(request.StreamId)
             );
 
         var reduced =
@@ -125,7 +126,7 @@ public static class JsonSynchronizationStream
                     reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
-                x => reduced.StreamId.Equals(x.Message.StreamId)
+                x => reduced.ClientId.Equals(x.Message.StreamId)
             )
         );
 
@@ -137,14 +138,14 @@ public static class JsonSynchronizationStream
                     reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
-                x => reduced.StreamId.Equals(x.Message.StreamId)
+                x => reduced.ClientId.Equals(x.Message.StreamId)
             )
         );
 
         // outgoing data changed
         reduced.AddDisposable(
             reduced
-                .ToDataChanged(c => !reduced.StreamId.Equals(c.ChangedBy))
+                .ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
@@ -154,7 +155,7 @@ public static class JsonSynchronizationStream
         // outgoing data changed
         reduced.AddDisposable(
             reduced
-                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.ChangedBy))
+                .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
@@ -193,7 +194,7 @@ public static class JsonSynchronizationStream
                                 stream.Stream.ToChangeItem(state,
                                     currentJson.Value,
                                     patch,
-                                    delivery.Message.ChangedBy ?? stream.StreamId)
+                                    delivery.Message.ChangedBy ?? stream.ClientId)
                         );
 
                     }
@@ -220,7 +221,7 @@ public static class JsonSynchronizationStream
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value.GetType(), stream.Hub.JsonSerializerOptions);
                     stream.Set(currentJson);
                     return new(
-                        stream.StreamId, 
+                        stream.ClientId, 
                         x.Version, 
                         new RawJson(currentJson.ToString()), 
                         ChangeType.Full,
@@ -233,7 +234,7 @@ public static class JsonSynchronizationStream
                     stream.Set(currentJson);
                     return new DataChangedEvent
                     (
-                        stream.StreamId,
+                        stream.ClientId,
                         x.Version,
                         new RawJson(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
                         x.ChangeType,
@@ -262,7 +263,8 @@ public static class JsonSynchronizationStream
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this JsonElement current,
         JsonElement updated,
-        JsonPatch patch)
+        JsonPatch patch,
+        JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
             var id = p.Path.Segments.Skip(1).FirstOrDefault()?.Value;
@@ -270,9 +272,9 @@ public static class JsonSynchronizationStream
             var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
             return new EntityUpdate(
                 collection,
-                id,
-                pointer.Evaluate(current)
-            ) { OldValue = pointer.Evaluate(updated) };
+                id == null ? null : JsonSerializer.Deserialize<object>(id, options),
+                pointer.Evaluate(updated)
+            ) { OldValue = pointer.Evaluate(current) };
         })
         .DistinctBy(x => new{x.Id, x.Collection})
         .ToArray();

@@ -9,7 +9,7 @@ public record StreamMessage(string StreamId);
 public record DataChangeRequest
     : IRequest<DataChangeResponse>
 {
-    public object ChangedBy { get; init; }
+    public string ChangedBy { get; init; }
     public ImmutableList<object> Creations { get; init; } = [];
 
     public ImmutableList<object> Updates { get; init; } = [];
@@ -25,11 +25,11 @@ public record DataChangeRequest
     public DataChangeRequest WithDeletions(params object[] deletions)
     => this with { Deletions = Deletions.AddRange(deletions) };
 
-    public static DataChangeRequest Create(IReadOnlyCollection<object> creations, object changedBy) =>
+    public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
         new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
-    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, object changedBy) =>
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy) =>
         new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy };
-    public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, object changedBy) =>
+    public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
         new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};
 
 };

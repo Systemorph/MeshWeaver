@@ -87,7 +87,7 @@ public class Workspace : IWorkspace
             {
                 Updates = instances.ToImmutableList(),
                 Options = updateOptions,
-                ChangedBy = Hub.Address
+                ChangedBy = null
             }, activity
         );
 
@@ -95,7 +95,7 @@ public class Workspace : IWorkspace
 
     public void Delete(IReadOnlyCollection<object> instances, Activity activity) =>
         RequestChange(
-            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = Hub.Address }, activity
+            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, activity
         );
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(

@@ -52,7 +52,15 @@ public record CollectionsReference(IReadOnlyCollection<string> Collections)
 }
 
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
-public record StreamIdentity(object Owner, object Partition) : WorkspaceReference<EntityStore>;
+
+public record StreamIdentity(object Owner, object Partition) : WorkspaceReference<EntityStore>
+{
+    public override string ToString()
+    {
+        return Partition == null ? Owner.ToString() : $"{Owner}:{Partition}";
+
+    }
+}
 
 public interface IPartitionedWorkspaceReference
 {

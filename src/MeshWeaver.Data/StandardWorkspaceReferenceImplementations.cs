@@ -3,7 +3,6 @@ using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Primitives;
 
 namespace MeshWeaver.Data;
 
@@ -24,13 +23,22 @@ public static class StandardWorkspaceReferenceImplementations
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
             )
-            .ForReducedStream<JsonElement>(reduced => reduced.AddPatchFunction(PatchJsonElement));
+            .ForReducedStream<JsonElement>(reduced => 
+                reduced.AddPatchFunction(PatchJsonElement)
+                    .AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonElementTo)
+                );
 
+    }
+
+    private static ChangeItem<JsonElement?> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
+    {
+        var pointer = JsonPointer.Parse(reference.Pointer);
+        return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates.Where(u => u.Collection == pointer.Segments.First().Value && u.Id == pointer.Segments[1].Value).ToArray());
     }
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
     {
-        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch));
+        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, EntityReference reference)

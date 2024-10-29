@@ -53,11 +53,12 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                     new EntityStoreAndUpdates(
                         (state ?? new()).Update(collectionName, i => i.Update(Instance, instance)),
                         [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
-                        workspace.Hub.Address)
+                        stream.StreamId)
                 );
             });
             return true;
         }).ToArray();
+
         stream.Dispose();
         await DisposeAsync();
 

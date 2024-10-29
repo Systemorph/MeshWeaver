@@ -8,6 +8,7 @@ public interface ISynchronizationStream : IDisposable
     object Owner { get; }
     object Reference { get; }
     string StreamId { get; }
+    string ClientId { get; }
 
     StreamIdentity StreamIdentity { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
