@@ -121,7 +121,7 @@ public static class WorkspaceOperations
                                             new EntityUpdate(g.Key.TypeSource.CollectionName, i.Key, null)
                                             {
                                                 OldValue = i.Instance
-                                            })), change.ChangedBy ?? stream.StreamIdentity.ToString());
+                                            })), change.ChangedBy ?? stream.StreamId);
                                 }
 
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
