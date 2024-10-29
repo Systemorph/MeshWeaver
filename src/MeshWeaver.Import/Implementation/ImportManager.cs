@@ -16,12 +16,14 @@ public class ImportManager
 
     private readonly IMessageHub importHub; 
     public IWorkspace Workspace { get; }
+    public IMessageHub Hub { get; }
 
-    public ImportManager(IWorkspace  workspace)
+    public ImportManager(IWorkspace workspace, IMessageHub hub)
     {
         Workspace = workspace;
-        Configuration = workspace.Hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
-        importHub = workspace.Hub.GetHostedHub(
+        Hub = hub;
+        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
+        importHub = hub.GetHostedHub(
             new ImportAddress(), 
             config => 
                 config.WithHandler<ImportRequest>((_,r,ct) => 
@@ -40,7 +42,7 @@ public class ImportManager
     )
     {
 
-        var activity = new Activity(ActivityCategory.Import, Workspace.Hub);
+        var activity = new Activity(ActivityCategory.Import, Hub);
 
 
         try
@@ -48,7 +50,7 @@ public class ImportManager
             await ImportImpl(request.Message, activity, cancellationToken);
             await activity.Complete(log =>
             {
-                Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request));
+                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
             }, cancellationToken: cancellationToken);
 
 
@@ -63,7 +65,7 @@ public class ImportManager
             }
 
             activity.LogError(message.ToString());
-            await activity.Complete(log => Workspace.Hub.Post(new ImportResponse(Workspace.Hub.Version, log), o => o.ResponseFor(request)), cancellationToken: cancellationToken);
+            await activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)), cancellationToken: cancellationToken);
         }
 
         return request.Processed();
