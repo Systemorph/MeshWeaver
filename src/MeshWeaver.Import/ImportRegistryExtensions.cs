@@ -26,6 +26,7 @@ public static class ImportExtensions
             return ret;
         return ret
             .AddActivities()
+            .AddData()
             .WithServices(x => x.AddScoped<ImportManager>())
             .AddHandlers()
             ;
@@ -82,7 +83,7 @@ public static class ImportExtensions
         EmbeddedResource source
     )
     {
-        var ret = new ImportUnpartitionedDataSource(source, workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>());
+        var ret = new ImportUnpartitionedDataSource(source, workspace);
         if(configuration != null)
             ret = configuration.Invoke(ret);
 

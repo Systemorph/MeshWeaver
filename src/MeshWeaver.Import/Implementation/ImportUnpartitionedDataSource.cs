@@ -6,8 +6,8 @@ using MeshWeaver.Import.Configuration;
 
 namespace MeshWeaver.Import.Implementation;
 
-public record ImportUnpartitionedDataSource(Source Source, ImportManager importManager)
-    : GenericUnpartitionedDataSource<ImportUnpartitionedDataSource>(Source, importManager.Workspace)
+public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
+    : GenericUnpartitionedDataSource<ImportUnpartitionedDataSource>(Source, Workspace)
 {
     private ImportRequest ImportRequest { get; init; } = new(Source);
 
@@ -20,7 +20,7 @@ public record ImportUnpartitionedDataSource(Source Source, ImportManager importM
 
     protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
-
+        var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
         var instances = await importManager.ImportInstancesAsync(
             ImportRequest,
             new(Data.Serialization.ActivityCategory.Import, Workspace.Hub),
