@@ -13,8 +13,52 @@ public static class WorkspaceStreams
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        return workspace.GetStreamFromDataSource(reference, reference.GetCollections()).Reduce(reference, configuration);
+        var collections = reference.GetCollections();
+        var groups = collections.Select(c => (Collection: c,
+                DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
+            .GroupBy(x => x.DataSource)
+            .ToArray();
+
+        if (groups.Length == 0)
+            return null;
+        var unmapped = groups.Where(x => x.Key == null).ToArray();
+        if (unmapped.Any())
+            throw new ArgumentException($"Collections {string.Join(", ", unmapped.SelectMany(u => u.Select(uu => uu.Collection)))} are not mapped to any source.");
+        var partition = reference is IPartitionedWorkspaceReference part ? part.Partition : null;
+        if (groups.Length == 1)
+        {
+            var dataSource = groups[0].Key;
+            if (dataSource == null)
+                throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
+            return groups[0].Key
+                .GetStreamForPartition(partition)
+                .Reduce(reference);
+        }
+
+        var streams = groups.Select(g =>
+                g.Key.GetStreamForPartition(partition))
+            .ToArray();
+
+
+        var combinedReference = new CombinedStreamReference(streams.Select(s => s.StreamIdentity).ToArray());
+
+        var ret = new SynchronizationStream<EntityStore>(
+            new StreamIdentity(workspace.Hub.Address, partition),
+            workspace.DataContext.Hub,
+            combinedReference,
+            workspace.ReduceManager.ReduceTo<EntityStore>(),
+c => c
+            );
+
+        ret.Initialize(async ct => await streams.ToAsyncEnumerable().SelectAwait(async x => await x.FirstAsync()).AggregateAsync(new EntityStore(), (x, y) =>
+            x.Merge(y.Value), cancellationToken: ct));
+
+        foreach (var stream in streams)
+            ret.AddDisposable(stream.Skip(1).Subscribe(s => ret.Update(current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)))));
+
+        return ret.Reduce(reference, configuration);
     }
+
 
     private static IReadOnlyCollection<string> GetCollections(this WorkspaceReference reference)
     => reference switch
@@ -28,25 +72,6 @@ public static class WorkspaceStreams
     };
 
 
-    private static ISynchronizationStream<EntityStore> GetStreamFromDataSource(this IWorkspace workspace,
-        WorkspaceReference reference,
-        IReadOnlyCollection<string> collections)
-    {
-        var groups = collections.Select(c => (Collection: c,
-                DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
-            .GroupBy(x => x.DataSource)
-            .ToArray();
-
-        if (groups.Length == 0)
-            return null;
-        if(groups.Length > 1)
-            throw new ArgumentException($"Collections {string.Join(", ",collections)} are are mapped to multiple sources. Split request.");
-        var dataSource = groups[0].Key;
-        if(dataSource == null)
-            throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-        return groups[0].Key.GetStreamForPartition(reference is IPartitionedWorkspaceReference part ? part.Partition : null);
-
-    }
 
     internal static object ReduceApplyRules<TStream, TReference, TReduced>(
         ChangeItem<TStream> state,
