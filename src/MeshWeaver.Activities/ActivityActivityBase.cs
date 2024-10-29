@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Activities;
 
-public abstract record ActivityBase: IDisposable
+public abstract class ActivityBase: IDisposable
 {
 
     protected readonly ILogger Logger;
@@ -26,7 +26,7 @@ public abstract record ActivityBase: IDisposable
 
     protected readonly IMessageHub SyncHub;
     public string Id => Log.Id;
-    protected ActivityLog Log { get; init; }
+    protected ActivityLog Log { get; set; }
     public bool IsEnabled(LogLevel logLevel) => Logger.IsEnabled(logLevel);
 
     public IDisposable BeginScope<TState>(TState state) => Logger.BeginScope(state);
@@ -56,7 +56,7 @@ public abstract record ActivityBase: IDisposable
 
 
 }
-public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
+public abstract class ActivityBase<TActivity> : ActivityBase, ILogger
     where TActivity:ActivityBase<TActivity>
 {
 
@@ -66,7 +66,8 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
 
     protected TActivity WithLog(Func<ActivityLog, ActivityLog> update)
     {
-        return This with { Log = update.Invoke(Log) };
+        Log = update.Invoke(Log);
+        return (TActivity)this;
     }
     protected ActivityBase(string category, IMessageHub hub) : base(category, hub)
     {
@@ -110,6 +111,7 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
                     Messages = log.Messages.Add(item), 
                     Version = log.Version + 1
                 }
+
             )
         );
     }
@@ -145,14 +147,8 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
 }
 
 
-public record Activity : ActivityBase<Activity>
+public class Activity(string category, IMessageHub hub) : ActivityBase<Activity>(category, hub)
 {
-    public Activity(string category, IMessageHub hub) : base(category, hub)
-    {
-    }
-
-
-
     protected void CompleteMyself(ActivityStatus? status)
     {
         Update(a =>

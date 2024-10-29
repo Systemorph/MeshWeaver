@@ -20,6 +20,8 @@ public record RouteConfiguration(IMessageHub Hub)
         RouteAddress<TAddress>((routedAddress, d) =>
         {
             var hub = hubFactory(routedAddress);
+            if (hub == null)
+                return d.NotFound();
             hub.DeliverMessage(d);
             return d.Forwarded();
         });
