@@ -167,11 +167,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(Configuration.StreamId, Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId, Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
         synchronizationHub.WithDisposeAction(_ => Store.Dispose());
     }
 
-    public string StreamId => Configuration.StreamId;
+    public string StreamId { get; } = Guid.NewGuid().AsString();
+    public string ClientId => Configuration.ClientId;
 
 
     private StreamConfiguration<TStream> Configuration { get; }
@@ -207,9 +208,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
-    internal string StreamId { get; init; } = Guid.NewGuid().AsString();
-    public StreamConfiguration<TStream> WithStreamId(string streamId) =>
-        this with { StreamId = streamId };
+    internal string ClientId { get; init; } = Guid.NewGuid().AsString();
+    public StreamConfiguration<TStream> WithClientId(string streamId) =>
+        this with { ClientId = streamId };
 
     internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
         [];

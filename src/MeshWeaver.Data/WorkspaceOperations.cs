@@ -121,7 +121,7 @@ public static class WorkspaceOperations
                                             new EntityUpdate(g.Key.TypeSource.CollectionName, i.Key, null)
                                             {
                                                 OldValue = i.Instance
-                                            })), change.ChangedBy);
+                                            })), change.ChangedBy ?? stream.StreamIdentity.ToString());
                                 }
 
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
@@ -250,7 +250,7 @@ public static class WorkspaceOperations
         return workspace.ValidateUpdate(instances);
     }
 
-    public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, object changedBy,
+    public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, string changedBy,
         UpdateOptions options = null )
     {
         options ??= UpdateOptions.Default;

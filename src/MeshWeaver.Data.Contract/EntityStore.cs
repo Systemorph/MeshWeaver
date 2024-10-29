@@ -99,7 +99,7 @@ public record EntityStore
         }
     }
 
-    public EntityStoreAndUpdates DeleteWithUpdates(EntityStore entityStore, object changedBy)
+    public EntityStoreAndUpdates DeleteWithUpdates(EntityStore entityStore, string changedBy)
     {
         var store = Remove(entityStore);
         return new EntityStoreAndUpdates(store, store.Collections.SelectMany(u => ComputeChanges(u.Key, u.Value)), changedBy);
@@ -121,7 +121,7 @@ public record EntityStore
         };
 }
 
-public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, object ChangedBy)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string ChangedBy)
 {
     //public EntityStoreAndUpdates(EntityStore Store) : this(Store, [], ChangedBy)
     //{
