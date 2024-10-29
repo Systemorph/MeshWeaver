@@ -53,7 +53,7 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
 
         if (Hub.Address.Equals(address))
             // TODO V10: This works only if the hub has been instantiated before. Consider re-implementing setting hosted hub configs at config time. (31.01.2024, Roland Bürgi)
-            return Hub.GetHostedHub(hostedSegment, null).DeliverMessage(delivery);
+            return Hub.GetHostedHub(hostedSegment, null)?.DeliverMessage(delivery) ?? delivery.NotFound();
 
         if (address is IHostedAddress hosted)
         {

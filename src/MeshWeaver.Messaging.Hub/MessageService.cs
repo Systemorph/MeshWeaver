@@ -71,8 +71,6 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery)
     {
-        if (isDisposing)
-            return delivery.Failed("Hub disposing");
 
         if (delivery.Target is JsonNode node)
             delivery = delivery.WithTarget(node.Deserialize<object>(hub.JsonSerializerOptions));
@@ -85,7 +83,12 @@ public class MessageService : IMessageService
         var cancellationToken = CancellationToken.None;
         logger.LogDebug("Buffering message {message} from sender {sender} in message service {address}", delivery.Message, delivery.Sender, delivery.Target);
 
-        buffer.Post((delivery, cancellationToken));
+        lock (locker)
+        {
+            if (isDisposing)
+                return delivery.Failed("Hub disposing");
+            buffer.Post((delivery, cancellationToken));
+        }
         return delivery;
     }
 
@@ -127,7 +130,8 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                ReportFailure(delivery.Failed(e.ToString()));
+                if(!hub.IsDisposing)
+                    ReportFailure(delivery.Failed(e.ToString()));
             }
 
             logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message,
@@ -139,6 +143,9 @@ public class MessageService : IMessageService
 
     public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
     {
+        lock(locker)
+            if (isDisposing)
+                return null;
         logger.LogDebug("Posting message {Message} from {Sender} to {Target}", message, Address, opt.Target);
         return PostImpl(message, opt);
     }
@@ -170,10 +177,13 @@ public class MessageService : IMessageService
             isDisposing = true;
         }
 
-
-
         buffer.Complete();
+
+        logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
         await deliveryAction.Completion;
+        logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
         await deferralContainer.DisposeAsync();
+        logger.LogDebug("Finished disposing message service in {Address}", Address);
+
     }
 }

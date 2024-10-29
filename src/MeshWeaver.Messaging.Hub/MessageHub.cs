@@ -22,7 +22,7 @@ public record ExecutionRequest(Func<CancellationToken, Task> Action);
 public sealed class MessageHub
     : MessageHubBase,
         IMessageHub,
-        IMessageHandler<ShutdownRequest>
+        IMessageHandlerAsync<ShutdownRequest>
 {
     public override object Address => MessageService.Address;
 
@@ -63,7 +63,9 @@ public sealed class MessageHub
                 return new RoutePlugin(forwardConfig, parentHub, hub);
                 
             });
-        disposeActions.AddRange(configuration.DisposeActions);
+
+        foreach (var disposeAction in configuration.DisposeActions) 
+            disposeActions.Add(disposeAction);
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions();
 
@@ -98,7 +100,7 @@ public sealed class MessageHub
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
         // TODO V10: Add logging for failed messages, not found, etc. (31.01.2024, Roland Bürgi)
-        return delivery;
+        return delivery.State == MessageDeliveryState.Submitted ? delivery.Ignored() : delivery;
     }
 
     private readonly TaskCompletionSource hasStarted = new();
@@ -345,6 +347,7 @@ public sealed class MessageHub
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
+    bool IMessageHub.IsDisposing => IsDisposing;
     private bool IsDisposing => disposingTaskCompletionSource != null;
 
     private TaskCompletionSource disposingTaskCompletionSource;
@@ -357,20 +360,24 @@ public sealed class MessageHub
     {
         lock (locker)
         {
-            if (IsDisposing)
-                return;
-            logger.LogDebug("Starting disposing of hub {address}", Address);
-            disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
+            if (!IsDisposing)
+            {
+                logger.LogDebug("Starting disposing of hub {address}", Address);
+                disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
+            }
         }
-
-        //Post(new DisconnectHubRequest(), o => o.WithTarget(MessageTargets.Subscriptions));
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
-    IMessageDelivery IMessageHandler<ShutdownRequest>.HandleMessage(
-        IMessageDelivery<ShutdownRequest> request
+    async Task<IMessageDelivery> IMessageHandlerAsync<ShutdownRequest>.HandleMessageAsync(
+        IMessageDelivery<ShutdownRequest> request,
+        CancellationToken ct
     )
     {
+        while (disposeActions.TryTake(out var configurationDisposeAction))
+            await configurationDisposeAction.Invoke(this);
+
+
         if (request.Message.Version != Version - 1)
         {
             Post(request.Message with { Version = Version });
@@ -416,14 +423,11 @@ public sealed class MessageHub
     {
         await hostedHubs.DisposeAsync();
 
-        foreach (var configurationDisposeAction in disposeActions)
-            await configurationDisposeAction.Invoke(this);
-
         await MessageService.DisposeAsync();
         await base.DisposeAsync();
     }
 
-    private readonly List<Func<IMessageHub, Task>> disposeActions = new();
+    private readonly ConcurrentBag<Func<IMessageHub, Task>> disposeActions = new();
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         MessageService.Defer(deferredFilter);

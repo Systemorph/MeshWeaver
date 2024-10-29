@@ -26,6 +26,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
 
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     {
+        if (isDisposing)
+            return null; 
         return serviceProvider.CreateMessageHub(address, config);
     }
 
