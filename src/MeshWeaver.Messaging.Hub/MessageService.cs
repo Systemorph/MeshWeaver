@@ -130,8 +130,7 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                if(!hub.IsDisposing)
-                    ReportFailure(delivery.Failed(e.ToString()));
+                ReportFailure(delivery.Failed(e.ToString()));
             }
 
             logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message,

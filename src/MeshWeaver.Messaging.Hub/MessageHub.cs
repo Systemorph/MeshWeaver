@@ -347,7 +347,6 @@ public sealed class MessageHub
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
-    bool IMessageHub.IsDisposing => IsDisposing;
     private bool IsDisposing => disposingTaskCompletionSource != null;
 
     private TaskCompletionSource disposingTaskCompletionSource;
@@ -383,33 +382,70 @@ public sealed class MessageHub
             Post(request.Message with { Version = Version });
             return request.Ignored();
         }
-        Task.Run(async () =>
+
+        HandleShutdown(request);
+        return request.Forwarded();
+    }
+
+    private async void HandleShutdown(IMessageDelivery<ShutdownRequest> request)
+    {
+        switch (request.Message.RunLevel)
         {
-            switch (request.Message.RunLevel)
-            {
-                case MessageHubRunLevel.DisposeHostedHubs:
-                    logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
-                    RunLevel = MessageHubRunLevel.DisposeHostedHubs;
+            case MessageHubRunLevel.DisposeHostedHubs:
+                try
+                {
+                    lock (locker)
+                    {
+                        if (RunLevel == MessageHubRunLevel.DisposeHostedHubs)
+                            return;
+
+                        logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
+                        RunLevel = MessageHubRunLevel.DisposeHostedHubs;
+                    }
                     await hostedHubs.DisposeAsync();
-                    Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
                     logger.LogDebug("Finish disposing hosted hubs of hub {address}", Address);
-                    return request.Processed();
-                case MessageHubRunLevel.ShutDown:
-                    logger.LogDebug("Starting shutdown of hub {address}", Address);
-                    RunLevel = MessageHubRunLevel.ShutDown;
+                }
+                catch (Exception e)
+                {
+                    logger.LogError("Error during disposal of hosted hubs: {exception}", e);
+                }
+                finally
+                {
+                    Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
+                }
+
+                break;
+            case MessageHubRunLevel.ShutDown:
+                try
+                {
+                    lock (locker)
+                    {
+                        if (RunLevel == MessageHubRunLevel.ShutDown)
+                            return;
+
+                        logger.LogDebug("Starting shutdown of hub {address}", Address);
+                        RunLevel = MessageHubRunLevel.ShutDown;
+                    }
+
                     await ShutdownAsync();
+
+                }
+                catch (Exception e)
+                {
+                    logger.LogError("Error during shutdown: {exception}", e);
+                }
+                finally
+                {
                     RunLevel = MessageHubRunLevel.Dead;
-                    disposingTaskCompletionSource.SetResult();
-                    await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
+                    //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
                     logger.LogDebug("Finished shutdown of hub {address}", Address);
-                    return request.Processed();
-            }
 
-            return request.Ignored();
-        });
+                    disposingTaskCompletionSource.SetResult();
+                }
 
-        return request.Forwarded();
+                break;
+        }
     }
 
     public override Task DisposeAsync()
