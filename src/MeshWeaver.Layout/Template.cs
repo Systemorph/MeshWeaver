@@ -26,7 +26,7 @@ public static class Template{
             .WithBuildup((host, context, store) =>
             {
                 var forwardSubscription = stream.Subscribe(changeItem =>
-                    host.Stream.SetData(id, changeItem.Value, host.Workspace.Hub.Address)
+                    host.Stream.SetData(id, changeItem.Value, host.Stream.StreamId)
                 );
                 host.AddDisposable(context.Area, forwardSubscription);
                 return new(store, [], null);
@@ -86,7 +86,7 @@ public static class Template{
                     if (Equals(val, current))
                         return;
                     current = val;
-                    host.Stream.SetData(id, val, host.Workspace.Hub.Address);
+                    host.Stream.SetData(id, val, host.Stream.StreamId);
                 });
                 host.AddDisposable(context.Area, forwardSubscription);
                 return new(store, [], null);
