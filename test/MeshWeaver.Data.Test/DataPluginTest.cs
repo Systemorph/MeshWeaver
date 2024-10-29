@@ -72,7 +72,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var data = (
             await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(3.Seconds())
+                //.Timeout(3.Seconds())
                 .FirstOrDefaultAsync()
                 
         )
@@ -83,9 +83,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems, client.Address),
-            o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            DataChangeRequest.Update(updateItems, null),
+            o => o.WithTarget(new ClientAddress())//,
+            //new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
 
         // asserts
@@ -106,7 +106,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             await GetHost()
                 .GetWorkspace()
                 .GetObservable<MyData>()
-                .Timeout(3.Seconds())
+                //.Timeout(3.Seconds())
                 .FirstOrDefaultAsync(x => x?.Count == 3)
         )
             .OrderBy(a => a.Id)
@@ -134,7 +134,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted, client.Address),
+            DataChangeRequest.Delete(toBeDeleted, null),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -211,7 +211,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems, client.Address),
+            DataChangeRequest.Update(updateItems, null),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );

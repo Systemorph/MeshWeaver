@@ -79,7 +79,7 @@ public class ImportManager
             if (activity.HasErrors())
                 return;
 
-            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported, Configuration.Workspace.Hub.Address), activity);
+            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported, null), activity);
         }
         catch (Exception e)
         {
