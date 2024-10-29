@@ -78,25 +78,21 @@ public static class LayoutExtensions
             .Parse(LayoutAreaReference.GetControlPointer(area)));
 
     public static IObservable<T> GetStream<T>(
-        this ISynchronizationStream<JsonElement> synchronizationItems,
+        this ISynchronizationStream<JsonElement> stream,
         JsonPointer referencePointer
     )
     {
         var first = true;
-        return synchronizationItems
+        var collection = referencePointer.Segments.First().Value;
+        var idString = referencePointer.Segments.Skip(1).FirstOrDefault()?.Value;
+        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
+
+        return stream
             .Where(i =>
                 first
                 || i.Updates is null
                 || i.Updates.Any(
-                    p =>
-                        new[]{ p.Collection, p.Id.ToString() }
-                            .Zip
-                            (
-                                referencePointer.Segments,
-                                (x, y) => x.Equals(y.Value))
-
-                            .All(x => x)
-                        )
+                    p =>p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
                 )
             .Select(i =>
                 {
@@ -104,7 +100,7 @@ public static class LayoutExtensions
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
                     return evaluated is null ? default
-                        : evaluated.Value.Deserialize<T>(synchronizationItems.Hub.JsonSerializerOptions);
+                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
                 }
             );
     }
