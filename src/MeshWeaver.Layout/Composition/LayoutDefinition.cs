@@ -21,7 +21,7 @@ public record LayoutDefinition(IMessageHub Hub)
         EntityStore store) =>
         Renderers
             .Where(r => r.Filter(context))
-            .Aggregate(new EntityStoreAndUpdates(store, [], host.Reference.HostId),(r,x) =>
+            .Aggregate(new EntityStoreAndUpdates(store, [], host.Stream.StreamId),(r,x) =>
             {
                 var ret = x.Renderer.Invoke(host, context, r.Store);
                 return ret with{

@@ -46,15 +46,16 @@ public static class WorkspaceOperations
             }
         }
 
-        if (activity.HasErrors())
-        {
-            activity.Complete(status: ActivityStatus.Failed);
-            return;
-        }
-        workspace.UpdateStreams(change, activity);
+
+        activity.Update(a => a.HasErrors() ? a with{Log = a.Log} : StartUpdate(a, workspace, change));
     }
 
-
+    private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change)
+    {
+        activity.LogInformation("Starting Update");
+        workspace.UpdateStreams(change, activity);
+        return activity;
+    }
 
 
     private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity)

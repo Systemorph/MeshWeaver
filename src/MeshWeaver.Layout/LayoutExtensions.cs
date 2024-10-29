@@ -167,7 +167,7 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore> stream,
         string id,
         object value,
-        object changedBy
+        string changedBy
     ) => stream.UpdateAsync(s =>
         stream.ApplyChanges(
             s.MergeWithUpdates(

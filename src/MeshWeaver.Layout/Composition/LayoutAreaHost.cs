@@ -94,7 +94,7 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, object view, EntityStore store)
     {
         if (view == null)
-            return new(store, [], Reference.HostId);
+            return new(store, [], Stream.StreamId);
 
         var control = ConvertToControl(view);
 
@@ -121,7 +121,7 @@ public record LayoutAreaHost : IDisposable
                 new(
                     updates.Store,
                 changes.Updates.Concat(updates.Updates),
-                Reference.HostId
+                Stream.StreamId
                     )
             ) ;
         });
@@ -131,7 +131,7 @@ public record LayoutAreaHost : IDisposable
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.UpdateAsync(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Hub.Address))
+            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId))
         );
     }
 
@@ -239,11 +239,11 @@ public record LayoutAreaHost : IDisposable
                 .ToArray();
 
         if (existing == null)
-            return new(store, [], Reference.HostId);
+            return new(store, [], Stream.StreamId);
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Reference.HostId);
+            new EntityUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Stream.StreamId);
     }
 
 
@@ -258,7 +258,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)], Reference.HostId));
+        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId));
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
