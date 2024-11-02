@@ -10,8 +10,8 @@
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.2.0" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="9.0.0-rc.1.24511.1" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.0.0-rc.1.24511.1" />
-    <PackageVersion Include="Autofac" Version="8.0.0" />
-    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="9.0.0" />
+    <PackageVersion Include="Autofac" Version="8.1.1" />
+    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.8.3" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="0.2.0" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
@@ -47,20 +47,21 @@
     <PackageVersion Include="System.Text.Encodings.Web" Version="8.0.0" />
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0-beta1.24219.2" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.8.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.24229.4" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.24229.4" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.24229.4" />
-    <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.24229.4" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.11.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.11.0" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive" Version="1.0.0-beta.24530.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.24530.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.24530.1" />
+    <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.24530.1" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="8.5.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="$(MicrosoftExtensionsVersion)" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="8.0.0" />
@@ -84,9 +85,9 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.12.6" />
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.12.6" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.12.6" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="8.0.7" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.7.2" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.7.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="8.0.10" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.10.3" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.10.3" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="9.0.0-rc.1.24511.1" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="8.2.0" />
