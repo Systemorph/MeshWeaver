@@ -4,16 +4,16 @@ using MeshWeaver.Pivot.Models.Interfaces;
 namespace MeshWeaver.Pivot.Grouping
 {
     public class SelectorPivotGrouper<T, TSelected, TGroup>(
-        Func<T, int, TSelected> selector,
-        string id
-    ) : IPivotGrouper<T, TGroup>
+        string id, 
+        Func<T, int, TSelected> selector) 
+        : IPivotGrouper<T,TGroup>
         where TGroup : class, IGroup, new()
     {
         protected Func<T, int, TSelected> Selector { get; } = selector;
-        public string Id { get; } = id;
 
-        public SelectorPivotGrouper(Func<T, TSelected> selector, string id)
-            : this((x, _) => selector.Invoke(x), id) { }
+        protected string Id { get; } = id;
+        public SelectorPivotGrouper(string id, Func<T, TSelected> selector)
+            : this(id, (x, _) => selector.Invoke(x)) { }
 
         public virtual IReadOnlyCollection<
             PivotGrouping<TGroup, IReadOnlyCollection<T>>

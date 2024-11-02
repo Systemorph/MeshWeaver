@@ -66,6 +66,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
         };
     }
 
+
     public PivotBuilder<T, TIntermediate, TAggregate> WithAggregation(
         Func<
             Aggregations<T, TIntermediate, TAggregate>,
@@ -102,20 +103,17 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
             Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>()),
         };
 
-    protected override PivotProcessorBase<
-        T,
-        T,
-        TIntermediate,
-        TAggregate,
-        PivotBuilder<T, TIntermediate, TAggregate>
-    > GetReportProcessor()
+    protected override PivotProcessorBase<T, T, TIntermediate, TAggregate, PivotBuilder<T, TIntermediate, TAggregate>>
+        GetReportProcessor()
+
     {
         return new PivotProcessor<T, TIntermediate, TAggregate>(
             new PivotColumnsConfiguration<TAggregate>(TransposedValue ?? typeof(TAggregate)),
             TransposedValue != null
                 ? new TransposedPivotRowsConfiguration<TAggregate>(TransposedValue)
                 : null,
-            this
+            this,
+            Workspace
         );
     }
 }

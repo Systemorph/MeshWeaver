@@ -10,7 +10,7 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : class, IGroup, new()
     {
         public PropertyPivotGrouper(Func<T, PropertyInfo> selector)
-            : base(selector, PivotConst.PropertyPivotGrouperName) { }
+            : base(PivotConst.PropertyPivotGrouperName, selector) { }
 
         protected override IOrderedEnumerable<IGrouping<PropertyInfo, T>> Order(
             IEnumerable<IGrouping<PropertyInfo, T>> groups

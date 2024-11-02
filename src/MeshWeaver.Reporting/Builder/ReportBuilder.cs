@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Linq.Expressions;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.GridModel;
 using MeshWeaver.Pivot.Aggregations;
@@ -123,17 +124,22 @@ namespace MeshWeaver.Reporting.Builder
             return this with { PivotBuilder = PivotBuilder.Transpose<TValue>() };
         }
 
-        public virtual GridOptions Execute()
+        public virtual IObservable<GridOptions> Execute()
         {
-            var pivotModel = PivotBuilder.Execute();
+            return PivotBuilder.Execute()
+                .Select(pivotModel =>
+                {
+                    var gridOptions = GridOptionsMapper.MapToGridOptions(pivotModel);
 
-            var gridOptions = GridOptionsMapper.MapToGridOptions(pivotModel);
+                    GridOptions PostProcessor(GridOptions go) =>
+                        PostProcessors.Aggregate(go, (current, next) => next(current));
 
-            GridOptions PostProcessor(GridOptions go) =>
-                PostProcessors.Aggregate(go, (current, next) => next(current));
-            gridOptions = PostProcessor(gridOptions);
+                    gridOptions = PostProcessor(gridOptions);
 
-            return gridOptions;
+                    return gridOptions;
+
+                });
+
         }
     }
 }

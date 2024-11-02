@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.GridModel;
 using MeshWeaver.Pivot.Aggregations;
@@ -212,17 +213,20 @@ namespace MeshWeaver.Reporting.Builder
             return this with { PivotBuilder = PivotBuilder.Transpose<TValue>() };
         }
 
-        public virtual GridOptions Execute()
+        public virtual IObservable<GridOptions> Execute()
         {
-            var pivotModel = PivotBuilder.Execute();
+            return  PivotBuilder.Execute()
+                .Select(pivotModel =>
+                {
+                    var gridOptions = GridOptionsMapper.MapToGridOptions(pivotModel);
 
-            var gridOptions = GridOptionsMapper.MapToGridOptions(pivotModel);
+                    GridOptions GridOptionsPostProcessor(GridOptions go) =>
+                        postProcessors.Aggregate(go, (current, next) => next(current));
+                    gridOptions = GridOptionsPostProcessor(gridOptions);
 
-            GridOptions GridOptionsPostProcessor(GridOptions go) =>
-                postProcessors.Aggregate(go, (current, next) => next(current));
-            gridOptions = GridOptionsPostProcessor(gridOptions);
+                    return gridOptions;
+                });
 
-            return gridOptions;
         }
 
         public GridControl ToGridControl() => new(Execute());
