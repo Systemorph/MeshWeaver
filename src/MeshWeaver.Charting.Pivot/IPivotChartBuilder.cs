@@ -14,5 +14,5 @@ public interface IPivotChartBuilder
     IPivotChartBuilder WithColorScheme(Palettes scheme);
     IPivotChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor);
     IPivotChartBuilder WithRows(params string[] lineRows);
-    Chart Execute();
+    IObservable<Chart> Execute();
 }

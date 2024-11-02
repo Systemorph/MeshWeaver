@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
-using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
@@ -17,6 +16,7 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : class, IGroup, new()
     {
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Expression<Func<TTransformed, TSelected>> selector
         )
@@ -26,7 +26,7 @@ namespace MeshWeaver.Pivot.Grouping
             // TODO V10: do we want to support this selector? (2022/03/10, Ekaterina Mishina)
             if (typeof(TGroup).IsAssignableFrom(typeof(TSelected)))
             {
-                string grouperName = GetGrouperName(selector);
+                var grouperName = GetGrouperName(selector);
                 return new DirectPivotGrouper<TTransformed, TGroup>(
                     x => x.GroupBy(y => (TGroup)(object)compiledSelector(y)),
                     grouperName
@@ -42,6 +42,7 @@ namespace MeshWeaver.Pivot.Grouping
                     dimensionAttribute.Type
                 );
                 return GetPivotGrouper(
+                    dimensionCache,
                     hierarchicalDimensionOptions,
                     dimensionDescriptor,
                     compiledSelector
@@ -49,10 +50,7 @@ namespace MeshWeaver.Pivot.Grouping
             }
 
             // TODO V10: find use cases (2022/03/08, Ekaterina Mishina)
-            return new SelectorPivotGrouper<TTransformed, TSelected, TGroup>(
-                compiledSelector,
-                property?.Name ?? PivotConst.PropertyPivotGrouperName
-            );
+            return new SelectorPivotGrouper<TTransformed, TSelected, TGroup>(property?.Name ?? PivotConst.PropertyPivotGrouperName, compiledSelector);
         }
 
         private class GrouperNameVisitor : ExpressionVisitor
@@ -88,12 +86,14 @@ namespace MeshWeaver.Pivot.Grouping
         }
 
         public static IPivotGrouper<DataSlice<TElement>, TGroup> GetPivotGrouper<TElement>(
+            DimensionCache dimensionCache,
             DimensionDescriptor descriptor,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
             if (typeof(INamed).IsAssignableFrom(descriptor.Type))
                 return GetPivotGrouper<DataSlice<TElement>, object>(
+                    dimensionCache,
                     hierarchicalDimensionOptions,
                     descriptor,
                     x => x.Tuple.GetValue(descriptor.SystemName)
@@ -130,10 +130,11 @@ namespace MeshWeaver.Pivot.Grouping
 
         private static readonly MethodInfo GetReportGrouperMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetPivotGrouper<object, object>(null,  null, null)
+                () => GetPivotGrouper<object, object>(null,  null, null, null)
             );
 
         private static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             DimensionDescriptor descriptor,
             Func<TTransformed, TSelected> selector
@@ -149,20 +150,18 @@ namespace MeshWeaver.Pivot.Grouping
                     GetDimensionReportGroupConfigMethod
                         .MakeGenericMethod(typeof(TTransformed), descriptor.Type)
                         .InvokeAsFunction(
+                            dimensionCache,
                             hierarchicalDimensionOptions,
                             selector,
                             new DimensionDescriptor(descriptor.SystemName, descriptor.Type)
                         );
 
-            return new SelectorPivotGrouper<TTransformed, TSelected, TGroup>(
-                selector,
-                descriptor.SystemName
-            );
+            return new SelectorPivotGrouper<TTransformed, TSelected, TGroup>(descriptor.SystemName, selector);
         }
 
         private static readonly MethodInfo GetDimensionReportGroupConfigMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetDimensionReportGroupConfig<object, INamed>(null, null, null, null, null)
+                () => GetDimensionReportGroupConfig<object, INamed>(null, null, null, null)
             );
 
         // ReSharper disable once UnusedMethodReturnValue.Local
@@ -170,8 +169,7 @@ namespace MeshWeaver.Pivot.Grouping
             TTransformed,
             TDimension
         >(
-            EntityStore state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<TTransformed, object> selector,
             DimensionDescriptor descriptor
@@ -183,17 +181,16 @@ namespace MeshWeaver.Pivot.Grouping
                     CreateHierarchicalDimensionPivotGrouperMethod
                         .MakeGenericMethod(typeof(TTransformed), typeof(TDimension))
                         .InvokeAsFunction(
-                            state,
-                            hierarchicalDimensionCache,
+                            dimensionCache,
                             hierarchicalDimensionOptions,
                             selector,
                             descriptor
                         );
 
             return new DimensionPivotGrouper<TTransformed, TDimension, TGroup>(
-                state,
+                descriptor,
                 selector,
-                descriptor
+                dimensionCache
             );
         }
 
@@ -201,7 +198,6 @@ namespace MeshWeaver.Pivot.Grouping
             GenericCaches.GetMethodCacheStatic(
                 () =>
                     CreateHierarchicalDimensionPivotGrouper<object, IHierarchicalDimension>(
-                        default,
                         default,
                         default,
                         default,
@@ -215,8 +211,7 @@ namespace MeshWeaver.Pivot.Grouping
             TDimension,
             TGroup
         > CreateHierarchicalDimensionPivotGrouper<TTransformed, TDimension>(
-            EntityStore state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<TTransformed, object> selector,
             DimensionDescriptor descriptor
@@ -224,8 +219,7 @@ namespace MeshWeaver.Pivot.Grouping
             where TDimension : class, IHierarchicalDimension
         {
             return new(
-                state,
-                hierarchicalDimensionCache,
+                dimensionCache,
                 hierarchicalDimensionOptions,
                 selector,
                 descriptor

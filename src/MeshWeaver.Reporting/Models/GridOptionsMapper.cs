@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.GridModel;
 using MeshWeaver.Pivot;
-using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Builder.Interfaces;
 using MeshWeaver.Pivot.Grouping;
 using MeshWeaver.Pivot.Models;
@@ -11,8 +11,8 @@ namespace MeshWeaver.Reporting.Models
 {
     public static class GridOptionsMapper
     {
-        public static GridControl ToGrid(this IPivotBuilder pivotBuilder) =>
-            pivotBuilder.Execute().ToGrid();
+        public static IObservable<GridControl> ToGrid(this IPivotBuilder pivotBuilder) =>
+            pivotBuilder.Execute().Select(x => x.ToGrid());
 
         public static GridControl ToGrid(this PivotModel pivotModel) =>
             new(MapToGridOptions(pivotModel));

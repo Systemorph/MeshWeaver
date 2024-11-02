@@ -2,12 +2,10 @@
 
 namespace MeshWeaver.Pivot.Grouping
 {
-    public class AutomaticEnumerationPivotGrouper<T, TGroup> : SelectorPivotGrouper<T, int, TGroup>
+    public class AutomaticEnumerationPivotGrouper<T, TGroup>()
+        : SelectorPivotGrouper<T, int, TGroup>(PivotConst.AutomaticEnumerationPivotGrouperName, (_, i) => i + 1)
         where TGroup : class, IGroup, new()
     {
-        public AutomaticEnumerationPivotGrouper()
-            : base((_, i) => i + 1, PivotConst.AutomaticEnumerationPivotGrouperName) { }
-
         public override IReadOnlyCollection<
             PivotGrouping<TGroup, IReadOnlyCollection<T>>
         > CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)

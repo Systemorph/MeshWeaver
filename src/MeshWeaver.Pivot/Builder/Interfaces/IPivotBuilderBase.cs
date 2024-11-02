@@ -4,7 +4,7 @@ namespace MeshWeaver.Pivot.Builder.Interfaces;
 
 public interface IPivotBuilder
 {
-    PivotModel Execute();
+    IObservable<PivotModel> Execute();
 }
 
 public interface IPivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
