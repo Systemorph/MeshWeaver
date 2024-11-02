@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using FluentAssertions;
 using MeshWeaver.Arithmetics;
@@ -185,21 +185,23 @@ public class PivotTest : HubTestBase
     public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
-        var exception = Record.Exception(
-            () =>
-                qs = GetHost().GetWorkspace()
+        var exception = await Record.ExceptionAsync(
+            async () =>
+                qs = await GetHost().GetWorkspace()
                     .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
                     .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
                     .Execute()
+                    .FirstAsync()
         );
         Assert.Null(exception);
         Assert.NotNull(qs);
 
-        var flattened = (GetHost().GetWorkspace())
+        var flattened = await (GetHost().GetWorkspace())
             .Pivot(ValueWithHierarchicalDimension.Data.ToDataCube())
             .WithHierarchicalDimensionOptions(o => o.Flatten<TestHierarchicalDimensionA>())
             .SliceRowsBy(nameof(ValueWithHierarchicalDimension.DimA))
-            .Execute();
+            .Execute()
+            .FirstAsync();
 
         qs.Columns.Should().BeEquivalentTo(flattened.Columns);
         // excluding display names, as they differ due to missing data source
@@ -216,7 +218,7 @@ public class PivotTest : HubTestBase
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
 
         async Task Report() =>
-            (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute();
+            await (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute().FirstAsync();
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report);
         ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
     }
@@ -229,7 +231,7 @@ public class PivotTest : HubTestBase
             .ForIdentities(storage.Identities, storage)
             .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
 
-        async Task Report() => (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute();
+        async Task Report() => await (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute().FirstAsync();
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report); //.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
         ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
     }

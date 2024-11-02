@@ -22,16 +22,19 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
         // TODO V10: this should be a new Column(){ Field = "", HeaderName = "Name", ValueGetter = "node.id"}  (2021/10/05, Ekaterina Mishina)
         if (typeof(INamed).IsAssignableFrom(typeof(T)))
         {
-            var keyFunction = typeRegistry.GetKeyFunction(typeof(T)).Function;
-            var grouper = Activator.CreateInstance(
-                typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
-                PivotConst.AutomaticEnumerationPivotGrouperName,
-                keyFunction
-            );
-            return new((IPivotGrouper<T, TGroup>)grouper);
+            return new(new(_ =>
+            {
+                var keyFunction = typeRegistry.GetKeyFunction(typeof(T)).Function;
+                var grouper = Activator.CreateInstance(
+                    typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
+                    PivotConst.AutomaticEnumerationPivotGrouperName,
+                    keyFunction
+                );
+                return (IPivotGrouper<T, TGroup>)grouper;
+            }));
         }
 
-        return new(new AutomaticEnumerationPivotGrouper<T, TGroup>());
+        return new(new (_ => new AutomaticEnumerationPivotGrouper<T, TGroup>()));
     }
 
 
@@ -52,11 +55,12 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
-        return new(
+        return new(new(dimensionCache =>
             PivotGroupingExtensions<TGroup>.GetPivotGrouper(
+                dimensionCache,
                 hierarchicalDimensionOptions,
                 selector
-            )
+            ))
         );
     }
 
@@ -85,10 +89,11 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
 public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, RowGroup>
 {
     private static readonly PivotGroupingConfigItem<T, RowGroup> DefaultTransposedRowGrouping =
-        new(
-            new DirectPivotGrouper<T, RowGroup>(
-                x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup),
-                IPivotGrouper<T, RowGroup>.TopGroup.GrouperName
+        new(new(_ =>
+                new DirectPivotGrouper<T, RowGroup>(
+                    x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup),
+                    IPivotGrouper<T, RowGroup>.TopGroup.GrouperName
+                )
             )
         );
 
@@ -106,10 +111,11 @@ public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, 
 public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<T, ColumnGroup>
 {
     private static readonly PivotGroupingConfigItem<T, ColumnGroup> DefaultColumnGrouping =
-        new(
-            new DirectPivotGrouper<T, ColumnGroup>(
-                x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup),
-                IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName
+        new(new(_ =>
+                new DirectPivotGrouper<T, ColumnGroup>(
+                    x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup),
+                    IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName
+                )
             )
         );
     private PivotGroupingConfigItem<T, ColumnGroup> DefaultTransposedGrouping =>

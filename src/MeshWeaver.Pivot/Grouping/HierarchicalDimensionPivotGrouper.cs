@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.DataCubes;
+﻿using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Aggregations;
@@ -21,28 +20,26 @@ namespace MeshWeaver.Pivot.Grouping
 
         void UpdateMaxLevel(T element);
     }
-
     public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
         string name,
         int level,
-        EntityStore store,
+        DimensionCache dimensionCache,
         Func<T, int, object> selector
-    ) : DimensionPivotGrouper<T, TDimension, TGroup>(store, selector, name + level)
+    ) : DimensionPivotGrouper<T, TDimension, TGroup>(name + level, selector, dimensionCache)
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
-        private readonly HierarchicalDimensionCache hierarchicalDimensionCache = new(store);
+        private readonly DimensionCache dimensionCache = dimensionCache;
 
         // TODO V10: fix order of groups in the group manager (2022/04/21, Ekaterina Mishina)
-        public override IReadOnlyCollection<
-            PivotGrouping<TGroup, IReadOnlyCollection<T>>
-        > CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)
+        public override IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateGroupings(
+            IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
             var selectedObjects = objects.Select(
                 (x, i) =>
                     new
                     {
-                        Key = hierarchicalDimensionCache.AncestorIdAtLevel<TDimension>(
+                        Key = dimensionCache.AncestorIdAtLevel<TDimension>(
                             Selector(x, i),
                             level
                         ),
@@ -82,33 +79,30 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
-        protected IHierarchicalDimensionCache HierarchicalDimensionCache;
         private int minLevel;
         private int maxLevel;
         private int maxLevelData;
         private bool flat;
 
         public HierarchicalDimensionPivotGrouper(
-            EntityStore state,
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             Func<T, object> selector,
             DimensionDescriptor dimensionDescriptor
         )
-            : base(state, selector, dimensionDescriptor)
+            : base(dimensionDescriptor, selector, dimensionCache)
         {
-            InitializeHierarchies(hierarchicalDimensionCache, hierarchicalDimensionOptions);
+            InitializeHierarchies(dimensionCache, hierarchicalDimensionOptions);
         }
 
         public void InitializeHierarchies(
-            IHierarchicalDimensionCache hierarchicalDimensionCache,
+            DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions
         )
         {
-            HierarchicalDimensionCache = hierarchicalDimensionCache;
             if (
-                HierarchicalDimensionCache == null
-                || !hierarchicalDimensionCache.Has(typeof(TDimension))
+                this.DimensionCache == null
+                || !dimensionCache.Has(typeof(TDimension))
             )
             {
                 flat = true;
@@ -144,7 +138,7 @@ namespace MeshWeaver.Pivot.Grouping
             if (flat)
                 return;
             var dimSystemName = Selector(element, 0);
-            var hierarchyNode = HierarchicalDimensionCache.Get<TDimension>(dimSystemName);
+            var hierarchyNode = DimensionCache.GetHierarchical<TDimension>(dimSystemName);
             if (hierarchyNode == null)
                 return;
             maxLevelData = Math.Max(maxLevelData, Math.Min(maxLevel, hierarchyNode.Level));
@@ -162,7 +156,7 @@ namespace MeshWeaver.Pivot.Grouping
             var grouper = new HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
                 DimensionDescriptor.SystemName,
                 level,
-                Store,
+                DimensionCache,
                 Selector
             );
 

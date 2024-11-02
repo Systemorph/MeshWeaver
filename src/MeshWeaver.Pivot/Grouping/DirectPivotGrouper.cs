@@ -22,8 +22,7 @@ namespace MeshWeaver.Pivot.Grouping
 
         public IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateGroupings(
             IReadOnlyCollection<T> objects,
-            TGroup nullGroup
-        )
+            TGroup nullGroup)
         {
             var grouped = grouping(objects);
             var ordered = Order(grouped);

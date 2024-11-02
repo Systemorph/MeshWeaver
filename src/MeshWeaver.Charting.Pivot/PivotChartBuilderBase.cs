@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
@@ -62,15 +63,18 @@ public abstract record PivotChartBuilderBase<
         return this;
     }
 
-    public Chart Execute()
+    public IObservable<Chart> Execute()
     {
-        var pivotModel = pivotBuilder.Execute();
-        var pivotChartModel = CreatePivotModel(pivotModel);
-        AddDataSets(pivotChartModel);
-        AddOptions(pivotChartModel);
+        return pivotBuilder.Execute()
+            .Select(pivotModel =>
+            {
+                var pivotChartModel = CreatePivotModel(pivotModel);
+                AddDataSets(pivotChartModel);
+                AddOptions(pivotChartModel);
 
-        ApplyCustomChartConfigs();
-        return Chart;
+                ApplyCustomChartConfigs();
+                return Chart;
+            });
     }
 
     public IPivotChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)

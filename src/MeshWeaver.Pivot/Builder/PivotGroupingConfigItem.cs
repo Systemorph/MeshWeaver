@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Grouping;
 using MeshWeaver.Pivot.Models.Interfaces;
@@ -8,22 +8,22 @@ namespace MeshWeaver.Pivot.Builder
     public record PivotGroupingConfigItem<T, TGroup>
         where TGroup : class, IGroup, new()
     {
-        public PivotGroupingConfigItem([NotNull] IPivotGrouper<T, TGroup> grouping)
-        {
-            Grouping = grouping;
-        }
+        private readonly PivotGroupBuilder<T, TGroup> builder;
 
-        internal IPivotGrouper<T, TGroup> Grouping { get; init; }
+        protected PivotGroupingConfigItem() { }
+
+        public PivotGroupingConfigItem(PivotGroupBuilder<T, TGroup> builder)
+            => this.builder = builder;
 
         public virtual PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetGroupManager<
             TIntermediate,
             TAggregate
         >(
+            DimensionCache dimensionCache,
             PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
-        )
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions)
         {
-            if (Grouping is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
+            if (subGroup.Grouper is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
             {
                 var groupManager = hierarchicalGrouper.GetPivotGroupManager(
                     subGroup,
@@ -31,7 +31,7 @@ namespace MeshWeaver.Pivot.Builder
                 );
                 return groupManager;
             }
-            return new(Grouping, subGroup, aggregationFunctions);
+            return new(subGroup.Grouper, subGroup, aggregationFunctions);
         }
     }
 }

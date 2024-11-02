@@ -1,4 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Grouping;
 using MeshWeaver.Pivot.Models;
@@ -11,7 +14,7 @@ namespace MeshWeaver.Pivot.Processors
         TIntermediate,
         TAggregate,
         TPivotBuilder
-    >(TPivotBuilder pivotBuilder)
+    >(TPivotBuilder pivotBuilder, IWorkspace workspace)
         where TPivotBuilder : PivotBuilderBase<
             T,
             TTransformed,
@@ -24,16 +27,28 @@ namespace MeshWeaver.Pivot.Processors
         protected internal IPivotConfiguration<TAggregate, RowGroup> RowConfig { get; init; }
 
         protected internal TPivotBuilder PivotBuilder { get; set; } = pivotBuilder;
-
-        public virtual PivotModel Execute()
+        protected IWorkspace Workspace { get; } = workspace;
+        public virtual IObservable<PivotModel> Execute()
         {
             // transform objects
             var transformed = PivotBuilder.Transformation(PivotBuilder.Objects).ToArray();
+            var stream = GetStream(transformed);
 
-            SetMaxLevelForHierarchicalGroupers(transformed);
-            var columnGroupManager = GetColumnGroupManager();
-            var rowGroupManager = GetRowGroupManager();
+            return stream.Select(store =>
+                {
+                    var dimensionCache = new DimensionCache(Workspace, store);
+                    var columnGroupManager = GetColumnGroupManager(dimensionCache, transformed);
+                    var rowGroupManager = GetRowGroupManager(dimensionCache, transformed);
+                    return EvaluateModel(rowGroupManager, transformed, columnGroupManager);
+                })
+                ;
+        }
 
+
+        protected abstract IObservable<EntityStore> GetStream(IEnumerable<TTransformed> objects);
+        protected virtual PivotModel EvaluateModel(PivotGroupManager<TTransformed, TIntermediate, TAggregate, RowGroup> rowGroupManager, TTransformed[] transformed,
+            PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup> columnGroupManager)
+        {
             // render rows
             var rowGroupings = rowGroupManager
                 .CreateRowGroupings(transformed, ImmutableList<string>.Empty)
@@ -61,7 +76,7 @@ namespace MeshWeaver.Pivot.Processors
             return ColumnConfig.GetValueColumns();
         }
 
-        private IEnumerable<Row> GetRowsFromRowGrouping(
+        private IReadOnlyCollection<Row> GetRowsFromRowGrouping(
             PivotGrouping<RowGroup, IReadOnlyCollection<TTransformed>> rowGrouping,
             PivotGroupManager<
                 TTransformed,
@@ -80,7 +95,7 @@ namespace MeshWeaver.Pivot.Processors
                     ? TransformRowGroupToColumnObject(rowGroup, aggregates)
                     : TransformRowGroupToRowObjects(rowGroup, aggregates);
 
-            return rows;
+            return rows.ToArray();
         }
 
         private IEnumerable<Row> TransformRowGroupToRowObjects(
@@ -157,20 +172,9 @@ namespace MeshWeaver.Pivot.Processors
             };
         }
 
-        protected abstract void SetMaxLevelForHierarchicalGroupers(
-            IReadOnlyCollection<TTransformed> transformed
-        );
-        protected abstract PivotGroupManager<
-            TTransformed,
-            TIntermediate,
-            TAggregate,
-            RowGroup
-        > GetRowGroupManager();
-        protected abstract PivotGroupManager<
-            TTransformed,
-            TIntermediate,
-            TAggregate,
-            ColumnGroup
-        > GetColumnGroupManager();
+        protected abstract PivotGroupManager<TTransformed, TIntermediate, TAggregate, RowGroup> GetRowGroupManager(
+            DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
+
+        protected abstract PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
     }
 }

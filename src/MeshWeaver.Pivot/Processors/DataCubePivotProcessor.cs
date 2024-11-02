@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Builder;
@@ -20,26 +21,44 @@ namespace MeshWeaver.Pivot.Processors
         public DataCubePivotProcessor(
             IPivotConfiguration<TAggregate, ColumnGroup> colConfig,
             IPivotConfiguration<TAggregate, RowGroup> rowConfig,
-            DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder
+            DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder,
+            IWorkspace workspace
         )
-            : base(pivotBuilder)
+            : base(pivotBuilder, workspace)
         {
             ColumnConfig = colConfig;
             RowConfig = rowConfig;
         }
 
-        protected override PivotGroupManager<
-            DataSlice<TElement>,
-            TIntermediate,
-            TAggregate,
-            ColumnGroup
-        > GetColumnGroupManager()
+        
+ 
+        protected override IObservable<EntityStore> GetStream(IEnumerable<DataSlice<TElement>> objects)
         {
-            var ret = PivotBuilder.SliceColumns.GetGroupManager(PivotBuilder.Aggregations);
-            return ret;
+            
+            var collections = PivotBuilder.SliceColumns.Dimensions.Select(d => d.Dim.Type)
+                .Concat(PivotBuilder.SliceRows.Dimensions.Select(d => d.Dim.Type))
+                .Select(Workspace.DataContext.GetTypeSource)
+                .Where(x => x != null)
+                .Select(t => t.CollectionName)
+                .ToArray();
+
+
+            var stream = Workspace.GetStream(
+                new CollectionsReference(collections),
+                null
+            );
+
+            return stream.Select(x => x.Value);
         }
 
-        protected override void SetMaxLevelForHierarchicalGroupers(
+        protected override PivotModel EvaluateModel(PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup> rowGroupManager, DataSlice<TElement>[] transformed,
+            PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> columnGroupManager)
+        {
+            SetMaxLevelForHierarchicalGroupers(transformed);
+            return base.EvaluateModel(rowGroupManager, transformed, columnGroupManager);
+        }
+
+        protected void SetMaxLevelForHierarchicalGroupers(
             IReadOnlyCollection<DataSlice<TElement>> transformed
         )
         {
@@ -47,18 +66,20 @@ namespace MeshWeaver.Pivot.Processors
             PivotBuilder.SliceRows.UpdateMaxLevelForHierarchicalGroupers(transformed);
         }
 
-        protected override PivotGroupManager<
-            DataSlice<TElement>,
-            TIntermediate,
-            TAggregate,
-            RowGroup
-        > GetRowGroupManager()
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup>
+            GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
-            var ret = PivotBuilder.SliceRows.GetGroupManager(PivotBuilder.Aggregations);
+            var ret = PivotBuilder.SliceRows.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;
         }
 
-        public override PivotModel Execute()
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        {
+            var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache,PivotBuilder.Aggregations);
+            return ret;
+        }
+
+        public override IObservable<PivotModel> Execute()
         {
             var dimensions = PivotBuilder
                 .SliceRows.Dimensions.Select(d => d.Dim)

@@ -8,8 +8,7 @@ namespace MeshWeaver.Pivot.Grouping
     {
         IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateGroupings(
             IReadOnlyCollection<T> objects,
-            TGroup nullGroup
-        );
+            TGroup nullGroup);
         IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped);
         static readonly TGroup NullGroup =
             new()

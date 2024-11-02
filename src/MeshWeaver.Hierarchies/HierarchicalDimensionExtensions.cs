@@ -1,48 +1,44 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Domain;
 
 namespace MeshWeaver.Hierarchies;
 
 public static class HierarchicalDimensionExtensions
 {
-    public static IHierarchicalDimensionCache ToHierarchicalDimensionCache(
-        this EntityStore state
-    )
-    {
-        return new HierarchicalDimensionCache(state);
-    }
-
-    public static T Parent<T>(this IHierarchicalDimensionCache cache, object id)
+    public static T Parent<T>(this IHierarchy<T> cache, object id)
         where T : class, IHierarchicalDimension
     {
-        return cache.Get<T>(id).Parent;
+        return cache.GetHierarchyNode(id).Parent;
     }
 
-    public static T AncestorAtLevel<T>(this IHierarchicalDimensionCache cache, object id, int level)
+    public static T AncestorAtLevel<T>(this DimensionCache cache, object id, int level)
         where T : class, IHierarchicalDimension
     {
-        var ret = cache.Get<T>(id);
+        var hierarchy = cache.GetHierarchical<T>();
+        var ret = hierarchy.GetHierarchyNode(id);
         if (ret.Level < level)
             return null;
         while (ret.Level > level)
-            ret = cache.Get<T>(ret.ParentId);
+            ret = hierarchy.GetHierarchyNode(ret.ParentId);
         return ret.Element;
+
     }
 
     public static object AncestorIdAtLevel<T>(
-        this IHierarchicalDimensionCache cache,
+        this DimensionCache cache,
         object id,
         int level
     )
         where T : class, IHierarchicalDimension
     {
-        var ret = cache.Get<T>(id);
+        var hierarchy = cache.GetHierarchical<T>();
+        var ret = hierarchy.GetHierarchyNode(id);
         if (ret == null)
             return id;
         if (ret.Level < level)
             return null;
         while (ret.Level > level)
-            ret = cache.Get<T>(ret.ParentId);
+            ret = hierarchy.GetHierarchyNode(ret.ParentId);
         return ret.Id;
     }
+
 }
