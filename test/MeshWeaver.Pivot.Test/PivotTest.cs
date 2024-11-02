@@ -1095,7 +1095,7 @@ public class PivotTest : HubTestBase
 
         var pivotBuilder = builder(initial);
 
-        var model = GetModel(pivotBuilder);
+        var model = await GetModel(pivotBuilder);
         await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
@@ -1112,7 +1112,7 @@ public class PivotTest : HubTestBase
 
         var pivotBuilder = builder(initial);
 
-        var model = GetModel(pivotBuilder);
+        var model = await GetModel(pivotBuilder);
         await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
@@ -1129,21 +1129,21 @@ public class PivotTest : HubTestBase
 
         var pivotBuilder = builder(initial);
 
-        var model = GetModel(pivotBuilder);
+        var model = await GetModel(pivotBuilder);
         await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
-    protected virtual object GetModel<T, TIntermediate, TAggregate>(
+    protected virtual async Task<PivotModel> GetModel<T, TIntermediate, TAggregate>(
         PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder
     )
     {
-        return pivotBuilder.Execute();
+        return await pivotBuilder.Execute().FirstAsync();
     }
 
-    protected virtual object GetModel<TElement, TIntermediate, TAggregate>(
+    protected virtual async Task<PivotModel> GetModel<TElement, TIntermediate, TAggregate>(
         DataCubePivotBuilder<IDataCube<TElement>, TElement, TIntermediate, TAggregate> pivotBuilder
     )
     {
-        return pivotBuilder.Execute();
+        return await pivotBuilder.Execute().FirstAsync();
     }
 }
