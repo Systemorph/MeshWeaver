@@ -67,10 +67,8 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     private int GetOrder(object dim)
     {
         if (dim == null)
-            // TODO: what to return? (2021/05/22, Roland Buergi)
             return int.MaxValue;
-        // ReSharper disable once SuspiciousTypeConversion.Global
-        var ordered = dim as IOrdered;
+        var ordered = dimensionCache.Get<TDimension>(dim) as IOrdered;
         return ordered?.Order ?? int.MaxValue;
     }
 
