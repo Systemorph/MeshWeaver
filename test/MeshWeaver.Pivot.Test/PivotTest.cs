@@ -89,7 +89,7 @@ public class PivotTest : HubTestBase
 
         var pivotBuilder = builder(initial);
 
-        var model = GetModel(pivotBuilder);
+        var model = await GetModel(pivotBuilder);
         await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 

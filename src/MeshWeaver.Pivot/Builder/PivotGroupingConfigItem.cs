@@ -23,7 +23,8 @@ namespace MeshWeaver.Pivot.Builder
             PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions)
         {
-            if (subGroup.Grouper is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
+            var grouper = builder.GetGrouper(dimensionCache);
+            if (grouper is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
             {
                 var groupManager = hierarchicalGrouper.GetPivotGroupManager(
                     subGroup,
@@ -31,7 +32,7 @@ namespace MeshWeaver.Pivot.Builder
                 );
                 return groupManager;
             }
-            return new(subGroup.Grouper, subGroup, aggregationFunctions);
+            return new(grouper, subGroup, aggregationFunctions);
         }
     }
 }
