@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Builder;
@@ -37,13 +36,15 @@ namespace MeshWeaver.Pivot.Processors
                 PivotBuilder
                     .SliceColumns
                     .Dimensions
-                    .Select(d => d.Dim.Type)
+                    .Select(d => d.Dim)
                 .Concat(
                     PivotBuilder
                     .SliceRows
                     .Dimensions
-                    .Select(d => d.Dim.Type))
+                    .Select(d => d.Dim)
+                    )
                 .Distinct()
+                    .Select(dim => (Dimension:dim.Type, IdAccessor:(Func<DataSlice<TElement>,object>)(slice => slice.Tuple.GetValue(dim.SystemName))))
                 .ToArray();
             return GetStream(objects, types);
         }
