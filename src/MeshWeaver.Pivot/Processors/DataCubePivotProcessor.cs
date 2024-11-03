@@ -30,41 +30,25 @@ namespace MeshWeaver.Pivot.Processors
             RowConfig = rowConfig;
         }
 
-        
- 
-        protected override IObservable<EntityStore> GetStream(IEnumerable<DataSlice<TElement>> objects)
+
+        protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<DataSlice<TElement>> objects)
         {
-            
-            var collections = PivotBuilder.SliceColumns.Dimensions.Select(d => d.Dim.Type)
-                .Concat(PivotBuilder.SliceRows.Dimensions.Select(d => d.Dim.Type))
-                .Select(Workspace.DataContext.GetTypeSource)
-                .Where(x => x != null)
-                .Select(t => t.CollectionName)
+            var types = 
+                PivotBuilder
+                    .SliceColumns
+                    .Dimensions
+                    .Select(d => d.Dim.Type)
+                .Concat(
+                    PivotBuilder
+                    .SliceRows
+                    .Dimensions
+                    .Select(d => d.Dim.Type))
+                .Distinct()
                 .ToArray();
-
-
-            var stream = Workspace.GetStream(
-                new CollectionsReference(collections),
-                null
-            );
-
-            return stream.Select(x => x.Value);
+            return GetStream(objects, types);
         }
 
-        protected override PivotModel EvaluateModel(PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup> rowGroupManager, DataSlice<TElement>[] transformed,
-            PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> columnGroupManager)
-        {
-            SetMaxLevelForHierarchicalGroupers(transformed);
-            return base.EvaluateModel(rowGroupManager, transformed, columnGroupManager);
-        }
 
-        protected void SetMaxLevelForHierarchicalGroupers(
-            IReadOnlyCollection<DataSlice<TElement>> transformed
-        )
-        {
-            PivotBuilder.SliceColumns.UpdateMaxLevelForHierarchicalGroupers(transformed);
-            PivotBuilder.SliceRows.UpdateMaxLevelForHierarchicalGroupers(transformed);
-        }
 
         protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup>
             GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)

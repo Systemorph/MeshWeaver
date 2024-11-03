@@ -7,18 +7,18 @@ public static class HierarchicalDimensionExtensions
     public static T Parent<T>(this IHierarchy<T> cache, object id)
         where T : class, IHierarchicalDimension
     {
-        return cache.GetHierarchyNode(id).Parent;
+        return cache.GetNode(id).Parent;
     }
 
     public static T AncestorAtLevel<T>(this DimensionCache cache, object id, int level)
         where T : class, IHierarchicalDimension
     {
-        var hierarchy = cache.GetHierarchical<T>();
-        var ret = hierarchy.GetHierarchyNode(id);
+        var hierarchy = cache.GetHierarchy<T>();
+        var ret = hierarchy.GetNode(id);
         if (ret.Level < level)
             return null;
         while (ret.Level > level)
-            ret = hierarchy.GetHierarchyNode(ret.ParentId);
+            ret = hierarchy.GetNode(ret.ParentId);
         return ret.Element;
 
     }
@@ -30,14 +30,14 @@ public static class HierarchicalDimensionExtensions
     )
         where T : class, IHierarchicalDimension
     {
-        var hierarchy = cache.GetHierarchical<T>();
-        var ret = hierarchy.GetHierarchyNode(id);
+        var hierarchy = cache.GetHierarchy<T>();
+        var ret = hierarchy.GetNode(id);
         if (ret == null)
             return id;
         if (ret.Level < level)
             return null;
         while (ret.Level > level)
-            ret = hierarchy.GetHierarchyNode(ret.ParentId);
+            ret = hierarchy.GetNode(ret.ParentId);
         return ret.Id;
     }
 

@@ -84,6 +84,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
     }
 
     internal abstract PivotGroupingConfiguration<T, TGroup> Transpose();
+
 }
 
 public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, RowGroup>

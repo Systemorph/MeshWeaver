@@ -21,7 +21,8 @@ namespace MeshWeaver.Pivot.Builder
         >(
             DimensionCache dimensionCache,
             PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
-            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions)
+            Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
+            )
         {
             var grouper = builder.GetGrouper(dimensionCache);
             if (grouper is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
