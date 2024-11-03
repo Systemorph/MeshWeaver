@@ -1,6 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reflection;
+using AspectCore.Extensions.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Grouping;
@@ -34,9 +37,8 @@ namespace MeshWeaver.Pivot.Processors
             var transformed = PivotBuilder.Transformation(PivotBuilder.Objects).ToArray();
             var stream = GetStream(transformed);
 
-            return stream.Select(store =>
+            return stream.Select(dimensionCache =>
                 {
-                    var dimensionCache = new DimensionCache(Workspace, store);
                     var columnGroupManager = GetColumnGroupManager(dimensionCache, transformed);
                     var rowGroupManager = GetRowGroupManager(dimensionCache, transformed);
                     return EvaluateModel(rowGroupManager, transformed, columnGroupManager);
@@ -45,7 +47,7 @@ namespace MeshWeaver.Pivot.Processors
         }
 
 
-        protected abstract IObservable<EntityStore> GetStream(IEnumerable<TTransformed> objects);
+        protected abstract IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed> objects);
         protected virtual PivotModel EvaluateModel(PivotGroupManager<TTransformed, TIntermediate, TAggregate, RowGroup> rowGroupManager, TTransformed[] transformed,
             PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup> columnGroupManager)
         {
@@ -176,5 +178,40 @@ namespace MeshWeaver.Pivot.Processors
             DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
 
         protected abstract PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
+
+        protected IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed> objects, Type[] types)
+        {
+            var dimensionProperties = types
+                .SelectMany(t =>
+                    t.GetProperties()
+                        .Select(p => new
+                            {
+                                Property = p,
+                                Dimension = p.GetCustomAttribute<DimensionAttribute>()?.Type
+                            }
+                        ))
+                .Where(x => x.Dimension != null)
+                .ToArray();
+            var reference = dimensionProperties.Select(p => Workspace.DataContext.TypeRegistry.GetCollectionName(p.Dimension))
+                .Where(x => x != null).ToArray();
+            var stream = reference.Any()
+                ? Workspace.GetStream(new CollectionsReference(reference))
+                    .Select(x => x.Value)
+                : Observable.Return<EntityStore>(new());
+
+            return stream.Select(store =>
+            {
+                var ret = new DimensionCache(Workspace, store);
+                foreach (var dimension in dimensionProperties.Where(x => typeof(IHierarchicalDimension).IsAssignableFrom(x.Dimension)))
+                {
+                    var reflector = dimension.Property.GetReflector();
+                    var hierarchy = ret.GetHierarchy(dimension.Dimension);
+                    ret.SetMaxHierarchyDataLevel(dimension.Dimension,
+                        objects.Select(o => hierarchy.GetNode(reflector.GetValue(o))?.Level ?? 0).Max());
+                }
+
+                return ret;
+            });
+        }
     }
 }

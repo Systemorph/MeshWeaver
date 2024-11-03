@@ -53,7 +53,7 @@ public class Hierarchy<T> : IHierarchy<T>
         return (T)ret;
     }
 
-    public HierarchyNode<T> GetHierarchyNode(object id)
+    public HierarchyNode<T> GetNode(object id)
     {
         return id == null ? null : hierarchy.GetValueOrDefault(id);
     }

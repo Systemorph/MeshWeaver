@@ -18,7 +18,6 @@ namespace MeshWeaver.Pivot.Grouping
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         );
 
-        void UpdateMaxLevel(T element);
     }
     public class HierarchyLevelDimensionPivotGrouper<T, TDimension, TGroup>(
         string name,
@@ -73,46 +72,21 @@ namespace MeshWeaver.Pivot.Grouping
         }
     }
 
-    public class HierarchicalDimensionPivotGrouper<T, TDimension, TGroup>
-        : DimensionPivotGrouper<T, TDimension, TGroup>,
+    public class HierarchicalDimensionPivotGrouper<T, TDimension, TGroup>(
+        DimensionCache dimensionCache,
+        IHierarchicalDimensionOptions hierarchicalDimensionOptions,
+        Func<T, object> selector,
+        DimensionDescriptor dimensionDescriptor)
+        : DimensionPivotGrouper<T, TDimension, TGroup>(dimensionDescriptor, selector, dimensionCache),
             IHierarchicalGrouper<TGroup, T>
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
     {
-        private int minLevel;
-        private int maxLevel;
-        private int maxLevelData;
-        private bool flat;
+        private IHierarchicalDimensionOptions DimensionOptions { get; } = hierarchicalDimensionOptions;
 
-        public HierarchicalDimensionPivotGrouper(
-            DimensionCache dimensionCache,
-            IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<T, object> selector,
-            DimensionDescriptor dimensionDescriptor
-        )
-            : base(dimensionDescriptor, selector, dimensionCache)
-        {
-            InitializeHierarchies(dimensionCache, hierarchicalDimensionOptions);
-        }
-
-        public void InitializeHierarchies(
-            DimensionCache dimensionCache,
-            IHierarchicalDimensionOptions hierarchicalDimensionOptions
-        )
-        {
-            if (
-                this.DimensionCache == null
-                || !dimensionCache.Has(typeof(TDimension))
-            )
-            {
-                flat = true;
-                return;
-            }
-
-            minLevel = hierarchicalDimensionOptions.GetLevelMin<TDimension>();
-            maxLevel = hierarchicalDimensionOptions.GetLevelMax<TDimension>();
-            flat = hierarchicalDimensionOptions.IsFlat<TDimension>();
-        }
+        private bool Flat => DimensionCache == null
+                             || !DimensionCache.Has(typeof(TDimension))
+                             || DimensionOptions.IsFlat<TDimension>();
 
         public PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<
             TIntermediate,
@@ -122,27 +96,19 @@ namespace MeshWeaver.Pivot.Grouping
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         )
         {
-            if (flat)
+            if (Flat)
                 return new(this, subGroup, aggregationFunctions);
 
             var groupManager = subGroup;
-            for (var i = maxLevelData; i >= minLevel; i--)
+            var maxLevel = Math.Min(DimensionOptions.GetLevelMax<TDimension>(),DimensionCache.GetMaxHierarchyDataLevel(typeof(TDimension)));
+            var minLevel = DimensionOptions.GetLevelMin<TDimension>();
+            for (var i = maxLevel; i >= minLevel; i--)
             {
                 groupManager = AddChildren(i, groupManager, aggregationFunctions);
             }
             return groupManager;
         }
 
-        public void UpdateMaxLevel(T element)
-        {
-            if (flat)
-                return;
-            var dimSystemName = Selector(element, 0);
-            var hierarchyNode = DimensionCache.GetHierarchical<TDimension>(dimSystemName);
-            if (hierarchyNode == null)
-                return;
-            maxLevelData = Math.Max(maxLevelData, Math.Min(maxLevel, hierarchyNode.Level));
-        }
 
         private PivotGroupManager<T, TIntermediate, TAggregate, TGroup> AddChildren<
             TIntermediate,
