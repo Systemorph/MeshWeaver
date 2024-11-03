@@ -65,18 +65,4 @@ public abstract record PivotBuilderBase<
         GetReportProcessor();
 
 
-    protected IObservable<EntityStore> GetStream()
-    {
-        var types = Objects.Select(o => o.GetType()).Distinct().ToArray();
-        var dimensions = types
-            .SelectMany(t => t.GetProperties().Select(p => p.GetCustomAttribute<DimensionAttribute>()?.Type))
-            .Where(x => x != null)
-            .ToArray();
-        var reference = dimensions.Select(Workspace.DataContext.TypeRegistry.GetCollectionName).Where(x => x != null).ToArray();
-        var stream = reference.Any()
-            ? Workspace.GetStream<EntityStore>(new CollectionsReference(reference), null).Select(x => x.Value)
-            : Observable.Return<EntityStore>(new());
-        return stream;
-
-    }
 }
