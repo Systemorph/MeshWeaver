@@ -74,19 +74,6 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
 
     }
 
-    public void UpdateMaxLevelForHierarchicalGroupers(
-        IReadOnlyCollection<DataSlice<TElement>> transformed
-    )
-    {
-        for (int i = 0; i < Dimensions.Length; i++)
-        {
-            if (Grouper is IHierarchicalGrouper<TGroup, DataSlice<TElement>> hgr)
-                foreach (var element in transformed)
-                {
-                    hgr.UpdateMaxLevel(element);
-                }
-        }
-    }
 
     protected PivotGroupManager<
         DataSlice<TElement>,
@@ -99,7 +86,6 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
         IPivotGrouper<DataSlice<TElement>, TGroup> grouper
     )
     {
-        Grouper = grouper;
 
         if (grouper is IHierarchicalGrouper<TGroup, DataSlice<TElement>> hierarchicalGrouper)
         {
@@ -125,15 +111,4 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             dimension, 
             hierarchicalDimensionOptions));
 
-    public void UpdateMaxLevelForHierarchicalGroupers(DataSlice<TElement>[] transformed, IPivotGrouper<DataSlice<TElement>, TGroup> grouper)
-    {
-        for (var i = 0; i < Dimensions.Length; i++)
-        {
-            if (grouper is IHierarchicalGrouper<TGroup, DataSlice<TElement>> hgr)
-                foreach (var element in transformed)
-                {
-                    hgr.UpdateMaxLevel(element);
-                }
-        }
-    }
 }

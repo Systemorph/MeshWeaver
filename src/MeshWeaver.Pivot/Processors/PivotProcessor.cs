@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Reflection;
+using AspectCore.Extensions.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Hierarchies;
@@ -40,34 +41,16 @@ namespace MeshWeaver.Pivot.Processors
                 columnGroupManager = groupConfig.GetGroupManager(dimensionCache, columnGroupManager,
                     PivotBuilder.Aggregations
                 );
-                if (columnGroupManager.Grouper is IHierarchicalGrouper<ColumnGroup, T> hgr)
-                    foreach (var element in transformed)
-                    {
-                        hgr.UpdateMaxLevel(element);
-                    }
-
             }
 
             return columnGroupManager;
         }
 
-        protected override IObservable<EntityStore> GetStream(IEnumerable<T> objects)
+        protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<T> objects)
         {
             var types = objects.Select(o => o.GetType()).Distinct().ToArray();
-            var dimensions = types
-                .SelectMany(t =>
-                    t.GetProperties().Select(p => p.GetCustomAttribute<DimensionAttribute>()?.Type))
-                .Where(x => x != null)
-                .ToArray();
-            var reference = dimensions.Select(Workspace.DataContext.TypeRegistry.GetCollectionName)
-                .Where(x => x != null).ToArray();
-            var stream = reference.Any()
-                ? Workspace.GetStream(new CollectionsReference(reference))
-                    .Select(x => x.Value)
-                : Observable.Return<EntityStore>(new());
-            return stream;
+            return GetStream(objects, types);
         }
-
 
 
         protected override PivotGroupManager<
@@ -83,11 +66,6 @@ namespace MeshWeaver.Pivot.Processors
                 rowGroupManager = groupConfig.GetGroupManager(dimensionCache, rowGroupManager,
                     PivotBuilder.Aggregations
                 );
-                if (rowGroupManager.Grouper is IHierarchicalGrouper<RowGroup, T> hgr)
-                    foreach (var element in transformed)
-                    {
-                        hgr.UpdateMaxLevel(element);
-                    }
 
             }
 
