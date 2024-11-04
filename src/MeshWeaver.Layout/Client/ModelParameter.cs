@@ -1,9 +1,8 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
-using Autofac.Core.Lifetime;
 using Json.Patch;
 
-namespace MeshWeaver.Blazor
+namespace MeshWeaver.Layout.Client
 {
     public class ModelParameter
     {

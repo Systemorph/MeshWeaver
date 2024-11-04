@@ -6,6 +6,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 using System.Linq.Expressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using MeshWeaver.Layout.Client;
 
 namespace MeshWeaver.Blazor;
 
@@ -47,16 +48,16 @@ public partial class DataGridView
         var index = 0;
         builder.AddComponentParameter(++index, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
-        builder.AddAttribute(++index, "Title", GetDataBoundValue<string>(column.Title));
+        builder.AddAttribute(++index, "Title", Stream.GetDataBoundValue<string>(column.Title));
         if (column.Format is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), GetDataBoundValue<string>(column.Format));
+            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format));
         if (column.Sortable is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), GetDataBoundValue<bool>(column.Sortable));
+            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable));
         if (column.Tooltip is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), GetDataBoundValue<bool>(column.Tooltip));
+            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), Stream.GetDataBoundValue<bool>(column.Tooltip));
         if (column.TooltipText is not null)
             builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText),
-                (Func<JsonObject, string>)(_ => GetDataBoundValue<string>(column.TooltipText)));
+                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.TooltipText)));
 
         builder.CloseComponent();
 
