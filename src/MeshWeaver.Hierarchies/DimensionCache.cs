@@ -17,7 +17,7 @@ public class DimensionCache(IWorkspace workspace, EntityStore store)
 
     public T Get<T>(object id)
         where T : class =>
-        (T)Get(typeof(T))?.GetValueOrDefault(id);
+        id == null ? null : (T)Get(typeof(T))?.GetValueOrDefault(id);
 
     public IReadOnlyDictionary<object,object> Get(Type type)
     {
