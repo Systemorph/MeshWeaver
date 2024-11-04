@@ -186,8 +186,11 @@ public abstract class PivotProcessorBase<
     protected IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed> objects, (Type Dimension, Func<TTransformed, object> IdAccessor)[] dimensionProperties)
     {
         var reference = dimensionProperties
-            .Select(p => Workspace.DataContext.TypeRegistry.GetCollectionName(p.Dimension))
-            .Where(x => x != null).ToArray();
+            .Select(p => Workspace.DataContext.GetTypeSource(p.Dimension))
+            .Where(x => x != null)
+            .Distinct()
+            .Select(x => x.CollectionName)
+            .ToArray();
         var stream = reference.Any()
             ? Workspace.GetStream(new CollectionsReference(reference))
                 .Select(x => x.Value)
