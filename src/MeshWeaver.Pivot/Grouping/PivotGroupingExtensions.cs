@@ -109,6 +109,7 @@ namespace MeshWeaver.Pivot.Grouping
                         null,
                         new[]
                         {
+                            dimensionCache,
                             hierarchicalDimensionOptions,
                             descriptor,
                             convertedLambda
