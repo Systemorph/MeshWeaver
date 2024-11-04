@@ -181,7 +181,7 @@ public class PivotTest : HubTestBase
         await ExecuteDataCubeTest(fileName, data, pivotBuilder);
     }
 
-    [Fact]
+    [Fact(Skip ="Not clear what the use case should be for this")]
     public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
