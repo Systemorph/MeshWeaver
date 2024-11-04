@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -64,7 +65,7 @@ namespace MeshWeaver.Reporting.Test
 
             var reportBuilder = toReportBuilder(initialPivotBuilder);
 
-            var gridOptions = GetModel(reportBuilder);
+            var gridOptions = await GetModelAsync(reportBuilder);
 
             await gridOptions.Verify(fileName);
         }
@@ -175,21 +176,21 @@ namespace MeshWeaver.Reporting.Test
             }
         }
 
-        protected object GetModel<T, TIntermediate, TAggregate>(
+        protected async Task<object> GetModelAsync<T, TIntermediate, TAggregate>(
             PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder
         )
         {
-            return pivotBuilder.ToTable().WithOptions(o => o.AutoHeight()).Execute();
+            return await pivotBuilder.ToTable().WithOptions(o => o.AutoHeight()).Execute().FirstAsync();
         }
 
-        private protected object GetModel<T, TIntermediate, TAggregate>(
+        private protected async Task<object> GetModelAsync<T, TIntermediate, TAggregate>(
             ReportBuilder<T, TIntermediate, TAggregate> reportBuilder
         )
         {
-            return reportBuilder.WithOptions(o => o.AutoHeight()).Execute();
+            return await reportBuilder.WithOptions(o => o.AutoHeight()).Execute().FirstAsync();
         }
 
-        protected object GetModel<TElement, TIntermediate, TAggregate>(
+        protected async Task<object> GetModelAsync<TElement, TIntermediate, TAggregate>(
             DataCubePivotBuilder<
                 IDataCube<TElement>,
                 TElement,
@@ -198,14 +199,14 @@ namespace MeshWeaver.Reporting.Test
             > pivotBuilder
         )
         {
-            return pivotBuilder.ToTable().WithOptions(o => o.AutoHeight()).Execute();
+            return await pivotBuilder.ToTable().WithOptions(o => o.AutoHeight()).Execute().FirstAsync();
         }
 
-        private object GetModel<T, TIntermediate, TAggregate>(
+        private async Task<object> GetModelAsync<T, TIntermediate, TAggregate>(
             DataCubeReportBuilder<IDataCube<T>, T, TIntermediate, TAggregate> reportBuilder
         )
         {
-            return reportBuilder.WithOptions(o => o.AutoHeight()).Execute();
+            return await reportBuilder.WithOptions(o => o.AutoHeight()).Execute().FirstAsync();
         }
     }
 }
