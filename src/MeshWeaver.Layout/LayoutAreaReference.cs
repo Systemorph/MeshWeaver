@@ -32,12 +32,15 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <returns>A string representing the data pointer.</returns>
     public static string GetDataPointer(string id, params string[] extraSegments) =>
         JsonPointer.Create(
-            new[] { Data, JsonSerializer.Serialize(id) }
+            new[] { Data, EncodeId(id) }
             .Concat(extraSegments)
             .Select(PointerSegment.Create)
             .ToArray()
         )
         .ToString();
+
+    public static string EncodeId(string id)
+        => JsonSerializer.Serialize(id);
 
     /// <summary>
     /// Gets the control pointer for the specified area.

@@ -22,6 +22,7 @@ public record ChangeItem<TStream>(
     object IChangeItem.Value => Value;
 
     public ActivityLog Log { get; init; }
+    public IReadOnlyCollection<EntityUpdate> Updates { get; init; } = Updates ?? [];
 
     public ChangeItem(
         TStream Value,

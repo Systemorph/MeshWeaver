@@ -33,7 +33,10 @@ public static class StandardWorkspaceReferenceImplementations
     private static ChangeItem<JsonElement?> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-        return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates.Where(u => u.Collection == pointer.Segments.First().Value && pointer.Segments[1].Value.Equals(u.Id) ).ToArray());
+
+        return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates
+            .Where(u => u.Collection == pointer.Segments.First().Value 
+                        && pointer.Segments[1].Value.Equals(u.Id) ).ToArray());
     }
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)

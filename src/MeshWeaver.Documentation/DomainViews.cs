@@ -41,7 +41,7 @@ public static class DomainViews
             var typeDefinition = typeSource.TypeDefinition;
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
-            var id = keyType == typeof(string) ? idString : JsonSerializer.Deserialize(idString, keyType);
+            var id = JsonSerializer.Deserialize(idString, keyType);
             return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
         }
         catch (Exception e)
