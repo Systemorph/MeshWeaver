@@ -1,6 +1,4 @@
-﻿//#define REGENERATE
-
-using System.Text.Json;
+﻿using System.Text.Json;
 using FluentAssertions;
 
 namespace MeshWeaver.Json.Assertions;
@@ -22,13 +20,16 @@ public static class BenchmarkUtils
         clonedOptions.WriteIndented = true;
         var modelSerialized = JsonSerializer.Serialize(model, model.GetType(), clonedOptions);
         var filePath = Path.Combine(@"../../../Json", fileName);
-#if REGENERATE
-        var benchmark = JsonSerializer.Serialize(model, model.GetType(), options);
-        await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
-#else
-        var benchmark = await File.ReadAllTextAsync(filePath);
-#endif
-        modelSerialized.Should().Be(benchmark);
+        if (!File.Exists(filePath))
+        {
+            var benchmark = JsonSerializer.Serialize(model, model.GetType(), clonedOptions);
+            await BenchmarkUtils.WriteBenchmarkAsync(filePath, benchmark);
+        }
+        else
+        {
+            var benchmark = await File.ReadAllTextAsync(filePath);
+            modelSerialized.Should().Be(benchmark);
+        }
     }
 
     private static JsonSerializerOptions CloneOptions(JsonSerializerOptions options) => new(options);
