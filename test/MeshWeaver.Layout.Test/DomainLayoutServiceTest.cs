@@ -2,12 +2,10 @@
 using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Json.Patch;
-using Json.Pointer;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
@@ -69,27 +67,24 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
 
-        var changeStream = stream
-            .Reduce(new JsonPointerReference(dataContext));
+        var jsonPointer = new JsonPointerReference($"{dataContext}/displayName");
+        string value = null;
+        var directFromStream = stream.GetDataBoundValue<string>(jsonPointer);
+        directFromStream.Should().Be("Hello");
+        stream.DataBind<string>(jsonPointer)
+            .Subscribe(v =>
+                {
+                    value = v;
+                }
+            );
 
-        var change = await changeStream.Where(x => x.Value is not null)
-            .Timeout(3.Seconds())
-            .Select(x => x.Value)
-            .FirstAsync();
+        value.Should().NotBeNull();
+        value.Should().Be("Hello");
 
+        stream.UpdatePointer("Universe", jsonPointer);
 
-        change.Should().NotBeNull();
-        var data = change!.Value;
-        var innerPointer = JsonPointer.Parse("/displayName");
-        var prop = innerPointer.Evaluate(data);
-        prop.ToString().Should().Be("Hello");
-
-
-        var dataPointer = JsonPointer.Parse($"{dataContext}/displayName");
-        var patch = new JsonPatch(PatchOperation.Replace(innerPointer, "Universe"));
-        var updated = patch.Apply(data);
-        var patchForUiStream = new JsonPatch(PatchOperation.Replace(dataPointer, "Universe"));
-        stream.Update(c => new ChangeItem<JsonElement>(updated, stream.StreamId, ChangeType.Patch, stream.Hub.Version, c.ToEntityUpdates(updated, patchForUiStream, stream.Hub.JsonSerializerOptions)));
+        await Task.Delay(10.Milliseconds());
+        value.Should().Be("Universe");
 
         stream.Dispose();
 
@@ -97,16 +92,11 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        change = await stream
-            .Reduce(new JsonPointerReference(dataContext))
-            .Where(x => x.Value is not null)
+        directFromStream = await stream
+            .GetDataBoundObservable<string>(jsonPointer)
             .Timeout(3.Seconds())
-            .Select(x => x.Value)
-            .FirstAsync();
-
-        change.Should().NotBeNull();
-        prop = innerPointer.Evaluate(change!.Value);
-        prop.ToString().Should().Be("Universe");
+            .FirstAsync(x => x != null);
+        directFromStream.Should().Be("Universe");
     }
 
 
