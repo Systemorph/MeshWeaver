@@ -2,14 +2,10 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Json.Patch;
-using Json.Pointer;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
-using MeshWeaver.Messaging;
+using MeshWeaver.Layout.Client;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor;
@@ -18,7 +14,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
-    [Inject] private IMessageHub Hub { get; set; }
     [Inject] protected ILogger<TView> Logger { get; set; }
 
 
@@ -84,9 +79,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (value is JsonPointerReference reference)
         {
             if (Model is not null)
-                property.SetValue(this, ConvertSingle(GetValueFromModel(reference), conversion));
+                property.SetValue(this, Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             else
-                bindings.Add(DataBind(reference, conversion)
+                bindings.Add(Stream.DataBind(reference, conversion)
                     .Subscribe(v =>
                         {
                             Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
@@ -102,7 +97,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         }
         else
         {
-            property.SetValue(this, ConvertSingle(value, conversion));
+            property.SetValue(this, Stream.ConvertSingle(value, conversion));
         }
     }
 
@@ -115,138 +110,24 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (value is JsonPointerReference reference)
         {
             if (Model != null)
-                return Observable.Return(ConvertSingle(GetValueFromModel(reference), conversion));
-            return DataBind(reference, conversion);
+                return Observable.Return(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
+            return Stream.DataBind(reference, conversion);
         }
 
-        return Observable.Return(ConvertSingle(value, conversion));
+        return Observable.Return(Stream.ConvertSingle(value, conversion));
     }
 
-    private object GetValueFromModel(JsonPointerReference reference)
-    {
-        var pointer = JsonPointer.Parse(reference.Pointer);
-        return pointer.Evaluate(Model.Element);
-    }
 
-    private IObservable<T> DataBind<T>(JsonPointerReference reference, Func<object, T> conversion) =>
-        Stream.GetStream<object>(JsonPointer.Parse(reference.Pointer))
-            .Select(conversion ?? (x => ConvertSingle<T>(x, null)));
-
-
-    protected T GetDataBoundValue<T>(object value)
-    {
-        if (value is JsonPointerReference reference)
-            return GetDataBoundValue<T>(reference);
-
-        if (value is string stringValue && typeof(T).IsEnum)
-            return (T)Enum.Parse(typeof(T), stringValue);
-
-        // Use Convert.ChangeType for flexible conversion
-        return (T)System.Convert.ChangeType(value, typeof(T));
-    }
-    private T GetDataBoundValue<T>(JsonPointerReference reference)
-    {
-        var ret = JsonPointer.Parse(reference.Pointer).Evaluate(Stream.Current.Value);
-        if (ret == null)
-            return default;
-        return ret.Value.Deserialize<T>(Stream.Hub.JsonSerializerOptions);
-    }
 
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-    private T ConvertSingle<T>(object value, Func<object, T> conversion)
-    {
-        if (conversion != null)
-            return conversion.Invoke(value);
-        return value switch
-        {
-            null => default,
-            JsonElement element => ConvertJson(element, conversion),
-            JsonObject obj => ConvertJson<T>(obj, conversion),
-            T t => t,
-            string s => ConvertString<T>(s),
-            _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")
-        };
-    }
-
-    private T ConvertString<T>(string s)
-    {
-        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
-        if (targetType.IsEnum)
-            return (T)Enum.Parse(targetType, s);
-        return Type.GetTypeCode(targetType) switch
-        {
-            TypeCode.Int32 => (T)(object)int.Parse(s),
-            TypeCode.Double => (T)(object)double.Parse(s),
-            TypeCode.Single => (T)(object)float.Parse(s),
-            TypeCode.Boolean => (T)(object)bool.Parse(s),
-            TypeCode.Int64 => (T)(object)long.Parse(s),
-            TypeCode.Int16 => (T)(object)short.Parse(s),
-            TypeCode.Byte => (T)(object)byte.Parse(s),
-            TypeCode.Char => (T)(object)char.Parse(s),
-            _ => throw new InvalidOperationException($"Cannot convert {s} to {typeof(T)}")
-        };
-
-    }
-
-    private T ConvertJson<T>(JsonElement? value, Func<object, T> conversion)
-    {
-        if (value == null)
-            return default;
-        if (conversion != null)
-            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), Hub.JsonSerializerOptions));
-        return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), Hub.JsonSerializerOptions);
-    }
-    private T ConvertJson<T>(JsonObject value, Func<object, T> conversion)
-    {
-        if (value == null)
-            return default;
-        if (conversion != null)
-            return conversion(value.Deserialize<object>(Hub.JsonSerializerOptions));
-        return value.Deserialize<T>(Hub.JsonSerializerOptions);
-    }
 
     protected void UpdatePointer<T>(T value, JsonPointerReference reference)
     {
-        if (reference != null)
-        {
-            if (Model != null)
-            {
-                var patch = GetPatch(value, reference, Model.Element);
-                if (patch != null)
-                    Model.Update(patch);
-            }
-
-            else
-                Stream.UpdateAsync(ci =>
-                {
-                    var patch = GetPatch(value, reference, ci);
-                    var updated = patch?.Apply(ci) ?? ci;
-
-                    return Stream.ToChangeItem(ci, updated, patch, Stream.StreamId);
-                });
-
-        }
+        Stream.UpdatePointer(value, reference, Model);
     }
 
-    private JsonPatch GetPatch<T>(T value, JsonPointerReference reference, JsonElement current)
-    {
-        var pointer = JsonPointer.Parse(ViewModel.DataContext + reference.Pointer);
-
-        var existing = pointer.Evaluate(current);
-        if (value == null)
-            return existing == null
-                ? null
-                : new JsonPatch(PatchOperation.Remove(pointer));
-
-        var valueSerialized = JsonSerializer.SerializeToNode(value, Hub.JsonSerializerOptions);
-
-        return existing == null
-                ? new JsonPatch(PatchOperation.Add(pointer, valueSerialized))
-                : new JsonPatch(PatchOperation.Replace(pointer, valueSerialized))
-            ;
-    }
 
     protected virtual void BindData()
     {
