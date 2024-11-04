@@ -96,13 +96,11 @@ public record DomainViewConfiguration
 
     public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
     {
-
-
-        var stream = host.Workspace
+       var stream = host.Workspace
             .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
         var ret = 
             
-            stream.Bind(context.IdString,
+            stream.Bind(ctx.Area,
             oo =>
                 context.TypeDefinition.Type.GetProperties()
                     .Aggregate(Controls.EditForm, (grid, property) =>
@@ -126,7 +124,6 @@ public record DomainViewConfiguration
 
         Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin => skin with{Name = propertyInfo.Name.ToCamelCase(), Description = description, Label = label};
         if (dimensionAttribute != null)
-        {
             return grid.WithView((host,_) => host.Workspace
                         .GetStream(
                             new CollectionReference(
@@ -136,7 +133,6 @@ public record DomainViewConfiguration
                                 .WithOptions(ConvertToOptions(changeItem.Value, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)))), skinConfiguration)
                 ;
 
-        }
 
         if (propertyInfo.PropertyType.IsNumber())
             return grid.WithView(RenderNumber(jsonPointerReference, context.EntityContext.Host, propertyInfo), skinConfiguration);
