@@ -52,7 +52,6 @@ public static class DataPluginExtensions
                 typeof(EntityReference),
                 typeof(CollectionReference),
                 typeof(CollectionsReference),
-                typeof(WorkspaceStoreReference),
                 typeof(JsonPointerReference),
                 typeof(JsonPatch),
                 typeof(DataChangedEvent),

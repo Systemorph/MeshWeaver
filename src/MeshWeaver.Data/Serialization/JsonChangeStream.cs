@@ -13,7 +13,6 @@ namespace MeshWeaver.Data.Serialization;
 
 public static class JsonSynchronizationStream
 {
-
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
     object owner,

@@ -1,11 +1,11 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.DataGrid;
@@ -51,32 +51,6 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var reference = host.GetDetailsReference(typeof(DataRecord).FullName, "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var innerPointer = JsonPointer.Parse("/displayName");
-        var (stream, data) = await GetDataInstance(workspace, reference);
-        var prop = innerPointer.Evaluate(data);
-        prop.ToString().Should().Be("Hello");
-
-
-        var patch = new JsonPatch(PatchOperation.Replace(innerPointer, "Universe"));
-        var response = await client.AwaitResponse(new DataChangeRequest{Updates = [patch.Apply(data)]}, x => x.WithTarget(new HostAddress()));
-        response.Message.Status.Should().Be(DataChangeStatus.Committed);
-        //stream.Update(c => new ChangeItem<JsonElement>(stream.Owner, stream.Reference, patch.Apply(c), client.Address, new(() => patch), client.Version));
-
-        var dataStream = await 
-            workspace.GetRemoteStream(host.Address, new CollectionReference(typeof(DataRecord).FullName)).FirstAsync();
-
-        var loadedInstance = (JsonObject)dataStream.Value.Instances.GetValueOrDefault("Hello");
-        loadedInstance["displayName"]!.ToString().Should().Be("Universe");
-
-
-        stream.Dispose();
-        (_,data) = await GetDataInstance(workspace, reference);
-        prop = innerPointer.Evaluate(data);
-        prop.ToString().Should().Be("Universe");
-    }
-
-    private static async Task<(ISynchronizationStream<JsonElement> Stream, JsonElement Element)> GetDataInstance(IWorkspace workspace, LayoutAreaReference reference)
-    {
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
@@ -89,17 +63,52 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .BeOfType<LayoutStackControl>()
             .Which;
 
-        var control = await stream.GetControlAsync(stack.Areas.Last().Area.ToString());
-        var dataContext = control.Should().BeOfType<EditFormControl>().Which.DataContext;
+
+        var controlFromStream = await stream.GetControlAsync(stack.Areas.Last().Area.ToString());
+        var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
+        var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
 
-        var pointer = JsonPointer.Parse(dataContext);
-        var data = await stream.Reduce(new JsonPointerReference(dataContext))
+        var changeStream = stream
+            .Reduce(new JsonPointerReference(dataContext));
+
+        var change = await changeStream.Where(x => x.Value is not null)
             .Timeout(3.Seconds())
+            .Select(x => x.Value)
             .FirstAsync();
-        data.Should().NotBeNull();
-        return (stream,data.Value!.Value);
+
+
+        change.Should().NotBeNull();
+        var data = change!.Value;
+        var innerPointer = JsonPointer.Parse("/displayName");
+        var prop = innerPointer.Evaluate(data);
+        prop.ToString().Should().Be("Hello");
+
+
+        var dataPointer = JsonPointer.Parse($"{dataContext}/displayName");
+        var patch = new JsonPatch(PatchOperation.Replace(innerPointer, "Universe"));
+        var updated = patch.Apply(data);
+        var patchForUiStream = new JsonPatch(PatchOperation.Replace(dataPointer, "Universe"));
+        stream.Update(c => new ChangeItem<JsonElement>(updated, stream.StreamId, ChangeType.Patch, stream.Hub.Version, c.ToEntityUpdates(updated, patchForUiStream, stream.Hub.JsonSerializerOptions)));
+
+        stream.Dispose();
+
+        stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            reference
+        );
+        change = await stream
+            .Reduce(new JsonPointerReference(dataContext))
+            .Where(x => x.Value is not null)
+            .Timeout(3.Seconds())
+            .Select(x => x.Value)
+            .FirstAsync();
+
+        change.Should().NotBeNull();
+        prop = innerPointer.Evaluate(change!.Value);
+        prop.ToString().Should().Be("Universe");
     }
+
 
     [HubFact]
     public async Task TestCatalog()
