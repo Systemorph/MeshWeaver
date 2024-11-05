@@ -243,10 +243,6 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .FirstAsync();
 
-        // data.Should()
-        //     .HaveCount(2)
-        //     .And.Contain(r => r.SystemName == "Hello")
-        //     .And.Contain(r => r.SystemName == "World");
 
         var view = itemTemplate.View;
         var pointer = view.Should()

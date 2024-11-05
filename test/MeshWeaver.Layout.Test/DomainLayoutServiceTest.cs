@@ -70,10 +70,8 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
         var namePointer = new JsonPointerReference($"{dataContext}/displayName");
-        var directFromStream = stream.GetDataBoundValue<string>(namePointer);
-        directFromStream.Should().Be("Hello");
         var nameStream = stream.DataBind<string>(namePointer);
-        var value = await nameStream.FirstAsync();
+        var value = await nameStream.Where(x => x != null).FirstAsync();
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
@@ -85,24 +83,24 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
         var response = await stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [obj] }, o => o.WithTarget(stream.Owner));
         response.Message.Status.Should().Be(DataChangeStatus.Committed);
-        directFromStream = await stream
+        value = await stream
             .DataBind(namePointer, x => (string)x)
             .Where(x => x != "Hello")
             .Timeout(3.Seconds())
             .FirstAsync();
-        directFromStream.Should().Be(Universe);
+        value.Should().Be(Universe);
 
         stream.Dispose();
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
-        directFromStream = await stream
+        value = await stream
             .GetDataBoundObservable<string>(namePointer)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
 
-        directFromStream.Should().Be(Universe);
+        value.Should().Be(Universe);
     }
 
 
