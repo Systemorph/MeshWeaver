@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -67,36 +68,41 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
 
-        var jsonPointer = new JsonPointerReference($"{dataContext}/displayName");
-        string value = null;
-        var directFromStream = stream.GetDataBoundValue<string>(jsonPointer);
-        directFromStream.Should().Be("Hello");
-        stream.DataBind<string>(jsonPointer)
-            .Subscribe(v =>
-                {
-                    value = v;
-                }
-            );
 
+        var namePointer = new JsonPointerReference($"{dataContext}/displayName");
+        var directFromStream = stream.GetDataBoundValue<string>(namePointer);
+        directFromStream.Should().Be("Hello");
+        var nameStream = stream.DataBind<string>(namePointer);
+        var value = await nameStream.FirstAsync();
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
-        stream.UpdatePointer("Universe", jsonPointer);
+        var objectPointer = new JsonPointerReference(dataContext);
+        var objectStream = stream.DataBind<JsonElement>(objectPointer);
+        var obj = await objectStream.FirstAsync();
+        const string Universe = nameof(Universe);
+        obj = obj.SetPointer("/displayName", JsonNode.Parse($"\"{Universe}\""));
 
-        await Task.Delay(10.Milliseconds());
-        value.Should().Be("Universe");
+        var response = await stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [obj] }, o => o.WithTarget(stream.Owner));
+        response.Message.Status.Should().Be(DataChangeStatus.Committed);
+        directFromStream = await stream
+            .DataBind(namePointer, x => (string)x)
+            .Where(x => x != "Hello")
+            .Timeout(3.Seconds())
+            .FirstAsync();
+        directFromStream.Should().Be(Universe);
 
         stream.Dispose();
-
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
         directFromStream = await stream
-            .GetDataBoundObservable<string>(jsonPointer)
+            .GetDataBoundObservable<string>(namePointer)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
-        directFromStream.Should().Be("Universe");
+
+        directFromStream.Should().Be(Universe);
     }
 
 
