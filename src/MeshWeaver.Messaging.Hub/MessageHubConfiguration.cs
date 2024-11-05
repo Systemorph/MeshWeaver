@@ -29,7 +29,6 @@ public record MessageHubConfiguration
     internal object SynchronizationAddress { get; init; }
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
-    internal Func<string> GetAccessObject { get; init; }
 
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
 
@@ -44,31 +43,14 @@ public record MessageHubConfiguration
         });
     public MessageHubConfiguration WithDisposeAction(Func<IMessageHub, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
-    internal MessageHubConfiguration WithParentHub(IMessageHub optParentHubs)
-    {
-        return this with { ParentHub = optParentHubs };
-    }
 
 
-    internal Func<RouteConfiguration, RouteConfiguration> ForwardConfigurationBuilder { get; init; }
-    internal ImmutableList<(Type Type,Func<IMessageHub,IMessageHubPlugin> Factory)> PluginFactories { get; init; } = ImmutableList<(Type Type, Func<IMessageHub, IMessageHubPlugin> Factory)>.Empty;
 
 
     public MessageHubConfiguration WithServices(Func<IServiceCollection, IServiceCollection> configuration)
     {
         return this with { Services = x => configuration(Services(x)) };
     }
-    public MessageHubConfiguration SynchronizeFrom(object address) => this with { SynchronizationAddress = address };
-
-
-    public MessageHubConfiguration WithRoutes(Func<RouteConfiguration, RouteConfiguration> configuration) => this with { ForwardConfigurationBuilder = x => configuration(ForwardConfigurationBuilder?.Invoke(x) ?? x) };
-
-
-    public MessageHubConfiguration WithAccessObject(Func<string> getAccessObject)
-    {
-        return this with { GetAccessObject = getAccessObject };
-    }
-
 
     public MessageHubConfiguration WithHostedHub(object address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)

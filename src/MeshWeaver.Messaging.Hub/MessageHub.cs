@@ -37,6 +37,7 @@ public sealed class MessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly IDisposable deferral;
     public long Version { get; private set; }
+    private RouteService routeService;
     public MessageHubRunLevel RunLevel { get; private set; }
 
     public MessageHub(
@@ -52,17 +53,8 @@ public sealed class MessageHub
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
-
-        Configuration = configuration
-            .AddPlugin(hub =>
-            {
-                var forwardConfig = (configuration.ForwardConfigurationBuilder ?? (x => x)).Invoke(
-                    new RouteConfiguration(this)
-                );
-
-                return new RoutePlugin(forwardConfig, parentHub, hub);
-                
-            });
+        Configuration = configuration;
+        routeService = new RouteService(parentHub, this);
 
         foreach (var disposeAction in configuration.DisposeActions) 
             disposeActions.Add(disposeAction);
@@ -108,9 +100,6 @@ public sealed class MessageHub
 
     async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        var plugins = Configuration.PluginFactories.Select(f => f.Factory.Invoke(this))
-            .Select(p => (p, AddPlugin(p)))
-            .ToArray();
         Hub = this;
         logger.LogInformation("Message hub {address} initialized", Address);
 
@@ -118,24 +107,6 @@ public sealed class MessageHub
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
-
-        foreach (var (plugin, def) in plugins)
-        {
-            logger.LogDebug(
-                "Initializing plugin {plugin} in Address {address}",
-                plugin.GetType(),
-                Address
-            );
-            await plugin.StartAsync(this, cancellationToken);
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            plugin.Initialized.ContinueWith(_ => def.Dispose());
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-            logger.LogDebug(
-                "Finished initializing plugin {plugin} in Address {address}",
-                plugin.GetType(),
-                Address
-            );
-        }
 
         deferral.Dispose();
         RunLevel = MessageHubRunLevel.Started;
@@ -481,20 +452,5 @@ public sealed class MessageHub
         return (T)ret;
     }
 
-    public IDisposable AddPlugin(IMessageHubPlugin plugin)
-    {
-        logger.LogDebug("Adding plugin {plugin} in Address {address}", plugin.GetType(), Address);
-
-        var def = MessageService.Defer(plugin.IsDeferred);
-        Register(
-            async (d, c) =>
-            {
-                d = await plugin.DeliverMessageAsync(d, c);
-                return d;
-            }
-        );
-        WithDisposeAction(_ => plugin.DisposeAsync());
-        return def;
-    }
 
 }

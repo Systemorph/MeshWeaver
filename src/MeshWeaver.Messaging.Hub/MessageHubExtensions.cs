@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using System.Collections.Immutable;
+
+namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
@@ -12,4 +14,13 @@ public static class MessageHubExtensions
 
     public static string GetRequestId(this IMessageDelivery delivery)
         => delivery.Properties.GetValueOrDefault(PostOptions.RequestId) as string;
+
+    public static MessageHubConfiguration WithRoutes(this MessageHubConfiguration config,
+        Func<RouteConfiguration, RouteConfiguration> lambda)
+        => config.Set(config.GetListOfRouteLambdas().Add(lambda));
+
+    internal static ImmutableList<Func<RouteConfiguration, RouteConfiguration>> GetListOfRouteLambdas(
+        this MessageHubConfiguration config)
+        => config.Get<ImmutableList<Func<RouteConfiguration, RouteConfiguration>>>() ?? [];
+
 }

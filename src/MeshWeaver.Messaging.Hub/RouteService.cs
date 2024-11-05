@@ -1,23 +1,26 @@
 ﻿using Microsoft.Extensions.Logging;
-using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
-public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
+internal class RouteService 
 {
     private readonly IMessageHub parentHub;
 
-    [Inject] private ILogger<RoutePlugin> logger;
+    private readonly ILogger<RouteService> logger;
+    private readonly RouteConfiguration configuration;
+    private readonly IMessageHub hub;
 
-    public RoutePlugin(RouteConfiguration routeConfiguration, IMessageHub parentHub, IMessageHub hub) : base(hub)
+    public RouteService(IMessageHub parentHub, IMessageHub hub)
     {
         this.parentHub = parentHub;
-        InitializeState(routeConfiguration);
-
-        Register(RouteMessageAsync);
+        this.hub = hub;
+        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<RouteService>>();
+        this.configuration = hub.Configuration.GetListOfRouteLambdas()
+            .Aggregate(new RouteConfiguration(hub), (c, f) => f.Invoke(c));
+        hub.Register(RouteMessageAsync);
     }
 
-    public override bool Filter(IMessageDelivery d) => d.State == MessageDeliveryState.Submitted;
 
     /// <summary>
     /// Loops through forward rules in a sequence. Each forward rule either applies and returns delivery.Forwarded() or doesn't apply and returns delivery.
@@ -27,23 +30,24 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
     /// <returns></returns>
     private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-
+        if(delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
-        if (State.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
+        if (configuration.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
         {
             foreach (var originalSender in originalSenders)
             {
                 logger.LogDebug("Routing message {id} of type {type} from address {sender} to address {target} to original address {originalSender}", delivery.Id, delivery.Message.GetType().Name, delivery.Sender,  delivery.Target, originalSender);
                 var delivery1 = delivery;
-                Hub.Post(delivery.Message, o => o.WithTarget(originalSender).WithProperties(delivery1.Properties));
+                hub.Post(delivery.Message, o => o.WithTarget(originalSender).WithProperties(delivery1.Properties));
             }
 
         }
 
-        foreach (var handler in State.Handlers)
+        foreach (var handler in configuration.Handlers)
             delivery = await handler(delivery, cancellationToken);
 
-        if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || Hub.Address.Equals(delivery.Target))
+        if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || hub.Address.Equals(delivery.Target))
             return delivery;
 
         return RouteAlongHostingHierarchy(delivery, delivery.Target, null);
@@ -51,9 +55,9 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery, object address, object hostedSegment)
     {
 
-        if (Hub.Address.Equals(address))
+        if (hub.Address.Equals(address))
             // TODO V10: This works only if the hub has been instantiated before. Consider re-implementing setting hosted hub configs at config time. (31.01.2024, Roland Bürgi)
-            return Hub.GetHostedHub(hostedSegment, null)?.DeliverMessage(delivery) ?? delivery.NotFound();
+            return hub.GetHostedHub(hostedSegment, null)?.DeliverMessage(delivery) ?? delivery.NotFound();
 
         if (address is IHostedAddress hosted)
         {
@@ -71,3 +75,4 @@ public class RoutePlugin : MessageHubPlugin<RouteConfiguration>
     }
 
 }
+
