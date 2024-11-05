@@ -220,17 +220,17 @@ public static class LayoutExtensions
         config.Get<ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>>()
         ?? ImmutableList<Func<LayoutClientConfiguration, LayoutClientConfiguration>>.Empty;
 
-    public static JsonObject SetPath(this JsonObject obj, string path, JsonNode value)
+    public static JsonElement SetPointer(this JsonElement obj, string pointer, JsonNode value)
     {
-        var jsonPath = JsonPath.Parse(path);
+        var jsonPath = JsonPointer.Parse(pointer);
         var existingValue = jsonPath.Evaluate(obj);
         var op =
-            existingValue.Matches?.Any() ?? false
-                ? PatchOperation.Replace(JsonPointer.Parse(path), value)
-                : PatchOperation.Add(JsonPointer.Parse(path), value);
+            existingValue is not null 
+                ? PatchOperation.Replace(JsonPointer.Parse(pointer), value)
+                : PatchOperation.Add(JsonPointer.Parse(pointer), value);
 
         var patchDocument = new JsonPatch(op);
-        return (JsonObject)patchDocument.Apply(obj).Result;
+        return patchDocument.Apply(obj);
     }
 
     public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
