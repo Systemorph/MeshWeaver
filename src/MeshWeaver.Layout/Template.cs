@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout;
@@ -19,20 +20,18 @@ public static class Template{
     /// <param name="dataTemplate">View Template.</param>
     /// <returns>The view template</returns>
     public static TView Bind<TEntity, TView>(this ISynchronizationStream<TEntity> stream, string id, Expression<Func<TEntity, TView>> dataTemplate)
-        where TView : UiControl
-    {
-
-        return (TView)GetTemplateControl(id, dataTemplate)
+        where TView : UiControl =>
+        (TView)GetTemplateControl(id, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
-                var forwardSubscription = stream.Subscribe(changeItem =>
-                    host.Stream.SetData(id, changeItem.Value, host.Stream.StreamId)
-                );
+                var forwardSubscription = stream
+                    .Where(change => change.ChangedBy != stream.ClientId)
+                    .Subscribe(changeItem =>
+                        host.Stream.SetData(id, changeItem.Value, host.Stream.StreamId)
+                    );
                 host.AddDisposable(context.Area, forwardSubscription);
                 return new(store, [], null);
             });
-
-    }
 
 
     /// <summary>

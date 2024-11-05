@@ -60,7 +60,7 @@ public static class StandardWorkspaceReferenceImplementations
         if (current.ChangeType != ChangeType.Patch)
             return new(current.Value.ReduceImpl(reference), current.Version);
         var change =
-            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && x.Id == reference.Id);
+            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id,reference.Id));
         if (change == null)
             return null;
         return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
