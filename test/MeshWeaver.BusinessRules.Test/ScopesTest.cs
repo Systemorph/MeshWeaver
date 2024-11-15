@@ -17,7 +17,7 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void RandomNumberIsCached()
     {
-        var registry = GetHost().GetScopeRegistry<object>(null);
+        var registry = GetHost().ServiceProvider.CreateScopeRegistry<object>(null);
         var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
 
         var randomNumber = randomScope.RandomNumber;
