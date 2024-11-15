@@ -1,36 +1,34 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+
 #pragma warning disable RS1035 // Do not use APIs banned for analyzers
 
 namespace MeshWeaver.BusinessRules.Generator;
 
-//[Generator]
+[Generator]
 public class ScopeCodeGenerator : ISourceGenerator
 {
     public void Execute(GeneratorExecutionContext context)
     {
-        //Debugger.Launch();
-        // Log the start of the generator execution
         context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
             "SCOPE000", "Generator Execution Started", "ScopeCodeGenerator execution started.",
             "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
 
-        // Get the compilation
         var compilation = context.Compilation;
-
-        // Find the IScope<,> interface
         var iScopeInterface = compilation.GetTypeByMetadataName("MeshWeaver.BusinessRules.IScope`2");
         if (iScopeInterface == null)
         {
             context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
                 "SCOPE001", "IScope Interface Not Found", "The IScope<TIdentity, TState> interface could not be found.",
                 "SourceGenerator", DiagnosticSeverity.Warning, true), Location.None));
-            return; // Interface not found
+            return;
         }
 
         var generated = new HashSet<string>();
+        Debugger.Launch();
 
         foreach (var tree in compilation.SyntaxTrees)
         {
@@ -42,27 +40,32 @@ public class ScopeCodeGenerator : ISourceGenerator
                 var typeSymbol = semanticModel.GetDeclaredSymbol(typeDecl) as INamedTypeSymbol;
                 if (typeSymbol == null || generated.Contains(typeSymbol.Name))
                     continue;
-                var interfaceType =  typeSymbol.AllInterfaces
+
+                var interfaceType = typeSymbol.AllInterfaces
                     .FirstOrDefault(i => i.OriginalDefinition.Equals(iScopeInterface, SymbolEqualityComparer.Default));
 
-                if(interfaceType == null)
+                if (interfaceType == null)
                     continue;
 
+
+                if (typeSymbol.TypeKind != TypeKind.Interface)
+                    continue;
+
+                generated.Add(interfaceType.Name);
                 context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
                     "SCOPE002", "Type Found", $"Found type implementing IScope: {typeSymbol.ToDisplayString()}",
                     "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
+
                 var (className, source) = GenerateProperties(typeSymbol, interfaceType);
                 generated.Add(className);
-                context.AddSource($"{className}.g.cs", source);
+                context.AddSource($"obj/scopes/{className}.g.cs", source);
             }
         }
 
-        // Log the end of the generator execution
         context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
             "SCOPE003", "Generator Execution Completed", "ScopeCodeGenerator execution completed.",
             "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
     }
-
 
     private (string className, string code) GenerateProperties(INamedTypeSymbol typeSymbol, INamedTypeSymbol interfaceType)
     {
@@ -72,48 +75,37 @@ public class ScopeCodeGenerator : ISourceGenerator
 
         var identityType = interfaceType.TypeArguments[0];
         var stateType = interfaceType.TypeArguments[1];
-        builder.AppendLine($"namespace {namespaceName}");
+        builder.AppendLine($"namespace {namespaceName};");
+        builder.AppendLine($"public partial class {className} : ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");
         builder.AppendLine("{");
-        builder.AppendLine($"    public partial class {className} : ScopeBase<{typeSymbol}, {identityType}, {stateType}>");
-        builder.AppendLine("    {");
 
-        // Get all interface properties
-        var properties = 
-            typeSymbol.GetMembers().Concat(
-                    typeSymbol
-                        .AllInterfaces
-                        .Where(i => !i.Equals(interfaceType, SymbolEqualityComparer.Default))
-                        .SelectMany(i => i.GetMembers())
-                )
+        var properties = typeSymbol.GetMembers()
             .OfType<IPropertySymbol>()
-            .Distinct(SymbolEqualityComparer.Default);
+            .Where(p => p.DeclaredAccessibility == Accessibility.Public && !p.IsStatic)
+            .ToList();
 
-        foreach (var property in properties.Cast<IPropertySymbol>())
+
+        List<string> constructorInitializations = new();
+        foreach (var property in properties)
         {
             var propertyName = property.Name;
             var propertyType = property.Type.ToDisplayString();
-            var fieldName = $"_{char.ToLower(propertyName[0])}{propertyName.Substring(1)}";
+            var fieldName = $"__{char.ToLower(propertyName[0])}{propertyName.Substring(1)}";
+            var getterName = $"__{propertyName}Getter";
 
-            builder.AppendLine($"        private System.Lazy<{propertyType}> {fieldName};");
+            builder.AppendLine($"    private static readonly System.Reflection.MethodInfo {getterName} = typeof({typeSymbol}).GetProperty(nameof({typeSymbol}.{propertyName})).GetMethod;");
+            builder.AppendLine($"    private readonly Lazy<{propertyType}> {fieldName};");
 
-            // Default interface implementation
-            builder.AppendLine($"        {propertyType} {typeSymbol}.{propertyName} => {propertyName};");
+            constructorInitializations.Add($"       {fieldName} = new(() => Evaluate<{propertyType}>({getterName}));");
 
-            // Property implementation with caching
-            builder.AppendLine($"        public {propertyType} {propertyName}");
-            builder.AppendLine("        {");
-            builder.AppendLine("            get");
-            builder.AppendLine("            {");
-            builder.AppendLine($"                if ({fieldName} == null)");
-            builder.AppendLine("                {");
-            builder.AppendLine($"                    {fieldName} = new System.Lazy<{propertyType}>(() => (({typeSymbol})this).{propertyName});");
-            builder.AppendLine("                }");
-            builder.AppendLine($"                return {fieldName}.Value;");
-            builder.AppendLine("            }");
-            builder.AppendLine("        }");
+            builder.AppendLine($"    public {propertyType} {propertyName} => {fieldName}.Value;");
         }
-
+        builder.AppendLine($"    public {className}({identityType} identity, ScopeRegistry<{stateType}> state) : base(identity, state)");
+        builder.AppendLine("    {");
+        foreach (var initialization in constructorInitializations)
+            builder.AppendLine(initialization);
         builder.AppendLine("    }");
+
         builder.AppendLine("}");
 
         return (className, builder.ToString());

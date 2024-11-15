@@ -11,4 +11,13 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="Generated\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.ScopeCodeGenerator\obj\scopes\" />
+    </ItemGroup>
+    <Target Name="CleanGeneratedFiles" BeforeTargets="BeforeBuild">
+        <ItemGroup>
+            <GeneratedFiles Include="obj\Scopes\*.g.cs" />
+        </ItemGroup>
+        <Delete Files="@(GeneratedFiles)" />
+    </Target>
 </Project>
