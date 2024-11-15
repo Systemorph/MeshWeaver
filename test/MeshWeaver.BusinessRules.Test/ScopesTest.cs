@@ -1,9 +1,6 @@
-﻿using System.Reflection;
-using System.Security.Principal;
-using FluentAssertions;
+﻿using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -20,7 +17,7 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void RandomNumberIsCached()
     {
-        var registry = GetHost().GetScopeRegistry<IRandomScope>(null);
+        var registry = GetHost().GetScopeRegistry<object>(null);
         var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
 
         var randomNumber = randomScope.RandomNumber;
@@ -28,6 +25,12 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
 
         // once the property is evaluated, it is cached ==> we should get the same number.
         randomScope.RandomNumber.Should().Be(randomNumber);
+
+        var otherScope = randomScope.GetScope<IRandomScope>(Guid.NewGuid());
+        otherScope.RandomNumber.Should().NotBe(randomNumber);
+
+        var originalScope = otherScope.GetScope<IRandomScope>(randomScope.Identity);
+        originalScope.RandomNumber.Should().Be(randomNumber);
     }
 }
 
@@ -37,18 +40,3 @@ public interface IRandomScope : IScope<Guid, object>
     private static Random Random = new Random();
     public double RandomNumber => Random.NextDouble();
 }
-
-
-//public class RansomScopeProxyManual
-//    : ScopeBase<IRandomScope, Guid, object>, IRandomScope
-//{
-//    private static readonly MethodInfo __randomNumberGetter = typeof(IRandomScope).GetProperty(nameof(IRandomScope.RandomNumber)).GetMethod;
-//    private readonly Lazy<double> __randomNumber;
-
-//    public RansomScopeProxyManual(Guid identity, ScopeRegistry<object> state) : base(identity, state)
-//    {
-//        __randomNumber = new(() => Evaluate<double>(__randomNumberGetter));
-//    }
-
-//    double IRandomScope.RandomNumber => __randomNumber.Value;
-//}
