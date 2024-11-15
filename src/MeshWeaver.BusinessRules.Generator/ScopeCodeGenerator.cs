@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Text;
+﻿using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -28,7 +27,6 @@ public class ScopeCodeGenerator : ISourceGenerator
         }
 
         var generated = new HashSet<string>();
-        Debugger.Launch();
 
         foreach (var tree in compilation.SyntaxTrees)
         {
@@ -47,18 +45,17 @@ public class ScopeCodeGenerator : ISourceGenerator
                 if (interfaceType == null)
                     continue;
 
-
                 if (typeSymbol.TypeKind != TypeKind.Interface)
                     continue;
 
-                generated.Add(interfaceType.Name);
+                generated.Add(typeSymbol.Name);
                 context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
                     "SCOPE002", "Type Found", $"Found type implementing IScope: {typeSymbol.ToDisplayString()}",
                     "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
 
                 var (className, source) = GenerateProperties(typeSymbol, interfaceType);
                 generated.Add(className);
-                context.AddSource($"obj/scopes/{className}.g.cs", source);
+                context.AddSource($"scopes/{className}.g.cs", source);
             }
         }
 
@@ -84,23 +81,22 @@ public class ScopeCodeGenerator : ISourceGenerator
             .Where(p => p.DeclaredAccessibility == Accessibility.Public && !p.IsStatic)
             .ToList();
 
-
         List<string> constructorInitializations = new();
         foreach (var property in properties)
         {
             var propertyName = property.Name;
             var propertyType = property.Type.ToDisplayString();
-            var fieldName = $"__{char.ToLower(propertyName[0])}{propertyName.Substring(1)}";
-            var getterName = $"__{propertyName}Getter";
+            var fieldName = $"__{char.ToLower(propertyName[0])}{propertyName.Substring(1)}_{propertyType.Replace('.', '_')}";
+            var getterName = $"__{propertyName}Getter_{propertyType.Replace('.', '_')}";
 
             builder.AppendLine($"    private static readonly System.Reflection.MethodInfo {getterName} = typeof({typeSymbol}).GetProperty(nameof({typeSymbol}.{propertyName})).GetMethod;");
             builder.AppendLine($"    private readonly Lazy<{propertyType}> {fieldName};");
 
             constructorInitializations.Add($"       {fieldName} = new(() => Evaluate<{propertyType}>({getterName}));");
 
-            builder.AppendLine($"    public {propertyType} {propertyName} => {fieldName}.Value;");
+            builder.AppendLine($"        {propertyType} {typeSymbol}.{propertyName} => {fieldName}.Value;");
         }
-        builder.AppendLine($"    public {className}({identityType} identity, ScopeRegistry<{stateType}> state) : base(identity, state)");
+        builder.AppendLine($"        public {className}({identityType} identity, ScopeRegistry<{stateType}> state) : base(identity, state)");
         builder.AppendLine("    {");
         foreach (var initialization in constructorInitializations)
             builder.AppendLine(initialization);

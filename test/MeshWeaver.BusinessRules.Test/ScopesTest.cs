@@ -23,7 +23,11 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
         var registry = GetHost().GetScopeRegistry<IRandomScope>(null);
         var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
 
-        randomScope.RandomNumber.Should().NotBe(0);
+        var randomNumber = randomScope.RandomNumber;
+        randomNumber.Should().NotBe(0);
+
+        // once the property is evaluated, it is cached ==> we should get the same number.
+        randomScope.RandomNumber.Should().Be(randomNumber);
     }
 }
 
