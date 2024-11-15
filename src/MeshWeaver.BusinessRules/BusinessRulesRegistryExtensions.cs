@@ -13,8 +13,8 @@ public static class BusinessRulesRegistryExtensions
                 .AddScoped<IScopeFactory>(_ => new ScopeFactory(assemblies))
         );
 
-    public static ScopeRegistry<TState> GetScopeRegistry<TState>(this IMessageHub hub, TState state)
+    public static ScopeRegistry<TState> CreateScopeRegistry<TState>(this IServiceProvider serviceProvider, TState state)
     {
-        return hub.ServiceProvider.GetRequiredService<IScopeRegistryFactory>().Create(state);
+        return serviceProvider.GetRequiredService<IScopeRegistryFactory>().Create(state);
     }
 }
