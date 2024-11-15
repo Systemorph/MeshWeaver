@@ -20,10 +20,9 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void RandomNumberIsCached()
     {
-        //var registry = GetHost().GetScopeRegistry<IRandomScope>(null);
-        //var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
+        var registry = GetHost().GetScopeRegistry<IRandomScope>(null);
+        var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
 
-        IRandomScope randomScope = new RansomScopeProxyManual(Guid.NewGuid(), null);
         randomScope.RandomNumber.Should().NotBe(0);
     }
 }
@@ -36,16 +35,16 @@ public interface IRandomScope : IScope<Guid, object>
 }
 
 
-public class RansomScopeProxyManual
-    : ScopeBase<IRandomScope, Guid, object>, IRandomScope
-{
-    private static readonly MethodInfo __randomNumberGetter = typeof(IRandomScope).GetProperty(nameof(IRandomScope.RandomNumber)).GetMethod;
-    private readonly Lazy<double> __randomNumber;
+//public class RansomScopeProxyManual
+//    : ScopeBase<IRandomScope, Guid, object>, IRandomScope
+//{
+//    private static readonly MethodInfo __randomNumberGetter = typeof(IRandomScope).GetProperty(nameof(IRandomScope.RandomNumber)).GetMethod;
+//    private readonly Lazy<double> __randomNumber;
 
-    public RansomScopeProxyManual(Guid identity, ScopeRegistry<object> state) : base(identity, state)
-    {
-        __randomNumber = new(() => Evaluate<double>(__randomNumberGetter));
-    }
+//    public RansomScopeProxyManual(Guid identity, ScopeRegistry<object> state) : base(identity, state)
+//    {
+//        __randomNumber = new(() => Evaluate<double>(__randomNumberGetter));
+//    }
 
-    double IRandomScope.RandomNumber => __randomNumber.Value;
-}
+//    double IRandomScope.RandomNumber => __randomNumber.Value;
+//}
