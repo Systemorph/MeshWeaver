@@ -11,7 +11,8 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
-            .AddBusinessRules(GetType().Assembly);
+            .WithServices(services => services.AddBusinessRules(GetType().Assembly))
+            ;
     }
 
     [Fact]
