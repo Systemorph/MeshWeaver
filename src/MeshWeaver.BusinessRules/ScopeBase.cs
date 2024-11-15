@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.BusinessRules;
+﻿using System.Reflection;
+
+namespace MeshWeaver.BusinessRules;
 
 public class ScopeBase<TScope, TIdentity, TState>(
     TIdentity identity, 
@@ -10,4 +12,8 @@ where TScope : IScope<TIdentity, TState>
     public TState GetStorage() => registry.State;
     public TRelatedScope GetScope<TRelatedScope>(object id) where TRelatedScope : IScope => registry.GetScope<TRelatedScope>(id);
     public Type ScopeType => typeof(TScope);
+
+    protected T Evaluate<T>(MethodInfo method)
+        => (T)DefaultImplementationOfInterfacesExtensions.DynamicInvokeNonVirtually(method, this, []);
+
 }

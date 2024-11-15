@@ -225,6 +225,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.BusinessRules", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.BusinessRules.Test", "test\MeshWeaver.BusinessRules.Test\MeshWeaver.BusinessRules.Test.csproj", "{5217DFDB-8A7D-4663-A6EF-3C3DB53F5E9D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.BusinessRules.Generator", "src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj", "{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -599,6 +601,10 @@ Global
 		{5217DFDB-8A7D-4663-A6EF-3C3DB53F5E9D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5217DFDB-8A7D-4663-A6EF-3C3DB53F5E9D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5217DFDB-8A7D-4663-A6EF-3C3DB53F5E9D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
