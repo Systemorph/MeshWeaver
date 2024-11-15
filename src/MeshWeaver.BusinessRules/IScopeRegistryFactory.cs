@@ -34,9 +34,9 @@ public class ScopeFactory(Assembly[] assemblies) : IScopeFactory
 {
     private readonly IReadOnlyDictionary<Type, Type> scopeImplementations = assemblies
         .SelectMany(a => a.GetTypes()
-            .Where(t => !t.IsAbstract && t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ScopeBase<,,>))
+            .Where(t => !t.IsAbstract && t.BaseType?.IsGenericType == true && t.BaseType.GetGenericTypeDefinition() == typeof(ScopeBase<,,>))
         )
-        .ToDictionary(t => t.GetGenericArguments().First());
+        .ToDictionary(t => t.BaseType!.GetGenericArguments().First());
     public object Create<TScope, TState>(object identity, TState state)
     {
         if (!scopeImplementations.TryGetValue(typeof(TScope), out var type))
