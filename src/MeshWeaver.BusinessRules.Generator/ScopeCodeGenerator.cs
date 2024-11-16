@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -73,7 +74,7 @@ public class ScopeCodeGenerator : ISourceGenerator
         var identityType = interfaceType.TypeArguments[0];
         var stateType = interfaceType.TypeArguments[1];
         builder.AppendLine($"namespace {namespaceName};");
-        builder.AppendLine($"public partial class {className} : ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");
+        builder.AppendLine($"public partial class {className} : MeshWeaver.BusinessRules.ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");
         builder.AppendLine("{");
 
         var properties = typeSymbol.GetMembers()
@@ -86,17 +87,17 @@ public class ScopeCodeGenerator : ISourceGenerator
         {
             var propertyName = property.Name;
             var propertyType = property.Type.ToDisplayString();
-            var fieldName = $"__{char.ToLower(propertyName[0])}{propertyName.Substring(1)}_{propertyType.Replace('.', '_')}";
-            var getterName = $"__{propertyName}Getter_{propertyType.Replace('.', '_')}";
+            var fieldName = $"__{typeSymbol.Name}_{propertyName}";
+            var getterName = $"__G_{fieldName}";
 
             builder.AppendLine($"    private static readonly System.Reflection.MethodInfo {getterName} = typeof({typeSymbol}).GetProperty(nameof({typeSymbol}.{propertyName})).GetMethod;");
             builder.AppendLine($"    private readonly Lazy<{propertyType}> {fieldName};");
 
             constructorInitializations.Add($"       {fieldName} = new(() => Evaluate<{propertyType}>({getterName}));");
 
-            builder.AppendLine($"        {propertyType} {typeSymbol}.{propertyName} => {fieldName}.Value;");
+            builder.AppendLine($"    {propertyType} {typeSymbol}.{propertyName} => {fieldName}.Value;");
         }
-        builder.AppendLine($"        public {className}({identityType} identity, ScopeRegistry<{stateType}> state) : base(identity, state)");
+        builder.AppendLine($"    public {className}({identityType} identity, MeshWeaver.BusinessRules.ScopeRegistry<{stateType}> state) : base(identity, state)");
         builder.AppendLine("    {");
         foreach (var initialization in constructorInitializations)
             builder.AppendLine(initialization);
@@ -106,7 +107,6 @@ public class ScopeCodeGenerator : ISourceGenerator
 
         return (className, builder.ToString());
     }
-
     public void Initialize(GeneratorInitializationContext context)
     {
         // Initialization logic if needed
