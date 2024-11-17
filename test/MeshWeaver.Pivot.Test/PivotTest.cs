@@ -11,28 +11,15 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
-using MeshWeaver.Scopes;
-using MeshWeaver.Scopes.Proxy;
-using MeshWeaver.ServiceProvider;
 using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.Cubes;
-using MeshWeaver.TestDomain.Scopes;
 using MeshWeaver.TestDomain.SimpleData;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Pivot.Test;
 
-public class PivotTest : HubTestBase
+public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    [Inject]
-    protected IScopeFactory ScopeFactory;
-
-    public PivotTest(ITestOutputHelper output)
-        : base(output)
-    {
-        Services.AddScopes();
-    }
-
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -109,20 +96,6 @@ public class PivotTest : HubTestBase
         await model.JsonShouldMatch(Options, $"{fileName}.json");
     }
 
-    [Theory]
-    [MemberData(nameof(DataCubeScopeWithDimensionTestCases))]
-    public async Task DataCubeScopeWithDimensionReports<TElement>(
-        string fileName,
-        Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen,
-        Func<
-            DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>,
-            DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>
-        > pivotBuilder
-    )
-    {
-        var data = dataGen(ScopeFactory);
-        await ExecuteDataCubeTest(fileName, data, pivotBuilder);
-    }
 
     [Theory]
     [MemberData(nameof(DataCubeTestCases))]
@@ -166,20 +139,6 @@ public class PivotTest : HubTestBase
         await ExecuteDataCubeAverageTest(fileName, data, pivotBuilder);
     }
 
-    [Theory]
-    [MemberData(nameof(ScopeDataCubeTestCases))]
-    public async Task ScopeDataCubeReports<TElement>(
-        string fileName,
-        Func<IScopeFactory, IEnumerable<IDataCube<TElement>>> dataGen,
-        Func<
-            DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>,
-            DataCubePivotBuilder<IDataCube<TElement>, TElement, TElement, TElement>
-        > pivotBuilder
-    )
-    {
-        var data = dataGen(ScopeFactory);
-        await ExecuteDataCubeTest(fileName, data, pivotBuilder);
-    }
 
     [Fact(Skip ="Not clear what the use case should be for this")]
     public async Task NullQuerySourceShouldFlatten()
@@ -209,32 +168,6 @@ public class PivotTest : HubTestBase
         qs.HasRowGrouping.Should().Be(flattened.HasRowGrouping);
     }
 
-    [Fact]
-    public async Task DataCubeScopeWithDimensionPropertiesErr()
-    {
-        var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-        var scopes = ScopeFactory
-            .ForIdentities(storage.Identities, storage)
-            .ToScopes<IDataCubeScopeWithValueAndDimensionErr>();
-
-        async Task Report() =>
-            await (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy(nameof(Country)).Execute().FirstAsync();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report);
-        ex.Message.Should().Be($"Duplicate dimensions: '{nameof(Country)}'");
-    }
-
-    [Fact]
-    public async Task DataCubeScopeWithDimensionPropertiesErr1()
-    {
-        var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-        var scopes = ScopeFactory
-            .ForIdentities(storage.Identities, storage)
-            .ToScopes<IDataCubeScopeWithValueAndDimensionErr1>();
-
-        async Task Report() => await (GetHost().GetWorkspace()).ForDataCubes(scopes).SliceColumnsBy("MyCountry").Execute().FirstAsync();
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(Report); //.WithMessage<InvalidOperationException>("Duplicate dimensions: 'MyCountry'");
-        ex.Message.Should().Be("Duplicate dimensions: 'MyCountry'");
-    }
 
     public static IEnumerable<object[]> DataCubeCountTestCases()
     {
@@ -566,142 +499,6 @@ public class PivotTest : HubTestBase
         );
     }
 
-    public static IEnumerable<object[]> DataCubeScopeWithDimensionTestCases()
-    {
-        var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1), (2020, 3));
-
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<IDataCubeScopeWithValueAndDimension>,
-            IDataCubeScopeWithValueAndDimension,
-            IDataCubeScopeWithValueAndDimension
-        >(
-            "DataCubeScopeWithDimension",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IDataCubeScopeWithValueAndDimension>(),
-            b =>
-                b.SliceColumnsBy(
-                    nameof(IDataCubeScopeWithValueAndDimension.Country),
-                    nameof(Company)
-                )
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "DataCubeScopeWithDimension2",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IDataCubeScopeWithValueAndDimension2>(),
-            b =>
-                b.SliceColumnsBy(
-                    nameof(IDataCubeScopeWithValueAndDimension2.ScopeCountry),
-                    nameof(Company)
-                )
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "DataCubeScopeWithDimension3",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IDataCubeScopeWithValueAndDimension3>(),
-            b =>
-                b.SliceColumnsBy(
-                    nameof(IDataCubeScopeWithValueAndDimension3.ScopeCountry),
-                    nameof(Company)
-                )
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "DataCubeScopeWithDimension4",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IDataCubeScopeWithValueAndDimension4>(),
-            b =>
-                b.SliceColumnsBy(
-                    nameof(IDataCubeScopeWithValueAndDimension4.ScopeCountry),
-                    nameof(Company)
-                )
-        );
-    }
-
-    public static IEnumerable<object[]> ScopeDataCubeTestCases()
-    {
-        var storage = new YearAndQuarterAndCompanyIdentityStorage((2021, 1));
-
-        // TODO: uncomment this #20722  (2021-08-19, Andrei Sirotenko)
-        // yield return new ScopeDataCubeTestCase<IDataCube<CashflowElement>, CashflowElement, CashflowElement>(
-        //                                                                                                      "ScopeWithDataCubePropertiesSlicedColumns",
-        //                                                                                                      sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IScopeWithDataCubeProperties>().Aggregate().RepeatOnce(),
-        //                                                                                                      b => b.SliceColumnsBy(nameof(AmountType)));
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<IDataCubeScope>,
-            IDataCubeScope,
-            IDataCubeScope
-        >(
-            "DataCubeScope",
-            sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
-            b => b.SliceColumnsBy(nameof(AmountType))
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "ScopeWithElementPropertiesSlicedColumns",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IScopeWithElementProperties>(),
-            b => b.SliceColumnsBy(nameof(AmountType))
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "ScopeWithElementPropertiesSlicedRows",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IScopeWithElementProperties>(),
-            b => b.SliceColumnsBy(nameof(Currency)).SliceRowsBy(nameof(AmountType), "Year")
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<IDataCubeScope>,
-            IDataCubeScope,
-            IDataCubeScope
-        >(
-            "DataCubeScopeTransposedSliceByRow",
-            sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
-            b => b.Transpose<double>().SliceRowsBy("Year")
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<IDataCubeScope>,
-            IDataCubeScope,
-            IDataCubeScope
-        >(
-            "DataCubeScopeTransposed",
-            sf => sf.ForIdentities(storage.Identities, storage).ToScopes<IDataCubeScope>(),
-            b => b.Transpose<double>()
-        );
-        yield return new ScopeDataCubeTestCase<
-            IDataCube<CashflowElement>,
-            CashflowElement,
-            CashflowElement
-        >(
-            "ScopeWithDataCubePropertiesSlicedColumns",
-            sf =>
-                sf.ForIdentities(storage.Identities, storage)
-                    .ToScopes<IScopeWithDataCubeProperties>(),
-            b => b.SliceColumnsBy(nameof(AmountType))
-        );
-    }
 
     public static IEnumerable<object[]> TestCasesCount()
     {
@@ -1053,33 +850,23 @@ public class PivotTest : HubTestBase
             : base(benchmarkFile, data, pivotBuilder) { }
     }
 
-    private class ScopeDataCubeTestCase<TScope, TElement, TAggregate>
+    private class ScopeDataCubeTestCase<TScope, TElement, TAggregate>(
+        string benchmarkFile,
+        Func<
+            DataCubePivotBuilder<TScope, TElement, TElement, TElement>,
+            DataCubePivotBuilder<TScope, TElement, TAggregate, TAggregate>
+        > pivotBuilder)
         where TScope : IDataCube<TElement>
     {
-        private readonly Func<IScopeFactory, IEnumerable<TScope>> dataGenerator;
         private readonly Func<
             DataCubePivotBuilder<TScope, TElement, TElement, TElement>,
             DataCubePivotBuilder<TScope, TElement, TAggregate, TAggregate>
-        > pivotBuilder;
-        private readonly string benchmarkFile;
+        > pivotBuilder = pivotBuilder;
+        private readonly string benchmarkFile = benchmarkFile;
 
         public static implicit operator object[](
             ScopeDataCubeTestCase<TScope, TElement, TAggregate> testCase
-        ) => new object[] { testCase.benchmarkFile, testCase.dataGenerator, testCase.pivotBuilder };
-
-        public ScopeDataCubeTestCase(
-            string benchmarkFile,
-            Func<IScopeFactory, IEnumerable<TScope>> dataGenerator,
-            Func<
-                DataCubePivotBuilder<TScope, TElement, TElement, TElement>,
-                DataCubePivotBuilder<TScope, TElement, TAggregate, TAggregate>
-            > pivotBuilder
-        )
-        {
-            this.dataGenerator = dataGenerator;
-            this.pivotBuilder = pivotBuilder;
-            this.benchmarkFile = benchmarkFile;
-        }
+        ) => [testCase.benchmarkFile,  testCase.pivotBuilder];
     }
 
     private async Task ExecuteDataCubeTest<TElement>(
