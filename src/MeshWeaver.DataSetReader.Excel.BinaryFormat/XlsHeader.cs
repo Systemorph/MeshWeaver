@@ -1,4 +1,4 @@
-// /******************************************************************************************************
+﻿// /******************************************************************************************************
 //  * Copyright (c) 2012- Systemorph Ltd. This file is part of Systemorph Platform. All rights reserved. *
 //  ******************************************************************************************************/
 
@@ -164,7 +164,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// Returns mini FAT table
 		/// </summary>
-		public XlsFat GetMiniFAT(XlsRootDirectory rootDir)
+		public XlsFat GetMiniFAT()
 		{
 			if (_minifat == null)
 				ReadMiniFAT();
@@ -220,71 +220,84 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			_minifat = XlsFat.Create(this, sectors);
 		}
 
-		private void ReadFAT()
-		{
-			uint value;
-			int sectorSize = SectorSize;
-			List<uint> sectors = new List<uint>(FatSectorCount);
-			for (int i = 0x4C; i < sectorSize; i += 4)
-			{
-				value = BitConverter.ToUInt32(_bytes, i);
-				if (value == (uint) FATMARKERS.FAT_FreeSpace)
-					goto XlsHeader_Fat_Ready;
-				sectors.Add(value);
-			}
-			int difCount;
-			if ((difCount = DifSectorCount) == 0)
-				goto XlsHeader_Fat_Ready;
-			lock (_stream)
-			{
-				uint difSector = DifFirstSector;
-				byte[] buff = new byte[sectorSize];
-				uint prevSector = 0;
-				while (difCount > 0)
-				{
-					sectors.Capacity += 128;
-					if (prevSector == 0 || (difSector - prevSector) != 1)
-						_stream.Seek((difSector + 1)*sectorSize, SeekOrigin.Begin);
-					prevSector = difSector;
-					_stream.Read(buff, 0, sectorSize);
-					for (int i = 0; i < 508; i += 4)
-					{
-						value = BitConverter.ToUInt32(buff, i);
-						if (value == (uint) FATMARKERS.FAT_FreeSpace)
-							goto XlsHeader_Fat_Ready;
-						sectors.Add(value);
-					}
-					value = BitConverter.ToUInt32(buff, 508);
-					if (value == (uint) FATMARKERS.FAT_FreeSpace)
-						break;
-					if ((difCount--) > 1)
-						difSector = value;
-					else
-						sectors.Add(value);
-				}
-			}
-			XlsHeader_Fat_Ready:
-			_fat = XlsFat.Create(this, sectors);
-		}
+        private void ReadFAT()
+        {
+            uint value;
+            int sectorSize = SectorSize;
+            List<uint> sectors = new List<uint>(FatSectorCount);
+            for (int i = 0x4C; i < sectorSize; i += 4)
+            {
+                value = BitConverter.ToUInt32(_bytes, i);
+                if (value == (uint)FATMARKERS.FAT_FreeSpace)
+                    goto XlsHeader_Fat_Ready;
+                sectors.Add(value);
+            }
+            int difCount;
+            if ((difCount = DifSectorCount) == 0)
+                goto XlsHeader_Fat_Ready;
+            lock (_stream)
+            {
+                var difSector = DifFirstSector;
+                var buff = new byte[sectorSize];
+                uint prevSector = 0;
+                while (difCount > 0)
+                {
+                    sectors.Capacity += 128;
+                    if (prevSector == 0 || (difSector - prevSector) != 1)
+                        _stream.Seek((difSector + 1) * sectorSize, SeekOrigin.Begin);
+                    prevSector = difSector;
 
-		/// <summary>
-		/// Reads Excel header from Stream
-		/// </summary>
-		/// <param name="file">Stream with Excel file</param>
-		/// <returns>XlsHeader representing specified file</returns>
-		public static XlsHeader ReadHeader(Stream file)
-		{
-			XlsHeader hdr = new XlsHeader(file);
-			lock (file)
-			{
-				file.Seek(0, SeekOrigin.Begin);
-				file.Read(hdr._bytes, 0, 512);
-			}
-			if (!hdr.IsSignatureValid)
-				throw new HeaderException(Errors.ErrorHeaderSignature);
-			if (hdr.ByteOrder != 0xFFFE)
-				throw new FormatException(Errors.ErrorHeaderOrder);
-			return hdr;
-		}
+                    int bytesRead;
+                    int totalBytesRead = 0;
+                    while (totalBytesRead < sectorSize && (bytesRead = _stream.Read(buff, totalBytesRead, sectorSize - totalBytesRead)) > 0)
+                    {
+                        totalBytesRead += bytesRead;
+                    }
+
+                    for (var i = 0; i < 508; i += 4)
+                    {
+                        value = BitConverter.ToUInt32(buff, i);
+                        if (value == (uint)FATMARKERS.FAT_FreeSpace)
+                            goto XlsHeader_Fat_Ready;
+                        sectors.Add(value);
+                    }
+                    value = BitConverter.ToUInt32(buff, 508);
+                    if (value == (uint)FATMARKERS.FAT_FreeSpace)
+                        break;
+                    if ((difCount--) > 1)
+                        difSector = value;
+                    else
+                        sectors.Add(value);
+                }
+            }
+            XlsHeader_Fat_Ready:
+            _fat = XlsFat.Create(this, sectors);
+        }
+
+        /// <summary>
+        /// Reads Excel header from Stream
+        /// </summary>
+        /// <param name="file">Stream with Excel file</param>
+        /// <returns>XlsHeader representing specified file</returns>
+        public static XlsHeader ReadHeader(Stream file)
+        {
+            XlsHeader hdr = new XlsHeader(file);
+            lock (file)
+            {
+                file.Seek(0, SeekOrigin.Begin);
+
+                int bytesRead;
+                int totalBytesRead = 0;
+                while (totalBytesRead < 512 && (bytesRead = file.Read(hdr._bytes, totalBytesRead, 512 - totalBytesRead)) > 0)
+                {
+                    totalBytesRead += bytesRead;
+                }
+            }
+            if (!hdr.IsSignatureValid)
+                throw new HeaderException(Errors.ErrorHeaderSignature);
+            if (hdr.ByteOrder != 0xFFFE)
+                throw new FormatException(Errors.ErrorHeaderOrder);
+            return hdr;
+        }
 	}
 }

@@ -1,4 +1,4 @@
-// /******************************************************************************************************
+﻿// /******************************************************************************************************
 //  * Copyright (c) 2012- Systemorph Ltd. This file is part of Systemorph Platform. All rights reserved. *
 //  ******************************************************************************************************/
 
@@ -34,34 +34,38 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			//if (rootDir != null)
 			//	offset = isMini ? (hdr.MiniFatFirstSector + 1) * hdr.SectorSize : 0;
 
-			byte[] buff = new byte[sizeOfSector];
-			Stream file = hdr.FileStream;
-			
-			using (MemoryStream ms = new MemoryStream(sizeOfSector * sectorsForFAT))
-			{
-				lock (file)
-				{
-					for (int i = 0; i < sectors.Count; i++)
-					{
-						uint sector = sectors[i];
-						if (prevSector == 0 || (sector - prevSector) != 1)
-							file.Seek((sector + 1) * sizeOfSector, SeekOrigin.Begin);
-						prevSector = sector;
-						file.Read(buff, 0, sizeOfSector);
-						ms.Write(buff, 0, sizeOfSector);
-					}
-				}
-				ms.Seek(0, SeekOrigin.Begin);
-				using (BinaryReader rd = new BinaryReader(ms))
-				{
-					int sectors1 = (int) ms.Length/4;
-					XlsFat result = new XlsFat(sectors1);
-					for (int i = 0; i < sectors1; i++)
-						result._fat.Add(rd.ReadUInt32());
-					return result;
-				}
-			}
-		}
+			var buff = new byte[sizeOfSector];
+			var file = hdr.FileStream;
+
+            using var ms = new MemoryStream(sizeOfSector * sectorsForFAT);
+            lock (file)
+            {
+                lock (file)
+                {
+                    foreach (var sector in sectors)
+                    {
+                        if (prevSector == 0 || (sector - prevSector) != 1)
+                            file.Seek((sector + 1) * sizeOfSector, SeekOrigin.Begin);
+                        prevSector = sector;
+
+                        int bytesRead;
+                        var totalBytesRead = 0;
+                        while (totalBytesRead < sizeOfSector && (bytesRead = file.Read(buff, totalBytesRead, sizeOfSector - totalBytesRead)) > 0)
+                        {
+                            totalBytesRead += bytesRead;
+                        }
+                        ms.Write(buff, 0, totalBytesRead);
+                    }
+                }
+            }
+            ms.Seek(0, SeekOrigin.Begin);
+            using var rd = new BinaryReader(ms);
+            var sectors1 = (int) ms.Length/4;
+            var result = new XlsFat(sectors1);
+            for (var i = 0; i < sectors1; i++)
+                result._fat.Add(rd.ReadUInt32());
+            return result;
+        }
 
 		/// <summary>
 		/// Returns next data sector using FAT
@@ -72,7 +76,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		{
 			if (_fat.Count <= sector)
 				throw new ArgumentException(Errors.ErrorFATBadSector);
-			uint value = _fat[(int)sector];
+			var value = _fat[(int)sector];
 			if (value == (uint)FATMARKERS.FAT_FatSector || value == (uint)FATMARKERS.FAT_DifSector)
 				throw new InvalidOperationException(Errors.ErrorFATRead);
 			return value;
