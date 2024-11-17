@@ -160,7 +160,7 @@ namespace MeshWeaver.DataSetReader.Csv
                     }
                     else
                     {
-                        var record = csvReader.GetRecord<string[]>();
+                        var record = csvReader.Parser.Record;
                         if (dataTable != null)
                         {
                             var row = dataTable.NewRow();
