@@ -2,6 +2,5 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Scopes\MeshWeaver.Scopes.csproj" />
   </ItemGroup>
 </Project>
