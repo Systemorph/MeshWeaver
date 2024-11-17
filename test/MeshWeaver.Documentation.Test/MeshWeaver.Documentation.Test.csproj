@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Domain.Layout\MeshWeaver.Domain.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>
     <ItemGroup>

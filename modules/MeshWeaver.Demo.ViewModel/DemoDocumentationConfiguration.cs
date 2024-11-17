@@ -3,7 +3,6 @@ using MeshWeaver.Demo.ViewModel.CkeckBox;
 using MeshWeaver.Demo.ViewModel.DropDown;
 using MeshWeaver.Demo.ViewModel.ItemTemplate;
 using MeshWeaver.Demo.ViewModel.Listbox;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;

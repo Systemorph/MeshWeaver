@@ -115,10 +115,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Import.Test", "t
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Scopes.Test", "test\MeshWeaver.Scopes.Test\MeshWeaver.Scopes.Test.csproj", "{DC713E3E-90F7-42CC-B719-29B76D96EA7C}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.CSharp.Kernel", "src\MeshWeaver.CSharp.Kernel\MeshWeaver.CSharp.Kernel.csproj", "{CE5F2FC3-8B56-414F-807D-906DE4DE3123}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.CSharp.Roslyn", "src\MeshWeaver.CSharp.Roslyn\MeshWeaver.CSharp.Roslyn.csproj", "{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Session", "src\MeshWeaver.Session\MeshWeaver.Session.csproj", "{F70F144A-C970-4EC4-8D59-3375F788E42A}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Data.TestDomain", "test\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj", "{6F344FFE-BAED-42FD-91CD-4F524A04EDA3}"
@@ -147,8 +143,6 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Blazor.ChartJs", "src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj", "{2CA5BB18-A78B-43F2-A1EE-EC591DE5AE72}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Blazor.AgGrid", "src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj", "{03014EA4-3DE8-4161-A7DD-86AB96132B4E}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Domain.Layout", "src\MeshWeaver.Documentation\MeshWeaver.Domain.Layout.csproj", "{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Documentation.Test", "test\MeshWeaver.Documentation.Test\MeshWeaver.Documentation.Test.csproj", "{8B907340-5972-462B-898F-CD833242C3AE}"
 EndProject
@@ -226,6 +220,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.BusinessRules.Test", "test\MeshWeaver.BusinessRules.Test\MeshWeaver.BusinessRules.Test.csproj", "{5217DFDB-8A7D-4663-A6EF-3C3DB53F5E9D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.BusinessRules.Generator", "src\MeshWeaver.BusinessRules.Generator\MeshWeaver.BusinessRules.Generator.csproj", "{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Domain.Layout", "src\MeshWeaver.Domain.Layout\MeshWeaver.Domain.Layout.csproj", "{0D631287-471F-42A6-F826-AA800CCD7DB5}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -429,14 +425,6 @@ Global
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DC713E3E-90F7-42CC-B719-29B76D96EA7C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{CE5F2FC3-8B56-414F-807D-906DE4DE3123}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F4515ED6-789C-4C34-A430-FBE3CFB38E9E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F70F144A-C970-4EC4-8D59-3375F788E42A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F70F144A-C970-4EC4-8D59-3375F788E42A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F70F144A-C970-4EC4-8D59-3375F788E42A}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -485,10 +473,6 @@ Global
 		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{03014EA4-3DE8-4161-A7DD-86AB96132B4E}.Release|Any CPU.Build.0 = Release|Any CPU
-		{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{06A5C4F3-421F-4BA9-9B1D-8A66454C42E4}.Release|Any CPU.Build.0 = Release|Any CPU
 		{8B907340-5972-462B-898F-CD833242C3AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8B907340-5972-462B-898F-CD833242C3AE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8B907340-5972-462B-898F-CD833242C3AE}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -605,6 +589,10 @@ Global
 		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0D631287-471F-42A6-F826-AA800CCD7DB5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0D631287-471F-42A6-F826-AA800CCD7DB5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0D631287-471F-42A6-F826-AA800CCD7DB5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0D631287-471F-42A6-F826-AA800CCD7DB5}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
