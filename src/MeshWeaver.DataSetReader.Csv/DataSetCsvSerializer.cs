@@ -143,21 +143,11 @@ namespace MeshWeaver.DataSetReader.Csv
                     )
                 )
                 {
-                    try
-                    {
-                        await csvReader.ReadAsync();
-                    }
-                    catch (BadDataException e)
-                    {
-                        throw new BadDataException(
-                            e.ReadingContext,
-                            $"Possibly error is in first or last line of this text: {content}"
-                        );
-                    }
+                    await csvReader.ReadAsync();
                     if (isHeaderRow)
                     {
                         csvReader.ReadHeader();
-                        var fieldHeaders = csvReader.Context.HeaderRecord;
+                        var fieldHeaders = csvReader.HeaderRecord;
                         foreach (
                             var header in fieldHeaders.TakeWhile(header =>
                                 !string.IsNullOrWhiteSpace(header)
@@ -170,7 +160,7 @@ namespace MeshWeaver.DataSetReader.Csv
                     }
                     else
                     {
-                        var record = csvReader.Context.Record;
+                        var record = csvReader.GetRecord<string[]>();
                         if (dataTable != null)
                         {
                             var row = dataTable.NewRow();

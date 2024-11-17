@@ -13,10 +13,4 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Search\MeshWeaver.Search.csproj" />
   </ItemGroup>
-  <!--<ItemGroup>
-      <None Update="MeshWeaver.Azure.Publish.runtimeconfig.json">
-          <Pack>true</Pack>
-          <PackagePath>tools/net8.0/any/</PackagePath>
-      </None>
-  </ItemGroup>-->
 </Project>

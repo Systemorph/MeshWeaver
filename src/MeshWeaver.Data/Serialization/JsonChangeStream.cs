@@ -43,11 +43,11 @@ public static class JsonSynchronizationStream
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
         .Subscribe(e =>
         {
-                    logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
-                        reduced.StreamId, reduced.Owner);
+            logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
+                reduced.StreamId, reduced.Owner);
 
-                    hub.Post(e, o => o.WithTarget(reduced.Owner));
-                })
+            hub.Post(e, o => o.WithTarget(reduced.Owner));
+        })
         );
 
 
@@ -94,7 +94,7 @@ public static class JsonSynchronizationStream
         return reduced;
     }
 
-    internal static  ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
+    internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
     SubscribeRequest request
 )
@@ -215,14 +215,14 @@ public static class JsonSynchronizationStream
             .Select(x =>
             {
                 var currentJson = stream.Get<JsonElement?>();
-                if(currentJson is null || x.ChangeType == ChangeType.Full)
+                if (currentJson is null || x.ChangeType == ChangeType.Full)
                 {
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value.GetType(), stream.Hub.JsonSerializerOptions);
                     stream.Set(currentJson);
                     return new(
-                        stream.ClientId, 
-                        x.Version, 
-                        new RawJson(currentJson.ToString()), 
+                        stream.ClientId,
+                        x.Version,
+                        new RawJson(currentJson.ToString()),
                         ChangeType.Full,
                         x.ChangedBy);
                 }
@@ -266,16 +266,17 @@ public static class JsonSynchronizationStream
         JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
-            var id = p.Path.Segments.Skip(1).FirstOrDefault()?.Value;
-            var collection = p.Path.Segments.First().Value;
+            var id = p.Path.Skip(1).FirstOrDefault();
+            var collection = p.Path.First();
             var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
             return new EntityUpdate(
                 collection,
                 id == null ? null : JsonSerializer.Deserialize<object>(id, options),
                 pointer.Evaluate(updated)
-            ) { OldValue = pointer.Evaluate(current) };
+            )
+            { OldValue = pointer.Evaluate(current) };
         })
-        .DistinctBy(x => new{x.Id, x.Collection})
+        .DistinctBy(x => new { x.Id, x.Collection })
         .ToArray();
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement(this DataChangedEvent request, JsonElement? currentJson, JsonSerializerOptions options)
@@ -329,11 +330,11 @@ public static class JsonSynchronizationStream
                 var last = g.Last().Value;
 
                 PointerSegment[] pointerSegments = g.Key.Id == null
-                    ? [PointerSegment.Create(g.Key.Collection)]
+                    ? [g.Key.Collection]
                     :
                     [
-                        PointerSegment.Create(g.Key.Collection),
-                        PointerSegment.Create(JsonSerializer.Serialize(g.Key.Id, options))
+                        g.Key.Collection,
+                        JsonSerializer.Serialize(g.Key.Id, options)
                     ];
                 var parentPath = JsonPointer.Create(pointerSegments);
                 if (last == null && first == null)

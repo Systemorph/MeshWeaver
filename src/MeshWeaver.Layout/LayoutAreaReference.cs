@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.ShortGuid;
@@ -34,7 +35,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
         JsonPointer.Create(
             new[] { Data, EncodeId(id) }
             .Concat(extraSegments)
-            .Select(PointerSegment.Create)
+            .Select(x => (PointerSegment)x)
             .ToArray()
         )
         .ToString();
