@@ -1,4 +1,4 @@
-// /******************************************************************************************************
+﻿// /******************************************************************************************************
 //  * Copyright (c) 2012- Systemorph Ltd. This file is part of Systemorph Platform. All rights reserved. *
 //  ******************************************************************************************************/
 
@@ -43,7 +43,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 				if (entry.RightSiblingSid != (uint)FATMARKERS.FAT_FreeSpace)
 					entry.RightSibling = entries[(int)entry.RightSiblingSid];
 			}
-			stream.CalculateMiniFat(this);
+			stream.CalculateMiniFat();
 		}
 
 		/// <summary>
