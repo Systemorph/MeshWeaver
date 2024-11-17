@@ -28,7 +28,7 @@ public static class LayoutExtensions
                     reduction
                         .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
                             (workspace, reference, configuration) =>
-                                reference is not LayoutAreaReference layoutArea ? null : 
+                                reference is not LayoutAreaReference layoutArea ? null :
                                 new LayoutAreaHost(workspace, layoutArea, workspace.Hub.GetLayoutDefinition(), configuration)
                                     .RenderLayoutArea()
                         )
@@ -83,8 +83,8 @@ public static class LayoutExtensions
     )
     {
         var first = true;
-        var collection = referencePointer.Segments.First().Value;
-        var idString = referencePointer.Segments.Skip(1).FirstOrDefault()?.Value;
+        var collection = referencePointer.First();
+        var idString = referencePointer.Skip(1).FirstOrDefault();
         var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
 
         return stream
@@ -92,7 +92,7 @@ public static class LayoutExtensions
                 first
                 || i.Updates is null
                 || i.Updates.Any(
-                    p =>p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
+                    p => p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
                 )
             .Select(i =>
                 {
@@ -169,7 +169,7 @@ public static class LayoutExtensions
             s.MergeWithUpdates(
                 s.Update(LayoutAreaReference.Data,
                     c => c.SetItem(id, value)
-                ), 
+                ),
                 changedBy
             )
         )
@@ -225,7 +225,7 @@ public static class LayoutExtensions
         var jsonPath = JsonPointer.Parse(pointer);
         var existingValue = jsonPath.Evaluate(obj);
         var op =
-            existingValue is not null 
+            existingValue is not null
                 ? PatchOperation.Replace(JsonPointer.Parse(pointer), value)
                 : PatchOperation.Add(JsonPointer.Parse(pointer), value);
 

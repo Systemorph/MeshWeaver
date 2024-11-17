@@ -23,7 +23,7 @@ public static class StandardWorkspaceReferenceImplementations
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
             )
-            .ForReducedStream<JsonElement>(reduced => 
+            .ForReducedStream<JsonElement>(reduced =>
                 reduced.AddPatchFunction(PatchJsonElement)
                     .AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonElementTo)
                 );
@@ -33,10 +33,9 @@ public static class StandardWorkspaceReferenceImplementations
     private static ChangeItem<JsonElement?> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-
         return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates
-            .Where(u => u.Collection == pointer.Segments.First().Value 
-                        && pointer.Segments[1].Value.Equals(u.Id) ).ToArray());
+            .Where(u => u.Collection == pointer.First()
+                        && pointer.Skip(1).Equals(u.Id)).ToArray());
     }
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
@@ -60,7 +59,7 @@ public static class StandardWorkspaceReferenceImplementations
         if (current.ChangeType != ChangeType.Patch)
             return new(current.Value.ReduceImpl(reference), current.Version);
         var change =
-            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id,reference.Id));
+            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
         if (change == null)
             return null;
         return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
@@ -102,15 +101,15 @@ public static class StandardWorkspaceReferenceImplementations
     private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch, string changedBy)
     {
         var updates = new List<EntityUpdate>();
-        foreach (var g in 
+        foreach (var g in
                  patch.Operations
-                     .GroupBy(p => p.Path.Segments.First().Value))
+                     .GroupBy(p => p.Path.First()))
         {
             var allChanges = g.ToArray();
-            if (allChanges.Length == 1 && allChanges[0].Path.Segments.Length == 1)
+            if (allChanges.Length == 1 && allChanges[0].Path.Count() == 1)
             {
                 var change = allChanges[0];
-                var collection = change.Path.Segments.First().Value;
+                var collection = change.Path.First();
                 switch (change.Op)
                 {
                     case OperationType.Add:
@@ -120,7 +119,7 @@ public static class StandardWorkspaceReferenceImplementations
                         break;
                     case OperationType.Remove:
                         var elements = currentStore.GetCollection(collection);
-                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, null){OldValue = x.Value}));
+                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, null) { OldValue = x.Value }));
                         currentStore = currentStore.Remove(collection);
                         break;
                     default:
@@ -128,23 +127,25 @@ public static class StandardWorkspaceReferenceImplementations
                 }
             }
 
-            foreach(var eg in allChanges.GroupBy(p => new{Id = p.Path.Segments[1].Value, Op = p.Op switch
-                        {
-                            OperationType.Add => OperationType.Add,
-                            OperationType.Remove => OperationType.Remove,
-                            _ => OperationType.Replace
-                        }
-                    }))
+            foreach (var eg in allChanges.GroupBy(p => new
             {
-                var collection = allChanges.First().Path.Segments.First().Value;
+                Id = p.Path.Skip(1).First(),
+                Op = p.Op switch
+                {
+                    OperationType.Add => OperationType.Add,
+                    OperationType.Remove => OperationType.Remove,
+                    _ => OperationType.Replace
+                }
+            }))
+            {
+                var collection = allChanges.First().Path.First();
                 var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions);
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
                     throw new InvalidOperationException(
                         $"Cannot patch collection {collection}, as it doesn't exist in current state.");
 
-                var entityPointer = JsonPointer.Create(PointerSegment.Create(collection),
-                    PointerSegment.Create(eg.Key.Id));
+                var entityPointer = JsonPointer.Create(collection, eg.Key.Id);
 
                 switch (eg.Key.Op)
                 {
@@ -157,7 +158,7 @@ public static class StandardWorkspaceReferenceImplementations
                         entity = stream.GetEntity(entityPointer, updatedJson);
                         var oldInstance = currentCollection.GetInstance(id);
                         currentCollection = currentCollection.Update(id, entity);
-                        updates.Add(new(collection, eg.Key.Id, entity){OldValue = oldInstance});
+                        updates.Add(new(collection, eg.Key.Id, entity) { OldValue = oldInstance });
                         break;
                     case OperationType.Remove:
                         oldInstance = currentCollection.GetInstance(id);
