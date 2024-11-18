@@ -24,7 +24,7 @@ public static class Currencies
                     Template.Bind(
                         new CurrenciesFilter(currencyNames.Select(c => new CurrenciesFilterItem(c.SystemName, c.DisplayName, false)).ToList()),
                         nameof(CurrenciesFilter),
-                        cf => Template.ItemTemplate(cf.Data, c => Controls.CheckBox(c.Label, c.Selected))
+                        cf => Template.BindMany(cf.Data, c => Controls.CheckBox(c.Label, c.Selected))
                     )
             )
             .WithView((a, _) => a
