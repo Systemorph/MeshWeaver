@@ -43,6 +43,7 @@ public interface ISynchronizationStream<TStream>
     void UpdateAsync(Func<TStream, ChangeItem<TStream>> update);
     void Update(Func<TStream, ChangeItem<TStream>> update);
     void Initialize(Func<CancellationToken, Task<TStream>> init);
+    void Initialize(Func<TStream> init) => Initialize(_ => Task.FromResult(init()));
     void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
     void RequestChange(Func<TStream, ChangeItem<TStream>> update);

@@ -70,10 +70,6 @@ public abstract record UiControl : IUiControl
 
 
     protected ImmutableList<Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates>> Buildup { get; init; } = [];
-    public UiControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)
-    {
-        return this with { Buildup = Buildup.Add(buildup) };
-    }
 
 
     public virtual bool Equals(UiControl other)
@@ -121,6 +117,12 @@ public abstract record UiControl : IUiControl
         return context with { Area = $"{context.Area}/{area}", Parent = context };
     }
 
+    public UiControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)
+    {
+        return this with { Buildup = Buildup.Add(buildup) };
+    }
+
+
 }
 
 public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
@@ -138,6 +140,10 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
     }
 
     public override bool IsUpToDate(object other) => Equals(other);
+    public new TControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)
+    {
+        return This with { Buildup = Buildup.Add(buildup) };
+    }
 
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) =>
         This with

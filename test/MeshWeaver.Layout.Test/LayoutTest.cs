@@ -48,13 +48,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(UpdatingView), UpdatingView())
                     .WithView(
                         nameof(ItemTemplate),
-                        (area, _) =>
                             layout
                                 .Hub.GetWorkspace()
                                 .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
                                 .DistinctUntilChanged()
-                                .Select(data => ItemTemplate(area, data))
-                    )
+                                .BindMany(nameof(ItemTemplate), y => 
+                                    Controls.Text(y.DisplayName).WithId(y.SystemName))
+                                )
+                    
                     .WithView(nameof(CatalogView), CatalogView)
                     .WithView(
                         nameof(Counter),
@@ -214,10 +215,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
-        Template.Bind(
-            data,
-            nameof(ItemTemplate),
-            record => Controls.Text(record.DisplayName).WithId(record.SystemName)
+        data.BindMany(record => Controls.Text(record.DisplayName).WithId(record.SystemName)
         );
 
     [HubFact]
@@ -241,6 +239,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetDataStream<IEnumerable<JsonElement>>(
                 new JsonPointerReference(itemTemplate.DataContext)
             )
+            .Where(x => x is not null)
             .FirstAsync();
 
 
@@ -362,7 +361,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.ItemTemplate(x.Data, y => Controls.CheckBox(y.Label, y.Value))), Filter)
+            .WithView(Template.Bind(data, nameof(DataBoundCheckboxes), x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Label, y.Value))), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
                 ), Results);
