@@ -1,5 +1,6 @@
 {
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "npm run build:Release",
     "build:Release": "vite build",
