@@ -46,7 +46,7 @@ public static class BlazorClientRegistry
         return control switch
         {
             LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutArea>(layoutArea, null, area),
+                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, null, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),

@@ -49,7 +49,6 @@ public partial class LayoutAreaPage
         Reference = new((string)LayoutExtensions.Decode(Area))
         {
             Id = id,
-            Layout = StandardPageLayout.Page,
         };
 
 

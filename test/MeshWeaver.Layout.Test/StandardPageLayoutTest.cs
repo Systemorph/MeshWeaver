@@ -2,7 +2,6 @@
 using System.Text.Json;
 using FluentAssertions;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Domain;
 using Xunit.Abstractions;
@@ -24,7 +23,6 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 )
                 .AddLayout(layout =>
                     layout
-                        .WithPageLayout()
                         .WithView(
                             StaticView,
                             Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
@@ -42,7 +40,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
         [HubFact]
         public async Task BasicArea()
         {
-            var reference = new LayoutAreaReference(StaticView) { Layout = StandardPageLayout.Page };
+            var reference = new LayoutAreaReference(StandardPageLayout.NavMenu);
 
             var workspace = GetClient().GetWorkspace();
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -53,31 +51,11 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
             var control = await stream.GetControlAsync(reference.Area);
             control
                 .Should()
-                .BeOfType<LayoutStackControl>()
+                .BeOfType<NavMenuControl>()
                 .Which.Areas.Should()
                 .HaveCount(2)
                 ;
 
-            var page = await stream.GetControlAsync(StandardPageLayout.Page);
-            var stack = page.Should().BeOfType<LayoutControl>().Which;
-                stack.Areas.Should().HaveCountGreaterThan(0)
-                .And.Subject.Should().BeEquivalentTo(Enumerable.Range(1, stack.Areas.Count).Select(i => new NamedAreaControl($"{StandardPageLayout.Page}/{i}"){Id = i.ToString()}))
-                ;
-
-            var header = await stream.GetControlAsync(StandardPageLayout.Header);
-            header.Should().BeOfType<LayoutStackControl>()
-                .Which.Areas.Should().HaveCountGreaterThan(0);
-            var footer = await stream.GetControlAsync(StandardPageLayout.Footer);
-            footer.Should().BeOfType<LayoutStackControl>()
-                .Which.Areas.Should().HaveCountGreaterThan(0);
-            var mainContent = await stream.GetControlAsync(StandardPageLayout.MainContent);
-            mainContent.Should().BeOfType<NamedAreaControl>()
-                .Which.Area.Should().Be(reference.Area);
-
-            var navMenu = await stream.GetControlAsync(StandardPageLayout.NavMenu);
-            navMenu.Should().BeOfType<NavMenuControl>()
-                .Which.Areas.Should().HaveCount(2)
-                ;
         }
     }
 }

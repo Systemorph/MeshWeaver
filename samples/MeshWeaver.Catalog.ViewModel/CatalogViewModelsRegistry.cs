@@ -26,7 +26,6 @@ public static class CatalogViewModels
         => configuration
             .WithTypes(typeof(CatalogItemControl))
             .AddLayout(layout => layout
-                .WithPageLayout()
                 .AddCatalog()
             )
             ;
