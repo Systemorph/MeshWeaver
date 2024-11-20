@@ -39,7 +39,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     /// </summary>
     public override MeshNode Node =>
         GetMeshNode(
-            new ApplicationAddress("Northwind", "dev"),
+            new ApplicationAddress("Northwind"),
             typeof(NorthwindApplicationAttribute).Assembly.Location
         );
 }

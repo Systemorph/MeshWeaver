@@ -10,5 +10,9 @@
 <LayoutArea ViewModel="@ViewModel" />
 
 @code {
-    private LayoutAreaControl ViewModel { get; } = new(new ApplicationAddress("MeshWeaver", "Overview"), new("Doc") { Id = "Embedded/MeshWeaver.Overview/Readme.md" });
+    private LayoutAreaControl ViewModel { get; } = new(new ApplicationAddress("Overview"), new("Doc")
+        {
+            Id =
+        "Embedded/MeshWeaver.Overview/Readme.md"
+        });
 }

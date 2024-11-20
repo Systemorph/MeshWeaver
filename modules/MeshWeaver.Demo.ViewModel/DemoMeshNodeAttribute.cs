@@ -9,7 +9,7 @@ namespace MeshWeaver.Demo.ViewModel
     public class DemoMeshNodeAttribute : MeshNodeAttribute
     {
         public override IMessageHub Create(IServiceProvider serviceProvider, object address)
-            =>  serviceProvider.CreateMessageHub(
+            => serviceProvider.CreateMessageHub(
                 address,
                 application =>
                     application
@@ -17,6 +17,6 @@ namespace MeshWeaver.Demo.ViewModel
             );
 
         public override MeshNode Node =>
-            GetMeshNode(new ApplicationAddress("MeshWeaver", "Demo"), typeof(DemoMeshNodeAttribute).Assembly.Location);
+            GetMeshNode(new ApplicationAddress("Demo"), typeof(DemoMeshNodeAttribute).Assembly.Location);
     }
 }

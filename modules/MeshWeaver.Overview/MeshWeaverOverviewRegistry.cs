@@ -17,7 +17,7 @@ public class MeshWeaverOverviewAttribute : MeshNodeAttribute
             .AddDocumentation());
 
     public override MeshNode Node =>
-        GetMeshNode(new ApplicationAddress("MeshWeaver", "Overview"), typeof(MeshWeaverOverviewAttribute).Assembly.Location);
+        GetMeshNode(new ApplicationAddress("MeshWeaver"), typeof(MeshWeaverOverviewAttribute).Assembly.Location);
 
 }
 
