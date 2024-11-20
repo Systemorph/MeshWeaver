@@ -9,7 +9,7 @@ using Microsoft.JSInterop;
 namespace MeshWeaver.Blazor.Components;
 
 [StreamRendering]
-public partial class LayoutArea
+public partial class LayoutAreaView
 {
     [Inject] private IMessageHub Hub { get; set; }
 

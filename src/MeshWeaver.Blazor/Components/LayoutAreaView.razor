@@ -1,0 +1,6 @@
+@inherits BlazorView<LayoutAreaControl, LayoutAreaView>
+
+<NamedAreaView 
+    Stream="@AreaStream" 
+    ViewModel="@NamedArea"
+    Area="@NamedArea.GetArea()" />

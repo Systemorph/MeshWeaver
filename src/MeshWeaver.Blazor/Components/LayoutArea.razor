@@ -1,6 +1,14 @@
-@inherits BlazorView<LayoutAreaControl, LayoutArea>
+@using MeshWeaver.Application
 
-<NamedAreaView 
-    Stream="@AreaStream" 
-    ViewModel="@NamedArea"
-    Area="@NamedArea.GetArea()" />
+<LayoutAreaView ViewModel="@ViewModel" />
+
+@code {
+    [Parameter] public string Application { get; set; }
+    [Parameter] public string Area { get; set; }
+    [Parameter] public string Id { get; set; }
+
+    private LayoutAreaControl ViewModel => new(new ApplicationAddress(Application), new(Area)
+    {
+        Id = Id
+    });
+}
