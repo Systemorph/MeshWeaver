@@ -1,9 +1,9 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor
+namespace MeshWeaver.Blazor.Components
 {
     public partial class NumberFieldView<TValue>
-        where TValue:new()
+        where TValue : new()
     {
         /// <summary>
         /// When true, spin buttons will not be rendered.

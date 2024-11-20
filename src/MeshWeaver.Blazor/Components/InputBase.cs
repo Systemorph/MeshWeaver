@@ -1,16 +1,17 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewModel, TView>
     where TViewModel : UiControl, IInputControl
-    where TView:InputBase<TViewModel, TView, TData>
+    where TView : InputBase<TViewModel, TView, TData>
 {
     protected TData Data
     {
         get => InnerData;
-        set {
+        set
+        {
             var needsUpdate = !EqualityComparer<TData>.Default.Equals(InnerData, value);
             InnerData = value;
             if (needsUpdate)
@@ -34,12 +35,12 @@ public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewMode
         base.BindData();
         if (ViewModel != null)
         {
-            DataBind<TData>(ViewModel.Data, x => x.InnerData);
-            DataBind<string>(ViewModel.Placeholder, x => x.Placeholder);
-            DataBind<bool>(ViewModel.Disabled, x => x.Disabled);
-            DataBind<bool>(ViewModel.AutoFocus, x => x.AutoFocus);
-            DataBind<bool>(ViewModel.Immediate, x => x.Immediate);
-            DataBind<int>(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
+            DataBind(ViewModel.Data, x => x.InnerData);
+            DataBind(ViewModel.Placeholder, x => x.Placeholder);
+            DataBind(ViewModel.Disabled, x => x.Disabled);
+            DataBind(ViewModel.AutoFocus, x => x.AutoFocus);
+            DataBind(ViewModel.Immediate, x => x.Immediate);
+            DataBind(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
 
             DataPointer = ViewModel.Data as JsonPointerReference;
         }

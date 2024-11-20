@@ -9,6 +9,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
+using MeshWeaver.Blazor.Notebooks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +37,7 @@ builder.UseMeshWeaver(
             x
                 .AddChartJs()
                 .AddAgGrid()
+                .AddNotebooks()
         )
         .AddMonolithMesh()
 );

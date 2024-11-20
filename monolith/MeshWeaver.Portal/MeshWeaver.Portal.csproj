@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Notebooks\MeshWeaver.Blazor.Notebooks.csproj" />
   </ItemGroup>
 
     <ItemGroup>

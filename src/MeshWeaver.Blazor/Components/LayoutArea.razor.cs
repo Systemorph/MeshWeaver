@@ -6,7 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 [StreamRendering]
 public partial class LayoutArea
@@ -31,8 +31,8 @@ public partial class LayoutArea
             BindStream();
         else
         {
-            if(AreaStream != null)
-               AreaStream.Dispose();
+            if (AreaStream != null)
+                AreaStream.Dispose();
             AreaStream = null;
         }
     }
@@ -51,7 +51,7 @@ public partial class LayoutArea
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {
-        if(AreaStream != null)
+        if (AreaStream != null)
             AreaStream.Dispose();
         AreaStream = null;
         await base.DisposeAsync();

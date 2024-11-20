@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using Markdig.Syntax;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 public partial class MarkdownView
 {

@@ -10,7 +10,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
 
-public  static class BlazorHostingExtensions
+public static class BlazorHostingExtensions
 {
     public static MeshWeaverHostBuilder AddBlazor(this MeshWeaverHostBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
     {
@@ -23,9 +23,9 @@ public  static class BlazorHostingExtensions
     }
 
     public static void MapStaticContent(this IEndpointRouteBuilder app, IMeshCatalog meshCatalog)
-        => app.MapGet("/static/{application}/{environment}/{*fileName}", async (string application, string environment, string fileName) =>
+        => app.MapGet("/static/{application}/{*fileName}", async (string application, string environment, string fileName) =>
     {
-        var address = new ApplicationAddress(application, environment);
+        var address = new ApplicationAddress(application);
         var storageInfo = await meshCatalog.GetNodeAsync(address.ToString());
         var filePath = Path.Combine(storageInfo.BasePath, storageInfo.ContentPath, fileName);
 

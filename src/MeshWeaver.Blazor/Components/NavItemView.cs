@@ -1,12 +1,12 @@
 ﻿using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 
 public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TView>
     where TViewModel : IMenuItem
-    where TView:NavItemView<TViewModel,TView>
+    where TView : NavItemView<TViewModel, TView>
 
 {
     protected string Href { get; set; }
@@ -19,7 +19,7 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
 
         if (ViewModel != null)
         {
-            DataBind(ViewModel.Title, x => x.Title );
+            DataBind(ViewModel.Title, x => x.Title);
             DataBind(ViewModel.Href, x => x.Href);
             DataBind(ViewModel.Icon, x => x.Icon);
         }

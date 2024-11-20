@@ -1,8 +1,8 @@
 ﻿using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
-public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel, TView, ListBase<TViewModel,TView>.Option>
+public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel, TView, ListBase<TViewModel, TView>.Option>
     where TViewModel : UiControl, IListControl
     where TView : ListBase<TViewModel, TView>
 {
