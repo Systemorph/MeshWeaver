@@ -27,7 +27,6 @@ namespace MeshWeaver.Northwind.ViewModel
                     .AddDomainViews()
                     .AddLayout(layout =>
                     layout
-                        .WithPageLayout()
                         .AddAnnualReport()
                         .AddDashboard()
                         .AddProductsSummary()

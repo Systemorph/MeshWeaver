@@ -28,7 +28,6 @@ public static class DemoViewModelsRegistry
         => configuration
             .AddDemoDocumentation()
             .AddLayout(layout => layout
-                .WithPageLayout()
                 .AddViewModelStateDemo()
                 .AddSelectControlDemo()
                 .AddListboxDemo()
