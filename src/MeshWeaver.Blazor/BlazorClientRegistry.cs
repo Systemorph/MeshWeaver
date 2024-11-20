@@ -11,7 +11,8 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
-[assembly:InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
+using MeshWeaver.Blazor.Components;
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
 
 public static class BlazorClientRegistry

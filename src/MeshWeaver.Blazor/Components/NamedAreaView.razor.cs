@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 public partial class NamedAreaView
 {
@@ -31,9 +31,9 @@ public partial class NamedAreaView
                 {
                     InvokeAsync(() =>
                     {
-                        if(RootControl is null && x is null || (RootControl != null && RootControl.Equals(x)))
+                        if (RootControl is null && x is null || RootControl != null && RootControl.Equals(x))
                             return;
-                        RootControl = (UiControl)x;
+                        RootControl = x;
                         Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
                             AreaToBeRendered, x?.GetType().Name ?? "null");
                         RequestStateChange();

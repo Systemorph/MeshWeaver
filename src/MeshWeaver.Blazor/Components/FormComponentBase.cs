@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<TViewModel, TView>
     where TViewModel : UiControl, IFormComponent
@@ -38,9 +38,9 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         return v;
     }
 
-    protected virtual  bool NeedsUpdate(TValue v)
+    protected virtual bool NeedsUpdate(TValue v)
     {
-        return !Equals(this.value, v);
+        return !Equals(value, v);
     }
 
     protected JsonPointerReference Pointer { get; set; }

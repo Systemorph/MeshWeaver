@@ -8,11 +8,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Layout.Client;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Components;
 
 public partial class DataGridView
 {
-    private bool Virtualize { get; set; } 
+    private bool Virtualize { get; set; }
     private float ItemSize { get; set; }
     private bool ResizableColumns { get; set; }
 

@@ -6,7 +6,7 @@ using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Blazor;
+namespace MeshWeaver.Blazor.Pages;
 
 public partial class LayoutAreaPage
 {
@@ -34,7 +34,7 @@ public partial class LayoutAreaPage
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-    private object Address => new ApplicationAddress(Application, Environment);
+    private object Address => new ApplicationAddress(Application);
 
     private LayoutAreaReference Reference { get; set; }
     protected override async Task OnParametersSetAsync()
