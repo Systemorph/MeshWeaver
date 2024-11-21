@@ -8,11 +8,13 @@ namespace MeshWeaver.Mesh.Contract;
 [GenerateSerializer]
 public record MeshArticle
 {
+    public string Id { get; init; }
+    public string Extension { get; init; }
     public string Name { get; init; }
     [property: Key] public string Url { get; init; }
     public string Path { get; init; }
     public string Description { get; init; }
-    string Thumbnail { get; init; }
+    public string Thumbnail { get; init; }
     public int Views { get; init; }
     public int Likes { get; init; }
     public int Comments { get; init; }
@@ -22,16 +24,17 @@ public record MeshArticle
     public string Content { get; init; }
 
     public ArticleStatus Status { get; init; }
-    public ImmutableList<(ArticleStatus Status, DateTime Timestamp)> StatusHistory { get; init; } = [];
+    public (ArticleStatus Status, DateTime Timestamp)[] StatusHistory { get; init; } = [];
 
     public MeshArticle SetStatus(ArticleStatus status)
-        => this with { Status = status, StatusHistory = StatusHistory.Add((status, DateTime.UtcNow)) };
+        => this with { Status = status, StatusHistory = StatusHistory.Append((status, DateTime.UtcNow)).ToArray() };
 
     public DateTime Created { get; init; } = DateTime.UtcNow;
 
-    public ImmutableList<string> Tags { get; init; } = [];
+    public string[] Tags { get; init; } = [];
 
-    public ImmutableList<string> Authors { get; init; } = [];
+    public string[] Authors { get; init; } = [];
+    public string Application { get; init; }
 
     public IDictionary<string, string> ToMetadata(string path, string type) =>
         new Dictionary<string, string>()

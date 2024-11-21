@@ -1,4 +1,6 @@
-﻿using Azure.Storage.Blobs;
+﻿using System.Text;
+using Azure.Storage.Blobs;
+using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Markdown;
 using Xunit.Abstractions;
@@ -17,21 +19,14 @@ public class ArticleParsingTest(ITestOutputHelper output) : HubTestBase(output)
 
         foreach (var file in files)
         {
-            var content = await File.ReadAllTextAsync(file);
-            var (article, html) = MarkdownIndexer.ParseArticle(file, content, "app/demo/dashboard");
-
-            // Store properties of article as metadata
-            //var metadata = new Dictionary<string, string>
-            //{
-            //    { "Title", article.Name },
-            //    { "Author", article.Author },
-            //    { "Date", article.Date.ToString() }
-            //};
-
-            // Store html as file content on blob client
-            //var blobContainerClient = blobServiceClient.GetBlobContainerClient("articles");
-            //var blobClient = blobContainerClient.GetBlobClient(article.Path);
-            //await blobClient.UploadAsync(new MemoryStream(Encoding.UTF8.GetBytes(html)), metadata);
+            var content = await File.ReadAllTextAsync(file, Encoding.Latin1);
+            var (article, html) = MarkdownIndexer.ParseArticle(file, content, "demo");
+            article.Should().NotBeNull();
+            article.Name.Should().Be("Northwind Overview");
+            article.Description.Should().Be("This is a sample description of the article.");
+            article.Id.Should().Be("Overview");
+            article.Extension.Should().Be(".md");
+            article.Url.Should().Be("demo/Overview");
         }
     }
 }

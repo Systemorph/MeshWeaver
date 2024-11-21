@@ -7,16 +7,16 @@ namespace MeshWeaver.Markdown;
 
 public static class MarkdownIndexer
 {
-    public static (MeshArticle Article, string Html) ParseArticle(string path, string markdownText, object address)
+    public static (MeshArticle Article, string Html) ParseArticle(string path, string markdownText, string application)
     {
-        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(address);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(application);
         var document = Markdig.Markdown.Parse(markdownText, pipeline);
 
-        var article = GetArticle(path, document, address);
+        var article = GetArticle(path, document, application);
         return (article, document.ToHtml(pipeline));
     }
 
-    private static MeshArticle GetArticle(string path, MarkdownDocument document, object address)
+    private static MeshArticle GetArticle(string path, MarkdownDocument document, string application)
     {
 
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
@@ -25,7 +25,17 @@ public static class MarkdownIndexer
             var yaml = yamlBlock.Lines.ToString();
             var deserializer = new YamlDotNet.Serialization.DeserializerBuilder().Build();
             var ret = deserializer.Deserialize<MeshArticle>(yaml);
-            ret = ret with { Path = path };
+
+            var id = Path.GetFileNameWithoutExtension(path);
+            
+            return ret with
+            {
+                Id = id,
+                Application = application,
+                Path = path,
+                Url = $"{application}/{id}",
+                Extension = Path.GetExtension(path),
+            };
         }
 
         return null;
