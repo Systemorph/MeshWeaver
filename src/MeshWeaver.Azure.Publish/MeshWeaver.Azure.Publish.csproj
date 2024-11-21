@@ -11,6 +11,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Search\MeshWeaver.Search.csproj" />
+    <ProjectReference Include="..\..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
   </ItemGroup>
 </Project>

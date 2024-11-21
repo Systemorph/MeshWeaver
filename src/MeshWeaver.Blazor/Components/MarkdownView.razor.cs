@@ -29,7 +29,7 @@ public partial class MarkdownView
             markdown => InvokeAsync(() =>
             {
                 var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
-                var document = Markdown.Parse(markdown, pipeline);
+                var document = Markdig.Markdown.Parse(markdown, pipeline);
                 var newLayoutComponents =
                     document.Descendants<LayoutAreaComponentInfo>()
                         .Select(component => new LayoutAreaControl(Stream.Owner, component.Reference) { Id = component.DivId })

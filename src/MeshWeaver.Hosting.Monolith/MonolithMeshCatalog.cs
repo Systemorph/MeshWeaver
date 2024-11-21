@@ -24,7 +24,7 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
         return Task.CompletedTask;
     }
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    public Task InitializeAsync(CancellationToken cancellationToken)
     {
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
@@ -34,6 +34,7 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
                 meshNodes[node.Id] = node;
             }
         }
+        return Task.CompletedTask;
     }
 
     private async IAsyncEnumerable<MeshArticle> InitializeArticlesForNodeAsync(MeshNode node)
