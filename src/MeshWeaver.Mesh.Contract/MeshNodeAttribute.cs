@@ -14,7 +14,10 @@ public abstract class MeshNodeAttribute : Attribute
         var basePathLength = location.LastIndexOf(Path.DirectorySeparatorChar);
         return new(address.ToString(), "Mesh Weaver Overview",
             location.Substring(0, basePathLength),
-            location.Substring(basePathLength + 1), "wwwroot", address);
+            location.Substring(basePathLength + 1))
+        {
+            AddressType = address.GetType().FullName
+        };
     }
 
 }

@@ -2,9 +2,8 @@
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using System.Collections.Immutable;
-using MeshWeaver.Domain.Layout;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Utils;
+using MeshWeaver.Data;
 
 namespace MeshWeaver.Blazor.Pages;
 
@@ -41,12 +40,12 @@ public partial class LayoutAreaPage
     {
         await base.OnParametersSetAsync();
 
-        var id = (string)LayoutExtensions.Decode(Id);
+        var id = (string)WorkspaceReference.Decode(Id);
         var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
         if (!string.IsNullOrEmpty(query))
             id += "?" + query;
         
-        Reference = new((string)LayoutExtensions.Decode(Area))
+        Reference = new((string)WorkspaceReference.Decode(Area))
         {
             Id = id,
         };

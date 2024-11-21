@@ -86,15 +86,14 @@ public class LayoutAreaMarkdownParser : BlockParser
     private bool ParseParameters(ref StringSlice slice, LayoutAreaComponentInfo info)
     {
         var name = ReadToken(ref slice);
-        if (name == null || name.IsEmpty())
+        if (string.IsNullOrEmpty(name))
             return false;
         var value = ReadToken(ref slice);
-        if(value == null || value.IsEmpty())
+        if (string.IsNullOrEmpty(value))
             return false;
         ParseToInfo(info, name, value);
         return true;
     }
-
     private static readonly HashSet<char> IgnoreChars = [' ', '\t'];
     private static readonly HashSet<char> BreakChars = ['\n', '\r', '\0', '}'];
     private static readonly HashSet<char> EndTokenChars = ['=', ','];
