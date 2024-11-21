@@ -8,7 +8,7 @@ namespace MeshWeaver.Hosting.Orleans.Server;
 [StorageProvider(ProviderName = StorageProviders.MeshCatalog)]
 public class ArticleGrain(ILogger<ArticleGrain> logger) : Grain<MeshArticle>, IArticleGrain
 {
-    public Task<MeshArticle> Get()
+    public Task<MeshArticle> Get(bool includeContent)
     {
         logger.LogDebug("Retrieving Article Entry {Article}", this.GetPrimaryKeyString());
         return Task.FromResult(State);

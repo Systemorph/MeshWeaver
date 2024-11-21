@@ -15,5 +15,8 @@ public record MeshArticle(
 {
     public int Views { get; init; }
     public int Likes { get; init; }
+    public int Comments { get; init; }
+
+    public string Content { get; init; }
 
 }

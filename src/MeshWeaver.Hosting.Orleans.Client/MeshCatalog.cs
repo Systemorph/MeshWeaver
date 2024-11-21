@@ -64,8 +64,8 @@ namespace MeshWeaver.Hosting.Orleans.Client
             deferral.Dispose();
         }
 
-        public Task<MeshArticle> GetArticleAsync(string id)
-            => grainFactory.GetGrain<IArticleGrain>(id).Get();
+        public Task<MeshArticle> GetArticleAsync(string application, string id, bool includeContent)
+            => grainFactory.GetGrain<IArticleGrain>($"{application}/{id}").Get(includeContent);
 
         public Task UpdateArticleAsync(MeshArticle meshArticle)
             => grainFactory.GetGrain<IArticleGrain>(meshArticle.Url).Update(meshArticle);
