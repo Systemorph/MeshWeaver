@@ -1,9 +1,10 @@
 ﻿using Markdig;
-using MeshWeaver.Layout.Markdown;
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using Markdig.Syntax;
+using MeshWeaver.Markdown;
+using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -27,7 +28,7 @@ public partial class MarkdownView
         AddBinding(Convert<string>(ViewModel.Data).Subscribe(
             markdown => InvokeAsync(() =>
             {
-                var pipeline = Layout.Markdown.MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
+                var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
                 var document = Markdown.Parse(markdown, pipeline);
                 var newLayoutComponents =
                     document.Descendants<LayoutAreaComponentInfo>()
