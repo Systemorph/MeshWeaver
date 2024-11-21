@@ -2,8 +2,8 @@
 using System.CommandLine.NamingConventionBinder;
 using System.Text.Json;
 using Azure.Storage.Blobs;
-using MeshWeaver.Search;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Markdown;
 
 namespace MeshWeaver.Azure.Publish
 {

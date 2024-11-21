@@ -1,9 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-      <PackageReference Include="EPS.Extensions.YamlMarkdown" />
       <PackageReference Include="Microsoft.DotNet.Interactive.Formatting" />
-      <PackageReference Include="Markdig" />
       <PackageReference Include="System.Text.Json" />
   </ItemGroup>
   <ItemGroup>

@@ -3,10 +3,13 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig" />
+    <PackageReference Include="EPS.Extensions.YamlMarkdown" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\src\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+
+      <ProjectReference Include="..\src\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+    <ProjectReference Include="..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
 </Project>
