@@ -82,7 +82,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var pipeline = new MarkdownPipelineBuilder().Use(markdownExtension).Build();
 
-        var html = Markdown.ToHtml(markdown, pipeline);
+        var html = Markdig.Markdown.ToHtml(markdown, pipeline);
         return html;
     }
     /// <summary>
