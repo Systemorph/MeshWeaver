@@ -66,9 +66,9 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <returns>A string representing the application href.</returns>
     public string ToAppHref(object address)
     {
-        var ret = $"app/{address}/{LayoutExtensions.Encode(Area)}";
+        var ret = $"app/{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
-            ret = $"{ret}/{LayoutExtensions.Encode(s)}";
+            ret = $"{ret}/{WorkspaceReference.Encode(s)}";
         return ret;
     }
 }

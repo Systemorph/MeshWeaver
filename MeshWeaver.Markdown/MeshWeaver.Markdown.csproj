@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\src\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

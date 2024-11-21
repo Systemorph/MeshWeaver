@@ -225,6 +225,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebooks", "src
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Markdown", "MeshWeaver.Markdown\MeshWeaver.Markdown.csproj", "{C785F115-8F58-4112-8B10-B3381FC74E73}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -595,6 +597,10 @@ Global
 		{DEA21798-1F11-4AF5-B0E2-E571FCE41A2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DEA21798-1F11-4AF5-B0E2-E571FCE41A2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DEA21798-1F11-4AF5-B0E2-E571FCE41A2B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C785F115-8F58-4112-8B10-B3381FC74E73}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C785F115-8F58-4112-8B10-B3381FC74E73}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C785F115-8F58-4112-8B10-B3381FC74E73}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C785F115-8F58-4112-8B10-B3381FC74E73}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -692,6 +698,7 @@ Global
 		{0D631287-471F-42A6-F826-AA800CCD7DB5} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{14768237-C925-4153-A76E-99A89B7416EA} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{DEA21798-1F11-4AF5-B0E2-E571FCE41A2B} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{C785F115-8F58-4112-8B10-B3381FC74E73} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

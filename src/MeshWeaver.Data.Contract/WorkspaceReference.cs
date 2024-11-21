@@ -2,7 +2,12 @@
 
 namespace MeshWeaver.Data;
 
-public abstract record WorkspaceReference;
+public abstract record WorkspaceReference
+{
+    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
+    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
+
+}
 
 
 // ReSharper disable once UnusedTypeParameter

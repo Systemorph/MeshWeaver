@@ -233,7 +233,5 @@ public static class LayoutExtensions
         return patchDocument.Apply(obj);
     }
 
-    public static object Encode(object value) => value is string s ? s.Replace(".", "%9Y") : value;
-    public static object Decode(object value) => value is string s ? s.Replace("%9Y", ".") : value;
 
 }

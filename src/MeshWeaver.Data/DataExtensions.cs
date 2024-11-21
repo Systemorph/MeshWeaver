@@ -9,7 +9,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public static class DataPluginExtensions
+public static class DataExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
         config.AddData(x => x);
