@@ -1,9 +1,9 @@
-﻿using Markdig.Renderers;
-using Markdig.Syntax.Inlines;
+﻿using Markdig;
+using Markdig.Renderers;
 using Markdig.Syntax;
-using Markdig;
+using Markdig.Syntax.Inlines;
 
-namespace MeshWeaver.Layout.Markdown; 
+namespace MeshWeaver.Markdown; 
 public class ImgPathMarkdownExtension(Func<string, string> transformation) : IMarkdownExtension
 {
     public void Setup(MarkdownPipelineBuilder pipeline)

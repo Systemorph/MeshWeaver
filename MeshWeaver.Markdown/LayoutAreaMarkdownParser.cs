@@ -2,7 +2,7 @@
 using Markdig.Helpers;
 using Markdig.Parsers;
 
-namespace MeshWeaver.Layout.Markdown;
+namespace MeshWeaver.Markdown;
 
 public class LayoutAreaMarkdownParser : BlockParser
 {

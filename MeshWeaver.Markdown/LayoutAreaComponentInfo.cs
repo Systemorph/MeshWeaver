@@ -1,7 +1,8 @@
 ﻿using Markdig.Parsers;
 using Markdig.Syntax;
+using MeshWeaver.Data;
 
-namespace MeshWeaver.Layout.Markdown;
+namespace MeshWeaver.Markdown;
 
 public class LayoutAreaComponentInfo(string area, BlockParser blockParser)
     : ContainerBlock(blockParser)
