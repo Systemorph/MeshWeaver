@@ -1,6 +1,6 @@
 ﻿using Markdig;
 
-namespace MeshWeaver.Layout.Markdown;
+namespace MeshWeaver.Markdown;
 
 public static  class MarkdownExtensions
 {

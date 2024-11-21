@@ -2,7 +2,7 @@
 using Markdig;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Fixture;
-using MeshWeaver.Layout.Markdown;
+using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 

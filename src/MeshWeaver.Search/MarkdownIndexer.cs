@@ -4,6 +4,7 @@ using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using Markdown = Markdig.Markdown;
+using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Search;
 
@@ -11,7 +12,7 @@ public static class MarkdownIndexer
 {
     public static (MeshArticleIndex Article, string Html) ParseArticle(string path, string markdownText, object address)
     {
-        var pipeline = Layout.Markdown.MarkdownExtensions.CreateMarkdownPipeline(address);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(address);
         var document = Markdown.Parse(markdownText, pipeline);
 
         var article = GetArticle(path, document, address);

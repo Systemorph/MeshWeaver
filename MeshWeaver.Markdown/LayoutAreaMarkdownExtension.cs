@@ -1,7 +1,7 @@
 ﻿using Markdig;
 using Markdig.Renderers;
 
-namespace MeshWeaver.Layout.Markdown;
+namespace MeshWeaver.Markdown;
 
 public class LayoutAreaMarkdownExtension() : IMarkdownExtension
 {

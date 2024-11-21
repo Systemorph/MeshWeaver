@@ -1,10 +1,7 @@
-﻿using System.Security.Cryptography.X509Certificates;
-using System.Text.Json;
+﻿using System.Text.Json;
 using Json.Pointer;
-using MeshWeaver.Data;
-using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Layout;
+namespace MeshWeaver.Data;
 
 /// <summary>
 /// Provides methods and constants for working with layout area references.
