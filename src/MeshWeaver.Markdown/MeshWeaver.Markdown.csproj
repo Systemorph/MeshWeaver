@@ -8,8 +8,8 @@
 
   <ItemGroup>
 
-      <ProjectReference Include="..\src\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
-    <ProjectReference Include="..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+      <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
 </Project>
