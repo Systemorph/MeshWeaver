@@ -7,7 +7,7 @@ using MeshWeaver.Data;
 
 namespace MeshWeaver.Blazor.Pages;
 
-public partial class LayoutAreaPage
+public partial class ApplicationPage
 {
     private LayoutAreaControl ViewModel { get; set; }
 
