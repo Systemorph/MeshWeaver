@@ -1,9 +1,8 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Hosting.Orleans.Client
+namespace MeshWeaver.Hosting.Orleans.Client;
+
+public interface IRoutingGrain : IGrainWithStringKey
 {
-    public interface IRoutingGrain : IGrainWithStringKey
-    {
-        Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery);
-    }
+    Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery);
 }

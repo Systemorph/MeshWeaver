@@ -4,6 +4,7 @@ namespace MeshWeaver.Mesh.Contract
 {
     [GenerateSerializer]
     public record MeshNode(
+        string AddressType,
         string Id, 
         string Name, 
         string BasePath, 
@@ -17,6 +18,5 @@ namespace MeshWeaver.Mesh.Contract
         public string Namespace { get; init; } = MeshNode.MeshIn;
         public string ContentPath { get; init; } = "wwwroot";
         public string ArticlePath { get; init; } = "articles";
-        public string AddressType { get; init; } = typeof(ApplicationAddress).FullName;
     }
 }

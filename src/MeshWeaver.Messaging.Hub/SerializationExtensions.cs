@@ -42,6 +42,10 @@ public static class SerializationExtensions
         => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.IdProperty, out var id)
             ? id!.ToString()
             : instance.ToString();
+    public static string GetType(object instance)
+        => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var type)
+            ? type!.ToString()
+            : instance.GetType().FullName;
 
     public static JsonSerializerOptions CreateJsonSerializationOptions(this IMessageHub hub)
     {

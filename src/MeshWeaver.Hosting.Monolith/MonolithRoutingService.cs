@@ -1,22 +1,24 @@
 ﻿using System.Collections.Concurrent;
 using System.Reflection;
+using MeshWeaver.Disposables;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Monolith
 {
-    // TODO V10: need to factor out some base class (02.09.2024, Roland Bürgi)
     public class MonolithRoutingService(IMeshCatalog meshCatalog, IMessageHub parentHub) : IRoutingService
     {
-        private readonly ConcurrentDictionary<string, IMessageHub> hubs = new(); 
-        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
+        private readonly ConcurrentDictionary<(string Type, string Id), AsyncDelivery> handlers = new();
+        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
-            if(delivery.Target == null)
+            if (delivery.Target == null)
                 return delivery;
 
             var targetId = SerializationExtensions.GetId(delivery.Target);
-            if (hubs.TryGetValue(targetId, out var hub))
-                return hub.DeliverMessage(delivery);
+            var targetType = SerializationExtensions.GetTypeName(delivery.Target);
+            var key = (targetType, targetId);
+            if (handlers.TryGetValue(key, out var handler))
+                return await handler.Invoke(delivery, cancellationToken);
 
             var node = await meshCatalog.GetNodeAsync(targetId);
             if (node == null)
@@ -29,15 +31,16 @@ namespace MeshWeaver.Hosting.Monolith
             var att = assembly.GetCustomAttributes<MeshNodeAttribute>().FirstOrDefault(x => x.Node.Id == targetId);
             if (att == null)
                 throw new InvalidOperationException($"Node {targetId} not found in {node.AssemblyLocation}");
-            hub = att.Create(parentHub.ServiceProvider, delivery.Target);
-            hubs[targetId] = hub;
-            return hub.DeliverMessage(delivery);
+            var hub = att.Create(parentHub.ServiceProvider, delivery.Target);
+            handlers[key] = handler = (d, _) => { hub.DeliverMessage(d); return Task.FromResult(d.Forwarded()); };
+            return await handler.Invoke(delivery, cancellationToken);
         }
 
-        public Task RegisterHubAsync(IMessageHub hub)
+        public Task<IDisposable> RegisterRouteAsync(string addressType, string id, AsyncDelivery delivery)
         {
-            hubs[hub.Address.ToString()!] = hub;
-            return Task.CompletedTask;
+            var key = (addressType, id);
+            handlers[key] = delivery;
+            return Task.FromResult<IDisposable>(new AnonymousDisposable(() => handlers.TryRemove(key, out _)));
         }
     }
 }

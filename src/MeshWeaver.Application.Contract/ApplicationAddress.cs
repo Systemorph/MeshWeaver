@@ -16,6 +16,6 @@ public record UiAddress
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public override string ToString()
-        => $"ui_{Id}";
+        => $"{Id}";
 }
 
