@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Disposables;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -10,7 +11,7 @@ namespace MeshWeaver.Hosting.Orleans.Client
     {
         private readonly IRoutingGrain routingGrain = grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
 
-        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
+        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
             var ret = await routingGrain.DeliverMessage(delivery);
             if (ret.State == MessageDeliveryState.Submitted)
@@ -19,35 +20,37 @@ namespace MeshWeaver.Hosting.Orleans.Client
         }
 
 
-        public async Task RegisterHubAsync(IMessageHub hub)
+
+        public async Task<IDisposable> RegisterRouteAsync(string addressType, string id, AsyncDelivery delivery)
         {
-            var address = hub.Address;
-            var addressId = address.ToString();
-            var streamInfo = new StreamInfo(addressId, StreamProviders.Memory, hub.Address.GetType().Name, address);
-            var info = await hub.ServiceProvider.GetRequiredService<IGrainFactory>().GetGrain<IAddressRegistryGrain>(streamInfo.Id).Register(address);
-            
+            var streamInfo = new StreamInfo(id, StreamProviders.Memory, addressType, addressType);
+            var info = await hub.ServiceProvider
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IAddressRegistryGrain>(streamInfo.Id)
+            .GetStreamInfo(addressType, id);
+
             var streamProvider = hub.ServiceProvider
                 .GetKeyedService<IStreamProvider>(info.StreamProvider);
 
-            logger.LogInformation("No stream provider found for {AddressId}", addressId);
+            logger.LogInformation("No stream provider found for {Id} of Type {Type}", id, addressType);
             if (streamProvider == null)
-                return;
+                return null;
 
 
             logger.LogInformation("Subscribing to {StreamProvider} {Namespace} {TargetId}", info.StreamProvider, info.Namespace, info.Id);
             var subscription = await streamProvider
                 .GetStream<IMessageDelivery>(info.Namespace, info.Id)
-                .SubscribeAsync((delivery, _) =>
+                .SubscribeAsync((d, _) =>
                 {
                     logger.LogDebug("Received {Delivery} for {Id}", delivery, info.Id);
-                    return Task.FromResult(hub.DeliverMessage(delivery));
+                    return delivery.Invoke(d, default);
                 });
-            hub.WithDisposeAction(_ =>
+
+            return new AnonymousDisposable(() =>
             {
-                logger.LogInformation("Unsubscribing from {StreamProvider} {Namespace} {TargetId}", info.StreamProvider, info.Namespace, info.Id);
-                return subscription.UnsubscribeAsync();
+                subscription.UnsubscribeAsync();
+
             });
         }
-
     }
 }
