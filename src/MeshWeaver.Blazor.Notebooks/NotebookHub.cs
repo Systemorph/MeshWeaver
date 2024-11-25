@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Notebooks;
 using Microsoft.AspNetCore.SignalR;
@@ -7,28 +7,26 @@ namespace MeshWeaver.Blazor.Notebooks;
 // In MeshWeaver.Portal project
 public class NotebookHub(IRoutingService routingService) : Hub
 {
-    private ConcurrentDictionary<object,IDisposable> disposables = new();
+    private ConcurrentDictionary<(string addressType, string id),IDisposable> disposables = new();
 
-    public async Task Register(object address)
+    public async Task Register(string addressType, string id)
     {
-        if(address is not NotebookAddress notebookAddress)
-            throw new ArgumentException("Invalid address type", nameof(address));
         var caller = Clients.Caller;
         var disposable = await routingService
             .RegisterRouteAsync(
                 typeof(NotebookAddress).FullName, 
-                notebookAddress.Id, 
+                id, 
             async (delivery, ct) =>
         {
             await caller.SendAsync("ReceiveMessage", delivery, cancellationToken: ct);
             return delivery.Forwarded();
         });
-        disposables.TryAdd(address, disposable);
+        disposables.TryAdd((addressType, id), disposable);
     }
 
-    public Task Unregister(object address)
+    public Task Unregister(string addressType, string id)
     {
-        if (disposables.TryRemove(address, out var disposable))
+        if (disposables.TryRemove((addressType, id), out var disposable))
         {
             disposable.Dispose();
         }

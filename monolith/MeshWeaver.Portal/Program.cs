@@ -10,6 +10,7 @@ using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
+using Microsoft.AspNetCore.ResponseCompression;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,6 +43,12 @@ builder.UseMeshWeaver(
         .AddMonolithMesh()
 );
 
+builder.Services.AddSignalR();
+builder.Services.AddResponseCompression(opts =>
+{
+    opts.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
+        new[] { "application/octet-stream" });
+});
 
 if (!builder.Environment.IsDevelopment())
 {
@@ -64,9 +71,10 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
-
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
+// Map the NotebookHub endpoint
+app.MapHub<NotebookHub>("/notebookHub");
 
 app.Run();
 
