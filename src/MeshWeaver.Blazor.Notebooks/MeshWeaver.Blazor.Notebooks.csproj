@@ -1,7 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
-    <Import Project="StaticAssets\StaticAssets.targets" />
-
+<!--    <Import Project="StaticAssets\StaticAssets.targets" />-->
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+    
     <ItemGroup>
         <SupportedPlatform Include="browser" />
     </ItemGroup>

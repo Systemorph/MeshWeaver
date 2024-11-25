@@ -12,12 +12,13 @@ public interface IMeshCatalog
     Task<MeshArticle> GetArticleAsync(string application, string id, bool includeContent = false);
 
     Task UpdateArticleAsync(MeshArticle meshArticle);
+
 }
 
 [GenerateSerializer]
 
-public record StreamInfo(string Id, string StreamProvider, string Namespace, object Address);
+public record StreamInfo(string Id, string StreamProvider, string Namespace, string AddressType);
 [GenerateSerializer]
-public record NodeStorageInfo(string NodeId, string BaseDirectory, string AssemblyLocation, object Address);
+public record NodeStorageInfo(string Id, string BaseDirectory, string AssemblyLocation, string AddressType);
 
 

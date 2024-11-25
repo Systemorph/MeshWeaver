@@ -1,8 +1,10 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
+using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 using Orleans.Streams;
@@ -36,13 +38,19 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         var loaded = Assembly.LoadFrom(pathToAssembly);
 
 
-        var startupAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
-            .FirstOrDefault(a => a.Node.Id == startupInfo.NodeId);
+        var meshAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
+            .FirstOrDefault(a => a.Node.Id == startupInfo.Id && a.Node.AddressType == startupInfo.AddressType);
 
-        if (startupAttribute == null)
-            throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.NodeId}");
-
-        Hub = startupAttribute.Create(parentHub.ServiceProvider, startupInfo.Address);
+        if (meshAttribute == null)
+            throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.Id} of type {startupInfo.AddressType}");
+        
+        
+        var typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var type = typeRegistry.GetType(startupInfo.AddressType);
+        if (type == null)
+            throw new InvalidOperationException($"Type {startupInfo.AddressType} not found in registry");
+        var address = Activator.CreateInstance(type, new object[] { startupInfo.Id });
+        Hub = meshAttribute.Create(parentHub.ServiceProvider, address);
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();
@@ -101,4 +109,3 @@ public record StreamActivity
 
 
 
-public record StopMessageHubEvent;

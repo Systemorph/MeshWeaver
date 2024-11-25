@@ -20,11 +20,11 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
             State = null;
     }
 
-    public async Task<StreamInfo> Register(object address)
+    public async Task<StreamInfo> GetStreamInfo(string addressType, string id)
     {
 
         if (State == null)
-            await InitializeState(address);
+            await InitializeState(addressType, id);
 
         return State;
     }
@@ -38,8 +38,19 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         await WriteStateAsync();
     }
 
-    private async Task InitializeState(object address)
+    private async Task InitializeState(string addressType, string addressId)
     {
+        var parts = this.GetPrimaryKeyString().Split('/');
+        if (parts.Length == 2)
+        {
+            addressType = parts[0];
+            addressId = parts[1];
+        }
+        else
+        {
+            throw new InvalidOperationException("Invalid primary key format. Expected format: addressType/id");
+        }
+        
         if (Node == null)
         {
             var id = this.GetPrimaryKeyString();
@@ -49,16 +60,16 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
             else logger.LogInformation("Mapping {Id} to {Node}", id, Node);
         }
         State = Node != null
-            ? new(this.GetPrimaryKeyString(), Node.StreamProvider, Node.Namespace, address)
-            : new StreamInfo(SerializationExtensions.GetId(address), StreamProviders.Memory, IRoutingService.MessageIn, address); 
+            ? new(addressId, Node.StreamProvider, Node.Namespace, addressType)
+            : new StreamInfo(addressId, StreamProviders.Memory, IRoutingService.MessageIn, addressType); 
         
-        logger.LogInformation("Mapping address {Address} for {Id} to {State}", address, this.GetPrimaryKeyString(),  State);
+        logger.LogInformation("Mapping address {AddressId} of Type {AddressType} to {State}", addressId, addressType,  State);
        await WriteStateAsync();
     }
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>
-        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.Id, Node.BasePath, Node.AssemblyLocation, State.Address));
+        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.Id, Node.BasePath, Node.AssemblyLocation, State.AddressType));
 
     public async Task Unregister()
     {
