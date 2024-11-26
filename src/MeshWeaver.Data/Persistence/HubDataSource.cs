@@ -7,7 +7,7 @@ public record UnpartitionedHubDataSource(object Id, IWorkspace Workspace) : Unpa
 {
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
     public override UnpartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) =>
-        WithType<T>(x => (TypeSourceWithType<T>)typeSource.Invoke(x));
+        WithType<T>(x => (TypeSourceWithType<T>)(typeSource ?? (y => y)).Invoke(x));
 
     public UnpartitionedHubDataSource WithType<T>(
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
