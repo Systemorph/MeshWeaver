@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Xml.Serialization;
 using FluentAssertions;
+using MeshWeaver.Charting;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout.Documentation.Model;
 using MeshWeaver.Fixture;
@@ -60,6 +61,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         MessageHubConfiguration configuration
     ) =>
         base.ConfigureClient(configuration)
+            .WithTypes(typeof(ChartControl), typeof(GridControl))
             .AddData(data =>
                 data.FromHub(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
             ).AddLayoutClient(x => x);
@@ -133,7 +135,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var dashboard = (await stream.GetControlAsync(viewName))
             .Should()
-            .BeOfType<LayoutStackControl>()
+            .BeOfType<LayoutGridControl>()
             .Subject;
         var areas = dashboard.Areas;
         var controls = new List<KeyValuePair<string, object>>();
@@ -162,7 +164,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
+        var controlName = $"{ViewName}"; 
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlAsync(controlName);
