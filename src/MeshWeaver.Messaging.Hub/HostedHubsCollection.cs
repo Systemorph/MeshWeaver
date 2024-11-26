@@ -49,7 +49,23 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
                 if (messageHubs.TryRemove(address, out var hub) && hub != null)
                 {
                     logger.LogDebug("Awaiting disposal of hub {address}", address);
-                    await hub.DisposeAsync();
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // Set timeout duration
+                    try
+                    {
+                        await Task.WhenAny(hub.DisposeAsync().AsTask(), Task.Delay(Timeout.Infinite, cts.Token));
+                        if (cts.Token.IsCancellationRequested)
+                        {
+                            logger.LogError("Disposal of hub {address} timed out", address);
+                        }
+                        else
+                        {
+                            logger.LogDebug("Finished disposal of hub {address}", address);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error during disposal of hub {address}", address);
+                    }
                     logger.LogDebug("Finished disposal of hub {address}", address);
 
                 }
