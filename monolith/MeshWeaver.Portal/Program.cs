@@ -74,7 +74,7 @@ app.UseRouting();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 // Map the NotebookHub endpoint
-app.MapHub<NotebookHub>("/notebookHub");
+app.MapHub<NotebookHub>("/notebook/{addressType}/{id}");
 
 app.Run();
 
