@@ -58,7 +58,7 @@ public static class SupplierSummaryArea
     )
     {
         return area.GetDataCube()
-            .Select(cube =>
+            .SelectMany(cube =>
                 area.Workspace
                     .Pivot(cube)
                     .SliceRowsBy(nameof(Supplier))
