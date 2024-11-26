@@ -115,7 +115,7 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.UpdateAsync(store =>
         {
-            var changes = DisposeExistingAreas(store, context);
+            var changes = RemoveViews(store, context.Area);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(
@@ -231,11 +231,16 @@ public record LayoutAreaHost : IDisposable
             if (disposablesByArea.TryRemove(area.Key, out var disposables))
                 disposables.ForEach(d => d.Dispose());
 
+        return RemoveViews(store, contextArea);
+    }
+
+    private EntityStoreAndUpdates RemoveViews(EntityStore store, string contextArea)
+    {
         var existing =
             store.Collections
                 .GetValueOrDefault(LayoutAreaReference.Areas)
-            ?.Instances
-            .Where(x => ((string)x.Key).StartsWith(contextArea))
+                ?.Instances
+                .Where(x => ((string)x.Key).StartsWith(contextArea))
                 .ToArray();
 
         if (existing == null)
@@ -293,14 +298,15 @@ public record LayoutAreaHost : IDisposable
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object> generator, EntityStore store)
     {
+        var ret = DisposeExistingAreas(store, context);
+
         AddDisposable(
             context.Area,
             generator.Subscribe(view =>
                 InvokeAsync(() => UpdateArea(context, view))
             )
         );
-
-        return DisposeExistingAreas(store, context);
+        return ret;
     }
 
     internal ISynchronizationStream<EntityStore> RenderLayoutArea()
