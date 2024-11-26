@@ -212,7 +212,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}/1/{nameof(SupplierSummaryArea.SupplierSummaryGrid)}"; // TODO V10: we need a better way to address sub-areas (2024/08/12, Dmitry Kalabin)
+        var controlName = $"{ViewName}"; 
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlAsync(controlName);
