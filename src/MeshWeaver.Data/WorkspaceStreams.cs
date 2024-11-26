@@ -32,7 +32,7 @@ public static class WorkspaceStreams
                 throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
             return groups[0].Key
                 .GetStreamForPartition(partition)
-                .Reduce(reference);
+                .Reduce(reference, configuration);
         }
 
         var streams = groups.Select(g =>
