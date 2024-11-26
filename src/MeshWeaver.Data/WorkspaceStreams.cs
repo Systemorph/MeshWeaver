@@ -108,11 +108,6 @@ c => c
 
         reducedStream.AddDisposable(
             selected
-                .Take(1)
-                .Concat(selected
-                    .Skip(1)
-                //.Where(x => !Equals(x.ChangedBy, subscriber))
-                )
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)
         );
