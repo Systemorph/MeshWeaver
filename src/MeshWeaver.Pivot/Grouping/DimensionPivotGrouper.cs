@@ -68,7 +68,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     {
         if (dim == null)
             return int.MaxValue;
-        var ordered = dimensionCache.Get<TDimension>(dim) as IOrdered;
+        var ordered = DimensionCache.Get<TDimension>(dim) as IOrdered;
         return ordered?.Order ?? int.MaxValue;
     }
 
