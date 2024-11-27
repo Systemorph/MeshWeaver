@@ -10,6 +10,7 @@ using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
+using MeshWeaver.Notebooks.Hub;
 using Microsoft.AspNetCore.ResponseCompression;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,8 +33,11 @@ builder.Services.AddLogging(config => config.AddConsole(
 builder.UseMeshWeaver(
     new UiAddress(),
     config => config
-        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location))
-        .ConfigureMesh(mesh => mesh.InstallAssemblies(typeof(MeshWeaverOverviewAttribute).Assembly.Location))
+        .ConfigureMesh(
+            mesh => mesh
+            .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location, typeof(MeshWeaverOverviewAttribute).Assembly.Location)
+            .AddNotebooks()
+        )
         .AddBlazor(x =>
             x
                 .AddChartJs()

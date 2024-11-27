@@ -11,7 +11,7 @@ public static  class OrleansServerRegistryExtensions
 {
     public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
-    where TBuilder:MeshWeaverHostBuilder
+    where TBuilder: MeshHostBuilder
     {
         
         builder.Host.UseOrleans(silo =>

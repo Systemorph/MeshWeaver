@@ -12,11 +12,11 @@ namespace MeshWeaver.Hosting.Blazor;
 
 public static class BlazorHostingExtensions
 {
-    public static MeshWeaverHostBuilder AddBlazor(this MeshWeaverHostBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
+    public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
     {
-        builder.Host.Services.AddRazorPages();
-        builder.Host.Services.AddServerSideBlazor();
-        builder.Host.Services.AddFluentUIComponents();
+        builder.Services.AddRazorPages();
+        builder.Services.AddServerSideBlazor();
+        builder.Services.AddFluentUIComponents();
 
         return builder.ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
@@ -26,7 +26,7 @@ public static class BlazorHostingExtensions
         => app.MapGet("/static/{application}/{*fileName}", async (string application, string environment, string fileName) =>
     {
         var address = new ApplicationAddress(application);
-        var storageInfo = await meshCatalog.GetNodeAsync(address.ToString());
+        var storageInfo = await meshCatalog.GetNodeAsync(address.GetType().FullName,address.ToString());
         var filePath = Path.Combine(storageInfo.BasePath, storageInfo.ContentPath, fileName);
 
         if (!File.Exists(filePath))

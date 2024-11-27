@@ -7,23 +7,16 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Orleans.Client
 {
-    public class MeshCatalog(IMessageHub hub, ILogger<MeshCatalog> logger) : IMeshCatalog
+    public class MeshCatalog(IMessageHub hub, ILogger<MeshCatalog> logger, MeshConfiguration meshConfiguration) : IMeshCatalog
     {
         private readonly IDisposable deferral = hub.Defer(_ => true);
         private readonly IGrainFactory grainFactory = hub.ServiceProvider.GetRequiredService<IGrainFactory>();
 
-        private MeshConfiguration Configuration { get; } = hub.Configuration.GetMeshContext();
+        private MeshConfiguration Configuration { get; } = meshConfiguration;
 
 
-        public string GetNodeId(object address)
-            => Configuration.AddressToMeshNodeMappers
-                .Select(loader => loader(address))
-                .FirstOrDefault(x => x != null);
 
-        public Task<MeshNode> GetNodeAsync(object address)=> 
-            GetNodeAsync(GetNodeId(address));
-
-        public Task<MeshNode> GetNodeAsync(string id)
+        public Task<MeshNode> GetNodeAsync(string addressType, string id)
             => grainFactory.GetGrain<IMeshNodeGrain>(id).Get();
 
         public Task UpdateAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
@@ -31,8 +24,8 @@ namespace MeshWeaver.Hosting.Orleans.Client
         {
             var assemblyLoadContext = new AssemblyLoadContext("ModuleRegistry");
             var assembly = assemblyLoadContext.LoadFromAssemblyPath(fullPathToDll);
-            foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Node))
-                await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+            foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().SelectMany(a => a.Nodes))
+                await grainFactory.GetGrain<IMeshNodeGrain>($"{node.Key}").Update(node);
         }
 
         public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -46,7 +39,7 @@ namespace MeshWeaver.Hosting.Orleans.Client
                 foreach (var node in assembly
                              .GetCustomAttributes()
                              .OfType<MeshNodeAttribute>()
-                             .Select(a => a.Node))
+                             .SelectMany(a => a.Nodes))
                 {
                     logger.LogInformation("Initializing {Node}", node);
                     /*
@@ -56,7 +49,7 @@ namespace MeshWeaver.Hosting.Orleans.Client
                      *    Idea for indexing: Create record entry by deserializing Markdown Tag and then complete with standard info such as Id, Title, etc.
                      * 4. Vector store for articles ==> use blazor rendering to create html (wait for layout areas to be injected) and index resulting html in vector store.
                      */
-                    await grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+                    await grainFactory.GetGrain<IMeshNodeGrain>(node.Key).Update(node);
                 }
                 loadContext.Unload();
             }
@@ -64,8 +57,8 @@ namespace MeshWeaver.Hosting.Orleans.Client
             deferral.Dispose();
         }
 
-        public Task<MeshArticle> GetArticleAsync(string application, string id, bool includeContent)
-            => grainFactory.GetGrain<IArticleGrain>($"{application}/{id}").Get(includeContent);
+        public Task<MeshArticle> GetArticleAsync(string addressType, string nodeId, string id, bool includeContent = false)
+            => grainFactory.GetGrain<IArticleGrain>($"{addressType}/{nodeId}/{id}").Get(includeContent);
 
         public Task UpdateArticleAsync(MeshArticle meshArticle)
             => grainFactory.GetGrain<IArticleGrain>(meshArticle.Url).Update(meshArticle);

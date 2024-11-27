@@ -25,8 +25,6 @@ public record MessageHubConfiguration
 
     internal ImmutableList<Func<IMessageHub, Task>> DisposeActions { get; init; } = ImmutableList<Func<IMessageHub, Task>>.Empty;
 
-    internal IMessageHub ParentHub { get; init; }
-    internal object SynchronizationAddress { get; init; }
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
