@@ -11,13 +11,14 @@ namespace MeshWeaver.Overview;
 
 public class MeshWeaverOverviewAttribute : MeshNodeAttribute
 {
-    public override IMessageHub Create(IServiceProvider serviceProvider, object address)
-        => serviceProvider.CreateMessageHub(address, configuration => configuration
+    private static readonly ApplicationAddress Address = new ApplicationAddress("MeshWeaver");
+    public override IMessageHub Create(IServiceProvider serviceProvider, MeshNode node)
+        => CreateIf(node.Matches(Address), () => serviceProvider.CreateMessageHub(Address, configuration => configuration
             .AddLayout(layout => layout)
-            .AddDocumentation());
+            .AddDocumentation()));
 
-    public override MeshNode Node =>
-        GetMeshNode(new ApplicationAddress("MeshWeaver"), typeof(MeshWeaverOverviewAttribute).Assembly.Location);
+    public override IEnumerable<MeshNode> Nodes =>
+        [MeshExtensions.GetMeshNode(Address, typeof(MeshWeaverOverviewAttribute).Assembly.Location)];
 
 }
 

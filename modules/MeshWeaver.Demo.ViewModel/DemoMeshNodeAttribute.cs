@@ -8,15 +8,20 @@ namespace MeshWeaver.Demo.ViewModel
 {
     public class DemoMeshNodeAttribute : MeshNodeAttribute
     {
-        public override IMessageHub Create(IServiceProvider serviceProvider, object address)
-            => serviceProvider.CreateMessageHub(
-                address,
-                application =>
-                    application
-                        .AddDemoViewModels()
+        private static readonly ApplicationAddress Address = new("Demo");
+
+        public override IMessageHub Create(IServiceProvider serviceProvider, MeshNode node)
+            => CreateIf(node.Matches(Address), () => serviceProvider.CreateMessageHub(
+                    Address,
+                    application =>
+                        application
+                            .AddDemoViewModels()
+                )
             );
 
-        public override MeshNode Node =>
-            GetMeshNode(new ApplicationAddress("Demo"), typeof(DemoMeshNodeAttribute).Assembly.Location);
+
+
+        public override IEnumerable<MeshNode> Nodes =>
+            [MeshExtensions.GetMeshNode(Address, typeof(DemoMeshNodeAttribute).Assembly.Location)];
     }
 }

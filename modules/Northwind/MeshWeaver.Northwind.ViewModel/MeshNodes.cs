@@ -13,33 +13,36 @@ namespace MeshWeaver.Northwind.ViewModel;
 /// </summary>
 public class NorthwindApplicationAttribute : MeshNodeAttribute
 {
+    private static readonly ApplicationAddress Address = new ("Northwind");
+
     /// <summary>
     /// Full configuration of the Northwind application mesh node.
     /// </summary>
     /// <param name="serviceProvider"></param>
-    /// <param name="address"></param>
+    /// <param name="node"></param>
     /// <returns></returns>
-    public override IMessageHub Create(IServiceProvider serviceProvider, object address)
-        => serviceProvider.CreateMessageHub(
-            address,
-            application =>
-                application
-                    .AddNorthwindViewModels()
-                    .AddNorthwindEmployees()
-                    .AddNorthwindOrders()
-                    .AddNorthwindSuppliers()
-                    .AddNorthwindProducts()
-                    .AddNorthwindCustomers()
-                    .AddNorthwindReferenceData()
-        );
+    public override IMessageHub Create(IServiceProvider serviceProvider, MeshNode node)
+        => CreateIf(node.Matches(Address),
+            () =>
+                serviceProvider.CreateMessageHub(
+                    Address,
+                    application =>
+                        application
+                            .AddNorthwindViewModels()
+                            .AddNorthwindEmployees()
+                            .AddNorthwindOrders()
+                            .AddNorthwindSuppliers()
+                            .AddNorthwindProducts()
+                            .AddNorthwindCustomers()
+                            .AddNorthwindReferenceData()
+                ));
 
 
     /// <summary>
     /// Mesh catalog entry.
     /// </summary>
-    public override MeshNode Node =>
-        GetMeshNode(
-            new ApplicationAddress("Northwind"),
-            typeof(NorthwindApplicationAttribute).Assembly.Location
-        );
+    public override IEnumerable<MeshNode> Nodes =>
+        [MeshExtensions.GetMeshNode(
+            Address, typeof(NorthwindApplicationAttribute).Assembly.Location
+        )];
 }
