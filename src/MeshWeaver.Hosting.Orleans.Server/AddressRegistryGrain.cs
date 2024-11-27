@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
 using Orleans.Providers;
@@ -54,7 +53,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         if (Node == null)
         {
             var id = this.GetPrimaryKeyString();
-            Node = await meshCatalog.GetNodeAsync(id);
+            Node = await meshCatalog.GetNodeAsync(addressType, id);
             if(Node == null)
                 logger.LogInformation("No mesh node found for {Id}", id);
             else logger.LogInformation("Mapping {Id} to {Node}", id, Node);

@@ -7,6 +7,7 @@ namespace MeshWeaver.Fixture;
 
 public class HubTestBase : TestBase
 {
+
     protected record RouterAddress;
 
     protected record HostAddress;

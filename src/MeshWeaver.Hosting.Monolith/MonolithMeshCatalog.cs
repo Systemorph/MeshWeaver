@@ -7,19 +7,26 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
+public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuration) : IMeshCatalog
 {
     private readonly ILogger<MonolithMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MonolithMeshCatalog>>();
-    private readonly ConcurrentDictionary<string, MeshNode> meshNodes = new();
-    private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, MeshArticle>> articles = new();
-    private MeshConfiguration Configuration { get; } = hub.Configuration.GetMeshContext();
+    private readonly ConcurrentDictionary<(string AddressType, string Id), MeshNode> meshNodes = new();
+    private readonly ConcurrentDictionary<(string AddressType, string Id), IReadOnlyDictionary<string, MeshArticle>> articles = new();
+    private MeshConfiguration Configuration { get; } = configuration;
 
 
-    public Task<MeshNode> GetNodeAsync(string id)
-        => Task.FromResult(meshNodes.GetValueOrDefault(id));
+
+    public Task<MeshNode> GetNodeAsync(string addressType, string id)
+        => Task.FromResult(
+            meshNodes.GetValueOrDefault((addressType, id)) 
+            ?? 
+            configuration.MeshNodeFactories
+                .Select(f => f.Invoke(addressType, id))
+                .FirstOrDefault(x => x != null)
+        );
     public Task UpdateAsync(MeshNode node)
     {
-        meshNodes[node.Id] = node;
+        meshNodes[(node.AddressType,node.Id)] = node;
         // TODO V10: Delegate indexing to IMeshIndexService running on its own hub. (06.09.2024, Roland Bürgi)
         return Task.CompletedTask;
     }
@@ -29,9 +36,9 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
             var assembly = Assembly.LoadFrom(assemblyLocation);
-            foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Node))
+            foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().SelectMany(a => a.Nodes))
             {
-                meshNodes[node.Id] = node;
+                meshNodes[(node.AddressType, node.Id)] = node;
             }
         }
         return Task.CompletedTask;
@@ -63,13 +70,14 @@ public class MonolithMeshCatalog(IMessageHub hub) : IMeshCatalog
         //}
     }
 
-    public async Task<MeshArticle> GetArticleAsync(string application, string id, bool includeContent)
+    public async Task<MeshArticle> GetArticleAsync(string addressType, string nodeId, string id, bool includeContent)
     {
-        if (articles.TryGetValue(id, out var inner))
+        var key = (addressType,nodeId);
+        if (articles.TryGetValue(key, out var inner))
             return await IncludeContent(inner.GetValueOrDefault(id), includeContent);
-        var node = await GetNodeAsync(application);
+        var node = await GetNodeAsync(addressType, nodeId);
         var articlesByApplication = await InitializeArticlesForNodeAsync(node).ToDictionaryAsync(x => x.Name);
-        articles[application] = articlesByApplication;
+        articles[key] = articlesByApplication;
         return await IncludeContent(articlesByApplication.GetValueOrDefault(id), includeContent);
     }
 

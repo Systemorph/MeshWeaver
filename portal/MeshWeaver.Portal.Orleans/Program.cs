@@ -24,8 +24,9 @@ var modules = directories.Select(d => Path.Combine(d, $"{Path.GetFileName(d)}.dl
 builder.
     UseMeshWeaver(address, conf =>
         conf
+            .AddOrleansMeshServer()
             .ConfigureMesh(mesh => mesh.InstallAssemblies(modules))
-            .AddOrleansMeshServer());
+            );
 
 var app = builder.Build();
 

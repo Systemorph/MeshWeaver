@@ -31,11 +31,11 @@ var blazorAddress = new UiAddress();
 
 builder.UseMeshWeaver(blazorAddress,
         config => config
+            .AddOrleansMeshClient()
             .AddBlazor(x =>
                 x.AddChartJs()
                     .AddAgGrid()
             )
-            .AddOrleansMeshClient()
     )
     ;
 

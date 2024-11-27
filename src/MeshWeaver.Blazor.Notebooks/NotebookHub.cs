@@ -8,7 +8,7 @@ namespace MeshWeaver.Blazor.Notebooks;
 // NotebookHub.cs
 public class NotebookHub(IRoutingService routingService) : Hub
 {
-    private ConcurrentDictionary<(string addressType, string id), IDisposable> disposables = new();
+    private readonly ConcurrentDictionary<(string addressType, string id), IDisposable> disposables = new();
 
     public override async Task OnConnectedAsync()
     {
@@ -36,7 +36,7 @@ public class NotebookHub(IRoutingService routingService) : Hub
         await base.OnConnectedAsync();
     }
 
-    public override async Task OnDisconnectedAsync(Exception? exception)
+    public override async Task OnDisconnectedAsync(Exception exception)
     {
         var context = Context.GetHttpContext();
         var addressType = context?.Request.Query["addressType"].ToString();

@@ -37,20 +37,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
         loadContext = new(startupInfo.BaseDirectory);
         var loaded = Assembly.LoadFrom(pathToAssembly);
 
-
-        var meshAttribute = loaded.GetCustomAttributes<MeshNodeAttribute>()
-            .FirstOrDefault(a => a.Node.Id == startupInfo.Id && a.Node.AddressType == startupInfo.AddressType);
-
-        if (meshAttribute == null)
-            throw new InvalidOperationException($"No HubStartupAttribute found for {startupInfo.Id} of type {startupInfo.AddressType}");
         
         
-        var typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        var type = typeRegistry.GetType(startupInfo.AddressType);
-        if (type == null)
-            throw new InvalidOperationException($"Type {startupInfo.AddressType} not found in registry");
-        var address = Activator.CreateInstance(type, new object[] { startupInfo.Id });
-        Hub = meshAttribute.Create(parentHub.ServiceProvider, address);
+        Hub = await parentHub.ServiceProvider.CreateHub(startupInfo.AddressType, startupInfo.Id);
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();

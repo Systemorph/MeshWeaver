@@ -1,12 +1,11 @@
 ﻿using System.Collections.Concurrent;
-using System.Reflection;
 using MeshWeaver.Disposables;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Monolith
 {
-    public class MonolithRoutingService(IMeshCatalog meshCatalog, IMessageHub parentHub) : IRoutingService
+    public class MonolithRoutingService(IMessageHub parent) : IRoutingService
     {
         private readonly ConcurrentDictionary<(string Type, string Id), AsyncDelivery> handlers = new();
         public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
@@ -20,18 +19,7 @@ namespace MeshWeaver.Hosting.Monolith
             if (handlers.TryGetValue(key, out var handler))
                 return await handler.Invoke(delivery, cancellationToken);
 
-            var node = await meshCatalog.GetNodeAsync(targetId);
-            if (node == null)
-                return delivery;
-
-            var assembly = Assembly.LoadFrom(Path.Combine(node.BasePath, node.AssemblyLocation));
-            if (assembly == null)
-                throw new InvalidOperationException($"Assembly {node.AssemblyLocation} not found in {node.BasePath}");
-
-            var att = assembly.GetCustomAttributes<MeshNodeAttribute>().FirstOrDefault(x => x.Node.Id == targetId);
-            if (att == null)
-                throw new InvalidOperationException($"Node {targetId} not found in {node.AssemblyLocation}");
-            var hub = att.Create(parentHub.ServiceProvider, delivery.Target);
+            var hub = await parent.ServiceProvider.CreateHub(targetType, targetId);
             handlers[key] = handler = (d, _) => { hub.DeliverMessage(d); return Task.FromResult(d.Forwarded()); };
             return await handler.Invoke(delivery, cancellationToken);
         }

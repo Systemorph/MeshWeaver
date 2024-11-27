@@ -350,7 +350,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
         await radarChart.JsonShouldMatch(Options, $"{nameof(RadarChartWithExtraOptions)}.json");
     }
 
-    [FactWithWorkItem("26433")]
+    [Fact()]
     public async Task SimpleWaterfallChart()
     {
         var filteredCube = CubeWithValues;

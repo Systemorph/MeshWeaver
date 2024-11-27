@@ -1,21 +1,23 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Application;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh.Contract
 {
     public static class MeshExtensions
     {
-        private static IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> GetMeshConfigurations(
-            this MessageHubConfiguration config
-        )
-        {
-            return config.Get<IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>>>()
-                   ?? [];
-        }
+        public static MeshNode GetMeshNode(object address, string location)
+            => GetMeshNode(address.GetType().FullName, address.ToString(), location);
 
-        public static MeshConfiguration GetMeshContext(this MessageHubConfiguration config)
+        public static MeshNode GetMeshNode(string addressType, string id, string location)
         {
-            var meshConf= config.GetMeshConfigurations();
-            return meshConf.Aggregate(new MeshConfiguration(), (x,y) =>y.Invoke(x));
+            var basePathLength = location.LastIndexOf(Path.DirectorySeparatorChar);
+            return new(typeof(ApplicationAddress).FullName, id, "Mesh Weaver Overview",
+                location.Substring(0, basePathLength),
+                location.Substring(basePathLength + 1))
+            {
+                AddressType = addressType,
+
+            };
         }
 
     }
