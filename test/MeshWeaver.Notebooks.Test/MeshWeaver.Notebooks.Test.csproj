@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj" />
   </ItemGroup>
 
 </Project>
