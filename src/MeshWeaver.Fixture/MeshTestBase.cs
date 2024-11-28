@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 
@@ -7,6 +8,7 @@ namespace MeshWeaver.Fixture
 {
     public class MeshTestBase : TestBase
     {
+        [Inject] protected IRoutingService RoutingService { get; set; }
         protected record MeshAddress;
 
         protected record ClientAddress;
@@ -27,10 +29,10 @@ namespace MeshWeaver.Fixture
 
         protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
             => config;
-        protected virtual IMessageHub GetClient()
+        protected virtual async Task<IMessageHub> GetClient()
         {
             var ret = MeshHub.ServiceProvider.CreateMessageHub(new ClientAddress(), ConfigureClient);
-            ServiceProvider.GetRequiredService<IRoutingService>().RegisterHubAsync(ret);
+            await RoutingService.RegisterHubAsync(ret);
             return ret;
         }
     }
