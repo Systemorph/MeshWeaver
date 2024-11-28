@@ -32,7 +32,8 @@ public class MonolithMeshTest(ITestOutputHelper output) : MeshTestBase(output)
     [Fact]
     public async Task BasicMessage()
     {
-        var response = await GetClient()
+        var client = await GetClient();
+        var response = await client
             .AwaitResponse(new Ping(), o => o.WithTarget(TestApplicationAttribute.Address));
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<Pong>();
