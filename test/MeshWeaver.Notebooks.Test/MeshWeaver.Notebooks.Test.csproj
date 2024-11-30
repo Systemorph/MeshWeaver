@@ -7,10 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Notebooks\MeshWeaver.Blazor.Notebooks.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.Server.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Notebook.Kernel\MeshWeaver.Notebook.Client.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj" />
   </ItemGroup>

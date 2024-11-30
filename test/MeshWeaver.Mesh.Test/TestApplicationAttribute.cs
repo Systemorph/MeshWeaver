@@ -1,10 +1,10 @@
 ﻿using MeshWeaver.Application;
 using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
-using MeshWeaver.Notebooks.Test;
 
 [assembly:TestApplication]
-namespace MeshWeaver.Notebooks.Test;
+namespace MeshWeaver.Mesh.Test;
 
 internal class TestApplicationAttribute : MeshNodeAttribute
 {
