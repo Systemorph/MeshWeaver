@@ -10,6 +10,7 @@ using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
+using MeshWeaver.Mesh.SignalR;
 using MeshWeaver.Notebooks.Hub;
 using Microsoft.AspNetCore.ResponseCompression;
 
@@ -78,7 +79,7 @@ app.UseRouting();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 // Map the NotebookHub endpoint
-app.MapHub<NotebookHub>("/notebook/{addressType}/{id}");
+app.MapHub<ConnectionHub>("/connect/{addressType}/{id}");
 
 app.Run();
 
