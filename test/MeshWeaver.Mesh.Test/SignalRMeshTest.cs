@@ -1,10 +1,11 @@
 ﻿using FluentAssertions;
-using MeshWeaver.Mesh.SignalR;
+using FluentAssertions.Extensions;
+using MeshWeaver.Application;
 using MeshWeaver.Mesh.SignalR.Client;
+using MeshWeaver.Mesh.SignalR.Server;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,16 +17,16 @@ namespace MeshWeaver.Mesh.Test
     public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(output)
     {
         private IHost host;
-        private HubConnection hubConnection;
         private TestServer server;
+
+        public HttpMessageHandler HttpMessageHandler => server.CreateHandler();
 
         protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
         {
             return config
-                .WithRoutes(routes => routes.AddSignalRClient("http://localhost/connection"))
+                .AddSignalRClient("http://localhost/connection", HttpMessageHandler)
                 .WithTypes(typeof(Ping), typeof(Pong));
         }
-
 
         public override async Task InitializeAsync()
         {
@@ -42,7 +43,7 @@ namespace MeshWeaver.Mesh.Test
                         app.UseRouting();
                         app.UseEndpoints(endpoints =>
                         {
-                            endpoints.MapHub<ConnectionHub>("/notebook");
+                            endpoints.MapHub<SignalRConnectionHub>(SignalRConnectionHub.UrlPattern);
                         });
                     });
                 })
@@ -50,33 +51,27 @@ namespace MeshWeaver.Mesh.Test
 
             server = host.GetTestServer();
 
-            hubConnection = new HubConnectionBuilder()
-                .WithUrl("http://localhost/connection/{addressType}/{id}", options =>
-                {
-                    options.HttpMessageHandlerFactory = _ => server.CreateHandler();
-                })
-                .Build();
-
-            await hubConnection.StartAsync();
+            await base.InitializeAsync();
         }
-
-
 
         [Fact]
         public async Task BasicMessage()
         {
             var address = new ClientAddress();
-            var hub = MeshHub.ServiceProvider.CreateMessageHub(address, ConfigureClient);
+            var client = ServiceProvider.CreateMessageHub(address, ConfigureClient);
 
+            var response = await client.AwaitResponse(new Ping(),
+                o => o.WithTarget(new ApplicationAddress(TestApplicationAttribute.Test)),
+                new CancellationTokenSource(3000.Seconds()).Token);
+            response.Message.Should().BeOfType<Pong>();
         }
+
         public override async Task DisposeAsync()
         {
-            await hubConnection.DisposeAsync();
             await host.StopAsync();
             server.Dispose();
             host.Dispose();
             await base.DisposeAsync();
         }
-
     }
 }

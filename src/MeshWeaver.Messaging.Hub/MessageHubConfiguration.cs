@@ -16,7 +16,7 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
-        TypeRegistry  = new TypeRegistry(ParentServiceProvider.GetService<ITypeRegistry>()).WithType(address.GetType());
+        TypeRegistry  = new TypeRegistry(ParentServiceProvider?.GetService<ITypeRegistry>()).WithType(address.GetType());
     }
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
