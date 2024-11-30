@@ -25,5 +25,6 @@ public class NotebookTest(ITestOutputHelper output) : MeshTestBase(output)
     public async Task HelloWorld()
     {
         var address = new NotebookAddress();
+        var notebook = ServiceProvider.CreateNotebookHub(address);
     }
 }

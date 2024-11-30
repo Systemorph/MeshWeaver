@@ -229,6 +229,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebooks.Hub", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebooks.Test", "test\MeshWeaver.Notebooks.Test\MeshWeaver.Notebooks.Test.csproj", "{538A4857-4181-436A-A651-9F55C90AF142}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebook.Kernel", "src\MeshWeaver.Notebook.Kernel\MeshWeaver.Notebook.Kernel.csproj", "{156C2E1D-325A-439D-AB59-7C04761E75C6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -607,6 +609,10 @@ Global
 		{538A4857-4181-436A-A651-9F55C90AF142}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{538A4857-4181-436A-A651-9F55C90AF142}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{538A4857-4181-436A-A651-9F55C90AF142}.Release|Any CPU.Build.0 = Release|Any CPU
+		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -706,6 +712,7 @@ Global
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{E4634523-1C7E-488D-9C54-1CB1823D8138} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{538A4857-4181-436A-A651-9F55C90AF142} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{156C2E1D-325A-439D-AB59-7C04761E75C6} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
