@@ -3,20 +3,15 @@ using MeshWeaver.Notebooks;
 
 namespace MeshWeaver.Notebook.Client;
 
-public class MeshWeaverKernelConnector
+public class MeshWeaverKernelConnector(
+    IServiceProvider serviceProvider,
+    MeshWeaverConnection meshWeaver,
+    string kernelSpecName,
+    string initScript)
 {
-    private readonly IServiceProvider serviceProvider;
-    private readonly MeshWeaverConnection meshWeaverConnection;
-    private readonly string kernelSpecName;
-    private readonly string initScript;
-
-    public MeshWeaverKernelConnector(IServiceProvider serviceProvider, MeshWeaverConnection meshWeaver, string kernelSpecName, string initScript)
-    {
-        this.serviceProvider = serviceProvider;
-        meshWeaverConnection = meshWeaver ?? throw new ArgumentNullException(nameof(meshWeaver));
-        this.kernelSpecName = kernelSpecName ?? throw new ArgumentNullException(nameof(kernelSpecName));
-        this.initScript = initScript;
-    }
+    private readonly IServiceProvider serviceProvider = serviceProvider;
+    private readonly MeshWeaverConnection meshWeaverConnection = meshWeaver ?? throw new ArgumentNullException(nameof(meshWeaver));
+    private readonly string kernelSpecName = kernelSpecName ?? throw new ArgumentNullException(nameof(kernelSpecName));
 
     public async Task<Microsoft.DotNet.Interactive.Kernel> CreateKernelAsync(string kernelName)
     {
