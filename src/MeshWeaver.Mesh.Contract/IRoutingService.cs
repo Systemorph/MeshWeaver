@@ -4,7 +4,7 @@ namespace MeshWeaver.Mesh.Contract;
 
 public interface IRoutingService
 {
-    Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken);
+    Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken = default);
     Task<IDisposable> RegisterHubAsync(IMessageHub hub)
     => RegisterRouteAsync(
         hub.Address.GetType().FullName,

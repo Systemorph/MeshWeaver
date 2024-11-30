@@ -11,6 +11,7 @@ using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
 using MeshWeaver.Mesh.SignalR;
+using MeshWeaver.Mesh.SignalR.Server;
 using MeshWeaver.Notebooks.Hub;
 using Microsoft.AspNetCore.ResponseCompression;
 
@@ -79,7 +80,7 @@ app.UseRouting();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 // Map the NotebookHub endpoint
-app.MapHub<ConnectionHub>("/connect/{addressType}/{id}");
+app.MapHub<SignalRConnectionHub>("/connect/{addressType}/{id}");
 
 app.Run();
 
