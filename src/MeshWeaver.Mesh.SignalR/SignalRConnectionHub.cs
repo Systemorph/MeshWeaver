@@ -1,12 +1,12 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
 
-namespace MeshWeaver.Mesh.SignalR;
-// In MeshWeaver.Portal project
-// NotebookHub.cs
-public class ConnectionHub(IRoutingService routingService) : Hub
+namespace MeshWeaver.Mesh.SignalR.Server;
+public class SignalRConnectionHub(IRoutingService routingService) : Hub
 {
+    public const string UrlPattern = "/connection/{addressType}/{id}";
     private readonly ConcurrentDictionary<(string addressType, string id), IDisposable> disposables = new();
 
     public override async Task OnConnectedAsync()
@@ -33,6 +33,11 @@ public class ConnectionHub(IRoutingService routingService) : Hub
 
         disposables.TryAdd((addressType, id), disposable);
         await base.OnConnectedAsync();
+    }
+
+    public void DeliverMessage(IMessageDelivery delivery)
+    {
+        routingService.DeliverMessage(delivery);
     }
 
     public override async Task OnDisconnectedAsync(Exception exception)
