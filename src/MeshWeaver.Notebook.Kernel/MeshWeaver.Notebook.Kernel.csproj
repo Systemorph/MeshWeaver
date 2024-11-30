@@ -1,10 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Notebooks\MeshWeaver.Notebooks.csproj" />
-  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.DotNet.Interactive" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
+
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Notebooks\MeshWeaver.Notebooks.csproj" />
+  </ItemGroup>
+
 </Project>
