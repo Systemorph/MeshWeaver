@@ -11,6 +11,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Notebooks\MeshWeaver.Blazor.Notebooks.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj" />
   </ItemGroup>
 

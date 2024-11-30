@@ -1,9 +1,7 @@
-using System.Security.Cryptography.X509Certificates;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using MeshWeaver.Notebooks;
-using Microsoft.DotNet.Interactive;
 
-namespace MeshWeaver.Notebook.Kernel;
+namespace MeshWeaver.Notebook.Client;
 internal partial class MeshWeaverKernel : Microsoft.DotNet.Interactive.Kernel
 {
     private IMessageHub Hub { get; }

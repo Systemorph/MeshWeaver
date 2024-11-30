@@ -1,13 +1,12 @@
-﻿using Microsoft.DotNet.Interactive;
+﻿using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Notebooks;
+using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Connection;
-using Microsoft.DotNet.Interactive.Events;
-using MeshWeaver.Messaging;
-using MeshWeaver.Notebooks;
 using Microsoft.DotNet.Interactive.Directives;
-using Microsoft.CodeAnalysis.Tags;
 
-namespace MeshWeaver.Notebook.Kernel;
+namespace MeshWeaver.Notebook.Client;
 
 public class ConnectMeshWeaverKernel(string connectedKernelName) : ConnectKernelCommand(connectedKernelName)
 {
@@ -63,7 +62,7 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
         var kernelSpecName = connectCommand.KernelSpecName;
         var initScript = connectCommand.InitScript;
 
-        var connection = GetMeshWeaverConnection(connectCommand);
+        var connection = await GetMeshWeaverConnectionAsync(connectCommand);
         if (connection is null)
         {
             throw new InvalidOperationException("No supported connection options were specified");
@@ -76,14 +75,25 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
         var kernel = await connector.CreateKernelAsync(localName);
         if (connection is IDisposable disposableConnection)
         {
-            kernel.RegisterForDisposal(disposableConnection);
+            kernel.RegisterForDisposal(disposable: disposableConnection);
         }
         return new[] { kernel };
     }
 
-    private IMeshWeaverConnection GetMeshWeaverConnection(ConnectMeshWeaverKernel connectCommand)
+    private async Task<MeshWeaverConnection> GetMeshWeaverConnectionAsync(ConnectMeshWeaverKernel connectCommand)
     {
-        throw new NotImplementedException();
+        var hubConnection = new HubConnectionBuilder()
+            .WithUrl(connectCommand.Url)
+            .Build();
+
+        await hubConnection.StartAsync();
+
+        // Assuming the hub has a method to get kernel information
+        var kernelInfo = await hubConnection.InvokeAsync<MeshWeaverConnection>(
+            "GetKernelConnectionAsync", connectCommand.KernelSpecName);
+
+
+        return kernelInfo;
     }
 }
 
