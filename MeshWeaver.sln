@@ -231,7 +231,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebooks.Test",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebook.Client", "src\MeshWeaver.Notebook.Kernel\MeshWeaver.Notebook.Client.csproj", "{156C2E1D-325A-439D-AB59-7C04761E75C6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.SignalR", "src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.csproj", "{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.SignalR.Server", "src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.Server.csproj", "{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.Test", "test\MeshWeaver.Mesh.Test\MeshWeaver.Mesh.Test.csproj", "{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.SignalR.Client", "src\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Mesh.SignalR.Client.csproj", "{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -619,6 +623,14 @@ Global
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -720,6 +732,8 @@ Global
 		{538A4857-4181-436A-A651-9F55C90AF142} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{156C2E1D-325A-439D-AB59-7C04761E75C6} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

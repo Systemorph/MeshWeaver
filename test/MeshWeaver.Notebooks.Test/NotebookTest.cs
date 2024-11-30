@@ -1,7 +1,4 @@
-﻿using System.Runtime.InteropServices.JavaScript;
-using MeshWeaver.Application;
-using MeshWeaver.Blazor.Notebooks;
-using MeshWeaver.Fixture;
+﻿using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Mesh.SignalR;
@@ -35,44 +32,7 @@ public class NotebookTest(ITestOutputHelper output) : MeshTestBase(output)
             .ConfigureMesh(mesh =>
                 mesh
                     .AddNotebooks()
-                    .WithMeshNodeFactory((addressType, id) =>
-                    addressType == typeof(ApplicationAddress).FullName && id == TestApplicationAttribute.Test
-                        ? MeshExtensions.GetMeshNode(addressType, id, GetType().Assembly.Location)
-                        : null));
-    public async Task InitializeAsync()
-    {
-        host = await new HostBuilder()
-            .ConfigureWebHostDefaults(webBuilder =>
-            {
-                webBuilder.UseTestServer();
-                webBuilder.ConfigureServices(services =>
-                {
-                    services.AddSignalR();
-                });
-                webBuilder.Configure(app =>
-                {
-                    app.UseRouting();
-                    app.UseEndpoints(endpoints =>
-                    {
-                        endpoints.MapHub<ConnectionHub>("/notebook");
-                    });
-                });
-            })
-            .StartAsync();
-
-        var server = host.GetTestServer();
-        var client = server.CreateClient();
-
-        hubConnection = new HubConnectionBuilder()
-            .WithUrl("http://localhost/notebook", options =>
-            {
-                options.HttpMessageHandlerFactory = _ => server.CreateHandler();
-            })
-            .Build();
-
-        await hubConnection.StartAsync();
-    }
-
+                );
 
     [Fact]
     public async Task HelloWorld()
