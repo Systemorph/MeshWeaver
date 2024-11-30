@@ -1,13 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <ItemGroup>
     <None Remove="C:\Users\rolan\.nuget\packages\microsoft.dotnet.interactive\1.0.0-beta.24568.1\contentFiles\cs\any\%28Pocket%29\LoggerExtensions\Format.CustomizeLogString.cs" />
   </ItemGroup>
+
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Notebooks\MeshWeaver.Notebooks.csproj" />
-  </ItemGroup>
-  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client.Core" />
     <PackageReference Include="Microsoft.DotNet.Interactive" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
+
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Notebooks\MeshWeaver.Notebooks.csproj" />
+  </ItemGroup>
+
 </Project>

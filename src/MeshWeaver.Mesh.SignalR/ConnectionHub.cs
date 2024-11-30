@@ -1,12 +1,11 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Notebooks;
 using Microsoft.AspNetCore.SignalR;
 
-namespace MeshWeaver.Blazor.Notebooks;
+namespace MeshWeaver.Mesh.SignalR;
 // In MeshWeaver.Portal project
 // NotebookHub.cs
-public class NotebookHub(IRoutingService routingService) : Hub
+public class ConnectionHub(IRoutingService routingService) : Hub
 {
     private readonly ConcurrentDictionary<(string addressType, string id), IDisposable> disposables = new();
 

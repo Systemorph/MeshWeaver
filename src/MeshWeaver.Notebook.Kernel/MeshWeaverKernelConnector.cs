@@ -1,14 +1,16 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Notebooks;
 
-namespace MeshWeaver.Notebook.Kernel;
-internal class MeshWeaverKernelConnector
+namespace MeshWeaver.Notebook.Client;
+
+public class MeshWeaverKernelConnector
 {
     private readonly IServiceProvider serviceProvider;
-    private readonly IMeshWeaverConnection meshWeaverConnection;
+    private readonly MeshWeaverConnection meshWeaverConnection;
     private readonly string kernelSpecName;
     private readonly string initScript;
 
-    public MeshWeaverKernelConnector(IServiceProvider serviceProvider, IMeshWeaverConnection meshWeaver, string kernelSpecName, string initScript)
+    public MeshWeaverKernelConnector(IServiceProvider serviceProvider, MeshWeaverConnection meshWeaver, string kernelSpecName, string initScript)
     {
         this.serviceProvider = serviceProvider;
         meshWeaverConnection = meshWeaver ?? throw new ArgumentNullException(nameof(meshWeaver));
@@ -18,9 +20,8 @@ internal class MeshWeaverKernelConnector
 
     public async Task<Microsoft.DotNet.Interactive.Kernel> CreateKernelAsync(string kernelName)
     {
-        var kernelConnection = await meshWeaverConnection.CreateKernelConnectionAsync(kernelSpecName);
+        var kernelConnection = await CreateKernelConnectionAsync(kernelSpecName);
 
-        await kernelConnection.StartAsync(serviceProvider);
         var kernel = await MeshWeaverKernel.CreateAsync(kernelName, kernelConnection.Hub, kernelConnection.Address);
 
         if (!string.IsNullOrEmpty(initScript))
@@ -32,4 +33,10 @@ internal class MeshWeaverKernelConnector
         kernel.RegisterForDisposal(kernelConnection);
         return kernel;
     }
+
+    private async Task<MeshWeaverKernelConnection> CreateKernelConnectionAsync(string s)
+    {
+        throw new NotImplementedException();
+    }
 }
+
