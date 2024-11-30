@@ -29,9 +29,10 @@ namespace MeshWeaver.Fixture
 
         protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
             => config;
-        protected virtual async Task<IMessageHub> GetClient()
+        protected virtual async Task<IMessageHub> GetClient(object address = null)
         {
-            var ret = MeshHub.ServiceProvider.CreateMessageHub(new ClientAddress(), ConfigureClient);
+            address ??= new ClientAddress();
+            var ret = MeshHub.ServiceProvider.CreateMessageHub(address, ConfigureClient);
             await RoutingService.RegisterHubAsync(ret);
             return ret;
         }

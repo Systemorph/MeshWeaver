@@ -18,15 +18,15 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 
     public Task<MeshNode> GetNodeAsync(string addressType, string id)
         => Task.FromResult(
-            meshNodes.GetValueOrDefault((addressType, id)) 
-            ?? 
-            configuration.MeshNodeFactories
+            meshNodes.GetValueOrDefault((addressType, id))
+            ??
+            Configuration.MeshNodeFactories
                 .Select(f => f.Invoke(addressType, id))
                 .FirstOrDefault(x => x != null)
         );
     public Task UpdateAsync(MeshNode node)
     {
-        meshNodes[(node.AddressType,node.Id)] = node;
+        meshNodes[(node.AddressType, node.Id)] = node;
         // TODO V10: Delegate indexing to IMeshIndexService running on its own hub. (06.09.2024, Roland Bürgi)
         return Task.CompletedTask;
     }
@@ -72,7 +72,7 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 
     public async Task<MeshArticle> GetArticleAsync(string addressType, string nodeId, string id, bool includeContent)
     {
-        var key = (addressType,nodeId);
+        var key = (addressType, nodeId);
         if (articles.TryGetValue(key, out var inner))
             return await IncludeContent(inner.GetValueOrDefault(id), includeContent);
         var node = await GetNodeAsync(addressType, nodeId);
@@ -84,7 +84,7 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 
     private static Task<MeshArticle> IncludeContent(MeshArticle article, bool includeContent)
     {
-        if(includeContent || article is null)
+        if (includeContent || article is null)
             return Task.FromResult(article);
         return Task.FromResult(article with { Content = null });
     }
