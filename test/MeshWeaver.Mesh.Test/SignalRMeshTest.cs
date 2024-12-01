@@ -1,11 +1,13 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Application;
+using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Mesh.SignalR.Client;
 using MeshWeaver.Mesh.SignalR.Server;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,6 +32,8 @@ namespace MeshWeaver.Mesh.Test
 
         public override async Task InitializeAsync()
         {
+            await base.InitializeAsync();
+
             host = await new HostBuilder()
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
@@ -43,7 +47,7 @@ namespace MeshWeaver.Mesh.Test
                         app.UseRouting();
                         app.UseEndpoints(endpoints =>
                         {
-                            endpoints.MapHub<SignalRConnectionHub>(SignalRConnectionHub.UrlPattern);
+                            endpoints.MapHub<SignalRConnectionHub>("/connection");
                         });
                     });
                 })
@@ -51,7 +55,23 @@ namespace MeshWeaver.Mesh.Test
 
             server = host.GetTestServer();
 
-            await base.InitializeAsync();
+        }
+
+        [Fact]
+        public async Task TestConnection()
+        {
+            var hubConnection = new HubConnectionBuilder()
+                .WithUrl(server.BaseAddress + "connection", options =>
+                {
+                    options.HttpMessageHandlerFactory = _ => server.CreateHandler();
+                })
+                .Build();
+
+            await hubConnection.StartAsync();
+
+            hubConnection.State.Should().Be(HubConnectionState.Connected);
+            var meshConnection = hubConnection.InvokeAsync<MeshConnection>("Connect", "MyAddress", "MyId");
+            await hubConnection.StopAsync();
         }
 
         [Fact]
