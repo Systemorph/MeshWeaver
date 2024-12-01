@@ -33,16 +33,16 @@ public static class MeshWeaverSignalRClientExtensions
                     {
                         var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
                         hubConnection.Closed += OnHubConnectionClosed;
-                        hub.WithDisposeAction(_ => hubConnection.DisposeAsync());
+                        hub.WithDisposeAction(async _ =>
+                        {
+                            await hubConnection.StopAsync(ct);
+                            await hubConnection.DisposeAsync();
+                        });
                         logger.LogInformation("Creating SignalR connection for {AddressType} {Id}", addressType, id);
                         await hubConnection.StartAsync(ct);
 
-
-                        var meshConnection = await hubConnection.InvokeAsync<MeshConnection>("Connect", "MyAddress", "MyId");
-
-
                         var connection =
-                            await hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id);
+                            await hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id, ct);
                         if (connection.Status != ConnectionStatus.Connected)
                             throw new SignalRException("Couldn't connect.");
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
