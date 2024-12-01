@@ -5,22 +5,9 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace MeshWeaver.Mesh.SignalR.Server;
 
-public class TestHub : Hub
-{
-    public async Task SendMessage(string user, string message)
-    {
-        await Clients.All.SendAsync("ReceiveMessage", user, message);
-    }
-
-    public async Task<MeshConnection> Connect(string addressType, string id)
-    {
-        return new(addressType, id);
-    }
-}
-    public class SignalRConnectionHub(IRoutingService routingService) : Hub
+public class SignalRConnectionHub(IRoutingService routingService) : Hub
 {
     private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
-
 
     public async Task<MeshConnection> Connect(string addressType, string id)
     {

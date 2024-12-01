@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Application;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Mesh.SignalR.Client;
 using MeshWeaver.Mesh.SignalR.Server;
@@ -44,6 +45,9 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
                 webBuilder.ConfigureServices(services =>
                 {
                     services.AddSignalR();
+                    // Add other necessary services here
+                    services.AddSingleton(ServiceProvider.GetRequiredService<IRoutingService>());
+
                 });
                 webBuilder.Configure(app =>
                 {
@@ -63,6 +67,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
     [Fact]
     public async Task TestConnection()
     {
+
         var hubConnection = new HubConnectionBuilder()
             .WithUrl(server.BaseAddress + "connection", options =>
             {
@@ -73,8 +78,37 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
         await hubConnection.StartAsync();
 
         hubConnection.State.Should().Be(HubConnectionState.Connected);
-        var meshConnection = hubConnection.InvokeAsync<MeshConnection>("Connect", "MyAddress", "MyId");
+        var meshConnection = await hubConnection.InvokeAsync<MeshConnection>("Connect", "MyAddress", "MyId");
         await hubConnection.StopAsync();
+    }
+
+    [Fact]
+    public async Task TestConnectionInHubStartupFlow()
+    {
+        var address = new ClientAddress();
+        var client = ServiceProvider.CreateMessageHub(address, conf => conf.WithServices(services =>
+            services.AddScoped(_ => new HubConnectionBuilder()
+                .WithUrl(server.BaseAddress + "connection", options =>
+                {
+                    options.HttpMessageHandlerFactory = _ => server.CreateHandler();
+                })
+                
+                .Build())).WithInitialization(async (hub, ct) =>
+                {
+                    var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
+                    await hubConnection.StartAsync(ct);
+
+                    hubConnection.State.Should().Be(HubConnectionState.Connected);
+                    var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+                    var addressType = typeRegistry.GetCollectionName(hub.Address.GetType());
+                    var id = address.ToString();
+                    var meshConnection = hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id);
+                    await hubConnection.StopAsync(ct);
+
+                })
+            )
+            ;
+        await client.HasStarted;
     }
 
     [Fact]
@@ -84,7 +118,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
         var client = ServiceProvider.CreateMessageHub(address, config => config
             .AddSignalRClient("http://localhost/connection", options =>
             {
-                options.HttpMessageHandlerFactory = _ => server.CreateHandler();
+                options.HttpMessageHandlerFactory = (_ => server.CreateHandler());
             })
             .WithTypes(typeof(Ping), typeof(Pong)));
 
