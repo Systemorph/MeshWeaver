@@ -5,12 +5,12 @@ namespace MeshWeaver.Notebook.Client;
 
 public class MeshWeaverKernelConnector(
     IServiceProvider serviceProvider,
-    MeshWeaverConnection meshWeaver,
+    MeshConnection mesh,
     string kernelSpecName,
     string initScript)
 {
     private readonly IServiceProvider serviceProvider = serviceProvider;
-    private readonly MeshWeaverConnection meshWeaverConnection = meshWeaver ?? throw new ArgumentNullException(nameof(meshWeaver));
+    private readonly MeshConnection meshConnection = mesh ?? throw new ArgumentNullException(nameof(mesh));
     private readonly string kernelSpecName = kernelSpecName ?? throw new ArgumentNullException(nameof(kernelSpecName));
 
     public async Task<Microsoft.DotNet.Interactive.Kernel> CreateKernelAsync(string kernelName)

@@ -4,24 +4,33 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
 
 namespace MeshWeaver.Mesh.SignalR.Server;
-public class SignalRConnectionHub(IRoutingService routingService) : Hub
+
+public class TestHub : Hub
 {
-    public const string UrlPattern = "/connection/{addressType}/{id}";
-    private readonly ConcurrentDictionary<(string addressType, string id), IDisposable> disposables = new();
-
-    public override async Task OnConnectedAsync()
+    public async Task SendMessage(string user, string message)
     {
-        var context = Context.GetHttpContext();
-        var addressType = context?.Request.RouteValues["addressType"]?.ToString();
-        var id = context?.Request.RouteValues["id"]?.ToString();
+        await Clients.All.SendAsync("ReceiveMessage", user, message);
+    }
 
+    public async Task<MeshConnection> Connect(string addressType, string id)
+    {
+        return new(addressType, id);
+    }
+}
+    public class SignalRConnectionHub(IRoutingService routingService) : Hub
+{
+    private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
+
+
+    public async Task<MeshConnection> Connect(string addressType, string id)
+    {
         if (string.IsNullOrEmpty(addressType) || string.IsNullOrEmpty(id))
         {
             throw new HubException("addressType and id are required query parameters");
         }
 
         var caller = Clients.Caller;
-        var disposable = await routingService
+        var route = await routingService
             .RegisterRouteAsync(
                 addressType,
                 id,
@@ -31,13 +40,17 @@ public class SignalRConnectionHub(IRoutingService routingService) : Hub
                     return delivery.Forwarded();
                 });
 
-        disposables.TryAdd((addressType, id), disposable);
-        await base.OnConnectedAsync();
+
+        var connection = new MeshConnection(addressType, id);
+        connection.WithDisposeAction(() => route.Dispose());
+        connections.TryAdd((addressType, id), connection);
+        return connection;
     }
 
-    public void DeliverMessage(IMessageDelivery delivery)
+    public Task DeliverMessage(IMessageDelivery delivery)
     {
         routingService.DeliverMessage(delivery);
+        return Task.CompletedTask;
     }
 
     public override async Task OnDisconnectedAsync(Exception exception)
@@ -48,7 +61,7 @@ public class SignalRConnectionHub(IRoutingService routingService) : Hub
 
         if (addressType != null && id != null)
         {
-            if (disposables.TryRemove((addressType, id), out var disposable))
+            if (connections.TryRemove((addressType, id), out var disposable))
             {
                 disposable.Dispose();
             }

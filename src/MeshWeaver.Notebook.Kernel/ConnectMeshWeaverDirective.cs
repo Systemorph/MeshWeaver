@@ -80,7 +80,7 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
         return new[] { kernel };
     }
 
-    private async Task<MeshWeaverConnection> GetMeshWeaverConnectionAsync(ConnectMeshWeaverKernel connectCommand)
+    private async Task<MeshConnection> GetMeshWeaverConnectionAsync(ConnectMeshWeaverKernel connectCommand)
     {
         var hubConnection = new HubConnectionBuilder()
             .WithUrl(connectCommand.Url)
@@ -89,7 +89,7 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
         await hubConnection.StartAsync();
 
         // Assuming the hub has a method to get kernel information
-        var kernelInfo = await hubConnection.InvokeAsync<MeshWeaverConnection>(
+        var kernelInfo = await hubConnection.InvokeAsync<MeshConnection>(
             "GetKernelConnectionAsync", connectCommand.KernelSpecName);
 
 
