@@ -16,7 +16,9 @@ internal class RouteService
         this.parentHub = parentHub;
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<RouteService>>();
-        this.configuration = hub.Configuration.GetListOfRouteLambdas()
+        this.configuration = hub
+            .Configuration
+            .GetListOfRouteLambdas()
             .Aggregate(new RouteConfiguration(hub), (c, f) => f.Invoke(c));
         hub.Register(RouteMessageAsync);
     }
