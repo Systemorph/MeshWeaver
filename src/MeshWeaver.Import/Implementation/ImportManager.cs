@@ -81,7 +81,7 @@ public class ImportManager
             if (activity.HasErrors())
                 return;
 
-            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported, null), activity);
+            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), null), activity);
         }
         catch (Exception e)
         {
@@ -96,7 +96,7 @@ public class ImportManager
         }
     }
 
-    public async Task<IReadOnlyCollection<object>> ImportInstancesAsync(
+    public async Task<EntityStore> ImportInstancesAsync(
         ImportRequest importRequest, 
         Activity activity,
         CancellationToken cancellationToken)

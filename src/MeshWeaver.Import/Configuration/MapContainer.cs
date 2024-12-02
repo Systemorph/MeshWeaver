@@ -1,9 +1,10 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 
 namespace MeshWeaver.Import.Configuration;
 
-public record ImportMapContainer
+public record ImportMapContainer(IWorkspace Workspace)
 {
     internal ImmutableDictionary<string, TableMapping> Mappings { get; init; } =
         ImmutableDictionary<string, TableMapping>.Empty;
@@ -25,7 +26,7 @@ public record ImportMapContainer
         string name,
         Type type,
         Func<TableToTypeMapping, TableToTypeMapping> config
-    ) => WithTableMapping(name, config.Invoke(new TableToTypeMapping(name, type)));
+    ) => WithTableMapping(name, config.Invoke(new TableToTypeMapping(name, type, Workspace)));
 
     internal TableMapping Get(string tableName) =>
         Mappings.TryGetValue(tableName, out var mapping) ? mapping : null;
@@ -44,10 +45,10 @@ public record ImportMapContainer
 
     public ImportMapContainer WithTableMapping(
         string name,
-        Func<IDataSet, IDataTable, Task<IReadOnlyCollection<object>>> mappingFunction
+        Func<IDataSet, IDataTable, IWorkspace, EntityStore, Task<EntityStore>> mappingFunction
     )
     {
-        var tableMapping = new DirectTableMapping(name, mappingFunction);
+        var tableMapping = new DirectTableMapping(name, mappingFunction, Workspace);
         return this with { Mappings = Mappings.SetItem(tableMapping.Name, tableMapping) };
     }
 
@@ -60,20 +61,21 @@ public record ImportMapContainer
                     .Where(t => !Mappings.ContainsKey(t.Name))
                     .Select(t => new KeyValuePair<string, TableMapping>(
                         t.Name,
-                        new TableToTypeMapping(t.Name, t)
+                        new TableToTypeMapping(t.Name, t, Workspace)
                     ))
             )
         };
     }
 
 
-    public async IAsyncEnumerable<object> Import(IDataSet dataSet)
+    public async Task<EntityStore> ImportAsync(IDataSet dataSet, EntityStore store)
     {
         foreach (var table in dataSet.Tables)
         {
             if (Mappings.TryGetValue(table.TableName, out var mapping))
-                foreach (var instance in await mapping.Map(dataSet, table))
-                    yield return instance;
+                store = await mapping.Map(dataSet, table, store);
         }
+
+        return store;
     }
 }

@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
 
@@ -21,23 +20,12 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
-        var instances = await importManager.ImportInstancesAsync(
+        var store = await importManager.ImportInstancesAsync(
             ImportRequest,
             new(Data.Serialization.ActivityCategory.Import, Workspace.Hub),
             cancellationToken
         );
-        return new(instances.GroupBy(i => i.GetType())
-            .Select(t =>
-            {
-                var typeSource = Workspace.DataContext.GetTypeSource(t.Key);
-                if (typeSource == null)
-                    return default;
-                return new KeyValuePair<string, InstanceCollection>(
-                    typeSource.CollectionName, new(t.ToDictionary(typeSource.TypeDefinition.GetKey)));
-            })
-            .Where(x => x.Key is not null)
-            .ToDictionary());
-
+        return store;
     }
 
     private ImmutableList<

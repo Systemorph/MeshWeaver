@@ -126,16 +126,17 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task SingleTableMappingTest()
     {
-        customImportFunction = (_, set, _) =>
+        customImportFunction = (_, set, ws, store) =>
         {
-            return set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()
                 {
                     SystemName = dsRow[nameof(MyRecord.SystemName)]
                         .ToString()
                         ?.Replace("Old", "New"),
                     DisplayName = "test"
-                }).ToAsyncEnumerable();
+                }).ToArray();
+            return Task.FromResult(ws.AddInstances(store, instances));
         };
 
         _ = await DoImport(ThreeTablesContent, "Test");
@@ -167,16 +168,17 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunction = (_, set, _) =>
+        customImportFunction = (_, set, ws,store) =>
         {
-            return set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()
                 {
                     SystemName = dsRow[nameof(MyRecord.SystemName)]
                         .ToString()
                         ?.Replace("Old", "New"),
                     DisplayName = "test"
-                }).ToAsyncEnumerable();
+                }).ToArray();
+            return Task.FromResult(ws.AddInstances(store, instances));
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");

@@ -128,9 +128,9 @@ public record EntityStore
 
 public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string ChangedBy)
 {
-    //public EntityStoreAndUpdates(EntityStore Store) : this(Store, [], ChangedBy)
-    //{
-    //}
+    public EntityStoreAndUpdates(EntityStore Store, string ChangedBy) : this(Store, [], ChangedBy)
+    {
+    }
 }
 
 public record EntityUpdate(string Collection, object Id, object Value)
