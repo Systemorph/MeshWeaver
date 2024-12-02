@@ -38,6 +38,8 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
     public IMessageDelivery WithProperty(string name, object value)
         => this with { Properties = PropertiesImpl.SetItem(name, value) };
 
+    public IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties)
+    => this with { Properties = PropertiesImpl.AddRange(properties) };
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
 
     IReadOnlyCollection<object> IMessageDelivery.ToBeForwarded(IEnumerable<object> addresses) => addresses.Where(a => !ForwardedTo.Contains(a)).ToArray();

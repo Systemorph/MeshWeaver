@@ -27,7 +27,8 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeof(Guid),
         typeof(Uri),
         typeof(byte[]),
-        typeof(RawJson)
+        typeof(RawJson),
+        typeof(MessageDelivery<>)
     ];
 
     private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =

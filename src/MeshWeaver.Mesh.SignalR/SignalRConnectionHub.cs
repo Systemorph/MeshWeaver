@@ -2,10 +2,11 @@
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh.SignalR.Server;
 
-public class SignalRConnectionHub(IRoutingService routingService) : Hub
+public class SignalRConnectionHub(IMessageHub hub) : Hub
 {
     private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
 
@@ -15,8 +16,12 @@ public class SignalRConnectionHub(IRoutingService routingService) : Hub
         {
             throw new HubException("addressType and id are required query parameters");
         }
-
+        var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
         var caller = Clients.Caller;
+        var key = (addressType, id);
+        if (connections.TryRemove(key, out var conn))
+            conn.Dispose();
+
         var route = await routingService
             .RegisterRouteAsync(
                 addressType,
@@ -30,13 +35,13 @@ public class SignalRConnectionHub(IRoutingService routingService) : Hub
 
         var connection = new MeshConnection(addressType, id);
         connection.WithDisposeAction(() => route.Dispose());
-        connections.TryAdd((addressType, id), connection);
+        connections.TryAdd(key, connection);
         return connection;
     }
 
     public Task DeliverMessage(IMessageDelivery delivery)
     {
-        routingService.DeliverMessage(delivery);
+        hub.DeliverMessage(delivery);
         return Task.CompletedTask;
     }
 
@@ -46,7 +51,7 @@ public class SignalRConnectionHub(IRoutingService routingService) : Hub
         var addressType = context?.Request.Query["addressType"].ToString();
         var id = context?.Request.Query["id"].ToString();
 
-        if (addressType != null && id != null)
+        if (addressType != null)
         {
             if (connections.TryRemove((addressType, id), out var disposable))
             {

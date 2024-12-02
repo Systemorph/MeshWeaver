@@ -1,17 +1,19 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Application;
-using MeshWeaver.Domain;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Mesh.SignalR.Client;
 using MeshWeaver.Mesh.SignalR.Server;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -24,10 +26,11 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
 
     public HttpMessageHandler HttpMessageHandler => server.CreateHandler();
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
+    protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
     {
         return config
-            .AddSignalRClient("http://localhost/connection", options =>
+            .AddSignalRClient("http://localhost/connection",
+                options =>
             {
                 options.HttpMessageHandlerFactory = _ => server.CreateHandler();
             })
@@ -37,16 +40,21 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
     public override async Task InitializeAsync()
     {
         await base.InitializeAsync();
-
-        host = await new HostBuilder()
+        var builder = (MeshHostBuilder)ConfigureMesh(new MeshHostBuilder(new HostBuilder(), new MeshAddress()));
+        host = await builder.Host
             .ConfigureWebHostDefaults(webBuilder =>
             {
                 webBuilder.UseTestServer();
                 webBuilder.ConfigureServices(services =>
                 {
-                    services.AddSignalR();
-                    // Add other necessary services here
-                    services.AddSingleton(ServiceProvider.GetRequiredService<IRoutingService>());
+                    services.AddScoped(CreateMesh);
+                    services
+                        .AddSignalR().AddJsonProtocol();
+                    services.AddSingleton<IHubProtocol, JsonHubProtocol>(sp =>
+                        new JsonHubProtocol(new OptionsWrapper<JsonHubProtocolOptions>(new()
+                        {
+                            PayloadSerializerOptions = sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
+                        })));
 
                 });
                 webBuilder.Configure(app =>
@@ -64,59 +72,14 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
 
     }
 
-    [Fact]
-    public async Task TestConnection()
-    {
-
-        var hubConnection = new HubConnectionBuilder()
-            .WithUrl(server.BaseAddress + "connection", options =>
-            {
-                options.HttpMessageHandlerFactory = _ => server.CreateHandler();
-            })
-            .Build();
-
-        await hubConnection.StartAsync();
-
-        hubConnection.State.Should().Be(HubConnectionState.Connected);
-        var meshConnection = await hubConnection.InvokeAsync<MeshConnection>("Connect", "MyAddress", "MyId");
-        await hubConnection.StopAsync();
-    }
 
     [Fact]
-    public async Task TestConnectionInHubStartupFlow()
-    {
-        var address = new ClientAddress();
-        var client = ServiceProvider.CreateMessageHub(address, conf => conf.WithServices(services =>
-            services.AddScoped(_ => new HubConnectionBuilder()
-                .WithUrl(server.BaseAddress + "connection", options =>
-                {
-                    options.HttpMessageHandlerFactory = _ => server.CreateHandler();
-                })
-                
-                .Build())).WithInitialization(async (hub, ct) =>
-                {
-                    var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
-                    await hubConnection.StartAsync(ct);
-
-                    hubConnection.State.Should().Be(HubConnectionState.Connected);
-                    var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-                    var addressType = typeRegistry.GetCollectionName(hub.Address.GetType());
-                    var id = address.ToString();
-                    var meshConnection = hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id);
-                    await hubConnection.StopAsync(ct);
-
-                })
-            )
-            ;
-        await client.HasStarted;
-    }
-
-    [Fact]
-    public async Task BasicMessage()
+    public async Task PingPong()
     {
         var address = new ClientAddress();
         var client = ServiceProvider.CreateMessageHub(address, config => config
-            .AddSignalRClient("http://localhost/connection", options =>
+            .AddSignalRClient("http://localhost/connection",
+                options =>
             {
                 options.HttpMessageHandlerFactory = (_ => server.CreateHandler());
             })
