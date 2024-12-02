@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Fixture;
@@ -16,6 +17,8 @@ public class HubTestBase : TestBase
 
     [Inject]
     protected IMessageHub Router;
+    [Inject]
+    protected ILogger<HubTestBase> Logger;
 
     protected HubTestBase(ITestOutputHelper output)
         : base(output)
@@ -56,7 +59,8 @@ public class HubTestBase : TestBase
 
     public override async Task DisposeAsync()
     {
-        // TODO V10: This should dispose the other two. (18.01.2024, Roland Buergi)
+        Logger.LogInformation("Starting disposal of router");   
         await Router.DisposeAsync();
+        Logger.LogInformation("Finished disposal of router");
     }
 }

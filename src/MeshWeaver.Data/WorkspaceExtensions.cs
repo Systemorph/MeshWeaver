@@ -49,10 +49,12 @@ public static class WorkspaceExtensions
                 var typeSource = workspace.DataContext.GetTypeSource(g.Key);
                 if (typeSource == null)
                     throw new DataException($"Type {g.Key.Name} is not mapped to the workspace.");
-                var collection = new InstanceCollection(g.ToDictionary(typeSource.TypeDefinition.GetKey));
+                var collection = s.Collections.GetValueOrDefault(typeSource.CollectionName);
+                
+                collection = collection == null ? new InstanceCollection(g.ToDictionary(typeSource.TypeDefinition.GetKey)) : collection with{Instances = collection.Instances.SetItems(g.ToDictionary(typeSource.TypeDefinition.GetKey)) };
                 return s with
                 {
-                    Collections = s.Collections.Add(typeSource.CollectionName, collection)
+                    Collections = s.Collections.SetItem(typeSource.CollectionName, collection)
                 };
             });
         return store;
