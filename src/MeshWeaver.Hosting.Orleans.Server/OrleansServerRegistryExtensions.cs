@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Orleans.Server;
 
 public static  class OrleansServerRegistryExtensions
 {
-    public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
+    public static TBuilder UseOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
     where TBuilder: MeshHostApplicationBuilder
     {

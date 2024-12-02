@@ -31,7 +31,7 @@ var blazorAddress = new UiAddress();
 
 builder.UseMeshWeaver(blazorAddress,
         config => config
-            .AddOrleansMeshClient()
+            .UseOrleansMeshClient()
             .AddBlazor(x =>
                 x.AddChartJs()
                     .AddAgGrid()

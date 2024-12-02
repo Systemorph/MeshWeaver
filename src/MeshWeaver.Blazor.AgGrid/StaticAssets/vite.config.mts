@@ -10,7 +10,10 @@ export default defineConfig({
                     if (id.includes('node_modules')) {
                         return 'vendor';
                     }
-                }
+                },
+                entryFileNames: 'index.mjs', // Ensure the output file is named index.mjs
+                format: 'es' // Ensure the format is ES module
+
             }
         },
         lib: {

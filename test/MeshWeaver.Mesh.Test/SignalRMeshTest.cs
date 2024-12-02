@@ -29,7 +29,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
     protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
     {
         return config
-            .AddSignalRClient("http://localhost/connection",
+            .UseSignalRMesh("http://localhost/connection",
                 options =>
             {
                 options.HttpMessageHandlerFactory = _ => server.CreateHandler();
@@ -78,7 +78,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(
     {
         var address = new ClientAddress();
         var client = ServiceProvider.CreateMessageHub(address, config => config
-            .AddSignalRClient("http://localhost/connection",
+            .UseSignalRMesh("http://localhost/connection",
                 options =>
             {
                 options.HttpMessageHandlerFactory = (_ => server.CreateHandler());
