@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Execution;
+using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -72,7 +73,9 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();
