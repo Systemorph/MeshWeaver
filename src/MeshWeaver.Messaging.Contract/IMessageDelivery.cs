@@ -22,6 +22,7 @@ public interface IMessageDelivery
     internal IMessageDelivery SetAccessObject(string accessObject, object address);
     internal IMessageDelivery ChangeState(string state);
     IMessageDelivery SetProperty(string name, object value);
+    IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties);
     IMessageDelivery ForwardTo(object target);
     IMessageDelivery Failed(string message) => ChangeState(MessageDeliveryState.Failed).WithProperty(nameof(Error), message);
     IMessageDelivery WithProperty(string name, object value);

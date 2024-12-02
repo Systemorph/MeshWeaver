@@ -12,15 +12,15 @@ namespace MeshWeaver.Hosting.Blazor;
 
 public static class BlazorHostingExtensions
 {
-    public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null)
-    {
-        builder.Services.AddRazorPages();
-        builder.Services.AddServerSideBlazor();
-        builder.Services.AddFluentUIComponents();
-
-        return builder.ConfigureHub(hub => hub.AddBlazor(clientConfig));
-
-    }
+    public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null) =>
+        builder
+            .ConfigureServices(services =>
+            {
+                services.AddRazorPages();
+                services.AddServerSideBlazor();
+                return services.AddFluentUIComponents();
+            })
+            .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
     public static void MapStaticContent(this IEndpointRouteBuilder app, IMeshCatalog meshCatalog)
         => app.MapGet("/static/{application}/{*fileName}", async (string application, string environment, string fileName) =>

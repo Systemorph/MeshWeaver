@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Hosting.Orleans.Client;
+﻿using MeshWeaver.Application;
+using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh.Contract;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +12,7 @@ public static  class OrleansServerRegistryExtensions
 {
     public static TBuilder AddOrleansMeshServer<TBuilder>(this TBuilder builder, 
         Action<ISiloBuilder> siloConfiguration = null)
-    where TBuilder: MeshHostBuilder
+    where TBuilder: MeshHostApplicationBuilder
     {
         
         builder.Host.UseOrleans(silo =>
@@ -34,7 +35,7 @@ public static  class OrleansServerRegistryExtensions
                 );
             });
         });
-        builder.ConfigureHub(conf => conf.WithTypes(typeof(StreamActivity)));
+        builder.ConfigureHub(conf => conf.WithTypes(typeof(StreamActivity), typeof(ApplicationAddress)));
         builder.AddOrleansMeshInternal();
 
         return builder;
