@@ -104,7 +104,7 @@ c => c
         stream.AddDisposable(reducedStream);
         var selected = stream
             .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference))
-            .Where(x => x.Value is not null);
+            .Where(x => x is{Value: not null});
 
         reducedStream.AddDisposable(
             selected

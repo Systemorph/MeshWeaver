@@ -81,7 +81,12 @@ public class ImportManager
             if (activity.HasErrors())
                 return;
 
-            Configuration.Workspace.RequestChange(DataChangeRequest.Update(imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), null), activity);
+            Configuration.Workspace.RequestChange(
+                DataChangeRequest.Update(
+                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), 
+                    null, 
+                    request.UpdateOptions),
+                activity);
         }
         catch (Exception e)
         {

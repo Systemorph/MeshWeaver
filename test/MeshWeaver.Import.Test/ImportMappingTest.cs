@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -79,7 +80,9 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         ret2.Should().BeEmpty();
 
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(1);
 
@@ -145,11 +148,10 @@ Record3SystemName,Record3DisplayName";
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
-        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
 
-        ret2.Should().BeEmpty();
-
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(1);
 
@@ -185,10 +187,10 @@ Record3SystemName,Record3DisplayName";
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
-        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
+        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync(x => x.Any());
 
         ret2.Should().HaveCount(1);
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(2);
 

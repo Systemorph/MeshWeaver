@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Activities;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Data;
 
@@ -27,8 +28,8 @@ public record DataChangeRequest
 
     public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
         new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
-    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy) =>
-        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy };
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy, UpdateOptions options) =>
+        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy, Options = options };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
         new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};
 

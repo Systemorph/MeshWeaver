@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -107,7 +108,9 @@ B4,B,4
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(4);
 

@@ -71,7 +71,8 @@ public static class ImportExtensions
         Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource> configuration
     )
     {
-        return dataContext.WithDataSourceBuilder(
+        return dataContext
+            .WithDataSourceBuilder(
             resource,
             _ => ConfigureDataSource(configuration, dataContext.Workspace, resource)
         );
