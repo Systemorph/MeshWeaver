@@ -14,6 +14,7 @@ public class EmbeddedResourceInitializationTest(ITestOutputHelper output) : HubT
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
+            .AddImport()
             .AddData(data => data
                 .FromEmbeddedResource(new EmbeddedResource(GetType().Assembly, "Files.categories.csv"), m => m.WithType<Category>())
                 .FromEmbeddedResource(new EmbeddedResource(GetType().Assembly, "Files.products.csv"), m => m.WithType<Product>())
