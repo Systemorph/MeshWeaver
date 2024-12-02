@@ -28,7 +28,7 @@ public record DataChangeRequest
 
     public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
         new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
-    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy, UpdateOptions options) =>
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy = null, UpdateOptions options = null) =>
         new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy, Options = options };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
         new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};

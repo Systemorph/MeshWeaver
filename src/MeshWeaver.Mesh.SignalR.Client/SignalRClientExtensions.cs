@@ -13,7 +13,7 @@ namespace MeshWeaver.Mesh.SignalR.Client;
 
 public static class SignalRClientExtensions
 {
-    public static MessageHubConfiguration AddSignalRClient(
+    public static MessageHubConfiguration UseSignalRMesh(
         this MessageHubConfiguration config, string connectionGateway,
         Action<HttpConnectionOptions> httpConnectionOptions = null)
     {

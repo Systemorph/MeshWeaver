@@ -14,7 +14,7 @@ namespace MeshWeaver.Mesh.Test
         protected record ClientAddress;
         protected MeshBuilder ConfigureMesh(MeshBuilder builder)
             => builder
-                .AddMonolithMesh()
+                .UseMonolithMesh()
                 .ConfigureMesh(mesh =>
                     mesh.WithMeshNodeFactory((addressType, id) =>
                         addressType == typeof(ApplicationAddress).FullName && id == TestApplicationAttribute.Test
