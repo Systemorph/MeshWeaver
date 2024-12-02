@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
@@ -56,6 +58,8 @@ internal class RouteService
     }
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery, object address, object hostedSegment)
     {
+        if (address is JsonObject obj)
+            address = obj.Deserialize<object>(hub.JsonSerializerOptions);
 
         if (hub.Address.Equals(address))
             // TODO V10: This works only if the hub has been instantiated before. Consider re-implementing setting hosted hub configs at config time. (31.01.2024, Roland Bürgi)
