@@ -13,7 +13,11 @@ internal class TestApplicationAttribute : MeshNodeAttribute
 
     public override IMessageHub Create(IServiceProvider serviceProvider, MeshNode node)
         => CreateIf(node.Matches(Address), () => serviceProvider.CreateMessageHub(Address,
-                conf => conf.WithHandler<Ping>((hub, delivery) => hub.Post(new Pong(), o => o.ResponseFor(delivery)))));
+                conf => conf.WithHandler<Ping>((hub, delivery) =>
+                {
+                    hub.Post(new Pong(), o => o.ResponseFor(delivery));
+                    return delivery.Processed();
+                })));
 }
 
 public record Ping : IRequest<Pong>;
