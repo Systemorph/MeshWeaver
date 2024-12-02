@@ -168,7 +168,7 @@ public record GenericUnpartitionedDataSource<TDataSource>(object Id, IWorkspace 
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
     public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(x => (TypeSourceWithType<T>)config(x));
+        WithType<T>(x => (TypeSourceWithType<T>)(config ??(y => y))(x));
 
     public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
         where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Workspace, Id)));
