@@ -118,7 +118,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         var host = GetHost();
         var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();

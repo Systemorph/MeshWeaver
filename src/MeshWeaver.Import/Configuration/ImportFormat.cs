@@ -2,6 +2,8 @@
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
+using MeshWeaver.Import.Implementation;
+using Microsoft.Extensions.Logging;
 using Activity = MeshWeaver.Activities.Activity;
 
 namespace MeshWeaver.Import.Configuration;
@@ -60,6 +62,9 @@ public record ImportFormat(
                         activity
                     ) || hasError;
         }
+
+        if(hasError)
+            activity.LogError(ImportManager.ImportFailed);
 
     }
 
