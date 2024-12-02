@@ -14,7 +14,7 @@ public static class OrleansClientExtensions
 
     public static TBuilder AddOrleansMeshClient<TBuilder>(this TBuilder builder,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
-        where TBuilder : MeshHostBuilder
+        where TBuilder : MeshHostApplicationBuilder
     {
         builder.Host
             .UseOrleansClient(client =>
@@ -43,7 +43,7 @@ public static class OrleansClientExtensions
 
 
     internal static void AddOrleansMeshInternal<TBuilder>(this TBuilder builder)
-        where TBuilder : MeshHostBuilder
+        where TBuilder : MeshHostApplicationBuilder
     {
         builder.Host.Services
                 .AddSingleton<IRoutingService, OrleansRoutingService>()

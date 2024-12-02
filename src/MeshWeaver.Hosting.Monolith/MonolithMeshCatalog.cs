@@ -12,8 +12,8 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
     private readonly ILogger<MonolithMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MonolithMeshCatalog>>();
     private readonly ConcurrentDictionary<(string AddressType, string Id), MeshNode> meshNodes = new();
     private readonly ConcurrentDictionary<(string AddressType, string Id), IReadOnlyDictionary<string, MeshArticle>> articles = new();
-    private MeshConfiguration Configuration { get; } = configuration;
 
+    private MeshConfiguration Configuration { get; } = configuration;
 
 
     public Task<MeshNode> GetNodeAsync(string addressType, string id)

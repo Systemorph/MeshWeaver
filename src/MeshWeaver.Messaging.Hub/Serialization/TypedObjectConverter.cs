@@ -12,7 +12,7 @@ namespace MeshWeaver.Messaging.Serialization;
 public class TypedObjectDeserializeConverter(ITypeRegistry typeRegistry, SerializationConfiguration configuration) : JsonConverter<object>
 {
 
-    public override bool CanConvert(Type typeToConvert) => !typeof(IEnumerable).IsAssignableFrom(typeToConvert) && (typeToConvert == typeof(object) || typeToConvert.IsAbstract);
+    public override bool CanConvert(Type typeToConvert) => !typeof(IEnumerable).IsAssignableFrom(typeToConvert) && (typeToConvert == typeof(object) || typeToConvert.IsAbstract || typeToConvert.IsInterface);
 
     public override object Read(
         ref Utf8JsonReader reader,

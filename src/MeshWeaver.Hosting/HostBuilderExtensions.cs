@@ -9,11 +9,11 @@ namespace MeshWeaver.Hosting
         (
             this IHostApplicationBuilder hostBuilder,
             object address,
-            Func<MeshHostBuilder, MeshBuilder> configuration = null)
+            Func<MeshHostApplicationBuilder, MeshBuilder> configuration = null)
         {
-            var builder = new MeshHostBuilder(hostBuilder, address);
+            var builder = new MeshHostApplicationBuilder(hostBuilder, address);
             if (configuration != null)
-                builder = (MeshHostBuilder)configuration.Invoke(builder);
+                builder = (MeshHostApplicationBuilder)configuration.Invoke(builder);
 
         }
 

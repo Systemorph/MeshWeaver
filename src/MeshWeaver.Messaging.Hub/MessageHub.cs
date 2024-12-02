@@ -290,8 +290,7 @@ public sealed class MessageHub
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
-        MessageService.IncomingMessage(ret);
-        return ret;
+        return MessageService.IncomingMessage(ret);
     }
 
     public IMessageHub GetHostedHub<TAddress1>(

@@ -7,9 +7,9 @@ namespace MeshWeaver.Mesh.Contract;
 
 public record MeshBuilder
 {
-    public MeshBuilder(IServiceCollection Services, object Address)
+    public MeshBuilder(Action<Func<IServiceCollection,IServiceCollection>> ServiceConfig, object Address)
     {
-        this.Services = Services;
+        this.ServiceConfig = ServiceConfig;
         this.Address = Address;
         Register();
     }
@@ -23,7 +23,13 @@ public record MeshBuilder
     }
 
     private List<Func<MeshConfiguration, MeshConfiguration>> MeshConfiguration { get; } = new();
-    public IServiceCollection Services { get; init; }
+
+    public MeshBuilder ConfigureServices(Func<IServiceCollection, IServiceCollection> configuration)
+    {
+        ServiceConfig.Invoke(configuration);
+        return this;
+    }
+    private Action<Func<IServiceCollection, IServiceCollection>> ServiceConfig { get; init; }
     public object Address { get; init; }
 
 
@@ -35,7 +41,8 @@ public record MeshBuilder
 
     private void Register()
     {
-        Services.AddSingleton(_ => BuildMeshConfiguration());
+        ConfigureServices(services => services
+            .AddSingleton(_ => BuildMeshConfiguration()).AddSingleton(BuildHub));
 
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
 
@@ -47,7 +54,6 @@ public record MeshBuilder
             .Set(meshConfig)
         );
 
-        Services.AddSingleton(BuildHub);
     }
 
     public virtual IMessageHub BuildHub(IServiceProvider sp)
