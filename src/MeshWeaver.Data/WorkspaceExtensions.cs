@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Data;
+using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Messaging;
 
@@ -40,6 +41,22 @@ public static class WorkspaceExtensions
             storeAndUpdates.Updates.ToArray()
             );
 
+    public static EntityStore AddInstances(this IWorkspace workspace, EntityStore store, IEnumerable<object> instances)
+    {
+        store = instances.GroupBy(x => x.GetType())
+            .Aggregate(store, (s, g) =>
+            {
+                var typeSource = workspace.DataContext.GetTypeSource(g.Key);
+                if (typeSource == null)
+                    throw new DataException($"Type {g.Key.Name} is not mapped to the workspace.");
+                var collection = new InstanceCollection(g.ToDictionary(typeSource.TypeDefinition.GetKey));
+                return s with
+                {
+                    Collections = s.Collections.Add(typeSource.CollectionName, collection)
+                };
+            });
+        return store;
+    }
 
 
 }

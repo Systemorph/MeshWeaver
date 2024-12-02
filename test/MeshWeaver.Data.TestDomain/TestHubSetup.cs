@@ -89,36 +89,25 @@ public static class TestHubSetup
             );
         
 
-    private static async IAsyncEnumerable<object> ImportFunction(
+    private static async Task<EntityStore> ImportFunction(
         ImportRequest request,
         IDataSet dataSet,
-        IWorkspace workspace
+        IWorkspace workspace,
+        EntityStore store
     )
     {
         var businessUnits = await workspace.GetStream<BusinessUnit>().FirstAsync();
         var partitions = businessUnits.Select(bu => new TransactionalDataAddress(2024, bu.SystemName)).ToArray();
 
-        var transactionalData = await partitions
-            .ToAsyncEnumerable()
-            .SelectAwait(async p =>
-                await workspace.GetStream(
-                    new PartitionedWorkspaceReference<InstanceCollection>(p, new CollectionReference(typeof(TransactionalData).FullName))).FirstAsync())
-            .ToArrayAsync();
+        var transactionalData = store.GetData<TransactionalData>();
 
-        foreach (var x in transactionalData.SelectMany(x =>
-                     x.Value
-                         .Instances
-                         .Values
-                         .Cast<TransactionalData>()
-                         .Select(t => new ComputedData(
-                             t.Id,
-                             2024,
-                             t.LoB,
-                             t.BusinessUnit,
-                             t.Value * 2
-                         ))))
-        {
-            yield return x;
-        }
+        var instances = transactionalData.Select(t => new ComputedData(
+                    t.Id,
+                    2024,
+                    t.LoB,
+                    t.BusinessUnit,
+                    t.Value * 2
+                )).ToArray();
+        return workspace.AddInstances(store, instances);
     }
 }
