@@ -30,7 +30,9 @@ public class MessageService : IMessageService
             NotifyAsync(d, c);
             return Task.FromResult(d.Submitted());
         }, ReportFailure);
-        deliveryAction = new(x => deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
+        deliveryAction = 
+            new(x => 
+                deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
 
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
 
@@ -89,7 +91,7 @@ public class MessageService : IMessageService
                 return delivery.Failed("Hub disposing");
             buffer.Post((delivery, cancellationToken));
         }
-        return delivery;
+        return delivery.Forwarded();
     }
 
     // TODO V10: This is needed only when coming from outside physical boundries (2023/07/16, Roland Buergi)
