@@ -156,8 +156,8 @@ SystemName,DisplayName
         var workspace = GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null)
         );
-        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync();
-        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync();
+        var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
+        var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);
         var expectedLoBs = new[]
         {
             new LineOfBusiness("1", "LoB_one"),
@@ -166,8 +166,8 @@ SystemName,DisplayName
         var expectedBUs = new[]
         {
             new BusinessUnit("1", "1"),
-            new BusinessUnit("BU1", "BU_one"),
             new BusinessUnit("2", "BU_two"),
+            new BusinessUnit("BU1", "BU_one"),
         };
 
         using (new AssertionScope())

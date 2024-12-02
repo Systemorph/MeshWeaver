@@ -52,9 +52,9 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                         )
             );
 
-    private Task<IReadOnlyCollection<object>> MapMyRecord(IDataSet set, IDataTable table)
-        => Task.FromResult<IReadOnlyCollection<object>>(MapMyRecordInd(set, table).ToArray());
-    private IEnumerable<object> MapMyRecordInd(IDataSet set, IDataTable table)
+    private Task<EntityStore> MapMyRecord(IDataSet set, IDataTable table, IWorkspace workspace,EntityStore store)
+        => Task.FromResult(MapMyRecordInd(set, table, workspace, store));
+    private EntityStore MapMyRecordInd(IDataSet set, IDataTable table, IWorkspace workspace, EntityStore store)
     {
         const string systemNameColumn = Prefix + nameof(MyRecord.SystemName);
         const string displayNameColumn = nameof(MyRecord.DisplayName);
@@ -62,32 +62,29 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         const string strListColumn = nameof(MyRecord.StringsList);
         const string intListColumn = Prefix + nameof(MyRecord.IntList);
 
-        foreach (var row in table)
+        return workspace.AddInstances(store, table.Select(row => new MyRecord()
         {
-            yield return new MyRecord()
-            {
-                SystemName = row[$"{systemNameColumn}"]?.ToString(),
-                DisplayName = row[$"{displayNameColumn}"]?.ToString(),
-                StringsArray = Enumerable
-                    .Range(0, 3)
-                    .Select(i => row[$"{strArrColumn}{i}"])
-                    .Where(x => x is not null)
-                    .Select(x => x.ToString())
-                    .ToArray(),
-                StringsList = Enumerable
-                    .Range(0, 3)
-                    .Select(i => row[$"{strListColumn}{i}"])
-                    .Where(x => x is not null)
-                    .Select(x => x.ToString())
-                    .ToList(),
-                IntList = Enumerable
-                    .Range(0, 3)
-                    .Select(i => row[$"{intListColumn}{i}"])
-                    .Where(x => x is not null)
-                    .Select(x => int.Parse(x.ToString()))
-                    .ToList(),
-            };
-        }
+            SystemName = row[$"{systemNameColumn}"]?.ToString(),
+            DisplayName = row[$"{displayNameColumn}"]?.ToString(),
+            StringsArray = Enumerable
+                .Range(0, 3)
+                .Select(i => row[$"{strArrColumn}{i}"])
+                .Where(x => x is not null)
+                .Select(x => x.ToString())
+                .ToArray(),
+            StringsList = Enumerable
+                .Range(0, 3)
+                .Select(i => row[$"{strListColumn}{i}"])
+                .Where(x => x is not null)
+                .Select(x => x.ToString())
+                .ToList(),
+            IntList = Enumerable
+                .Range(0, 3)
+                .Select(i => row[$"{intListColumn}{i}"])
+                .Where(x => x is not null)
+                .Select(x => int.Parse(x.ToString()))
+                .ToList(),
+        }));
     }
 
     private const string Prefix = "Prefix_";

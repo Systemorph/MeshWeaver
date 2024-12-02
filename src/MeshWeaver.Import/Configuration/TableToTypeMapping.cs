@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using Autofac.Core.Activators.Reflection;
 using MeshWeaver.Collections;
+using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
@@ -13,32 +14,25 @@ namespace MeshWeaver.Import.Configuration;
 
 public abstract record TableMapping(string Name)
 {
-    public abstract Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable);
+    public abstract Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store);
 }
 
 public record DirectTableMapping(
     string Name,
-    Func<IDataSet, IDataTable, Task<IReadOnlyCollection<object>>> MappingFunction
+    Func<IDataSet, IDataTable, IWorkspace, EntityStore, Task<EntityStore>> MappingFunction,
+    IWorkspace Workspace
 ) : TableMapping(Name)
 {
-    public override Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable) =>
-        MappingFunction(dataSet, dataSetTable);
+    public override Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store) =>
+        MappingFunction(dataSet, dataSetTable, Workspace, store);
 }
 
-public record TableToTypeMapping : TableMapping
+public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) : TableMapping(Name)
 {
-    public Type Type { get; }
+    public override Task<EntityStore> Map(IDataSet dataSet, IDataTable dataSetTable, EntityStore store) =>
+        Task.FromResult(MapTableToType(dataSet, dataSetTable, store));
 
-    public TableToTypeMapping(string name, Type type)
-        : base(name)
-    {
-        Type = type;
-    }
-
-    public override Task<IReadOnlyCollection<object>> Map(IDataSet dataSet, IDataTable dataSetTable) =>
-        Task.FromResult<IReadOnlyCollection<object>>(MapTableToType(dataSet, dataSetTable).ToArray());
-
-    private IEnumerable<object> MapTableToType(IDataSet dataSet, IDataTable table)
+    private EntityStore MapTableToType(IDataSet dataSet, IDataTable table, EntityStore store)
     {
         var constructor = InstanceInitFunction;
         if (constructor == null)
@@ -51,7 +45,8 @@ public record TableToTypeMapping : TableMapping
             );
             constructor = (_, dr) => init(dr);
         }
-        return table.Rows.Select(r => constructor.Invoke(dataSet, r));
+        var instances = table.Rows.Select(r => constructor.Invoke(dataSet, r)).ToArray();
+        return Workspace.AddInstances(store, instances);
     }
 
     private Func<IDataSet, IDataRow, object> InstanceInitFunction { get; init; }

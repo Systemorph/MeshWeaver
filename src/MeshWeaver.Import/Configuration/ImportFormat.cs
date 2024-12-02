@@ -24,28 +24,31 @@ public record ImportFormat(
 
 
 
-    public async Task<IReadOnlyCollection<object>> Import(
+    public async Task<EntityStore> Import(
         ImportRequest importRequest,
         IDataSet dataSet,
         Activity activity
     )
     {
-        var imported = await ImportFunctions
-            .Select(i => i.Invoke(importRequest, dataSet, Workspace))
-            .Aggregate(AsyncEnumerable.Empty<object>(), (e, r) => e.Concat(r))
-            .ToArrayAsync();
+        var store = new EntityStore();
+        foreach (var importFunction in ImportFunctions)
+        {
+            store = await importFunction.Invoke(importRequest, dataSet, Workspace, store);
+        }
 
-        Validate(imported, activity);
+
+        Validate(store, activity);
         if (activity.HasErrors())
             return null;
-        return imported;
+        return store;
     }
 
-    private void Validate(IReadOnlyCollection<object> importedInstances, Activity activity)
+
+    private void Validate(EntityStore importedInstances, Activity activity)
     {
         var hasError = false;
         var validationCache = new Dictionary<object, object>();
-        foreach (var item in importedInstances)
+        foreach (var item in importedInstances.Collections.SelectMany(x => x.Value.Instances.Values))
         {
             if (item == null)
                 continue;
@@ -60,15 +63,16 @@ public record ImportFormat(
 
     }
 
-    public delegate IAsyncEnumerable<object> ImportFunction(
+    public delegate Task<EntityStore> ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
-        IWorkspace workspace
+        IWorkspace workspace,
+        EntityStore storeAndUpdates
     );
 
     public ImportFormat WithMappings(Func<ImportMapContainer, ImportMapContainer> config) =>
-        WithImportFunction((_, dataSet, _) =>
-            config(new()).Import(dataSet)
+        WithImportFunction((_, dataSet, _, store) =>
+            config(new(Workspace)).ImportAsync(dataSet, store)
         );
 
     public ImportFormat WithAutoMappings() => WithAutoMappingsForTypes(Workspace.MappedTypes);
