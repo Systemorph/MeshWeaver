@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Orleans.Client;
 public static class OrleansClientExtensions
 {
 
-    public static TBuilder AddOrleansMeshClient<TBuilder>(this TBuilder builder,
+    public static TBuilder UseOrleansMeshClient<TBuilder>(this TBuilder builder,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
         where TBuilder : MeshHostApplicationBuilder
     {
