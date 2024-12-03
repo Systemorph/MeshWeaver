@@ -10,13 +10,14 @@ namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
-    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, T value, JsonPointerReference reference, ModelParameter model = null)
+    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, T value,
+        JsonPointerReference reference, string dataContext, ModelParameter model = null)
     {
         if (reference != null)
         {
             if (model != null)
             {
-                var patch = stream.GetPatch(value, reference, model.Element);
+                var patch = stream.GetPatch(value, reference, dataContext, model.Element);
                 if (patch != null)
                     model.Update(patch);
             }
@@ -24,7 +25,7 @@ public static class LayoutClientExtensions
             else
                 stream.UpdateAsync(ci =>
                 {
-                    var patch = stream.GetPatch(value, reference, ci);
+                    var patch = stream.GetPatch(value, reference, dataContext, ci);
                     var updated = patch?.Apply(ci) ?? ci;
 
                     return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
@@ -33,13 +34,13 @@ public static class LayoutClientExtensions
         }
     }
 
-    private static JsonPatch GetPatch<T>(
-        this ISynchronizationStream<JsonElement> stream, 
-        T value, 
-        JsonPointerReference reference, 
+    private static JsonPatch GetPatch<T>(this ISynchronizationStream<JsonElement> stream,
+        T value,
+        JsonPointerReference reference,
+        string dataContext,
         JsonElement current)
     {
-        var pointer = JsonPointer.Parse(reference.Pointer);
+        var pointer = JsonPointer.Parse($"{dataContext}{reference.Pointer}");
 
         var existing = pointer.Evaluate(current);
         if (value == null)
