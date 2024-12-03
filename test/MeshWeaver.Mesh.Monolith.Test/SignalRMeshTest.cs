@@ -2,6 +2,7 @@
 using FluentAssertions.Extensions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Test;
+using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -16,6 +17,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     {
         var client = new SignalRMeshClient(new ClientAddress(), SignalRUrl)
             .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
+            .WithConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
             .Build();
 
         var response = await client.AwaitResponse(new Ping(),

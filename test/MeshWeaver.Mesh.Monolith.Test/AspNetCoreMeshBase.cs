@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
     {
         protected IHost Host;
         protected TestServer Server;
-        public static string SignalREndPoint = "/connection";
+        public static string SignalREndPoint = "connection";
         public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";
         public HttpMessageHandler HttpMessageHandler => Server.CreateHandler();
         public override async Task InitializeAsync()
@@ -45,7 +45,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                         EndpointRoutingApplicationBuilderExtensions.UseRouting(app);
                         EndpointRoutingApplicationBuilderExtensions.UseEndpoints(app, endpoints =>
                         {
-                            HubEndpointRouteBuilderExtensions.MapHub<SignalRConnectionHub>(endpoints, "/connection");
+                            HubEndpointRouteBuilderExtensions.MapHub<SignalRConnectionHub>(endpoints, $"/{SignalREndPoint}");
                         });
                     });
                 })
