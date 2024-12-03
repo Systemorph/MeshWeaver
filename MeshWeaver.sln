@@ -227,15 +227,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Northwind.Test",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebooks.Hub", "src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj", "{E4634523-1C7E-488D-9C54-1CB1823D8138}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Notebook.Client", "src\MeshWeaver.Notebook.Kernel\MeshWeaver.Notebook.Client.csproj", "{156C2E1D-325A-439D-AB59-7C04761E75C6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.SignalR.Server", "src\MeshWeaver.Mesh.SignalR\MeshWeaver.Hosting.SignalR.Server.csproj", "{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.SignalR.Server", "src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.Server.csproj", "{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Test", "test\MeshWeaver.Mesh.Test\MeshWeaver.Hosting.Test.csproj", "{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.Test", "test\MeshWeaver.Mesh.Test\MeshWeaver.Mesh.Test.csproj", "{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.SignalR.Client", "src\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Hosting.SignalR.Client.csproj", "{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.SignalR.Client", "src\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Mesh.SignalR.Client.csproj", "{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Mesh.Monolith.Test", "test\MeshWeaver.Mesh.Monolith.Test\MeshWeaver.Mesh.Monolith.Test.csproj", "{0E987CDD-A150-4815-95DC-238DC7942E32}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith.Test", "test\MeshWeaver.Mesh.Monolith.Test\MeshWeaver.Hosting.Monolith.Test.csproj", "{0E987CDD-A150-4815-95DC-238DC7942E32}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -611,10 +609,6 @@ Global
 		{E4634523-1C7E-488D-9C54-1CB1823D8138}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E4634523-1C7E-488D-9C54-1CB1823D8138}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E4634523-1C7E-488D-9C54-1CB1823D8138}.Release|Any CPU.Build.0 = Release|Any CPU
-		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{156C2E1D-325A-439D-AB59-7C04761E75C6}.Release|Any CPU.Build.0 = Release|Any CPU
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -729,7 +723,6 @@ Global
 		{C785F115-8F58-4112-8B10-B3381FC74E73} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{E4634523-1C7E-488D-9C54-1CB1823D8138} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
-		{156C2E1D-325A-439D-AB59-7C04761E75C6} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{634ACBA4-75DA-4988-83DC-E1FF6E4B2E80} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}

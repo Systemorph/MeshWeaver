@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Mesh.Test;
+﻿using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 
 [assembly:TestApplication]

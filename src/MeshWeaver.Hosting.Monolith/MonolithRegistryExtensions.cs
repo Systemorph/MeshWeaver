@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 

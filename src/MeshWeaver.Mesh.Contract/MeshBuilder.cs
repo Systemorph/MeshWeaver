@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 [assembly:InternalsVisibleTo("MeshWeaver.Hosting")]
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 public record MeshBuilder
 {

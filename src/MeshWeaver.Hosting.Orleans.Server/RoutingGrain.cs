@@ -1,5 +1,5 @@
 ﻿using MeshWeaver.Hosting.Orleans.Client;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;

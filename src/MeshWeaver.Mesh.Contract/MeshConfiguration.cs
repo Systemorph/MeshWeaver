@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Client")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 public record MeshConfiguration
 {

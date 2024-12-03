@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Hosting;
-using MeshWeaver.Mesh.SignalR.Server;
+using MeshWeaver.Hosting.SignalR.Server;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -12,13 +11,14 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
 
-namespace MeshWeaver.Mesh.Monolith.Test
+namespace MeshWeaver.Hosting.Monolith.Test
 {
     public abstract class AspNetCoreMeshBase(ITestOutputHelper output) : ConfiguredMeshTestBase(output)
     {
         protected IHost Host;
         protected TestServer Server;
-
+        public static string SignalREndPoint = "/connection";
+        public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";
         public HttpMessageHandler HttpMessageHandler => Server.CreateHandler();
         public override async Task InitializeAsync()
         {

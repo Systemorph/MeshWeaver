@@ -1,10 +1,10 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Mesh.SignalR.Server;
+namespace MeshWeaver.Hosting.SignalR.Server;
 
 public class SignalRConnectionHub(IMessageHub hub) : Hub
 {

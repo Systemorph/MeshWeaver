@@ -1,5 +1,5 @@
 ﻿[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 public interface IMeshCatalog
 {
