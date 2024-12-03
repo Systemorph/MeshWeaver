@@ -34,7 +34,10 @@ public static  class OrleansServerRegistryExtensions
                 );
             });
         });
-        builder.ConfigureHub(conf => conf.WithTypes(typeof(StreamActivity), typeof(ApplicationAddress)));
+        builder.ConfigureHub(conf => conf
+            .WithTypes(typeof(StreamActivity))
+            .WithTypes(MeshExtensions.MeshAddressTypes)
+        );
         builder.AddOrleansMeshInternal();
 
         return builder;

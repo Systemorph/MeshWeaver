@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting
 
         }
 
-        public virtual IMessageHub Build()
+        protected virtual IMessageHub BuildHub()
         {
             var serviceProvider = Services.CreateMeshWeaverServiceProvider();
 

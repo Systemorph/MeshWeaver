@@ -8,6 +8,9 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Notebook\MeshWeaver.Hosting.Notebook.csproj">
+          <Private>True</Private>
+        </ProjectReference>
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Hosting.SignalR.Client.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR\MeshWeaver.Hosting.SignalR.Server.csproj" />
