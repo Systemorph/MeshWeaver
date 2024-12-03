@@ -23,4 +23,13 @@ public record SignalRClientAddress
         => $"{Id}";
 
 }
+public record NotebookAddress
+{
+    public string Id { get; init; } = Guid.NewGuid().AsString();
+
+    public override string ToString()
+        => $"{Id}";
+
+}
+
 

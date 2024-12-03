@@ -17,5 +17,8 @@
             };
         }
 
+        public static readonly Type[] MeshAddressTypes =
+            [typeof(ApplicationAddress), typeof(NotebookAddress), typeof(SignalRClientAddress), typeof(UiAddress)];
+
     }
 }
