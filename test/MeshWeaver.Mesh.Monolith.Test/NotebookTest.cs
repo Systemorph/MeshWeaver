@@ -35,11 +35,44 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
 
         var createHub = await kernel.SubmitCodeAsync(
-@$"var client = SignalRMeshClient
+            @$"var client = SignalRMeshClient
    .Configure(""{SignalRUrl}"")
    .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
    .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
    .Build();"
+        );
+
+        createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        // Send Ping and receive Pong
+        var pingPong = await kernel.SubmitCodeAsync(
+            "var ping = new Ping();\n" +
+            $"var pong = await client.AwaitResponse<Pong>(ping, o => o.WithTarget(new {typeof(ApplicationAddress).FullName}(\"Test\")));\n" +
+            "pong");
+
+        pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
+        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
+    }
+    [Fact]
+    public async Task PingPongThroughNotebookHosting()
+    {
+        var kernel = await CreateCompositeKernelAsync();
+
+        // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
+        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.Notebook\"");
+        loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        var createHub = await kernel.SubmitCodeAsync(
+            @$"
+var kernel = Microsoft.DotNet.Interactive.Kernel.Current;
+var client = await kernel
+        .ConnectMeshAsync(
+            ""{SignalRUrl}""
+        )
+        .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
+        .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+        .BuildAsync();"
         );
 
         createHub.Events.Last().Should().BeOfType<CommandSucceeded>();

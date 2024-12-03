@@ -235,6 +235,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.SignalR.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith.Test", "test\MeshWeaver.Mesh.Monolith.Test\MeshWeaver.Hosting.Monolith.Test.csproj", "{0E987CDD-A150-4815-95DC-238DC7942E32}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Notebook", "src\MeshWeaver.Hosting.Notebook\MeshWeaver.Hosting.Notebook.csproj", "{57D9EA7D-9017-4180-A7A8-A23746326A19}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -625,6 +627,10 @@ Global
 		{0E987CDD-A150-4815-95DC-238DC7942E32}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0E987CDD-A150-4815-95DC-238DC7942E32}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0E987CDD-A150-4815-95DC-238DC7942E32}.Release|Any CPU.Build.0 = Release|Any CPU
+		{57D9EA7D-9017-4180-A7A8-A23746326A19}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57D9EA7D-9017-4180-A7A8-A23746326A19}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57D9EA7D-9017-4180-A7A8-A23746326A19}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57D9EA7D-9017-4180-A7A8-A23746326A19}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -727,6 +733,7 @@ Global
 		{D8F565B5-B0FB-A8EB-43E2-44A5F4AEC569} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{2D9D84C6-2BE5-44D7-B99E-49EE69C95A8D} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{0E987CDD-A150-4815-95DC-238DC7942E32} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{57D9EA7D-9017-4180-A7A8-A23746326A19} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
