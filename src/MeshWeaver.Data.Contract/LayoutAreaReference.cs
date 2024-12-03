@@ -68,4 +68,13 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
         return ret;
     }
+
+    public string ToHref(string addressType, string addressId)
+    {
+        var ret = $"area/{WorkspaceReference.Encode(addressType)}/{WorkspaceReference.Encode(addressId)}/{WorkspaceReference.Encode(Area)}";
+        if (Id?.ToString() is { } s)
+            ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        return ret;
+
+    }
 }
