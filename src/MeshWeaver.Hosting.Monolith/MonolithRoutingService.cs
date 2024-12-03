@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Disposables;
 using MeshWeaver.Domain;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 

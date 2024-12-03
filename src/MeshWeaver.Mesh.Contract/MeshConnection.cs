@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 public record MeshConnection(string AddressType, string Id) : IDisposable
 {

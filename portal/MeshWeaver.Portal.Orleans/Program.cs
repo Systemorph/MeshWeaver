@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Hosting.Orleans.Server;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Hosting;
 

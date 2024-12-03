@@ -2,7 +2,7 @@
 using System.Reflection;
 using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Orleans.Client;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;

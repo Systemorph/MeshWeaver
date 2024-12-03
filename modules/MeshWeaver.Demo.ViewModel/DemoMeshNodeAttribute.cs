@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Application;
 using MeshWeaver.Demo.ViewModel;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 [assembly: DemoMeshNode]
 

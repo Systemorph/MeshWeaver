@@ -1,5 +1,5 @@
 ﻿using MeshWeaver.Application;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Model;
 using MeshWeaver.Northwind.ViewModel;

@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 public interface IRoutingService
 {

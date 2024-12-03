@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh;
 using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting
