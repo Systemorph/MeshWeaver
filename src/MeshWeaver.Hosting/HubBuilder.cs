@@ -22,7 +22,7 @@ namespace MeshWeaver.Hosting
 
         private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } = [];
 
-        public TBuilder WithConfiguration(Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        public TBuilder WithHubConfiguration(Func<MessageHubConfiguration, MessageHubConfiguration> config)
         {
             HubConfigurations.Add(config);
             return This;
