@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Application;
+﻿using FluentAssertions;
+using MeshWeaver.Application;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Mesh.Contract;
@@ -16,6 +17,7 @@ using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.CSharp;
+using Microsoft.DotNet.Interactive.Events;
 using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
@@ -45,14 +47,30 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
 
 
     [Fact]
-    public async Task HelloWorld()
+    public async Task PingPong()
     {
-        var address = new NotebookAddress();
         var kernel = CreateCompositeKernel();
-        var result = await kernel.SubmitCodeAsync(
-            $"#!connect meshweaver --kernel-name testKernel --kernel-spec csharp --uri http://localhost/notebook");
-    }
 
+        // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
+        var result = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Notebook.Client\"");
+        result.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        // Connect to the MeshWeaver instance
+        result = await kernel.SubmitCodeAsync(
+            $"#!connect-meshweaver --url \"http://localhost/notebook\"");
+
+        result.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        // Send Ping and receive Pong
+        result = await kernel.SubmitCodeAsync(
+            "var ping = new Ping();\n" +
+            "var pong = await messageHub.AwaitResponse<Pong>(ping);\n" +
+            "pong");
+
+        result.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        //Assert.Contains("Pong", pingResult.KernelEvents.ToString());
+    }
     protected CompositeKernel CreateCompositeKernel()
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
@@ -64,7 +82,7 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         var kernel = new CompositeKernel { csharpKernel };
         kernel.DefaultKernelName = csharpKernel.Name;
 
-        var jupyterKernelCommand = new ConnectMeshWeaverDirective(ServiceProvider);
+        var jupyterKernelCommand = new ConnectMeshWeaverKernelDirective(ServiceProvider);
 
         kernel.AddConnectDirective(jupyterKernelCommand);
         Disposables.Add(kernel);
