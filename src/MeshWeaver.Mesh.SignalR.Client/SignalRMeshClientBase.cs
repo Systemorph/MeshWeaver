@@ -12,7 +12,7 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient>
     {
 
         this.Url = url;
-        WithHubConfiguration(config =>
+        ConfigureHub(config =>
             config
                 .UseSignalRClient(url, options => HttpConnectionOptions.ForEach(o => o.Invoke(options))));
 

@@ -1,20 +1,19 @@
 ﻿using MeshWeaver.Hosting.Notebook;
 using MeshWeaver.Layout;
 using Microsoft.DotNet.Interactive;
-
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.CSharp;
 
-public static class NotebookHostingExtensions
+public static class NotebookMeshClientExtensions
 {
-    public static NotebookMeshClient ConnectMeshAsync(
+    public static NotebookMeshClient ConfigureMesh(
         this Kernel kernel, 
         string url, 
         object address = null)
     {
         var builder = new NotebookMeshClient(kernel, address ?? new NotebookAddress(), url)
-            .WithHubConfiguration(config => 
+            .ConfigureHub(config => 
                 config
                     .AddLayout(layout => layout));
         return builder;
