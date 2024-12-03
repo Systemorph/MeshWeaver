@@ -67,12 +67,12 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
             @$"
 var kernel = Microsoft.DotNet.Interactive.Kernel.Current;
 var client = await kernel
-        .ConnectMeshAsync(
+        .ConfigureMesh(
             ""{SignalRUrl}""
         )
         .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
         .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-        .BuildAsync();"
+        .ConnectAsync();"
         );
 
         createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
