@@ -2,17 +2,18 @@
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 
-namespace MeshWeaver.Mesh.Test
+namespace MeshWeaver.Mesh.Monolith.Test
 {
     public abstract class ConfiguredMeshTestBase(ITestOutputHelper output) : TestBase(output)
     {
         protected record MeshAddress;
 
         protected record ClientAddress;
-        protected MeshBuilder ConfigureMesh(MeshBuilder builder)
+        protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
             => builder
                 .UseMonolithMesh()
                 .ConfigureMesh(mesh =>
