@@ -28,40 +28,33 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
     [Fact]
     public async Task PingPong()
     {
-        var kernel = CreateCompositeKernel();
+        var kernel = await CreateCompositeKernelAsync();
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
-        var result = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Notebook.Client\"");
-        result.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.SignalR.Client\"");
+        loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
 
-        var debug = await kernel.SubmitCodeAsync(
-            "var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.FullName).ToList();\nloadedAssemblies"
+        var createHub = await kernel.SubmitCodeAsync(
+@$"var client = SignalRMeshClient
+   .Configure(""{SignalRUrl}"")
+   .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
+   .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+   .Build();"
         );
-        
-        var r = debug.Events.OfType<ReturnValueProduced>().Single();
-        r.Value.Should().BeOfType<List<string>>().Which.Should().NotContain(x => x.Contains("Notebook.Client"));
-        var withNotebook = ((IEnumerable<string>)r.Value).Where(x => x.Contains("Notebook")).ToArray();
-        // Connect to the MeshWeaver instance
-        debug = await kernel.SubmitCodeAsync(
-            "using MeshWeaver.Notebook.Client;"
-        );
-        debug.Events.Last().Should().BeOfType<CommandSucceeded>();
-        result = await kernel.SubmitCodeAsync(
-            $"#!connect-meshweaver --url \"http://localhost/notebook\"");
 
-        result.Events.Last().Should().BeOfType<CommandSucceeded>();
+        createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
 
         // Send Ping and receive Pong
-        result = await kernel.SubmitCodeAsync(
+        var pingPong = await kernel.SubmitCodeAsync(
             "var ping = new Ping();\n" +
-            "var pong = await messageHub.AwaitResponse<Pong>(ping);\n" +
+            $"var pong = await client.AwaitResponse<Pong>(ping, o => o.WithTarget(new {typeof(ApplicationAddress).FullName}(\"Test\")));\n" +
             "pong");
 
-        result.Events.Last().Should().BeOfType<CommandSucceeded>();
-
-        //Assert.Contains("Pong", pingResult.KernelEvents.ToString());
+        pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
+        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
     }
-    protected CompositeKernel CreateCompositeKernel()
+    protected async Task<CompositeKernel> CreateCompositeKernelAsync()
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
 
@@ -71,7 +64,12 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
 
         var kernel = new CompositeKernel { csharpKernel };
         kernel.DefaultKernelName = csharpKernel.Name;
+        await csharpKernel.SubmitCodeAsync($"#r \"{Server.GetType().Assembly.Location}\"");
+        await csharpKernel.SubmitCodeAsync($"#r \"{typeof(Ping).Assembly.Location}\"");
+        await csharpKernel.SubmitCodeAsync($"using {typeof(Ping).Namespace};");
+        await csharpKernel.SubmitCodeAsync($"using {typeof(MessageHubExtensions).Namespace};");
 
+        await csharpKernel.SetValueAsync(nameof(Server), Server, Server.GetType());
         Disposables.Add(kernel);
         return kernel;
     }
@@ -80,7 +78,7 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
     protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
     {
         return config
-            .UseSignalRMesh("http://localhost/connection",
+            .UseSignalRClient("http://localhost/connection",
                 options =>
                 {
                     options.HttpMessageHandlerFactory = _ => Server.CreateHandler();
