@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Mesh.SignalR.Client.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Mesh.SignalR\MeshWeaver.Mesh.SignalR.Server.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Mesh.Test\MeshWeaver.Mesh.Test.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Notebook.Kernel\MeshWeaver.Notebook.Client.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj" />
+    </ItemGroup>
+
+</Project>

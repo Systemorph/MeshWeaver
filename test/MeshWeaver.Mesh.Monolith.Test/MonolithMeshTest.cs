@@ -1,12 +1,12 @@
 ﻿using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace MeshWeaver.Mesh.Test;
+namespace MeshWeaver.Mesh.Monolith.Test;
 
 public class MonolithMeshTest : ConfiguredMeshTestBase
 {

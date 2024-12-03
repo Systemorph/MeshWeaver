@@ -6,7 +6,7 @@ using MeshWeaver.Messaging;
 [assembly:TestApplication]
 namespace MeshWeaver.Mesh.Test;
 
-internal class TestApplicationAttribute : MeshNodeAttribute
+public class TestApplicationAttribute : MeshNodeAttribute
 {
     public const string Test = nameof(Test);
     public static readonly ApplicationAddress Address = new(Test);
