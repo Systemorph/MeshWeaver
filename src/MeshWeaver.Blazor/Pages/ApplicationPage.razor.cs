@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components;
 using System.Collections.Immutable;
 using MeshWeaver.Utils;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Blazor.Pages;
 

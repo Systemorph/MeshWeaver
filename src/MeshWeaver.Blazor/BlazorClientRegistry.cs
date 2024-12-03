@@ -12,6 +12,8 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Mesh;
+
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
 

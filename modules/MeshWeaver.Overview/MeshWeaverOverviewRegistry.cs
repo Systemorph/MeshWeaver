@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Application;
 using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Overview;
 

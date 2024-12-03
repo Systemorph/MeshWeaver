@@ -1,6 +1,5 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Hosting.Orleans.Client;
-using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Hosting.Orleans.Client;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

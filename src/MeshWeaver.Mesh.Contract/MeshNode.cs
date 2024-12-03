@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Application;
 
-namespace MeshWeaver.Mesh.Contract
+namespace MeshWeaver.Mesh
 {
     [GenerateSerializer]
     public record MeshNode(

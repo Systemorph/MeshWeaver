@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using MeshWeaver.Application;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Hosting;
@@ -10,8 +9,8 @@ using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
-using MeshWeaver.Mesh.SignalR;
-using MeshWeaver.Mesh.SignalR.Server;
+using MeshWeaver.Hosting.SignalR.Server;
+using MeshWeaver.Mesh;
 using MeshWeaver.Notebooks.Hub;
 using Microsoft.AspNetCore.ResponseCompression;
 

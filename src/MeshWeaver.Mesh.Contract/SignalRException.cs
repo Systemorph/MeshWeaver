@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Mesh.Contract
+﻿namespace MeshWeaver.Mesh
 {
     public class SignalRException : Exception
     {

@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Application;
 using MeshWeaver.Blazor;
 using MeshWeaver.Layout.Client;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;

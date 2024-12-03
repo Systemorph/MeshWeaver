@@ -1,7 +1,6 @@
-﻿using System.Net.Mime;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
 public abstract class MeshNodeAttribute : Attribute

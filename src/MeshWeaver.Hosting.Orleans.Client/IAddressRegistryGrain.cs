@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Hosting.Orleans.Client;
 

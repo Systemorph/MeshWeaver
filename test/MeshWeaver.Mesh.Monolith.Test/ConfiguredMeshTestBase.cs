@@ -1,12 +1,10 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Fixture;
-using MeshWeaver.Hosting.Monolith;
-using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Fixture;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 
-namespace MeshWeaver.Mesh.Monolith.Test
+namespace MeshWeaver.Hosting.Monolith.Test
 {
     public abstract class ConfiguredMeshTestBase(ITestOutputHelper output) : TestBase(output)
     {
@@ -19,13 +17,14 @@ namespace MeshWeaver.Mesh.Monolith.Test
                 .ConfigureMesh(mesh =>
                     mesh.WithMeshNodeFactory((addressType, id) =>
                         addressType == typeof(ApplicationAddress).FullName && id == TestApplicationAttribute.Test
-                            ? MeshExtensions.GetMeshNode(addressType, id, GetType().Assembly.Location)
+                            ? MeshExtensions.GetMeshNode(addressType, id, typeof(TestApplicationAttribute).Assembly.Location)
                             : null));
 
 
 
         protected IMessageHub CreateMesh(IServiceProvider serviceProvider)
-            => ConfigureMesh(new(c => c.Invoke(Services), new MeshAddress())).BuildHub(ServiceProvider);
+            => ConfigureMesh(new(c => c.Invoke(Services), new MeshAddress()))
+                .BuildHub(ServiceProvider);
 
 
     }

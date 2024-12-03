@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Mesh.Contract;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Notebooks.Hub;

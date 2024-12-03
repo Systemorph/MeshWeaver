@@ -1,5 +1,5 @@
 ﻿using MeshWeaver.Domain;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR;
@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace MeshWeaver.Mesh.SignalR.Client;
+namespace MeshWeaver.Hosting.SignalR.Client;
 
 public static class SignalRClientExtensions
 {

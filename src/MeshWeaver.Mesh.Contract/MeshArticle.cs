@@ -1,9 +1,8 @@
-﻿using System.Collections.Immutable;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Text.Json;
 
-namespace MeshWeaver.Mesh.Contract;
+namespace MeshWeaver.Mesh;
 
 [GenerateSerializer]
 public record MeshArticle
