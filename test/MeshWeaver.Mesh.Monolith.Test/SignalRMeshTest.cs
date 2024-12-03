@@ -15,9 +15,10 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     [Fact]
     public async Task PingPong()
     {
-        var client = new SignalRMeshClient(new ClientAddress(), SignalRUrl)
+        var client = SignalRMeshClient
+            .Configure(new ClientAddress(), SignalRUrl)
             .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
-            .WithConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+            .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
             .Build();
 
         var response = await client.AwaitResponse(new Ping(),

@@ -1,15 +1,17 @@
 ﻿using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.SignalR.Client;
+using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Http.Connections.Client;
 
 public class SignalRMeshClient : HubBuilder<SignalRMeshClient>
 {
     public SignalRMeshClient(object address, string url) : base(address)
     {
+
         this.Url = url;
-        WithConfiguration(config =>
+        WithHubConfiguration(config =>
             config
-                .UseSignalRMesh(url, options => HttpConnectionOptions.ForEach(o => o.Invoke(options))));
+                .UseSignalRClient(url, options => HttpConnectionOptions.ForEach(o => o.Invoke(options))));
 
     }
 
@@ -22,4 +24,10 @@ public class SignalRMeshClient : HubBuilder<SignalRMeshClient>
     }
     public string Url { get;  }
 
+
+    public static SignalRMeshClient Configure(object address, string url)
+        => new(address, url);
+
+    public static SignalRMeshClient Configure(string url)
+        => new(new SignalRClientAddress(), url);
 }
