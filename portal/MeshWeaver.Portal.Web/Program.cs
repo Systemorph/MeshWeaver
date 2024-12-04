@@ -1,11 +1,11 @@
 ﻿using System.Diagnostics;
-using MeshWeaver.Application;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
-using MeshWeaver.Hosting.Orleans.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 

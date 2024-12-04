@@ -3,6 +3,7 @@ using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Options.Scales;
+using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 

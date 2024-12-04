@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Fixture;
+using MeshWeaver.Hosting.Test;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 

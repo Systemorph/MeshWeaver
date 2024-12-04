@@ -7,8 +7,8 @@
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans.Client\MeshWeaver.Hosting.Orleans.Client.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
         <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />

@@ -4,6 +4,10 @@ using MeshWeaver.Charting.Builders;
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bubble;
+using MeshWeaver.Charting.Models.Line;
+using MeshWeaver.Charting.Models.Polar;
+using MeshWeaver.Charting.Models.Radar;
 using MeshWeaver.Charting.Models.Segmented;
 using MeshWeaver.Json.Assertions;
 

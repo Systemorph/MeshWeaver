@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Models
+﻿namespace MeshWeaver.Charting.Models.Line
 {
     public record LineScatterDataSet : LineDataSet;
 }

@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Enums;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Bubble
 {
     public record BubbleDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointStyle
     {

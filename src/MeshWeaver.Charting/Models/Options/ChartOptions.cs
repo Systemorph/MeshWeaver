@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options.Scales;
+using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 
 namespace MeshWeaver.Charting.Models.Options
 {

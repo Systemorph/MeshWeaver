@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Models.Options.Scales
+﻿namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     // https://www.chartjs.org/docs/3.7.1/axes/cartesian/#common-tick-options-to-all-cartesian-axes
     public record CartesianTick : Tick

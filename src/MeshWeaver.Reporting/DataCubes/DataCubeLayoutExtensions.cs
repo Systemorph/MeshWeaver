@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
