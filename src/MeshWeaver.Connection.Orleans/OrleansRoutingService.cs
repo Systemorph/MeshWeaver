@@ -1,11 +1,12 @@
 ﻿using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Streams;
 
-namespace MeshWeaver.Hosting.Orleans.Client
+namespace MeshWeaver.Connection.Orleans
 {
     public class OrleansRoutingService(IGrainFactory grainFactory, IMessageHub hub, ILogger<OrleansRoutingService> logger) : IRoutingService
     {
@@ -26,8 +27,8 @@ namespace MeshWeaver.Hosting.Orleans.Client
             var streamInfo = new StreamInfo(id, StreamProviders.Memory, addressType, addressType);
             var info = await hub.ServiceProvider
             .GetRequiredService<IGrainFactory>()
-            .GetGrain<IAddressRegistryGrain>(streamInfo.Id)
-            .GetStreamInfo(addressType, id);
+            .GetGrain<IAddressRegistryGrain>($"{addressType}/{id}")
+            .GetStreamInfo();
 
             var streamProvider = hub.ServiceProvider
                 .GetKeyedService<IStreamProvider>(info.StreamProvider);

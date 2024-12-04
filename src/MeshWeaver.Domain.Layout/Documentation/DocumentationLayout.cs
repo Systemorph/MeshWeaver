@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Layout.Controls;
 
 namespace MeshWeaver.Domain.Layout.Documentation;

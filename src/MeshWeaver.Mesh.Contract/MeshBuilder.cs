@@ -1,4 +1,5 @@
 ﻿using System.Runtime.CompilerServices;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 

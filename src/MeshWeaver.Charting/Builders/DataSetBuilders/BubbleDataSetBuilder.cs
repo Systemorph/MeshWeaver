@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bubble;
 
 namespace MeshWeaver.Charting.Builders.DataSetBuilders;
 

@@ -1,11 +1,11 @@
-﻿using MeshWeaver.Hosting.Orleans.Client;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
 using Orleans.Streams;
 
-namespace MeshWeaver.Hosting.Orleans.Server
+namespace MeshWeaver.Hosting.Orleans
 {
     [PreferLocalPlacement]
     public class RoutingGrain(ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.Orleans.Server
             var target = delivery.Target;
             var targetId = SerializationExtensions.GetId(target);
             var targetType = SerializationExtensions.GetType(target);
-            var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(targetId).GetStreamInfo(targetType, targetId);
+            var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>($"{targetType}/{targetId}").GetStreamInfo();
             if (streamInfo.StreamProvider is StreamProviders.Mesh)
             {
                 logger.LogDebug("Forwarding Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);

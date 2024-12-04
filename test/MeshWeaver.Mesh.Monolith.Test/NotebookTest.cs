@@ -1,7 +1,8 @@
 ﻿using FluentAssertions;
-using MeshWeaver.Hosting.SignalR.Client;
+using MeshWeaver.Connection.SignalR;
+using MeshWeaver.Hosting.Test;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Test;
 using MeshWeaver.Messaging;
 using MeshWeaver.Notebooks.Hub;
 using Microsoft.DotNet.Interactive;
@@ -35,10 +36,9 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
 
         var createHub = await kernel.SubmitCodeAsync(
-            @$"var client = SignalRMeshClient
+            @$"var client = MeshWeaver.Hosting.SignalR.Client.MeshClient
    .Configure(""{SignalRUrl}"")
-   .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
-   .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+   .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
    .Build();"
         );
 
@@ -54,28 +54,12 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
         result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
     }
+
     [Fact]
     public async Task PingPongThroughNotebookHosting()
     {
-        var kernel = await CreateCompositeKernelAsync();
 
-        // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
-        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.Notebook\"");
-        loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
-
-        var createHub = await kernel.SubmitCodeAsync(
-            @$"
-var kernel = Microsoft.DotNet.Interactive.Kernel.Current;
-var client = await kernel
-        .ConfigureMesh(
-            ""{SignalRUrl}""
-        )
-        .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
-        .WithHubConfiguration(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-        .ConnectAsync();"
-        );
-
-        createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var kernel = await ConnectHubAsync();
 
         // Send Ping and receive Pong
         var pingPong = await kernel.SubmitCodeAsync(
@@ -87,6 +71,44 @@ var client = await kernel
         var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
         result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
     }
+    [Fact]
+    public async Task LayoutAreas()
+    {
+
+        var kernel = await ConnectHubAsync();
+
+        // Send Ping and receive Pong
+        var kernelResult = await kernel.SubmitCodeAsync(
+            @$"new {typeof(MarkdownControl).FullName}(""Hello World"")"
+        );
+
+        kernelResult.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var result = kernelResult.Events.OfType<ReturnValueProduced>().Single();
+        await Task.Delay(100);
+        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
+    }
+
+    protected async Task<CompositeKernel> ConnectHubAsync()
+    {
+        var kernel = await CreateCompositeKernelAsync();
+
+        // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
+        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.Notebook\"");
+        loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var createHub = await kernel.SubmitCodeAsync(
+            @$"var client = await MeshWeaver.Hosting.Notebook.MeshClient
+        .Configure(""{SignalRUrl}"")
+        .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
+        .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+        .ConnectAsync();"
+        );
+
+        createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
+
+        return kernel;
+    }
+
+
     protected async Task<CompositeKernel> CreateCompositeKernelAsync()
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
@@ -106,6 +128,8 @@ var client = await kernel
         Disposables.Add(kernel);
         return kernel;
     }
+
+    
 
 
     protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)

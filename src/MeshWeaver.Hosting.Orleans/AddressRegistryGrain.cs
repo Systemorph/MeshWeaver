@@ -1,10 +1,11 @@
-﻿using MeshWeaver.Hosting.Orleans.Client;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 using Orleans.Placement;
 using Orleans.Providers;
 
-namespace MeshWeaver.Hosting.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans;
 
 [PreferLocalPlacement]
 [StorageProvider(ProviderName = StorageProviders.Redis)]
@@ -19,11 +20,11 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
             State = null;
     }
 
-    public async Task<StreamInfo> GetStreamInfo(string addressType, string id)
+    public async Task<StreamInfo> GetStreamInfo()
     {
 
         if (State == null)
-            await InitializeState(addressType, id);
+            await InitializeState();
 
         return State;
     }
@@ -37,8 +38,9 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         await WriteStateAsync();
     }
 
-    private async Task InitializeState(string addressType, string addressId)
+    private async Task InitializeState()
     {
+        string addressType, addressId;
         var parts = this.GetPrimaryKeyString().Split('/');
         if (parts.Length == 2)
         {

@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
@@ -23,4 +25,9 @@ public static class MessageHubExtensions
         this MessageHubConfiguration config)
         => config.Get<ImmutableList<Func<RouteConfiguration, RouteConfiguration>>>() ?? [];
 
+
+    public static ITypeRegistry GetTypeRegistry(this IMessageHub hub)
+        => hub.ServiceProvider.GetTypeRegistry();
+    public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
+        => serviceProvider.GetRequiredService<ITypeRegistry>();
 }

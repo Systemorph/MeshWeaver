@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Models.Options.Animation;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Polar
 {
     public record PolarAnimation : Animation
     {

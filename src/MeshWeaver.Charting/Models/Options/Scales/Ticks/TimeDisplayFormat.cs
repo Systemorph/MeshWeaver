@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Enums;
 
-namespace MeshWeaver.Charting.Models.Options.Scales
+namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     public record TimeDisplayFormat
     {

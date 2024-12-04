@@ -1,13 +1,15 @@
 ﻿using System.Runtime.CompilerServices;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
 
-[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Server")]
-namespace MeshWeaver.Hosting.Orleans.Client;
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+namespace MeshWeaver.Connection.Orleans;
 
 public static class OrleansClientExtensions
 {

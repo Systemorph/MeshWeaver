@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Client")]
+[assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 
 namespace MeshWeaver.Mesh;

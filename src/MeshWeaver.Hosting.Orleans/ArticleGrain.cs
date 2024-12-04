@@ -1,9 +1,9 @@
-﻿using MeshWeaver.Hosting.Orleans.Client;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 
-namespace MeshWeaver.Hosting.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans;
 
 [StorageProvider(ProviderName = StorageProviders.MeshCatalog)]
 public class ArticleGrain(ILogger<ArticleGrain> logger) : Grain<MeshArticle>, IArticleGrain

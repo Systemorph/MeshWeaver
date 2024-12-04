@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Models.Options.Scales;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Radar
 {
     public record RadarOptions : MeshWeaver.Charting.Models.Options.ChartOptions
     {

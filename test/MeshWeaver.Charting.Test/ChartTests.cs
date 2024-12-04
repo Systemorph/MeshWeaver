@@ -5,8 +5,11 @@ using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bubble;
+using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Models.Options.Scales;
+using MeshWeaver.Charting.Models.Segmented;
 using MeshWeaver.Json.Assertions;
 
 namespace MeshWeaver.Charting.Test;

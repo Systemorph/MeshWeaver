@@ -1,10 +1,10 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh.Services;
 
-namespace MeshWeaver.Hosting.Orleans.Client;
+namespace MeshWeaver.Connection.Orleans;
 
 public interface IAddressRegistryGrain : IGrainWithStringKey
 {
-    Task<StreamInfo> GetStreamInfo(string addressType, string id);
+    Task<StreamInfo> GetStreamInfo();
     Task<NodeStorageInfo> GetStorageInfo();
     Task Register(StreamInfo streamInfo);
     Task Unregister();

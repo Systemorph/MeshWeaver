@@ -1,6 +1,7 @@
 ﻿using FluentAssertions;
+using MeshWeaver.Hosting.Test;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Test;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;

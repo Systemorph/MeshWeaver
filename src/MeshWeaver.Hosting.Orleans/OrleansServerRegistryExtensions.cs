@@ -1,11 +1,10 @@
-﻿using MeshWeaver.Hosting.Orleans.Client;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
 
-namespace MeshWeaver.Hosting.Orleans.Server;
+namespace MeshWeaver.Hosting.Orleans;
 
 public static  class OrleansServerRegistryExtensions
 {

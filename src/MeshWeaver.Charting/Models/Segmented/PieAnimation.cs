@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Models.Options.Animation;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Segmented
 {
     public record PieAnimation : Animation
     {

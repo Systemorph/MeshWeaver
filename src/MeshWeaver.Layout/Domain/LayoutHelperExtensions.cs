@@ -1,8 +1,7 @@
 ﻿using MeshWeaver.Data;
-using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
-namespace MeshWeaver.Domain.Layout;
+namespace MeshWeaver.Layout.Domain;
 
 public static class LayoutHelperExtensions
 {

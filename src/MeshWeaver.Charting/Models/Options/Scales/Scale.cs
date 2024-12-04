@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Charting.Helpers;
+using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 
 namespace MeshWeaver.Charting.Models.Options.Scales
 {

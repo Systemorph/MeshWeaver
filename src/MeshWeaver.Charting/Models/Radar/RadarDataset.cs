@@ -2,7 +2,7 @@
 using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models.Options.Scales;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Radar
 {
     public record RadarDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithFill, IDataSetWithPointStyle
     {

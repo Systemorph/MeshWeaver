@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Radar;
 
 namespace MeshWeaver.Charting.Plugins.Zoom
 {

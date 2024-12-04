@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Models.Options.Scales
+﻿namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     public record RadialLinearTick : RadialTick
     {

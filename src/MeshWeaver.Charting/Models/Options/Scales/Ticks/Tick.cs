@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Helpers;
 
-namespace MeshWeaver.Charting.Models.Options.Scales
+namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     // https://www.chartjs.org/docs/3.7.1/axes/#common-tick-options-to-all-axes
     public record Tick

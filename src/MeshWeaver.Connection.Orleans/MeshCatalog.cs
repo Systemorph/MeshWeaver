@@ -1,11 +1,12 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Hosting.Orleans.Client
+namespace MeshWeaver.Connection.Orleans
 {
     public class MeshCatalog(IMessageHub hub, ILogger<MeshCatalog> logger, MeshConfiguration meshConfiguration) : IMeshCatalog
     {

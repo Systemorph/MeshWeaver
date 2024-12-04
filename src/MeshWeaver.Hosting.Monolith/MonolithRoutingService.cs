@@ -2,6 +2,7 @@
 using MeshWeaver.Disposables;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -23,7 +24,7 @@ namespace MeshWeaver.Hosting.Monolith
                 return await handler.Invoke(delivery, cancellationToken);
 
             if(targetType == null)
-                throw new SignalRException($"Cannot determine the address type of {delivery.Target}");
+                throw new MeshException($"Cannot determine the address type of {delivery.Target}");
 
             var hub = await parent.ServiceProvider.CreateHub(targetType, targetId);
             handlers[key] = handler = (d, _) =>

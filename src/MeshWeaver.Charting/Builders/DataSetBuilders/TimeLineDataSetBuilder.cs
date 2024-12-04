@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Line;
 
 namespace MeshWeaver.Charting.Builders.DataSetBuilders;
 

@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Layout
 {

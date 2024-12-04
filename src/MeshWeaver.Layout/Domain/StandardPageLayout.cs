@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Domain.Layout;
-using MeshWeaver.Layout.Composition;
+﻿using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Domain;
 

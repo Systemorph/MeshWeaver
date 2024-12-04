@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Hosting.Orleans.Client
+namespace MeshWeaver.Connection.Orleans
 {
     public interface IMessageHubGrain : IGrainWithStringKey
     {

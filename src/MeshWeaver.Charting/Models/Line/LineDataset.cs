@@ -2,7 +2,7 @@
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 
-namespace MeshWeaver.Charting.Models
+namespace MeshWeaver.Charting.Models.Line
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
     public abstract record LineDataSetBase : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithPointStyle, IDataSetWithFill, IDataSetWithStack
