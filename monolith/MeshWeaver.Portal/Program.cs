@@ -9,7 +9,7 @@ using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
 using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
-using MeshWeaver.Hosting.SignalR.Server;
+using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Notebooks.Hub;
 using Microsoft.AspNetCore.ResponseCompression;

@@ -2,6 +2,7 @@
 using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Radar;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 

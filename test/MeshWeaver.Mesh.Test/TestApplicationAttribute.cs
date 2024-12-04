@@ -1,8 +1,9 @@
-﻿using MeshWeaver.Mesh.Test;
+﻿using MeshWeaver.Hosting.Test;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 [assembly:TestApplication]
-namespace MeshWeaver.Mesh.Test;
+namespace MeshWeaver.Hosting.Test;
 
 public class TestApplicationAttribute : MeshNodeAttribute
 {

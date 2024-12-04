@@ -2,6 +2,10 @@
 using MeshWeaver.Charting.Builders.Options;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bubble;
+using MeshWeaver.Charting.Models.Line;
+using MeshWeaver.Charting.Models.Polar;
+using MeshWeaver.Charting.Models.Radar;
 using MeshWeaver.Charting.Models.Segmented;
 
 namespace MeshWeaver.Charting.Builders;

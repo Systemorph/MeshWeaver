@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Hosting.SignalR.Server;
+using MeshWeaver.Connection.SignalR;
+using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -52,7 +53,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .StartAsync();
 
             Server = Host.GetTestServer();
-
+            ConnectionContext.ConnectionOptions =
+                options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler());
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();

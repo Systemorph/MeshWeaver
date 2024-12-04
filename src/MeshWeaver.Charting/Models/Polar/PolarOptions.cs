@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Models
+﻿namespace MeshWeaver.Charting.Models.Polar
 {
     public record PolarOptions : Options.ChartOptions
     {

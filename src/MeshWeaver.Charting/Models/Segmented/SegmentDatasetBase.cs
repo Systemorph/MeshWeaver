@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Models
+﻿namespace MeshWeaver.Charting.Models.Segmented
 {
     public abstract record SegmentDataSetBase : DataSet
     {
