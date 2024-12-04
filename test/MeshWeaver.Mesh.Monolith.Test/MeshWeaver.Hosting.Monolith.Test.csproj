@@ -6,6 +6,9 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\..\src\MeshWeaver.Connection.Notebook\MeshWeaver.Connection.Notebook.csproj">
+          <Private>True</Private>
+        </ProjectReference>
         <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />

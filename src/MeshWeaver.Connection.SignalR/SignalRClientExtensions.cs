@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.SignalR.Protocol;
@@ -14,8 +13,7 @@ namespace MeshWeaver.Connection.SignalR;
 public static class SignalRClientExtensions
 {
     public static MessageHubConfiguration UseSignalRClient(
-        this MessageHubConfiguration config, string connectionGateway,
-        Action<HttpConnectionOptions> httpConnectionOptions = null)
+        this MessageHubConfiguration config, string connectionGateway)
     {
         return config
             .WithServices(services =>
@@ -24,8 +22,9 @@ public static class SignalRClientExtensions
                 return services.AddScoped(sp =>
                     {
                         var builder= new HubConnectionBuilder()
-                                .WithUrl(connectionGateway, httpConnectionOptions ?? (_ => { }))
+                                .WithUrl(connectionGateway, ConnectionContext.ConnectionOptions ?? (_ => { }))
                                 .WithAutomaticReconnect();
+
 
                         builder.Services.AddSingleton<IHubProtocol>(_ =>
                             new JsonHubProtocol(new OptionsWrapper<JsonHubProtocolOptions>(new()
