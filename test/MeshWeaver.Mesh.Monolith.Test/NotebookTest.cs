@@ -32,14 +32,14 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         var kernel = await CreateCompositeKernelAsync();
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
-        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.SignalR.Client\"");
+        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.SignalR\"");
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
 
         var createHub = await kernel.SubmitCodeAsync(
-            @$"var client = MeshWeaver.Hosting.SignalR.Client.MeshClient
+            @$"var client = MeshWeaver.Connection.SignalR.MeshClient
    .Configure(""{SignalRUrl}"")
    .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-   .Build();"
+   .Connect();"
         );
 
         createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
@@ -93,12 +93,11 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
         var kernel = await CreateCompositeKernelAsync();
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
-        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Hosting.Notebook\"");
+        var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.Notebook\"");
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
         var createHub = await kernel.SubmitCodeAsync(
-            @$"var client = await MeshWeaver.Hosting.Notebook.MeshClient
+            @$"var client = await MeshWeaver.Connection.Notebook.MeshClient
         .Configure(""{SignalRUrl}"")
-        .WithHttpConnectionOptions(options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))
         .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
         .ConnectAsync();"
         );
@@ -135,11 +134,7 @@ public class NotebookTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
     protected MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
     {
         return config
-            .UseSignalRClient("http://localhost/connection",
-                options =>
-                {
-                    options.HttpMessageHandlerFactory = _ => Server.CreateHandler();
-                })
+            .UseSignalRClient("http://localhost/connection")
             .WithTypes(typeof(Ping), typeof(Pong));
     }
 
