@@ -13,17 +13,15 @@ namespace MeshWeaver.Connection.SignalR;
 public static class SignalRClientExtensions
 {
     public static MessageHubConfiguration UseSignalRClient(
-        this MessageHubConfiguration config, string connectionGateway)
+        this MessageHubConfiguration config, 
+        Func<HubConnectionBuilder, IHubConnectionBuilder> connectionConfiguration)
     {
         return config
             .WithServices(services =>
             {
-
                 return services.AddScoped(sp =>
                     {
-                        var builder= new HubConnectionBuilder()
-                                .WithUrl(connectionGateway, ConnectionContext.ConnectionOptions ?? (_ => { }))
-                                .WithAutomaticReconnect();
+                        var builder= connectionConfiguration.Invoke(new());
 
 
                         builder.Services.AddSingleton<IHubProtocol>(_ =>

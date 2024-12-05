@@ -1,11 +1,13 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Connection.Notebook;
 
@@ -19,17 +21,21 @@ public class ProxyKernel : Kernel,
     IKernelCommandHandler<SendValue>,
     IKernelCommandHandler<SubmitCode>
 {
-    private readonly string addressId;
-    private readonly string addressType;
+    private string addressId;
+    private string addressType;
     private readonly Kernel kernel;
 
-    public ProxyKernel(string name, Kernel kernel, IMessageHub hub) : base(name)
+    public ProxyKernel(string name, Kernel kernel) : base(name)
     {
-        addressId = hub.Address.ToString();
-        addressType = hub.GetTypeRegistry().GetCollectionName(hub.Address.GetType());
         this.kernel = kernel;
         kernel.KernelEvents.Subscribe(OnInnerKernelEvent);
     }
+
+    public void Initialize(IMessageHub hub)
+    {
+        addressType = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(hub.Address.GetType());
+        addressId = hub.Address.ToString();
+    }   
 
     public async Task HandleAsync(RequestCompletions command, KernelInvocationContext context)
     {
@@ -105,8 +111,8 @@ public class ProxyKernel : Kernel,
                 )
         {
             var id = Guid.NewGuid().AsString();
-            cells[id] = control;
-            var url = new LayoutAreaReference(nameof(MeshClient.Cell)) { Id = id }.ToHref(addressType, addressId);
+            Cells[id] = control;
+            var url = new LayoutAreaReference(id).ToHref(addressType, addressId);
             var htmlContent = $"<iframe src='{url}'></iframe>";
             var newEvent = new DisplayedValueProduced(htmlContent, returnValueProduced.Command, returnValueProduced.FormattedValues);
 
@@ -117,9 +123,7 @@ public class ProxyKernel : Kernel,
         PublishEvent(kernelEvent);
     }
 
-    private readonly ConcurrentDictionary<string, UiControl> cells = new();
+    internal readonly ConcurrentDictionary<string, UiControl> Cells = new();
 
-    public UiControl GetCell(string id)
-        => cells.GetValueOrDefault(id);
 
 }
