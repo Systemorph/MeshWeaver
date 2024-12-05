@@ -12,7 +12,7 @@ public abstract record ActivityBase: IDisposable
 
     protected readonly ILogger Logger;
 
-    private record ActivityAddress(object Host) : IHostedAddress
+    private record ActivityAddress 
     {
         public Guid Id { get; } = Guid.NewGuid();
     }
@@ -21,7 +21,7 @@ public abstract record ActivityBase: IDisposable
         this.Hub = hub;
         this.Logger = hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         Log = new(category);
-        SyncHub = hub.GetHostedHub(new ActivityAddress(hub.Address), x => x);
+        SyncHub = hub.GetHostedHub(new ActivityAddress(), x => x);
     }
 
     protected readonly IMessageHub SyncHub;

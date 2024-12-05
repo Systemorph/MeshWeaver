@@ -27,7 +27,7 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             )
             .WithHostedHub(
-                new TestDomain.ImportAddress(configuration.Address),
+                new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
@@ -110,13 +110,13 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
 

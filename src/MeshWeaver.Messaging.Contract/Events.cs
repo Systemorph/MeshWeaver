@@ -22,6 +22,6 @@ public class DeliveryFailureException : Exception
 
 public record DeliveryFailure(IMessageDelivery Delivery);
 
-public record PersistenceAddress(object Host) : IHostedAddress;
+public record PersistenceAddress();
 
 public record HeartbeatEvent(SyncDelivery Route);

@@ -65,7 +65,7 @@ internal class RouteService
             // TODO V10: This works only if the hub has been instantiated before. Consider re-implementing setting hosted hub configs at config time. (31.01.2024, Roland Bürgi)
             return hub.GetHostedHub(hostedSegment, null)?.DeliverMessage(delivery) ?? delivery.NotFound();
 
-        if (address is IHostedAddress hosted)
+        if (address is HostedAddress hosted)
         {
             logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id, delivery.Message.GetType().Name, hosted.Host);
             return RouteAlongHostingHierarchy(delivery, hosted.Host, address);
