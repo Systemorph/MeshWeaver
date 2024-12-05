@@ -14,5 +14,9 @@
     <ProjectReference Include="..\MeshWeaver.Mesh.SignalR.Client\MeshWeaver.Connection.SignalR.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
+    <ItemGroup>
+        <None Include="extension.dib" Pack="true" PackagePath="interactive-extensions/dotnet" />
+    </ItemGroup>
+
 
 </Project>

@@ -1,0 +1,3 @@
+#!csharp
+
+MeshWeaver.Connection.Notebook.ConnectNotebookKernelDirective.Install(Microsoft.DotNet.Interactive.Kernel.Root);

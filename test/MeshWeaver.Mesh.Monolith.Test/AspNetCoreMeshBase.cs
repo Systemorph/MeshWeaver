@@ -1,5 +1,5 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Connection.SignalR;
+using MeshWeaver.Connection.Notebook;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
@@ -53,7 +53,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .StartAsync();
 
             Server = Host.GetTestServer();
-            ConnectionContext.ConnectionOptions =
+            ConnectionConfiguration.ConnectionOptions =
                 options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler());
         }
 
