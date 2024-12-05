@@ -88,7 +88,8 @@ public sealed record DataContext : IDisposable
             .ToDictionary(x => x.CollectionName);
         TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary(ts => ts.TypeDefinition.Type);
 
-
+        foreach (var typeSource in TypeSources.Values)
+            TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
     }
 
