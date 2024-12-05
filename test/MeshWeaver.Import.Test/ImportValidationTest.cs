@@ -27,14 +27,18 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                     source =>
                         source.ConfigureCategory(TestDomain.ContractDomain).WithType<ActivityLog>()
                 )
-            )
-            .WithHostedHub(
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
+    {
+        return base.ConfigureRouter(conf).WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
                             data.FromHub(
-                                configuration.Address,
+                                new HostAddress(),
                                 source =>
                                     source
                                         .ConfigureCategory(TestDomain.ContractDomain)
