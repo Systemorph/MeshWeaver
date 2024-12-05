@@ -47,8 +47,6 @@ internal class HostedHubRouting
             delivery = delivery.WithSender(obj.Deserialize<object>(hub.JsonSerializerOptions));
         if(delivery.Target is JsonObject obj2)
             delivery = delivery.WithTarget(obj2.Deserialize<object>(hub.JsonSerializerOptions));
-        if (delivery.Target is HostedAddress hosted && hosted.Host.Equals(parentHub.Address))
-            delivery = delivery.WithTarget(hosted.Address);
 
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
         if (configuration.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
@@ -67,7 +65,9 @@ internal class HostedHubRouting
         foreach (var handler in configuration.Handlers)
             delivery = await handler(delivery, cancellationToken);
 
-        if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || hub.Address.Equals(delivery.Target))
+        if (delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
+        if(delivery.Target == null || hub.Address.Equals(delivery.Target))
             return delivery.NotFound();
 
         return RouteAlongHostingHierarchy(delivery);
