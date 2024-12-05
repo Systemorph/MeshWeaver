@@ -167,7 +167,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId, Hub.Address), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
         synchronizationHub.WithDisposeAction(_ => Store.Dispose());
     }
 
@@ -186,7 +186,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
 
-    private record SynchronizationStreamAddress(string Id, object Host) : IHostedAddress;
+    private record SynchronizationStreamAddress(string Id);
 
 
     public void Revert<TReduced>(ChangeItem<TReduced> change)

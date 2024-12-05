@@ -56,7 +56,7 @@ public record LayoutAreaHost : IDisposable
             )
         );
         executionHub = Stream.Hub.GetHostedHub(
-            new LayoutExecutionAddress(Stream.Hub.Address),
+            new LayoutExecutionAddress(),
             x => x
         );
 

@@ -103,7 +103,7 @@ public record RouteConfiguration(IMessageHub Hub)
         while (address != null)
         {
             yield return address;
-            address = (address as IHostedAddress)?.Host;
+            address = (address as HostedAddress)?.Address;
         }
     }
 

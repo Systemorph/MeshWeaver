@@ -18,7 +18,7 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
     where TTypeSource : ITypeSource
 {
     private readonly IMessageHub persistenceHub = Workspace.Hub.ServiceProvider.CreateMessageHub(
-        new PersistenceAddress(Workspace.Hub.Address),
+        new PersistenceAddress(),
         c => c
     );
 

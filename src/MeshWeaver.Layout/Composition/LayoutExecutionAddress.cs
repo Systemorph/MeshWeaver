@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Layout.Composition;
 
-public record LayoutExecutionAddress(object Host) : IHostedAddress
+public record LayoutExecutionAddress() 
 {
     public Guid Id { get; init; } = Guid.NewGuid();
 }
