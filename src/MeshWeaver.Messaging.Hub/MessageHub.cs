@@ -37,7 +37,6 @@ public sealed class MessageHub
     private readonly HostedHubsCollection hostedHubs;
     private readonly IDisposable deferral;
     public long Version { get; private set; }
-    private RouteService routeService;
     public MessageHubRunLevel RunLevel { get; private set; }
 
     public MessageHub(
@@ -54,7 +53,7 @@ public sealed class MessageHub
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
         Configuration = configuration;
-        routeService = new RouteService(parentHub, this);
+        MessageHubRouting.Setup(parentHub, this);
 
         foreach (var disposeAction in configuration.DisposeActions) 
             disposeActions.Add(disposeAction);
