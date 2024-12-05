@@ -60,9 +60,9 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
-    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config);
-    IMessageHub GetHostedHub<TAddress1>(TAddress1 address)
-        => GetHostedHub(address, x => x);
+    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false);
+    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, bool cachedOnly = false)
+        => GetHostedHub(address, x => x, cachedOnly);
     
     IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
     IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);

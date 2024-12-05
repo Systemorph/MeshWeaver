@@ -59,7 +59,6 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             return true;
         }).ToArray();
 
-        stream.Dispose();
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)

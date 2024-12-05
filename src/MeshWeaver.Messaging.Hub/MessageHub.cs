@@ -53,7 +53,7 @@ public sealed class MessageHub
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
         Configuration = configuration;
-        MessageHubRouting.Setup(parentHub, this);
+        HostedHubRouting.Setup(parentHub, this);
 
         foreach (var disposeAction in configuration.DisposeActions) 
             disposeActions.Add(disposeAction);
@@ -294,10 +294,11 @@ public sealed class MessageHub
 
     public IMessageHub GetHostedHub<TAddress1>(
         TAddress1 address,
-        Func<MessageHubConfiguration, MessageHubConfiguration> config
+        Func<MessageHubConfiguration, MessageHubConfiguration> config,
+        bool cachedOnly = false
     )
     {
-        var messageHub = hostedHubs.GetHub(address, config);
+        var messageHub = hostedHubs.GetHub(address, config, cachedOnly);
         return messageHub;
     }
 

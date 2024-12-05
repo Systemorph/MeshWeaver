@@ -5,19 +5,19 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
-internal class MessageHubRouting
+internal class HostedHubRouting
 {
     private readonly IMessageHub parentHub;
 
-    private readonly ILogger<MessageHubRouting> logger;
+    private readonly ILogger<HostedHubRouting> logger;
     private readonly RouteConfiguration configuration;
     private readonly IMessageHub hub;
 
-    private MessageHubRouting(IMessageHub parentHub, IMessageHub hub)
+    private HostedHubRouting(IMessageHub parentHub, IMessageHub hub)
     {
         this.parentHub = parentHub;
         this.hub = hub;
-        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MessageHubRouting>>();
+        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<HostedHubRouting>>();
         this.configuration = hub
             .Configuration
             .GetListOfRouteLambdas()
@@ -26,7 +26,7 @@ internal class MessageHubRouting
 
     public static void Setup(IMessageHub parentHub, IMessageHub hub)
     {
-        var instance = new MessageHubRouting(parentHub, hub);
+        var instance = new HostedHubRouting(parentHub, hub);
         hub.Register(instance.RouteMessageAsync);
     }
 
@@ -47,6 +47,8 @@ internal class MessageHubRouting
             delivery = delivery.WithSender(obj.Deserialize<object>(hub.JsonSerializerOptions));
         if(delivery.Target is JsonObject obj2)
             delivery = delivery.WithTarget(obj2.Deserialize<object>(hub.JsonSerializerOptions));
+        if (delivery.Target is HostedAddress hosted && hosted.Host.Equals(parentHub.Address))
+            delivery = delivery.WithTarget(hosted.Address);
 
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
         if (configuration.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
@@ -93,13 +95,13 @@ internal class MessageHubRouting
             }
         }
 
-
         if (parentHub == null)
             return delivery.NotFound();
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        parentHub.DeliverMessage(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)));
+        delivery = delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address));
+        parentHub.DeliverMessage(delivery);
         return delivery.Forwarded();
     }
 }
