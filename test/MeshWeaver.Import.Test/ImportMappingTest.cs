@@ -23,14 +23,18 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                     nameof(GenericUnpartitionedDataSource),
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
-            )
+            );
+
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
+    {
+        return base.ConfigureRouter(conf)
             .WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
                             data.FromHub(
-                                configuration.Address,
+                                new HostAddress(),
                                 source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )
                         )
@@ -49,6 +53,8 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                                 )
                         )
             );
+            ;
+    }
 
     private ImportFormat.ImportFunction customImportFunction = null;
 
@@ -59,6 +65,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress())
+            , new CancellationTokenSource(3.Seconds()).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return client;
@@ -73,10 +80,11 @@ SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsL
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         _ = await DoImport(content);
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync();
+        var ret2 = await workspace.GetObservable<MyRecord2>()
+            .Timeout(3.Seconds())
+            .FirstAsync();
 
         ret2.Should().BeEmpty();
 
@@ -107,10 +115,12 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace
+            .GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync();
 
         ret.Should().BeEmpty();
     }
@@ -145,8 +155,7 @@ Record3SystemName,Record3DisplayName";
         _ = await DoImport(ThreeTablesContent, "Test");
 
         //Check that didn't appeared what we don't import
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
 
         var ret = await workspace.GetObservable<MyRecord>()
@@ -184,13 +193,18 @@ Record3SystemName,Record3DisplayName";
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        var ret2 = await workspace.GetObservable<MyRecord2>().FirstAsync(x => x.Any());
+        var ret2 = await workspace
+            .GetObservable<MyRecord2>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret2.Should().HaveCount(1);
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
+        var ret = await workspace
+            .GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(2);
 
