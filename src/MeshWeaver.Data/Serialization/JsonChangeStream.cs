@@ -40,7 +40,7 @@ public static class JsonSynchronizationStream
         reduced.Initialize(ct => (tcs2 = new(ct)).Task);
         reduced.AddDisposable(
                 reduced
-                .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
+                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.ChangedBy))
         .Subscribe(e =>
         {
             logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
