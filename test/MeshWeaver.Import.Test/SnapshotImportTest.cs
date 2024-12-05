@@ -22,19 +22,25 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                     nameof(GenericUnpartitionedDataSource),
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
-            )
+            );
+
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureRouter(configuration)
             .WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
                             data.FromHub(
-                                configuration.Address,
-                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+                                new HostAddress(),
+                                source => source.WithType<MyRecord>()
                             )
                         )
                         .AddImport()
             );
+    }
+
 
     [Fact]
     public async Task SnapshotImport_SimpleTest()
@@ -56,10 +62,9 @@ B4,B,4
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(4);
 
