@@ -37,16 +37,10 @@ public record RouteConfiguration(IMessageHub Hub)
                         return delivery;
 
                     if (delivery.Target is TAddress routedAddress)
-                    {
-                        await handler(routedAddress, delivery, cancellationToken);
-                        return delivery.Forwarded();
-                    }
+                        return await handler(routedAddress, delivery, cancellationToken);
 
                     if (delivery.Target is HostedAddress { Host: TAddress hostRoutedAddress, Address: { } address })
-                    {
-                        await handler(hostRoutedAddress, delivery.WithTarget(address), cancellationToken);
-                        return delivery.Forwarded();
-                    }
+                        return await handler(hostRoutedAddress, delivery.WithTarget(address), cancellationToken);
 
                     return delivery;
                 }
