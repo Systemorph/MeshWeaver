@@ -24,7 +24,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             )
             .WithHostedHub(
-                new TestDomain.ImportAddress(configuration.Address),
+                new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
@@ -52,12 +52,12 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -74,7 +74,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -102,11 +102,11 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
             .Timeout(3.Seconds())
@@ -126,7 +126,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new(){Snapshot = true} };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -149,7 +149,7 @@ SystemName2,DisplayName2
         importRequest = new ImportRequest(content3);
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -174,12 +174,12 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress(new HostAddress()))
+        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -193,7 +193,7 @@ SystemName,DisplayName,Number
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 

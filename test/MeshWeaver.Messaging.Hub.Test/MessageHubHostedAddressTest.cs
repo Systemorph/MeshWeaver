@@ -12,7 +12,7 @@ public class MessageHubHostedAddressTest : TestBase
     protected record RouterAddress;
 
     protected record HostAddress;
-    protected record SubHubAddress(object Host) : IHostedAddress;
+    protected record SubHubAddress;
     protected record ClientAddress;
 
     record SayHelloRequest : IRequest<HelloEvent>;
@@ -52,7 +52,7 @@ public class MessageHubHostedAddressTest : TestBase
     public async Task SimpleRequest()
     {
         var client = GetClient();
-        var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new SubHubAddress(new HostAddress())));
+        var response = await client.AwaitResponse(new SayHelloRequest(), o => o.WithTarget(new SubHubAddress()));
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
 }

@@ -1,13 +1,12 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.TestDomain;
 
 public static class TestDomain
 {
-    public record ImportAddress(object Host) : IHostedAddress;
+    public record ImportAddress();
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain =
         new()

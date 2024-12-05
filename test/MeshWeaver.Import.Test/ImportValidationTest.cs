@@ -29,7 +29,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                 )
             )
             .WithHostedHub(
-                new TestDomain.ImportAddress(configuration.Address),
+                new TestDomain.ImportAddress(),
                 config =>
                     config
                         .AddData(data =>
@@ -88,7 +88,7 @@ SystemName,FoundationYear,ContractType
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -120,7 +120,7 @@ FR,France";
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
@@ -147,7 +147,7 @@ DoubleValue,Country
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -179,7 +179,7 @@ A,B";
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
@@ -218,7 +218,7 @@ Blue,FR";
         var importRequest = new ImportRequest(content) { Format = "Test2" };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress(new HostAddress()))
+            o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
