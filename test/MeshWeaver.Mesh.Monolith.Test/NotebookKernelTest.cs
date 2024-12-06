@@ -63,15 +63,29 @@ public class NotebookKernelTest(ITestOutputHelper output) : AspNetCoreMeshBase(o
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.Notebook\"");
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var createHub = await kernel.SubmitCodeAsync(
-            @$"
-var client = await MeshWeaver.Connection.Notebook.MeshClient
-        .Configure(""{SignalRUrl}"")
-        .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-        .ConnectAsync();"
+        var connectMeshWeaver = await kernel.SubmitCodeAsync(
+@$"
+#r ""MeshWeaver.Connection.Notebook""
+#!connect meshweaver --kernel-name ""mesh"" --url ""{SignalRUrl}""
+"
         );
 
-        createHub.Events.Last().Should().BeOfType<CommandSucceeded>();
+        connectMeshWeaver.Events.Last().Should().BeOfType<CommandSucceeded>();
+        kernel.DefaultKernelName = "mesh";
+        var createClient = await kernel.SubmitCodeAsync(
+@$"
+#r ""MeshWeaver.Hosting.Test""
+using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Test;
+private record ClientAddress;
+var client = Mesh.ServiceProvider
+        .CreateMessageHub(new ClientAddress(), 
+            config => config.WithTypes(typeof(Ping), typeof(Pong))
+        )
+    ;"
+);
+
+        createClient.Events.Last().Should().BeOfType<CommandSucceeded>();
 
         return kernel;
     }
