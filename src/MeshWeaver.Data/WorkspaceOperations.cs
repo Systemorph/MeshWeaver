@@ -87,7 +87,7 @@ public static class WorkspaceOperations
                 try
                 {
 
-                    var updates = group.GroupBy(x => (x.Op, x.TypeSource))
+                    var updates = group.GroupBy(x => (Op:(x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
                         .Aggregate(new EntityStoreAndUpdates(store, [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
@@ -104,7 +104,8 @@ public static class WorkspaceOperations
                                         : storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName)
                                             ?.Merge(instances) ?? instances;
                                     var updates =
-                                        storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated);
+                                        storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
+                                            .ToArray();
                                     return new EntityStoreAndUpdates(
                                         storeAndUpdates.Store.WithCollection(g.Key.TypeSource.CollectionName, updated),
                                         storeAndUpdates.Updates.Concat(updates), change.ChangedBy);
@@ -115,7 +116,7 @@ public static class WorkspaceOperations
                                 {
                                     var instances = g.Select(i => (i.Instance,
                                         Key: g.Key.TypeSource.TypeDefinition.GetKey(i.Instance))).ToArray();
-                                    var newStore = store.Update(g.Key.TypeSource.CollectionName,
+                                    var newStore = storeAndUpdates.Store.Update(g.Key.TypeSource.CollectionName,
                                         c => c.Remove(instances.Select(x => x.Key)));
                                     return new EntityStoreAndUpdates(newStore,
                                         storeAndUpdates.Updates.Concat(instances.Select(i =>

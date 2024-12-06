@@ -34,7 +34,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                         .AddData(data =>
                             data.FromHub(
                                 new HostAddress(),
-                                source => source.WithType<MyRecord>()
+                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )
                         )
                         .AddImport()
@@ -83,12 +83,19 @@ SystemName,DisplayName
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Equals(5);
+
+        var host = GetHost().GetWorkspace();
+        var ret2 = await host
+            .GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Count != 4);
+        ret2.Should().HaveCount(1);
+        ret2.Should().ContainSingle().Which.Number.Equals(5);
     }
 
     [Fact]
@@ -110,8 +117,7 @@ B4,B,4
             o => o.WithTarget(new TestDomain.ImportAddress())
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
             .Timeout(3.Seconds())
