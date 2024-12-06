@@ -17,8 +17,10 @@ namespace MeshWeaver.Hosting.Monolith
             if (delivery.Target == null)
                 return delivery;
 
-            var targetId = SerializationExtensions.GetId(delivery.Target);
-            var targetType = typeRegistry.GetTypeName(delivery.Target);
+            var address = GetRoutedAddress(delivery.Target);
+
+            var targetId = SerializationExtensions.GetId(address);
+            var targetType = typeRegistry.GetTypeName(address);
             var key = (targetType, targetId);
             if (handlers.TryGetValue(key, out var handler))
                 return await handler.Invoke(delivery, cancellationToken);
@@ -29,12 +31,18 @@ namespace MeshWeaver.Hosting.Monolith
             var hub = await parent.ServiceProvider.CreateHub(targetType, targetId);
             handlers[key] = handler = (d, _) =>
             {
-                hub.DeliverMessage(d); 
+                hub.DeliverMessage(d);
                 return Task.FromResult(d.Forwarded());
             };
             return await handler.Invoke(delivery, cancellationToken);
         }
 
+        private object GetRoutedAddress(object address)
+        {
+            if(address is HostedAddress hosted)
+                return GetRoutedAddress(hosted.Host);
+            return address;
+        }
         public Task<IDisposable> RegisterRouteAsync(string addressType, string id, AsyncDelivery delivery)
         {
             var key = (addressType, id);
