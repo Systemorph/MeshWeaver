@@ -4,5 +4,5 @@ namespace MeshWeaver.Connection.Notebook;
 
 public class ConnectMeshWeaver(string connectedKernelName) : ConnectKernelCommand(connectedKernelName)
 {
-    public string HubUrl { get; set; }
+    public string Url { get; set; }
 }

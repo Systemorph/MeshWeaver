@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Connection.SignalR;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.Connection;
@@ -23,10 +24,10 @@ public class ConnectMeshWeaverDirective
     public const string Mesh = nameof(Mesh);
     public ConnectMeshWeaverDirective() : base("meshweaver", "Connects to a MeshWeaver instance")
     {
-        Parameters.Add(HubUrlParameter);
+        Parameters.Add(UrlParameter);
     }
 
-    public KernelDirectiveParameter HubUrlParameter { get; } =
+    public KernelDirectiveParameter UrlParameter { get; } =
         new("--url",
             "The URL of the MeshWeaver connection.")
         {
@@ -37,7 +38,7 @@ public class ConnectMeshWeaverDirective
         ConnectMeshWeaver connectCommand,
         KernelInvocationContext context)
     {
-        var hubUrl = connectCommand.HubUrl;
+        var hubUrl = connectCommand.Url;
 
         var localName = connectCommand.ConnectedKernelName;
         var address = ConnectionConfiguration.Address ?? new NotebookAddress();
@@ -64,10 +65,13 @@ public class ConnectMeshWeaverDirective
             .Connect();
 
         kernel.Initialize(hub);
+        innerKernel.AddAssemblyReferences([typeof(MessageHub).Assembly.Location]);
 
-        await innerKernel.SetValueAsync(Mesh, new NotebookMeshApi(hub),
-            typeof(NotebookMeshApi));
+        await innerKernel.SetValueAsync(Mesh, hub,
+            typeof(IMessageHub));
+
         kernel.RegisterForDisposal(() => hub.Dispose());
+
         return [kernel];
     }
 
