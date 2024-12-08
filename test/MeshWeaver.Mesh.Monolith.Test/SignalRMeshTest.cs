@@ -16,7 +16,8 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     public async Task PingPong()
     {
         var client = SignalRMeshClient
-            .Configure(new SignalRClientAddress(), c => c.WithUrl(SignalRUrl, x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler()))
+            .Configure(SignalRUrl)
+            .ConfigureConnection(c => c.WithUrl(SignalRUrl, x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler()))
             .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
             .Connect();
 
