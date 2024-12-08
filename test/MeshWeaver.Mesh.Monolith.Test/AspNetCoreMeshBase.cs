@@ -44,10 +44,10 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     });
                     webBuilder.Configure(app =>
                     {
-                        EndpointRoutingApplicationBuilderExtensions.UseRouting(app);
-                        EndpointRoutingApplicationBuilderExtensions.UseEndpoints(app, endpoints =>
+                        app.UseRouting();
+                        app.UseEndpoints(endpoints =>
                         {
-                            HubEndpointRouteBuilderExtensions.MapHub<SignalRConnectionHub>(endpoints, $"/{SignalREndPoint}");
+                            endpoints.MapHub<SignalRConnectionHub>($"/{SignalREndPoint}");
                         });
                     });
                 })
