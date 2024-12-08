@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Mesh
+﻿using MeshWeaver.Messaging;
+
+namespace MeshWeaver.Mesh
 {
     public static class MeshExtensions
     {
@@ -17,8 +19,21 @@
             };
         }
 
-        public static readonly Type[] MeshAddressTypes =
-            [typeof(ApplicationAddress), typeof(NotebookAddress), typeof(SignalRClientAddress), typeof(UiAddress)];
+        public static readonly IReadOnlyDictionary<string, Type> MeshAddressTypes = new Dictionary<string, Type>()
+        {
+            { "app", typeof(ApplicationAddress) },
+            { "nb", typeof(NotebookAddress) },
+            { "signalr", typeof(SignalRClientAddress) },
+            { "ui", typeof(UiAddress) }
+        };
+
+
+        public static MessageHubConfiguration AddDefaultAddressTypes(this MessageHubConfiguration config)
+        {
+            MeshAddressTypes.ForEach(kvp => config.TypeRegistry.WithType(kvp.Value, kvp.Key));
+            return config;
+        }
+
 
     }
 }
