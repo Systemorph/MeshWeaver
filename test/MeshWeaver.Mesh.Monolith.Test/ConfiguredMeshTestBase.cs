@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .UseMonolithMesh()
                 .ConfigureMesh(mesh =>
                     mesh.WithMeshNodeFactory((addressType, id) =>
-                        addressType == typeof(ApplicationAddress).FullName && id == TestApplicationAttribute.Test
+                        addressType == "app" && id == TestApplicationAttribute.Test
                             ? MeshExtensions.GetMeshNode(addressType, id, typeof(TestApplicationAttribute).Assembly.Location)
                             : null));
 
