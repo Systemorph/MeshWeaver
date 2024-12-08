@@ -1,5 +1,9 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Reactive.Linq;
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Test;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -69,7 +73,17 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         addressId.Should().NotBeNullOrEmpty();
         area.Should().NotBeNullOrEmpty();
 
-        //var meshClient = ();
+        var uiClient = Server.Services.CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(c => c));
+        var stream = uiClient.GetWorkspace()
+            .GetRemoteStream(new NotebookAddress() { Id = addressId }, new LayoutAreaReference(area));
+
+        var control = await stream
+            .GetControlStream(area)
+            .Timeout(3.Seconds())
+            .FirstAsync();
+
+
+        control.Should().BeOfType<MarkdownControl>();
     }
 
     protected async Task<CompositeKernel> ConnectHubAsync()
