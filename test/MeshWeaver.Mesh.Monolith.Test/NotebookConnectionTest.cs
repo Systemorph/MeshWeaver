@@ -1,5 +1,5 @@
-﻿using FluentAssertions;
-using MeshWeaver.Connection.Notebook;
+﻿using System.Text.RegularExpressions;
+using FluentAssertions;
 using MeshWeaver.Hosting.Test;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -44,7 +44,6 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
     [Fact]
     public async Task LayoutAreas()
     {
-
         var kernel = await ConnectHubAsync();
 
         // Send Ping and receive Pong
@@ -53,8 +52,24 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         );
 
         kernelResult.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var result = kernelResult.Events.OfType<DisplayedValueProduced>().Single();
-        result.Value.Should().BeOfType<string>().Which.Should().Contain("iframe");
+        var result = kernelResult.Events.OfType<ReturnValueProduced>().Single();
+        var formattedValues = result.FormattedValues.First();
+
+        formattedValues.Value.Should().BeOfType<string>().Which.Should().Contain("iframe");
+        var iframeSrc = formattedValues.Value;
+        var match = Regex.Match(iframeSrc, @"<iframe src='http://[^/]+/area/(?<addressType>[^/]+)/(?<addressId>[^/]+)/(?<area>[^/]+)'></iframe>");
+
+        match.Success.Should().BeTrue();
+        var addressType = match.Groups["addressType"].Value;
+        var addressId = match.Groups["addressId"].Value;
+        var area = match.Groups["area"].Value;
+
+        // Assert the extracted values
+        addressType.Should().Be("nb");
+        addressId.Should().NotBeNullOrEmpty();
+        area.Should().NotBeNullOrEmpty();
+
+        //var meshClient = ();
     }
 
     protected async Task<CompositeKernel> ConnectHubAsync()
@@ -78,7 +93,7 @@ var client = MeshWeaver.Connection.Notebook.MeshConnection
 "
         );
 
-        connectMeshWeaver.Events.Last().Should().BeOfType<CommandSucceeded>();
+        connectMeshWeaver.Events.OfType<CommandSucceeded>().SingleOrDefault().Should().NotBeNull();
         return kernel;
     }
 

@@ -73,6 +73,7 @@ public static class SignalRClientExtensions
                         throw;
                     }
                 })
+            .AddDefaultAddressTypes()
                 .WithRoutes(AddSignalRRoute);
     }
 
