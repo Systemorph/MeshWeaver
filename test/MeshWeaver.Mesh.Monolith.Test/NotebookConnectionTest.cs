@@ -16,7 +16,7 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class NotebookKernelTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
+public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -31,9 +31,11 @@ public class NotebookKernelTest(ITestOutputHelper output) : AspNetCoreMeshBase(o
 
         // Send Ping and receive Pong
         var pingPong = await kernel.SubmitCodeAsync(
-            "var ping = new Ping();\n" +
-            $"var pong = await client.AwaitResponse<Pong>(ping, o => o.WithTarget(new {typeof(ApplicationAddress).FullName}(\"Test\")));\n" +
-            "pong");
+@$"await client.AwaitResponse(
+    new Ping(), 
+    o => o.WithTarget(new {typeof(ApplicationAddress).FullName}(""Test""))
+    , new CancellationTokenSource(10000).Token
+)");
 
         pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
         var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
@@ -51,9 +53,8 @@ public class NotebookKernelTest(ITestOutputHelper output) : AspNetCoreMeshBase(o
         );
 
         kernelResult.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var result = kernelResult.Events.OfType<ReturnValueProduced>().Single();
-        await Task.Delay(100);
-        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
+        var result = kernelResult.Events.OfType<DisplayedValueProduced>().Single();
+        result.Value.Should().BeOfType<string>().Which.Should().Contain("iframe");
     }
 
     protected async Task<CompositeKernel> ConnectHubAsync()
@@ -66,29 +67,21 @@ public class NotebookKernelTest(ITestOutputHelper output) : AspNetCoreMeshBase(o
         var connectMeshWeaver = await kernel.SubmitCodeAsync(
 @$"
 #r ""MeshWeaver.Connection.Notebook""
-#!connect meshweaver --kernel-name ""mesh"" --url ""{SignalRUrl}""
+#r ""MeshWeaver.Hosting.Test""
+using MeshWeaver.Hosting.Test;
+using MeshWeaver.Messaging;
+using System.Threading;
+var client = MeshWeaver.Connection.Notebook.MeshConnection
+    .Configure(""{SignalRUrl}"")
+    .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
+    .Connect();
 "
         );
 
         connectMeshWeaver.Events.Last().Should().BeOfType<CommandSucceeded>();
-        kernel.DefaultKernelName = "mesh";
-        var createClient = await kernel.SubmitCodeAsync(
-@$"
-#r ""MeshWeaver.Hosting.Test""
-using MeshWeaver.Messaging;
-using MeshWeaver.Hosting.Test;
-private record ClientAddress;
-var client = Mesh.ServiceProvider
-        .CreateMessageHub(new ClientAddress(), 
-            config => config.WithTypes(typeof(Ping), typeof(Pong))
-        )
-    ;"
-);
-
-        createClient.Events.Last().Should().BeOfType<CommandSucceeded>();
-
         return kernel;
     }
+
 
 
     protected async Task<CompositeKernel> CreateCompositeKernelAsync()
@@ -101,8 +94,6 @@ var client = Mesh.ServiceProvider
 
         var kernel = new CompositeKernel { csharpKernel };
         kernel.DefaultKernelName = csharpKernel.Name;
-        kernel.AddConnectDirective(new ConnectMeshWeaverDirective());
-
         Disposables.Add(kernel);
         return kernel;
     }

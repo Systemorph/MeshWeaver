@@ -5,6 +5,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,8 +54,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .StartAsync();
 
             Server = Host.GetTestServer();
-            ConnectionConfiguration.ConnectionOptions =
-                options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler());
+            MeshConnection.ConfigurationOptions =
+                connection => connection.WithUrl(SignalRUrl, options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()));
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();
