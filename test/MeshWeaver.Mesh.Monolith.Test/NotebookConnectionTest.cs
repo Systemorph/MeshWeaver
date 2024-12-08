@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -15,6 +14,7 @@ using Microsoft.DotNet.Interactive.Events;
 using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -73,7 +73,10 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         addressId.Should().NotBeNullOrEmpty();
         area.Should().NotBeNullOrEmpty();
 
-        var uiClient = Server.Services.CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(c => c));
+        var uiClient = Server.Services
+            .GetRequiredService<IMessageHub>()
+            .ServiceProvider
+            .CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(c => c));
         var stream = uiClient.GetWorkspace()
             .GetRemoteStream(new NotebookAddress() { Id = addressId }, new LayoutAreaReference(area));
 
