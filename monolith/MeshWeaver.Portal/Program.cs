@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging.Console;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
-using MeshWeaver.Overview;
 using MeshWeaver.Blazor.Notebooks;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
@@ -36,7 +35,7 @@ builder.UseMeshWeaver(
     config => config
         .ConfigureMesh(
             mesh => mesh
-            .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location, typeof(MeshWeaverOverviewAttribute).Assembly.Location)
+            .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
             .AddNotebooks()
         )
         .AddBlazor(x =>

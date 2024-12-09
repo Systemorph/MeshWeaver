@@ -6,10 +6,9 @@ namespace MeshWeaver.Mesh;
 public abstract class MeshNodeAttribute : Attribute
 {
 
-    public abstract IMessageHub Create(IServiceProvider serviceProvider, MeshNode meshNode);
+    public abstract IMessageHub Create(IMessageHub meshHub, MeshNode meshNode);
     public virtual IEnumerable<MeshNode> Nodes => [];
 
-    protected IMessageHub CreateIf(bool condition, Func<IMessageHub> factory)
-    => condition ? factory() : null;
+    public abstract bool Matches(IMessageHub meshHub, MeshNode meshNode);
 
 }

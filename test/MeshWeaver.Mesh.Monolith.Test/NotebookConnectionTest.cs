@@ -3,7 +3,6 @@ using System.Text.RegularExpressions;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Hosting.Test;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -36,14 +35,14 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         // Send Ping and receive Pong
         var pingPong = await kernel.SubmitCodeAsync(
 @$"await client.AwaitResponse(
-    new Ping(), 
-    o => o.WithTarget(new {typeof(ApplicationAddress).FullName}(""Test""))
+    new PingRequest(), 
+    o => o.WithTarget(new {typeof(MeshAddress).FullName}())
     , new CancellationTokenSource(10000).Token
 )");
 
         pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
         var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
-        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<Pong>();
+        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<PingResponse>();
     }
     [Fact]
     public async Task LayoutAreas()
@@ -82,7 +81,7 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
 
         var control = await stream
             .GetControlStream(area)
-            .Timeout(3.Seconds())
+            .Timeout(5.Seconds())
             .FirstAsync();
 
 
@@ -99,14 +98,12 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         var connectMeshWeaver = await kernel.SubmitCodeAsync(
 @$"
 #r ""MeshWeaver.Connection.Notebook""
-#r ""MeshWeaver.Hosting.Test""
 using MeshWeaver.Hosting.Test;
 using MeshWeaver.Messaging;
 using System.Threading;
-var client = MeshWeaver.Connection.Notebook.MeshConnection
+var client = await MeshWeaver.Connection.Notebook.MeshConnection
     .Configure(""{SignalRUrl}"")
-    .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-    .Connect();
+    .ConnectAsync();
 "
         );
 

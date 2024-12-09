@@ -8,9 +8,9 @@ namespace MeshWeaver.Hosting;
 
 public static  class HostingExtensions
 {
-    public static async Task<IMessageHub> CreateHub(this IServiceProvider serviceProvider, string addressType, string id)
+    public static async Task<IMessageHub> CreateHub(this IMessageHub meshHub, string addressType, string id)
     {
-        var meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
+        var meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var node = await meshCatalog.GetNodeAsync(addressType, id);
         if (node == null)
             return null;
@@ -19,11 +19,15 @@ public static  class HostingExtensions
         if (assembly == null)
             throw new InvalidOperationException($"Assembly {node.AssemblyLocation} not found in {node.BasePath}");
 
-        var hub = assembly.GetCustomAttributes<MeshNodeAttribute>().Select(a => a.Create(serviceProvider, node)).FirstOrDefault(x => x != null);
+        var hub = assembly.GetCustomAttributes<MeshNodeAttribute>()
+            .Where(a => a.Matches(meshHub, node))
+            .Select(a => a.Create(meshHub, node))
+            .FirstOrDefault(x => x != null);
 
         if(hub == null)
             throw new NotSupportedException($"Cannot implementation for hub with address {addressType}/{id} at {node.AssemblyLocation}");
         return hub;
 
     }
+
 }

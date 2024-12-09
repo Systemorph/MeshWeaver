@@ -10,7 +10,7 @@ namespace MeshWeaver.Mesh
         public static MeshNode GetMeshNode(string addressType, string id, string location)
         {
             var basePathLength = location.LastIndexOf(Path.DirectorySeparatorChar);
-            return new(typeof(ApplicationAddress).FullName, id, "Mesh Weaver Overview",
+            return new(ApplicationAddress.TypeName, id, "Mesh Weaver Overview",
                 location.Substring(0, basePathLength),
                 location.Substring(basePathLength + 1))
             {
@@ -21,10 +21,11 @@ namespace MeshWeaver.Mesh
 
         public static readonly IReadOnlyDictionary<string, Type> MeshAddressTypes = new Dictionary<string, Type>()
         {
-            { "app", typeof(ApplicationAddress) },
-            { "nb", typeof(NotebookAddress) },
-            { "signalr", typeof(SignalRClientAddress) },
-            { "ui", typeof(UiAddress) }
+            { MeshAddress.TypeName, typeof(MeshAddress) },
+            { ApplicationAddress.TypeName, typeof(ApplicationAddress) },
+            { NotebookAddress.TypeName, typeof(NotebookAddress) },
+            { SignalRClientAddress.TypeName, typeof(SignalRClientAddress) },
+            { UiAddress.TypeName, typeof(UiAddress) }
         };
 
 

@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Model;
 using MeshWeaver.Northwind.ViewModel;
@@ -13,18 +12,16 @@ namespace MeshWeaver.Northwind.ViewModel;
 /// </summary>
 public class NorthwindApplicationAttribute : MeshNodeAttribute
 {
-    private static readonly ApplicationAddress Address = new ("Northwind");
-
+    private static readonly ApplicationAddress Address = new (Northwind);
+    public const string Northwind = nameof(Northwind);
     /// <summary>
     /// Full configuration of the Northwind application mesh node.
     /// </summary>
     /// <param name="serviceProvider"></param>
     /// <param name="node"></param>
     /// <returns></returns>
-    public override IMessageHub Create(IServiceProvider serviceProvider, MeshNode node)
-        => CreateIf(node.Matches(Address),
-            () =>
-                serviceProvider.CreateMessageHub(
+    public override IMessageHub Create(IMessageHub meshHub, MeshNode node)
+        => meshHub.ServiceProvider.CreateMessageHub(
                     Address,
                     application =>
                         application
@@ -35,8 +32,11 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
                             .AddNorthwindProducts()
                             .AddNorthwindCustomers()
                             .AddNorthwindReferenceData()
-                ));
+                );
 
+
+    public override bool Matches(IMessageHub meshHub, MeshNode meshNode)
+    => meshNode.AddressType == ApplicationAddress.TypeName && meshNode.AddressId == Northwind;
 
     /// <summary>
     /// Mesh catalog entry.

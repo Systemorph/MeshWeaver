@@ -10,7 +10,7 @@ using Orleans.Streams;
 namespace MeshWeaver.Hosting.Orleans;
 
 [StorageProvider(ProviderName = StorageProviders.Activity)]
-public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parentHub)
+public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain<StreamActivity>, IMessageHubGrain
 {
 
@@ -37,7 +37,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub parent
 
         
         
-        Hub = await parentHub.ServiceProvider.CreateHub(startupInfo.AddressType, startupInfo.Id);
+        Hub = await meshHub.CreateHub(startupInfo.AddressType, startupInfo.Id);
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();

@@ -1,7 +1,6 @@
 ﻿using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.SignalR;
-using MeshWeaver.Hosting.Test;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -15,15 +14,14 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     [Fact]
     public async Task PingPong()
     {
-        var client = SignalRMeshClient
+        var client = await SignalRMeshClient
             .Configure(SignalRUrl)
             .ConfigureConnection(c => c.WithUrl(SignalRUrl, x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler()))
-            .ConfigureHub(config => config.WithTypes(typeof(Ping), typeof(Pong)))
-            .Connect();
+            .ConnectAsync();
 
-        var response = await client.AwaitResponse(new Ping(),
-            o => o.WithTarget(new ApplicationAddress(TestApplicationAttribute.Test)),
+        var response = await client.AwaitResponse(new PingRequest(),
+            o => o.WithTarget(new MeshAddress()),
             new CancellationTokenSource(3000.Seconds()).Token);
-        response.Message.Should().BeOfType<Pong>();
+        response.Message.Should().BeOfType<PingResponse>();
     }
 }
