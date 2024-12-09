@@ -34,9 +34,9 @@ public class NotebookMeshClient(string url, object address) : SignalRMeshClientB
     }
 
     private readonly ConcurrentDictionary<string, UiControl> areas = new();
-    public IMessageHub Connect(CancellationToken ct = default)
+    public  override async Task<IMessageHub> ConnectAsync(CancellationToken ct = default)
     {
-        var hub = BuildHub();
+        var hub = await base.ConnectAsync(ct);
 
         var kernel = Kernel.Current;
         if (kernel is not CSharpKernel cSharpKernel)
