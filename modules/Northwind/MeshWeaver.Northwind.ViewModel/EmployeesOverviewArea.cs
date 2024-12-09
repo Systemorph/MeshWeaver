@@ -30,7 +30,7 @@ public static class EmployeesOverviewArea
     /// <returns>An observable sequence containing the bar chart object.</returns>
     public static IObservable<object> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Employee))

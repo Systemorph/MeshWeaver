@@ -28,7 +28,7 @@ public static class DiscountPercentageArea
     /// <returns>An observable sequence of objects representing the discount summary view.</returns>
     public static IObservable<object> DiscountPercentage(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetCombinedDiscountsDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(NorthwindDataCube.Discount))

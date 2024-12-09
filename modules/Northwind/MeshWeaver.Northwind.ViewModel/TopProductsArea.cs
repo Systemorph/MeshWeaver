@@ -33,7 +33,7 @@ namespace MeshWeaver.Northwind.ViewModel
         /// <returns>An observable sequence of objects representing the rendered top products view.</returns>
         public static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
             => layoutArea.YearlyNorthwindData()
-                .Select(d =>
+                .SelectMany(d =>
                     layoutArea.Workspace
                         .Pivot(d.ToDataCube())
                         .SliceColumnsBy(nameof(Product))
