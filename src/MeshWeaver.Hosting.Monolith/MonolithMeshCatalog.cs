@@ -27,7 +27,7 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
         );
     public Task UpdateAsync(MeshNode node)
     {
-        meshNodes[(node.AddressType, node.Id)] = node;
+        meshNodes[(node.AddressType, node.AddressId)] = node;
         // TODO V10: Delegate indexing to IMeshIndexService running on its own hub. (06.09.2024, Roland Bürgi)
         return Task.CompletedTask;
     }
@@ -39,7 +39,7 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
             var assembly = Assembly.LoadFrom(assemblyLocation);
             foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().SelectMany(a => a.Nodes))
             {
-                meshNodes[(node.AddressType, node.Id)] = node;
+                meshNodes[(node.AddressType, node.AddressId)] = node;
             }
         }
         return Task.CompletedTask;

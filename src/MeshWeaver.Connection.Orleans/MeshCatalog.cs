@@ -20,7 +20,7 @@ namespace MeshWeaver.Connection.Orleans
         public Task<MeshNode> GetNodeAsync(string addressType, string id)
             => grainFactory.GetGrain<IMeshNodeGrain>(id).Get();
 
-        public Task UpdateAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.Id).Update(node);
+        public Task UpdateAsync(MeshNode node) => grainFactory.GetGrain<IMeshNodeGrain>(node.AddressId).Update(node);
         public async Task InstallModuleAsync(string fullPathToDll)
         {
             var assemblyLoadContext = new AssemblyLoadContext("ModuleRegistry");

@@ -5,13 +5,13 @@ namespace MeshWeaver.Mesh
     [GenerateSerializer]
     public record MeshNode(
         string AddressType,
-        string Id, 
+        string AddressId, 
         string Name, 
         string BasePath, 
         string AssemblyLocation
         )
     {
-        [Key] public string Key { get; init; } = $"{AddressType}/{Id}";
+        [Key] public string Key { get; init; } = $"{AddressType}/{AddressId}";
 
         public const string MeshIn = nameof(MeshIn);
         public string ThumbNail { get; init; }
@@ -21,11 +21,5 @@ namespace MeshWeaver.Mesh
         public string ContentPath { get; init; } = "wwwroot";
         public string ArticlePath { get; init; } = "articles";
 
-        public bool Matches(object address)
-        {
-            if (address == null)
-                return false;
-            return address.GetType().FullName == AddressType && Id == address.ToString();
-        }
     }
 }

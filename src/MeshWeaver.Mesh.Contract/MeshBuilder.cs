@@ -15,7 +15,9 @@ public record MeshBuilder
         Register();
     }
 
-    private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfiguration { get; } = new();
+    private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfiguration { get; } = new()    {
+        AddMeshHandlers
+    };
     public MeshBuilder ConfigureHub(
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
     {
@@ -24,6 +26,7 @@ public record MeshBuilder
     }
 
     private List<Func<MeshConfiguration, MeshConfiguration>> MeshConfiguration { get; } = new();
+
 
     public MeshBuilder ConfigureServices(Func<IServiceCollection, IServiceCollection> configuration)
     {
@@ -60,6 +63,14 @@ public record MeshBuilder
     public virtual IMessageHub BuildHub(IServiceProvider sp)
     {
         return sp.CreateMessageHub(Address, conf => HubConfiguration.Aggregate(conf, (x, y) => y.Invoke(x)));
+    }
+    private static MessageHubConfiguration AddMeshHandlers(MessageHubConfiguration configuration)
+    {
+        return configuration.WithHandler<PingRequest>((hub, request) =>
+        {
+            hub.Post(new PingResponse(), o => o.ResponseFor(request));
+            return request.Processed();
+        });
     }
 
 

@@ -3,6 +3,8 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Connection.SignalR;
 
@@ -17,7 +19,6 @@ public class SignalRMeshClient : SignalRMeshClientBase<SignalRMeshClient>
 
 
 
-    public IMessageHub Connect() => BuildHub();
 
 }
 
@@ -53,5 +54,21 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient> where TClient 
         );
         return base.BuildHub();
     }
-
+    public virtual async Task<IMessageHub> ConnectAsync()
+    {
+        var ret = BuildHub();
+        var logger = ret.ServiceProvider.GetRequiredService<ILogger<TClient>>();
+        try
+        {
+            logger.LogInformation("Trying to connect {Address} to the mesh {Url}", ret.Address, Url);
+            await ret.AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress()));
+            logger.LogInformation("Connection succeeded.");
+        }
+        catch (Exception e)
+        {
+            logger.LogError("Connection failed: {Exception}", e);
+            throw;
+        }
+        return ret;
+    }
 }

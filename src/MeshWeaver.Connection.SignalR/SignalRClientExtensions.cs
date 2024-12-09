@@ -46,7 +46,7 @@ public static class SignalRClientExtensions
                     try
                     {
                         var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
-                        hub.WithDisposeAction(async _ =>
+                        hub.RegisterForDisposal(async _ =>
                         {
                             await hubConnection.StopAsync(ct);
                             await hubConnection.DisposeAsync();
