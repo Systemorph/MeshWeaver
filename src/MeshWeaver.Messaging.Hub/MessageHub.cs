@@ -302,14 +302,14 @@ public sealed class MessageHub
         return messageHub;
     }
 
-    public IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction) =>
-        WithDisposeAction(hub =>
+    public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction) =>
+        RegisterForDisposal(hub =>
         {
             disposeAction.Invoke(hub);
             return Task.CompletedTask;
         });
 
-    public IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction)
+    public IMessageHub RegisterForDisposal(Func<IMessageHub, Task> disposeAction)
     {
         disposeActions.Add(disposeAction);
         return this;

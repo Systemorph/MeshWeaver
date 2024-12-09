@@ -2,10 +2,17 @@
 
 namespace MeshWeaver.Mesh;
 
+public record MeshAddress
+{
+    public const string TypeName = "mesh";
+}
+
 public record ApplicationAddress(string Name)
 {
     public override string ToString()
         => $"{Name}";
+
+    public const string TypeName = "app";
 }
 public record UiAddress
 {
@@ -13,6 +20,9 @@ public record UiAddress
 
     public override string ToString()
         => $"{Id}";
+
+    public const string TypeName = "ui";
+
 }
 
 public record SignalRClientAddress
@@ -22,6 +32,8 @@ public record SignalRClientAddress
     public override string ToString()
         => $"{Id}";
 
+    public const string TypeName = "signalr";
+
 }
 public record NotebookAddress
 {
@@ -29,6 +41,8 @@ public record NotebookAddress
 
     public override string ToString()
         => $"{Id}";
+
+    public const string TypeName = "nb";
 
 }
 

@@ -65,8 +65,6 @@ public class InitializationHostedService(IMessageHub hub, IMeshCatalog catalog, 
     public virtual async Task StartAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Starting initialization of {Address}", hub.Address);
-        var disposable = await hub.ServiceProvider.GetRequiredService<IRoutingService>().RegisterHubAsync(hub);
-        hub.WithDisposeAction(_ => disposable.Dispose());
         await catalog.InitializeAsync(cancellationToken);
     }
 

@@ -136,7 +136,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Store.OnError(error);
     }
 
-    public void AddDisposable(IDisposable disposable) => Hub.WithDisposeAction(_ => disposable.Dispose());
+    public void AddDisposable(IDisposable disposable) => Hub.RegisterForDisposal(_ => disposable.Dispose());
 
     public IMessageDelivery DeliverMessage(
         IMessageDelivery delivery
@@ -168,7 +168,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
         synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
-        synchronizationHub.WithDisposeAction(_ => Store.Dispose());
+        synchronizationHub.RegisterForDisposal(_ => Store.Dispose());
     }
 
     public string StreamId { get; } = Guid.NewGuid().AsString();

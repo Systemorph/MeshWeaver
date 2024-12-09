@@ -1,35 +1,24 @@
 ﻿using FluentAssertions;
-using MeshWeaver.Hosting.Test;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class MonolithMeshTest : ConfiguredMeshTestBase
+public class MonolithMeshTest(ITestOutputHelper output) : ConfiguredMeshTestBase(output)
 {
-    public MonolithMeshTest(ITestOutputHelper output) : base(output)
-    {
-        ConfigureMesh(new MeshBuilder(config => config.Invoke(Services), new MeshAddress()));
-    }
-
 
     [Fact]
     public async Task BasicMessage()
     {
-        var client = ServiceProvider.CreateMessageHub(new ClientAddress(), conf => conf.WithTypes(typeof(Ping), typeof(Pong)));
-        var mesh = ServiceProvider.GetRequiredService<IMessageHub>();
-        var routingService = ServiceProvider.GetRequiredService<IRoutingService>();
-        await routingService.RegisterHubAsync(client);
+        var client = Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), conf => conf.WithTypes(typeof(PingRequest), typeof(PingResponse)));
         var response = await client
-            .AwaitResponse(new Ping(), o => o.WithTarget(TestApplicationAttribute.Address)
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress())
                 //, new CancellationTokenSource(3.Seconds()).Token
                 );
         response.Should().NotBeNull();
-        response.Message.Should().BeOfType<Pong>();
+        response.Message.Should().BeOfType<PingResponse>();
     }
 
 }

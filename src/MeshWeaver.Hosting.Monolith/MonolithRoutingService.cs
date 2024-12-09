@@ -8,14 +8,21 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.Monolith
 {
-    public class MonolithRoutingService(IMessageHub parent) : IRoutingService
+    public class MonolithRoutingService(IMessageHub meshHub) : IRoutingService
     {
-        private readonly ITypeRegistry typeRegistry = parent.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        private readonly ITypeRegistry typeRegistry = meshHub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         private readonly ConcurrentDictionary<(string Type, string Id), AsyncDelivery> handlers = new();
+
         public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
             if (delivery.Target == null)
                 return delivery;
+
+            if (delivery.Target is MeshAddress)
+            {
+                meshHub.DeliverMessage(delivery);
+                return delivery.Forwarded();
+            }
 
             var address = GetRoutedAddress(delivery.Target);
 
@@ -28,7 +35,10 @@ namespace MeshWeaver.Hosting.Monolith
             if(targetType == null)
                 throw new MeshException($"Cannot determine the address type of {delivery.Target}");
 
-            var hub = await parent.ServiceProvider.CreateHub(targetType, targetId);
+            var hub = await meshHub.CreateHub(targetType, targetId);
+            if (hub == null)
+                return delivery;
+
             handlers[key] = handler = (d, _) =>
             {
                 hub.DeliverMessage(d);
@@ -39,8 +49,13 @@ namespace MeshWeaver.Hosting.Monolith
 
         private object GetRoutedAddress(object address)
         {
-            if(address is HostedAddress hosted)
-                return GetRoutedAddress(hosted.Host);
+            if (address is HostedAddress hosted)
+            {
+                var host = GetRoutedAddress(hosted.Host);
+                if (host is MeshAddress)
+                    return hosted.Address;
+                return host;
+            }
             return address;
         }
         public Task<IDisposable> RegisterRouteAsync(string addressType, string id, AsyncDelivery delivery)

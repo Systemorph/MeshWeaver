@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Connection.Notebook;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
+using MeshConnection = MeshWeaver.Connection.Notebook.MeshConnection;
 
 namespace MeshWeaver.Hosting.Monolith.Test
 {
@@ -32,7 +33,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     webBuilder.UseTestServer();
                     webBuilder.ConfigureServices(services =>
                     {
-                        services.AddScoped(CreateMesh);
+                        services.AddScoped(_ => CreateMesh());
                         services
                             .AddSignalR().AddJsonProtocol();
                         services.AddSingleton<IHubProtocol, JsonHubProtocol>(sp =>

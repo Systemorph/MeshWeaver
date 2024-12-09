@@ -1,31 +1,46 @@
 ﻿using MeshWeaver.Fixture;
-using MeshWeaver.Hosting.Test;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test
 {
-    public abstract class ConfiguredMeshTestBase(ITestOutputHelper output) : TestBase(output)
+    public abstract class ConfiguredMeshTestBase : TestBase
     {
-        protected record MeshAddress;
-
         protected record ClientAddress;
         protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
             => builder
                 .UseMonolithMesh()
-                .ConfigureMesh(mesh =>
-                    mesh.WithMeshNodeFactory((addressType, id) =>
-                        addressType == "app" && id == TestApplicationAttribute.Test
-                            ? MeshExtensions.GetMeshNode(addressType, id, typeof(TestApplicationAttribute).Assembly.Location)
-                            : null));
+                ;
+
+        protected ConfiguredMeshTestBase(ITestOutputHelper output) : base(output)
+        {
+            
+            lazyMesh = new(CreateMesh);
+
+        }
 
 
+        private readonly Lazy<IMessageHub> lazyMesh;
+        protected IMessageHub Mesh => lazyMesh.Value;
 
-        protected IMessageHub CreateMesh(IServiceProvider serviceProvider)
-            => ConfigureMesh(new(c => c.Invoke(Services), new MeshAddress()))
-                .BuildHub(ServiceProvider);
-
-
+        protected IMessageHub CreateMesh()
+        {
+            var serviceCollection = new ServiceCollection();
+            foreach (var service in Services)
+            {
+                serviceCollection.Add(service);
+            }
+            return ConfigureMesh(
+                    new(
+                        c => c.Invoke(serviceCollection),
+                        new MeshAddress()
+                    )
+                )
+                .BuildHub(serviceCollection.CreateMeshWeaverServiceProvider());
+        }
     }
 }

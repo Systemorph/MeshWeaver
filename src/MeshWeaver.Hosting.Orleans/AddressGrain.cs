@@ -13,7 +13,7 @@ public class MeshNodeGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMeshNod
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         await base.OnActivateAsync(cancellationToken);
-        if (State is { Id: null })
+        if (State is { AddressId: null })
             State = null;
 
     }

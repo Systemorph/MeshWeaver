@@ -63,9 +63,10 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false);
     IMessageHub GetHostedHub<TAddress1>(TAddress1 address, bool cachedOnly = false)
         => GetHostedHub(address, x => x, cachedOnly);
-    
-    IMessageHub WithDisposeAction(Action<IMessageHub> disposeAction);
-    IMessageHub WithDisposeAction(Func<IMessageHub, Task> disposeAction);
+    IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
+    IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
+    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal(_ => disposable.DisposeAsync().AsTask());
+    IMessageHub RegisterForDisposal(Func<IMessageHub, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     Task HasStarted { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
