@@ -16,7 +16,7 @@ public static class MonolithRegistryExtensions
         );
         return builder.ConfigureHub(conf => 
             conf
-                .AddDefaultAddressTypes()
+                .AddMeshTypesTypes()
                 .WithInitialization((hub,ct) => hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(ct)));
     }
 

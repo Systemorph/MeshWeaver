@@ -29,9 +29,10 @@ namespace MeshWeaver.Mesh
         };
 
 
-        public static MessageHubConfiguration AddDefaultAddressTypes(this MessageHubConfiguration config)
+        public static MessageHubConfiguration AddMeshTypesTypes(this MessageHubConfiguration config)
         {
             MeshAddressTypes.ForEach(kvp => config.TypeRegistry.WithType(kvp.Value, kvp.Key));
+            config.TypeRegistry.WithTypes(typeof(PingRequest), typeof(PingResponse));
             return config;
         }
 
