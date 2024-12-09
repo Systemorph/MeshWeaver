@@ -84,10 +84,10 @@ await client.AwaitResponse(
         var control = await stream
             .GetControlStream(area)
             .Timeout(5.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
 
 
-        control.Should().BeOfType<MarkdownControl>();
+        control.Should().BeOfType<MarkdownControl>().Which.Data.Should().Be("Hello World");
     }
 
     protected async Task<CompositeKernel> ConnectHubAsync()
