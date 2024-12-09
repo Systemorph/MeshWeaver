@@ -1,4 +1,5 @@
-﻿@using Microsoft.JSInterop
+﻿@using Microsoft.Extensions.Logging
+@using Microsoft.JSInterop
 @inherits BlazorView<MeshWeaver.Charting.ChartControl, ChartView>
 
 <canvas @ref="element" class="@Class"></canvas>
@@ -12,17 +13,30 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-
         if (firstRender)
         {
-            jsModule = await JsRuntime.Import("index.mjs");
+            try
+            {
+                jsModule = await JsRuntime.Import("index.mjs"); ;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Error loading JavaScript module: {ex.Message}");
+            }
 
             DataBind(ViewModel.Data, o => o.Options);
         }
 
         if (jsModule is not null)
         {
-            await jsModule.InvokeVoidAsync("renderChart", element, Options);
+            try
+            {
+                await jsModule.InvokeVoidAsync("renderChart", element, Options);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Error invoking renderChart function: {ex.Message}");
+            }
         }
     }
 

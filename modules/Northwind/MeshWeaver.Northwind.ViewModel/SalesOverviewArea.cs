@@ -34,7 +34,7 @@ public static class SalesOverviewArea
     public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.YearlyNorthwindData()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
@@ -47,7 +47,8 @@ public static class SalesOverviewArea
                                         .WithAlign(DataLabelsAlign.End))
                                 )
                     )
-                    .WithClass("chart sales-by-category-chart")
+                    .Select(x => x.WithClass("chart sales-by-category-chart"))
+                    
             );
     }
 

@@ -43,6 +43,6 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     /// </summary>
     public override IEnumerable<MeshNode> Nodes =>
         [MeshExtensions.GetMeshNode(
-            Address, typeof(NorthwindApplicationAttribute).Assembly.Location
+            ApplicationAddress.TypeName, Northwind, typeof(NorthwindApplicationAttribute).Assembly.Location
         )];
 }

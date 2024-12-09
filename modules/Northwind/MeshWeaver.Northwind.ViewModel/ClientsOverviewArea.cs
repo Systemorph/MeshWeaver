@@ -30,7 +30,7 @@ public static class ClientsOverviewArea
     /// <returns>An observable sequence of objects representing the top clients bar chart.</returns>
     public static IObservable<object> TopClients(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Customer))

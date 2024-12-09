@@ -1,11 +1,12 @@
-﻿using MeshWeaver.Pivot.Builder;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
 
 // todo: move to Charting.Layout project (07.08.2024, Alexander Kravets)
 public static class PivotChartBuilderExtensions
 {
-    public static ChartControl ToBarChart<
+    public static IObservable<ChartControl> ToBarChart<
             T,
             TTransformed,
             TIntermediate,
@@ -24,7 +25,7 @@ public static class PivotChartBuilderExtensions
         >
         => pivotBuilder.ToChart(b => b.ToBarChartPivotBuilder(), builder);
 
-    public static ChartControl ToLineChart<
+    public static IObservable<ChartControl> ToLineChart<
             T,
             TTransformed,
             TIntermediate,
@@ -43,7 +44,7 @@ public static class PivotChartBuilderExtensions
         >
         => pivotBuilder.ToChart(b => b.ToLineChart(), builder);
 
-    public static ChartControl ToPieChart<
+    public static IObservable<ChartControl> ToPieChart<
             T,
             TTransformed,
             TIntermediate,
@@ -62,7 +63,7 @@ public static class PivotChartBuilderExtensions
         >
         => pivotBuilder.ToChart(b => b.ToPieChart(), builder);
 
-    public static ChartControl ToDoughnutChart<
+    public static IObservable<ChartControl> ToDoughnutChart<
             T,
             TTransformed,
             TIntermediate,
@@ -81,7 +82,7 @@ public static class PivotChartBuilderExtensions
         >
         => pivotBuilder.ToChart(b => b.ToDoughnutChart(), builder);
 
-    private static ChartControl ToChart<
+    private static IObservable<ChartControl> ToChart<
             T,
             TTransformed,
             TIntermediate,
@@ -111,6 +112,6 @@ public static class PivotChartBuilderExtensions
 
         var chartModel = pivotChartBuilder.Execute();
 
-        return new(chartModel);
+        return chartModel.Select(x => new ChartControl(x));
     }
 }
