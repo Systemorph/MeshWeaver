@@ -2,7 +2,6 @@
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.SignalR;
 using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR.Client;
 using Xunit;
 using Xunit.Abstractions;
@@ -16,7 +15,8 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     {
         var client = await SignalRMeshClient
             .Configure(SignalRUrl)
-            .ConfigureConnection(c => c.WithUrl(SignalRUrl, x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler()))
+            .ConfigureConnection(c => c.WithUrl(SignalRUrl, x => 
+                x.HttpMessageHandlerFactory = (_ => Server.CreateHandler())))
             .ConnectAsync();
 
         var response = await client.AwaitResponse(new PingRequest(),

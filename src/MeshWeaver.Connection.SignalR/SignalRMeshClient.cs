@@ -54,14 +54,14 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient> where TClient 
         );
         return base.BuildHub();
     }
-    public virtual async Task<IMessageHub> ConnectAsync()
+    public virtual async Task<IMessageHub> ConnectAsync(CancellationToken ct = default)
     {
         var ret = BuildHub();
         var logger = ret.ServiceProvider.GetRequiredService<ILogger<TClient>>();
         try
         {
             logger.LogInformation("Trying to connect {Address} to the mesh {Url}", ret.Address, Url);
-            await ret.AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress()));
+            await ret.AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress()), ct);
             logger.LogInformation("Connection succeeded.");
         }
         catch (Exception e)

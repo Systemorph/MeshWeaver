@@ -16,7 +16,7 @@ public interface ITypeRegistry
         => WithTypesFromAssembly(typeof(T), filter);
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter);
-    ITypeRegistry WithTypes(IEnumerable<Type> select);
+    ITypeRegistry WithTypes(params IEnumerable<Type> select);
     string GetOrAddType(Type valueType);
     ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key);
     ITypeDefinition GetTypeDefinition(Type type, bool create = true);

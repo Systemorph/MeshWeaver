@@ -34,10 +34,12 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
 
         // Send Ping and receive Pong
         var pingPong = await kernel.SubmitCodeAsync(
-@$"await client.AwaitResponse(
+@$"
+using MeshWeaver.Mesh;
+await client.AwaitResponse(
     new PingRequest(), 
     o => o.WithTarget(new {typeof(MeshAddress).FullName}())
-    , new CancellationTokenSource(10000).Token
+    , new CancellationTokenSource(10_000).Token
 )");
 
         pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
@@ -98,7 +100,6 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         var connectMeshWeaver = await kernel.SubmitCodeAsync(
 @$"
 #r ""MeshWeaver.Connection.Notebook""
-using MeshWeaver.Hosting.Test;
 using MeshWeaver.Messaging;
 using System.Threading;
 var client = await MeshWeaver.Connection.Notebook.MeshConnection
