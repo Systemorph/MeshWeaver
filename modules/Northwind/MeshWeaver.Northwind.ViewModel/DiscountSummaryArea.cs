@@ -30,7 +30,7 @@ public static class DiscountSummaryArea
     /// <returns>An observable sequence of objects representing the discount summary view.</returns>
     public static IObservable<object> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a.Sum(x => x.UnitPrice * x.Quantity * x.Discount))
