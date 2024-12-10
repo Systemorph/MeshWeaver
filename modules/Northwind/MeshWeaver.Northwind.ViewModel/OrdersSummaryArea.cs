@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Linq;
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout.Documentation;
@@ -74,20 +75,21 @@ public static class OrdersSummaryArea
                             area.ToDataGrid(
                                 tuple.changeItem.Value.GetData<Order>()
                                     .Where(x => tuple.tb.Year == 0 || x.OrderDate.Year == tuple.tb.Year)
-                                    .OrderByDescending(y => y.OrderDate)
-                                    .Take(5)
                                     .Select(order => new OrderSummaryItem(
                                         tuple.changeItem.Value.GetData<Customer>(
                                             order.CustomerId
                                         )?.CompanyName,
                                         tuple.changeItem.Value.GetData<OrderDetails>()
-                                            .Count(d => d.OrderId == order.OrderId),
+                                            .Where(d => d.OrderId == order.OrderId)
+                                            .Sum(d => d.UnitPrice * d.Quantity),
                                         order.OrderDate
                                     ))
+                                    .OrderByDescending(y => y.Amount)
+                                    .Take(5)
                                     .ToArray(),
                                 config =>
                                     config.WithColumn(o => o.Customer)
-                                        .WithColumn(o => o.Products)
+                                        .WithColumn(o => o.Amount, column => column.WithFormat("N0"))
                                         .WithColumn(
                                             o => o.Purchased,
                                             column => column.WithFormat("yyyy-MM-dd")

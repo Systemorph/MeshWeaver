@@ -7,10 +7,10 @@ namespace MeshWeaver.Northwind.ViewModel;
 /// <param name="Customer">
 /// The identifier or name of the customer who placed the order.
 /// </param>
-/// <param name="Products">
-/// The total number of products included in the order.
+/// <param name="Amount">
+/// The total value of products purchased in the order.
 /// </param>
 /// <param name="Purchased">
 /// The date when the order was purchased.
 /// </param>
-public record OrderSummaryItem(string Customer, int Products, DateTime Purchased);
+public record OrderSummaryItem(string Customer, double Amount, DateTime Purchased);
