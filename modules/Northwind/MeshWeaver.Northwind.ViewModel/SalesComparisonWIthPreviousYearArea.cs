@@ -34,7 +34,7 @@ public static class SalesComparisonWIthPreviousYearArea
     public static IObservable<object> SalesByCategoryWithPrevYear(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.WithPrevYearNorthwindData()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
