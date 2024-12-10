@@ -42,6 +42,8 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     protected override object ConvertToData(Option value) => value?.Item;
     protected override bool NeedsUpdate(Option value)
     {
-        return Value != null && Value.ItemString != value?.ItemString;
+        if (Value is null)
+            return value is not null;
+        return Value.ItemString != value?.ItemString;
     }
 }
