@@ -5,6 +5,7 @@
     <PropertyGroup>
         <RazorCompileOnBuild>true</RazorCompileOnBuild>
         <RazorLangVersion>3.0</RazorLangVersion>
+        <TargetFrameworks>net9.0</TargetFrameworks>
     </PropertyGroup>
 
 
