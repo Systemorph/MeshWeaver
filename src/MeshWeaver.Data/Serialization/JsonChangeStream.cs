@@ -40,12 +40,12 @@ public static class JsonSynchronizationStream
         reduced.Initialize(ct => (tcs2 = new(ct)).Task);
         reduced.AddDisposable(
                 reduced
-                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.ChangedBy))
+                .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
         .Subscribe(e =>
         {
             logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                 reduced.StreamId, reduced.Owner);
-
+            e = e with { StreamId = reduced.StreamId };
             hub.Post(e, o => o.WithTarget(reduced.Owner));
         })
         );
@@ -172,7 +172,8 @@ public static class JsonSynchronizationStream
     private static StreamConfiguration<TStream> GetJsonConfig<TStream>(
         StreamConfiguration<TStream> stream) =>
         stream.ConfigureHub(config =>
-            config.WithHandler<DataChangedEvent>(
+            config
+                .WithHandler<DataChangedEvent>(
                 (hub, delivery) =>
                 {
                     var currentJson = stream.Stream.Get<JsonElement?>();
