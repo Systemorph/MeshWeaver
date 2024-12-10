@@ -5,6 +5,12 @@
     </ItemGroup>
 
     <ItemGroup>
+      <PackageReference Include="Microsoft.DotNet.Interactive" />
+      <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
       <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     </ItemGroup>
 

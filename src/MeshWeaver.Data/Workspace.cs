@@ -51,11 +51,6 @@ public class Workspace : IWorkspace
             x.GetRemoteStream<object, WorkspaceReference<object>>(default, default)
         );
 
-    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
-        TReference reference
-    )
-        where TReference : WorkspaceReference =>
-        GetRemoteStream<TReduced, TReference>(Hub.Address, reference);
 
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         object owner,
