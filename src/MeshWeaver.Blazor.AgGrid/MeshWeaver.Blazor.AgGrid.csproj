@@ -3,23 +3,24 @@
     <PropertyGroup>
         <Description>Blazor component for AG Grid integration.</Description>
         <PackageReadmeFile>README.md</PackageReadmeFile>
+        <TargetFrameworks>net9.0</TargetFrameworks>
     </PropertyGroup>
-
 
     <Import Project="StaticAssets\StaticAssets.targets" />
 
-  <ItemGroup>
-    <SupportedPlatform Include="browser" />
-    <Content Update="StaticAssets\**" Pack="false" />
-  </ItemGroup>
+    <ItemGroup>
+        <SupportedPlatform Include="browser" />
+        <Content Update="StaticAssets\**" Pack="false" />
+        <None Include="README.md" Pack="true" PackagePath="" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+    </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+        <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
+    </ItemGroup>
 
 </Project>
