@@ -24,6 +24,8 @@ builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
     options.TimestampFormat = "hh:mm:ss:fff";
     options.IncludeTimestamp = true;
 });
+
+builder.Services.AddSingleton<KernelHub>();
 builder.Services.AddLogging(config => config.AddConsole(
     options =>
     {
@@ -78,7 +80,7 @@ app.UseRouting();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 // Map the NotebookHub endpoint
-app.MapHub<SignalRConnectionHub>("/connect/{addressType}/{id}");
-
+app.MapHub<SignalRConnectionHub>("/connection");
+app.MapHub<KernelHub>("/kernel");
 app.Run();
 

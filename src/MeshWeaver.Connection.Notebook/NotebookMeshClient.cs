@@ -50,8 +50,8 @@ public class NotebookMeshClient(string url, object address) : SignalRMeshClientB
             ]
         );
 
-        var addressType = hub.ServiceProvider
-            .GetTypeRegistry()
+        var addressType = hub.Configuration
+                .TypeRegistry
             .GetCollectionName(hub.Address.GetType())
             ;
 
