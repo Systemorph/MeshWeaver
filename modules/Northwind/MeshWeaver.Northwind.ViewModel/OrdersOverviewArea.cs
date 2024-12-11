@@ -31,7 +31,7 @@ public static class OrdersOverviewArea
     /// <returns>An observable sequence of objects representing the orders count.</returns>
     public static IObservable<object> OrdersCount(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a.CountDistinctBy(x => x.OrderId))
@@ -47,7 +47,7 @@ public static class OrdersOverviewArea
     /// <returns>An observable sequence of objects representing the average order value.</returns>
     public static IObservable<object> AvgOrderValue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a
