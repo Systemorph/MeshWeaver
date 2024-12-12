@@ -26,7 +26,7 @@ public static class BlazorClientRegistry
     ) => config
         .AddData()
         .AddLayoutClient(c => (configuration ?? (x => x)).Invoke(c.WithView(DefaultFormatting)))
-        .AddMeshTypesTypes()
+        .AddMeshTypes()
     ;
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(

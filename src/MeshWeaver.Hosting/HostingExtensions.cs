@@ -15,9 +15,12 @@ public static  class HostingExtensions
         if (node == null)
             return null;
 
-        var assembly = Assembly.LoadFrom(Path.Combine(node.BasePath, node.AssemblyLocation));
+        if(node.HubFactory != null)
+            return node.HubFactory(meshHub.ServiceProvider, id);
+
+        var assembly = Assembly.LoadFrom(node.AssemblyLocation);
         if (assembly == null)
-            throw new InvalidOperationException($"Assembly {node.AssemblyLocation} not found in {node.BasePath}");
+            throw new InvalidOperationException($"Assembly {node.AssemblyLocation} not found in {node.PackageName}");
 
         var hub = assembly.GetCustomAttributes<MeshNodeAttribute>()
             .Where(a => a.Matches(meshHub, node))

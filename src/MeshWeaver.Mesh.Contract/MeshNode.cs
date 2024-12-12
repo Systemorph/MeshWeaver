@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh
 {
@@ -7,8 +8,7 @@ namespace MeshWeaver.Mesh
         string AddressType,
         string AddressId, 
         string Name, 
-        string BasePath, 
-        string AssemblyLocation
+        string PackageName
         )
     {
         [Key] public string Key { get; init; } = $"{AddressType}/{AddressId}";
@@ -21,5 +21,8 @@ namespace MeshWeaver.Mesh
         public string ContentPath { get; init; } = "wwwroot";
         public string ArticlePath { get; init; } = "articles";
 
+        public string AssemblyLocation { get; init; }
+
+        public Func<IServiceProvider, string, IMessageHub> HubFactory { get; init; }
     }
 }

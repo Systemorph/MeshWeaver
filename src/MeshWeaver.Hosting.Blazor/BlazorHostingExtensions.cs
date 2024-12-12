@@ -28,7 +28,7 @@ public static class BlazorHostingExtensions
     {
         var address = new ApplicationAddress(application);
         var storageInfo = await meshCatalog.GetNodeAsync(address.GetType().FullName,address.ToString());
-        var filePath = Path.Combine(storageInfo.BasePath, storageInfo.ContentPath, fileName);
+        var filePath = Path.Combine(storageInfo.PackageName, storageInfo.ContentPath, fileName);
 
         if (!File.Exists(filePath))
         {

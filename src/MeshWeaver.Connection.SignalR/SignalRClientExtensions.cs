@@ -73,7 +73,7 @@ public static class SignalRClientExtensions
                         throw;
                     }
                 })
-            .AddMeshTypesTypes()
+            .AddMeshTypes()
                 .WithRoutes(AddSignalRRoute);
     }
 
