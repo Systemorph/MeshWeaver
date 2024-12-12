@@ -16,7 +16,7 @@ using MeshConnection = MeshWeaver.Connection.Notebook.MeshConnection;
 
 namespace MeshWeaver.Hosting.Monolith.Test
 {
-    public abstract class AspNetCoreMeshBase(ITestOutputHelper output) : ConfiguredMeshTestBase(output)
+    public abstract class AspNetCoreMeshBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
         protected IHost Host;
         protected TestServer Server;
@@ -33,7 +33,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     webBuilder.UseTestServer();
                     webBuilder.ConfigureServices(services =>
                     {
-                        services.AddScoped(_ => CreateMesh());
+                        services.AddScoped(builder.BuildHub);
                         services
                             .AddSignalR().AddJsonProtocol();
                         services.AddSingleton<IHubProtocol, JsonHubProtocol>(sp =>

@@ -47,7 +47,7 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 
     private async IAsyncEnumerable<MeshArticle> InitializeArticlesForNodeAsync(MeshNode node)
     {
-        var files = Directory.GetFiles(Path.Combine(node.BasePath, node.ArticlePath));
+        var files = Directory.GetFiles(Path.Combine(node.PackageName, node.ArticlePath));
         foreach (var file in files)
         {
             var fileName = Path.GetFileNameWithoutExtension(file);

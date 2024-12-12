@@ -34,14 +34,7 @@ namespace MeshWeaver.Blazor.Pages
 
         [Parameter(CaptureUnmatchedValues = true)]
         public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-        private object Address =>
-            AddressType switch
-            {
-                ApplicationAddress.TypeName => new ApplicationAddress(AddressId),
-                NotebookAddress.TypeName => new NotebookAddress { Id = Id },
-
-                _ => throw new NotSupportedException($"Address type '{AddressType}' is not supported.")
-            };
+        private object Address => MeshExtensions.MapAddress(AddressType, AddressId);
 
         private LayoutAreaReference Reference { get; set; }
         protected override async Task OnParametersSetAsync()

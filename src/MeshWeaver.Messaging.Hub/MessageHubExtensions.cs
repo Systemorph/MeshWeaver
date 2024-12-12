@@ -6,7 +6,7 @@ namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
-    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, object address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, object address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
             .WithTypes(address.GetType());

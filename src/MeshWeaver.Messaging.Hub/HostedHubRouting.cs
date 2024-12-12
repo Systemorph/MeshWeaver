@@ -62,12 +62,14 @@ internal class HostedHubRouting
 
         }
 
+
         foreach (var handler in configuration.Handlers)
             delivery = await handler(delivery, cancellationToken);
 
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
-        if(delivery.Target == null || hub.Address.Equals(delivery.Target))
+
+        if (delivery.Target == null || hub.Address.Equals(delivery.Target))
             return delivery.NotFound();
 
         return RouteAlongHostingHierarchy(delivery);
@@ -75,6 +77,7 @@ internal class HostedHubRouting
 
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery)
     {
+
         if (delivery.Target is HostedAddress hosted)
         {
             logger.LogDebug("Routing delivery {id} of type {type} to host with address {target}", delivery.Id,
@@ -94,13 +97,21 @@ internal class HostedHubRouting
                 return delivery.NotFound();
             }
         }
+        else
+        {
+            var hostedHub = hub.GetHostedHub(delivery.Target, cachedOnly: true);
+            if (hostedHub is not null)
+            {
+                hostedHub.DeliverMessage(delivery);
+                return delivery.Forwarded();
+            }
+        }
 
         if (parentHub == null)
             return delivery.NotFound();
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        delivery = delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address));
         parentHub.DeliverMessage(delivery);
         return delivery.Forwarded();
     }
