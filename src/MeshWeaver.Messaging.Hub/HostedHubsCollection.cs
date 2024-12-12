@@ -7,7 +7,7 @@ namespace MeshWeaver.Messaging;
 public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisposable
 {
     public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
-    public readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>(); 
+    private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>(); 
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
 

@@ -18,4 +18,5 @@ public record MeshConfiguration
 
     public MeshConfiguration WithMeshNodeFactory(Func<string, string, MeshNode> meshNodeFactory)
         => this with { MeshNodeFactories = MeshNodeFactories.Add(meshNodeFactory) };
+
 }

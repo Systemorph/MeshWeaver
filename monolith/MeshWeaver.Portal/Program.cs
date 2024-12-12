@@ -10,7 +10,7 @@ using MeshWeaver.Portal;
 using MeshWeaver.Blazor.Notebooks;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
-using MeshWeaver.Notebooks.Hub;
+using MeshWeaver.Kernel.Hub;
 using Microsoft.AspNetCore.ResponseCompression;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,7 +25,7 @@ builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
     options.IncludeTimestamp = true;
 });
 
-builder.Services.AddSingleton<KernelHub>();
+builder.Services.AddScoped<KernelHub>();
 builder.Services.AddLogging(config => config.AddConsole(
     options =>
     {
@@ -38,8 +38,8 @@ builder.UseMeshWeaver(
         .ConfigureMesh(
             mesh => mesh
             .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
-            .AddNotebooks()
         )
+        .AddKernel()
         .AddBlazor(x =>
             x
                 .AddChartJs()

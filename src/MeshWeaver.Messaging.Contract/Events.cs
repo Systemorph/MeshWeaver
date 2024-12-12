@@ -25,3 +25,5 @@ public record DeliveryFailure(IMessageDelivery Delivery);
 public record PersistenceAddress();
 
 public record HeartbeatEvent(SyncDelivery Route);
+
+public record DisposeRequest;

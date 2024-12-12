@@ -13,7 +13,7 @@ public static class MeshConnection
 
     public static NotebookMeshClient Configure(string url, object address = null)
     {
-        var ret = new NotebookMeshClient(url, address ?? new NotebookAddress());
+        var ret = new NotebookMeshClient(url, address ?? new KernelAddress());
         if (ConfigurationOptions != null)
             ret = ret.ConfigureConnection(ConfigurationOptions);
         return ret;

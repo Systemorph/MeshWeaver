@@ -23,9 +23,17 @@ namespace MeshWeaver.Hosting.Monolith
                 meshHub.DeliverMessage(delivery);
                 return delivery.Forwarded();
             }
+            if(delivery.Target is HostedAddress { Host: MeshAddress } hosted)
+                delivery = delivery.WithTarget(hosted.Address);
 
             var address = GetRoutedAddress(delivery.Target);
 
+            // if we have created the hub ==> route through us.
+            var hostedHub = meshHub.GetHostedHub(delivery.Target, true);
+            if (hostedHub is not null)
+                return hostedHub.DeliverMessage(delivery);
+
+            // try if we can instantiate one.
             var targetId = SerializationExtensions.GetId(address);
             var targetType = typeRegistry.GetTypeName(address);
             var key = (targetType, targetId);

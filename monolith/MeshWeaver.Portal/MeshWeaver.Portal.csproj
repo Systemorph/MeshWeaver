@@ -14,7 +14,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Notebooks\MeshWeaver.Blazor.Notebooks.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Notebooks.Hub\MeshWeaver.Notebooks.Hub.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
   </ItemGroup>
 
 <ItemGroup>

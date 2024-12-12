@@ -35,9 +35,18 @@ public record SignalRClientAddress
     public const string TypeName = "signalr";
 
 }
-public record NotebookAddress
+public record KernelAddress
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
+
+    public override string ToString()
+        => $"{Id}";
+
+    public const string TypeName = "kernel";
+
+}
+public record NotebookAddress(string Id)
+{
 
     public override string ToString()
         => $"{Id}";

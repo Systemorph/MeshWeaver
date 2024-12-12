@@ -6,7 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.Notebooks.Hub;
+using MeshWeaver.Kernel.Hub;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.CSharp;
 using Microsoft.DotNet.Interactive.Events;
@@ -23,7 +23,7 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .ConfigureMesh(mesh => mesh.AddNotebooks());
+            .AddKernel();
 
 
     [Fact]
@@ -79,7 +79,7 @@ await client.AwaitResponse(
             .ServiceProvider
             .CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(c => c));
         var stream = uiClient.GetWorkspace()
-            .GetRemoteStream(new NotebookAddress() { Id = addressId }, new LayoutAreaReference(area));
+            .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
         var control = await stream
             .GetControlStream(area)

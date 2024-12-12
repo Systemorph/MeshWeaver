@@ -13,7 +13,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Notebooks\MeshWeaver.Notebooks.csproj" />
     </ItemGroup>
 
 </Project>

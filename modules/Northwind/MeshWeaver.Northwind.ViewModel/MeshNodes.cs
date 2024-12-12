@@ -42,7 +42,13 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     /// Mesh catalog entry.
     /// </summary>
     public override IEnumerable<MeshNode> Nodes =>
-        [MeshExtensions.GetMeshNode(
-            ApplicationAddress.TypeName, Northwind, typeof(NorthwindApplicationAttribute).Assembly.Location
-        )];
+        [new(
+            ApplicationAddress.TypeName, 
+            Northwind, 
+            Northwind, 
+            typeof(NorthwindApplicationAttribute).FullName
+        )
+        {
+            AssemblyLocation = typeof(NorthwindApplicationAttribute).Assembly.Location,
+        }];
 }

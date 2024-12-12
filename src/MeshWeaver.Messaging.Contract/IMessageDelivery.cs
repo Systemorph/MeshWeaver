@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Messaging.Hub")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 
 namespace MeshWeaver.Messaging;
 

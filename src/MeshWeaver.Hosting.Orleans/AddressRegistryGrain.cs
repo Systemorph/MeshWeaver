@@ -70,7 +70,7 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
 
 
     public Task<NodeStorageInfo> GetStorageInfo() =>
-        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.AddressId, Node.BasePath, Node.AssemblyLocation, State.AddressType));
+        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.AddressId, Node.PackageName, Node.AssemblyLocation, State.AddressType));
 
     public async Task Unregister()
     {

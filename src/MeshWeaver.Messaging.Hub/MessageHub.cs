@@ -22,6 +22,7 @@ public record ExecutionRequest(Func<CancellationToken, Task> Action);
 public sealed class MessageHub
     : MessageHubBase,
         IMessageHub,
+        IMessageHandler<DisposeRequest>,
         IMessageHandlerAsync<ShutdownRequest>
 {
     public override object Address => MessageService.Address;
@@ -452,4 +453,9 @@ public sealed class MessageHub
     }
 
 
+    IMessageDelivery IMessageHandler<DisposeRequest>.HandleMessage(IMessageDelivery<DisposeRequest> request)
+    {
+        Dispose();
+        return request.Processed();
+    }
 }
