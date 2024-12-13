@@ -14,8 +14,7 @@ namespace MeshWeaver.Hosting.Orleans
         {
             logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);
             var target = delivery.Target;
-            var targetId = SerializationExtensions.GetId(target);
-            var targetType = SerializationExtensions.GetType(target);
+            var (targetType,targetId) = SerializationExtensions.GetAddressTypeAndId(target);
             var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>($"{targetType}/{targetId}").GetStreamInfo();
             if (streamInfo.StreamProvider is StreamProviders.Mesh)
             {

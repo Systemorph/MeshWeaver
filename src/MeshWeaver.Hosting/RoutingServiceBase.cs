@@ -50,8 +50,7 @@ namespace MeshWeaver.Hosting
 
 
             var hostAddress = GetHostAddress(address);
-            var addressId = SerializationExtensions.GetId(hostAddress);
-            var addressType = typeRegistry.GetTypeName(hostAddress);
+            var (addressType,addressId) = SerializationExtensions.GetAddressTypeAndId(hostAddress);
 
             var node = await meshCatalog.GetNodeAsync(addressType, addressId);
             if (node == null)
