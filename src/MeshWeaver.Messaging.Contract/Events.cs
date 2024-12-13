@@ -20,7 +20,12 @@ public class DeliveryFailureException : Exception
     internal DeliveryFailure Failure { get; }
 }
 
-public record DeliveryFailure(IMessageDelivery Delivery);
+public record DeliveryFailure(IMessageDelivery Delivery)
+{
+    public string ExceptionType { get; init; }
+    public string Message { get; init; }
+    public string StackTrace { get; init; }
+}
 
 public record PersistenceAddress();
 
