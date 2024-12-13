@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
-using Json.Path;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
@@ -70,7 +69,7 @@ public static class LayoutExtensions
                 typeof(Icon)
             );
 
-    public static IObservable<UiControl> GetControlStream(
+    public static IObservable<UiControl> GetLayoutAreaStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) =>
@@ -104,7 +103,7 @@ public static class LayoutExtensions
                 }
             );
     }
-    public static object GetControl(
+    public static object GetLayoutArea(
         this ISynchronizationStream<JsonElement> stream,
         string area
     ) => JsonPointer
@@ -112,7 +111,7 @@ public static class LayoutExtensions
         .Evaluate(stream.Current.Value)
         ?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
 
-    public static IObservable<object> GetControlStream(
+    public static IObservable<object> GetLayoutAreaStream(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
     ) =>
@@ -121,15 +120,15 @@ public static class LayoutExtensions
                 ?.Instances.GetValueOrDefault(area)
         );
 
-    public static async Task<object> GetControlAsync(
+    public static async Task<object> GetLayoutAreaAsync(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
-    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
+    ) => await synchronizationItems.GetLayoutAreaStream(area).FirstAsync(x => x != null);
 
-    public static async Task<object> GetControlAsync(
+    public static async Task<object> GetLayoutAreaAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
-    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
+    ) => await synchronizationItems.GetLayoutAreaStream(area).FirstAsync(x => x != null);
 
     public static async Task<object> GetDataAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
@@ -175,7 +174,7 @@ public static class LayoutExtensions
         )
     );
 
-    public static TControl GetControl<TControl>(this EntityStore store, string area)
+    public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>
         store.Collections.TryGetValue(LayoutAreaReference.Areas, out var instances) &&
            instances.Instances.TryGetValue(area, out var ret)

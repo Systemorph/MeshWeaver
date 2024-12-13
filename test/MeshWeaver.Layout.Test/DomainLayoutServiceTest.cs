@@ -54,7 +54,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetLayoutAreaStream(reference.Area)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -63,7 +63,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .Which;
 
 
-        var controlFromStream = await stream.GetControlAsync(stack.Areas.Last().Area.ToString());
+        var controlFromStream = await stream.GetLayoutAreaAsync(stack.Areas.Last().Area.ToString());
         var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
         var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
@@ -115,7 +115,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetLayoutAreaStream(reference.Area)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -123,7 +123,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .BeOfType<LayoutStackControl>()
             .Which;
 
-        var control = await stream.GetControlAsync(stack.Areas.Last().Area.ToString());
+        var control = await stream.GetLayoutAreaAsync(stack.Areas.Last().Area.ToString());
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
         dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
 

@@ -13,7 +13,7 @@ public static class LayoutHelperExtensions
         Func<TControl, LayoutAreaHost, RenderingContext, TControl> config)
         where TControl : UiControl
     {
-        var menu = store.GetControl<TControl>(area) ?? factory();
+        var menu = store.GetLayoutArea<TControl>(area) ?? factory();
         menu = config(menu, host, context);
         return host.RenderArea(
             context with { Area = area }, menu, store)
