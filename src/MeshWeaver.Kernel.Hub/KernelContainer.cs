@@ -5,7 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.DotNet.Interactive;
-using Microsoft.DotNet.Interactive.Connection;
+using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.CSharp;
 using Microsoft.DotNet.Interactive.Events;
 using Microsoft.DotNet.Interactive.Formatting;
@@ -27,10 +27,11 @@ public class KernelContainer : IDisposable
                     (_, ctx) => areas.GetValueOrDefault(ctx.Area)
                 )
             )
-            .WithHandler<MeshWeaverKernelCommand>((_, request, ct) => HandleKernelCommandAsync(request, ct))
+            .WithHandler<KernelCommandEnvelope>((_, request, ct) => HandleKernelCommandAsync(request, ct))
+            .WithHandler<SubmitCodeRequest>((_, request, ct) => HandleKernelCommandAsync(request, ct))
             .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
             .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
-            .WithHandler<MeshWeaverKernelEvent>((_, request) => HandleKernelEvent(request))
+            .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request))
         );
         Kernel = CreateKernel(id);
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
@@ -39,9 +40,9 @@ public class KernelContainer : IDisposable
 
     private void PublishEventToContext(KernelEvent @event)
     {
-        var eventEnvelope = KernelEventEnvelope.Serialize(KernelEventEnvelope.Create(@event));
+        var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event));
         foreach (var a in subscriptions)
-            Hub.Post(new MeshWeaverKernelEvent(eventEnvelope), o => o.WithTarget(a));
+            Hub.Post(new KernelEventEnvelope(eventEnvelope), o => o.WithTarget(a));
     }
     private string LayoutAreaUrl { get; set; } = "https://localhost:65260/area/";
 
@@ -103,17 +104,28 @@ public class KernelContainer : IDisposable
     }
 
 
-    private IMessageDelivery HandleKernelEvent(IMessageDelivery<MeshWeaverKernelEvent> @event)
+    private IMessageDelivery HandleKernelEvent(IMessageDelivery<KernelEventEnvelope> @event)
     {
         // TODO V10: here we need to see what to do. cancellation will come through here. (12.12.2024, Roland Bürgi)
         return @event.Processed();
     }
 
-    public async Task<IMessageDelivery> HandleKernelCommandAsync(IMessageDelivery<MeshWeaverKernelCommand> request, CancellationToken ct)
+    public Task<IMessageDelivery> HandleKernelCommandAsync(IMessageDelivery<KernelCommandEnvelope> request, CancellationToken ct)
     {
         subscriptions.Add(request.Sender);
-        var envelope = KernelCommandEnvelope.Deserialize(request.Message.Command);
+        var envelope = Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Deserialize(request.Message.Command);
         var command = envelope.Command;
+        return SubmitCommand(request, ct, command);
+    }
+    public Task<IMessageDelivery> HandleKernelCommandAsync(IMessageDelivery<SubmitCodeRequest> request, CancellationToken ct)
+    {
+        subscriptions.Add(request.Sender);
+        var command = new SubmitCode(request.Message.Code);
+        return SubmitCommand(request, ct, command);
+    }
+
+    private async Task<IMessageDelivery> SubmitCommand(IMessageDelivery request, CancellationToken ct, KernelCommand command)
+    {
         await Kernel.SendAsync(command, ct);
         return request.Processed();
     }

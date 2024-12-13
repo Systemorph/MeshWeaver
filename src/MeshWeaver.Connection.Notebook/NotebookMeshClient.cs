@@ -7,6 +7,7 @@ using MeshWeaver.ShortGuid;
 using Microsoft.DotNet.Interactive;
 using Microsoft.DotNet.Interactive.CSharp;
 using Microsoft.DotNet.Interactive.Formatting;
+using Microsoft.DotNet.Interactive.Utility;
 
 namespace MeshWeaver.Connection.Notebook;
 
@@ -38,7 +39,7 @@ public class NotebookMeshClient(string url, object address) : SignalRMeshClientB
     {
         var hub = await base.ConnectAsync(ct);
 
-        var kernel = Kernel.Current;
+        var kernel = Microsoft.DotNet.Interactive.Kernel.Current;
         if (kernel is not CSharpKernel cSharpKernel)
             throw new NotSupportedException("Usage of Mesh Weaver is currently only supported in C#");
 

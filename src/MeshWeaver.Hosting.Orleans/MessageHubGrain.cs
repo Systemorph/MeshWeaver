@@ -1,8 +1,9 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Providers;
 using Orleans.Streams;
@@ -15,8 +16,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext loadContext;
-
-
+    private readonly IMeshCatalog meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
     private IMessageHub Hub { get; set; }
 
 
@@ -31,13 +31,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             return;
         }
 
-        var pathToAssembly = Path.Combine(startupInfo.BaseDirectory, startupInfo.AssemblyLocation);
-        loadContext = new(startupInfo.BaseDirectory);
-        var loaded = Assembly.LoadFrom(pathToAssembly);
 
-        
-        
-        Hub = await meshHub.CreateHub(startupInfo.AddressType, startupInfo.Id);
+        var node = await meshCatalog.GetNodeAsync(startupInfo.AddressType, startupInfo.Id);
+
+        Hub = meshHub.CreateHub(node, startupInfo.Id);
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();
