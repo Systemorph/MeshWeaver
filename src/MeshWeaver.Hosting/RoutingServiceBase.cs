@@ -13,6 +13,23 @@ namespace MeshWeaver.Hosting
         private readonly IMeshCatalog meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
+            try
+            {
+                return await RouteInMesh(delivery, cancellationToken);
+            }
+            catch(Exception e)
+            {
+                Mesh.Post(new DeliveryFailure(delivery)
+                {
+                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace
+                },
+                    o => o.ResponseFor(delivery));
+                return delivery.Failed(e.Message);
+            }
+        }
+
+        private async Task<IMessageDelivery> RouteInMesh(IMessageDelivery delivery, CancellationToken cancellationToken)
+        {
             if (delivery.Target == null)
                 return delivery;
 
@@ -37,6 +54,9 @@ namespace MeshWeaver.Hosting
             var addressType = typeRegistry.GetTypeName(hostAddress);
 
             var node = await meshCatalog.GetNodeAsync(addressType, addressId);
+            if (node == null)
+                throw new MeshException($"No Mesh node was found for {addressType}/{addressId}");
+
             if (!string.IsNullOrWhiteSpace(node.StartupScript))
                 return RouteToKernel(delivery, node, addressId);
             return await RouteMessage(delivery, node, addressId, cancellationToken);

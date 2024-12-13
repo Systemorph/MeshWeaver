@@ -121,6 +121,18 @@ public static class LayoutExtensions
         );
 
     public static async Task<object> GetLayoutAreaAsync(
+        this IMessageHub hub,
+        object address,
+        string area,
+        string id = null
+    ) => await hub.GetWorkspace()
+        .GetRemoteStream(address, new LayoutAreaReference(area){Id = id})
+        .GetLayoutAreaStream(area)
+        .Catch<object, Exception>(ex => Observable.Throw<object>(new InvalidOperationException("An error occurred while retrieving the layout area stream.", ex)))
+        .FirstAsync(x => x != null)
+;
+
+    public static async Task<object> GetLayoutAreaAsync(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) => await synchronizationItems.GetLayoutAreaStream(area).FirstAsync(x => x != null);

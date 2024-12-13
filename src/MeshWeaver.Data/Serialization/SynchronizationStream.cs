@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Data;
 using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Disposables;
@@ -204,7 +205,17 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void Set<T>(string key, T value) => Properties[key] = value;
     public void Set<T>(T value) => Properties[typeof(T).FullName!] = value;
 
-
+    private readonly ConcurrentDictionary<int, Task> tasks = new();
+    public void BindToTask(Task task)
+    {
+        tasks[task.Id] = task;
+        task.ContinueWith(t =>
+        {
+            tasks.TryRemove(task.Id, out var _);
+            if (t is { IsFaulted: true, Exception: not null })
+                Store.OnError(t.Exception);
+        });
+    }
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
