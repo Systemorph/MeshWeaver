@@ -18,7 +18,7 @@ public class KernelHub(IMessageHub hub) : Hub
 
     public void KernelCommandFromServer(string kernelCommandEnvelope)
     {
-        hub.Post(new MeshWeaverKernelCommand(kernelCommandEnvelope), o => o.WithTarget(KernelAddress));
+        hub.Post(new KernelCommandEnvelope(kernelCommandEnvelope), o => o.WithTarget(KernelAddress));
     }
 
     public void KernelEvent(string kernelEventEnvelope)
@@ -28,7 +28,7 @@ public class KernelHub(IMessageHub hub) : Hub
 
     public void KernelEventFromServer(string kernelEventEnvelope)
     {
-        hub.Post(new MeshWeaverKernelEvent(kernelEventEnvelope));
+        hub.Post(new KernelEventEnvelope(kernelEventEnvelope));
     }
 
     public async Task Connect()
