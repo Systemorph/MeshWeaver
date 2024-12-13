@@ -48,7 +48,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 reference
             );
 
-            var control = await stream.GetControlAsync(reference.Area);
+            var control = await stream.GetLayoutAreaAsync(reference.Area);
             control
                 .Should()
                 .BeOfType<NavMenuControl>()

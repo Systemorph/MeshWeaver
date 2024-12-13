@@ -4,7 +4,7 @@ namespace MeshWeaver.Connection.Notebook;
 
 public interface INotebookLayoutService
 {
-    UiControl GetControl(string area);
-    void SetControl(string area, UiControl control);
+    UiControl GetArea(string area);
+    void SetArea(string area, UiControl control);
     bool HasArea(string area);
 }
