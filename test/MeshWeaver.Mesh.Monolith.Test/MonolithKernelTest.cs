@@ -5,6 +5,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Northwind.ViewModel;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
 using Xunit;
@@ -17,7 +18,8 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return base.ConfigureMesh(builder)
-            .AddKernel();
+            .AddKernel()
+            .ConfigureMesh(config => config.AddMeshNodes(NorthwindApplicationAttribute.Northwind));
     }
 
     [Fact]

@@ -10,7 +10,7 @@ public record MeshAddress
 public record ApplicationAddress(string Name)
 {
     public override string ToString()
-        => $"{Name}";
+        => $"{TypeName}/{Name}";
 
     public const string TypeName = "app";
 }
@@ -19,7 +19,7 @@ public record UiAddress
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public override string ToString()
-        => $"{Id}";
+        => $"{TypeName}/{Id}";
 
     public const string TypeName = "ui";
 
@@ -30,7 +30,7 @@ public record SignalRClientAddress
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public override string ToString()
-        => $"{Id}";
+        => $"{TypeName}/{Id}";
 
     public const string TypeName = "signalr";
 
@@ -40,7 +40,7 @@ public record KernelAddress
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
     public override string ToString()
-        => $"{Id}";
+        => $"{TypeName}/{Id}";
 
     public const string TypeName = "kernel";
 
@@ -49,7 +49,7 @@ public record NotebookAddress(string Id)
 {
 
     public override string ToString()
-        => $"{Id}";
+        => $"{TypeName}/{Id}";
 
     public const string TypeName = "nb";
 

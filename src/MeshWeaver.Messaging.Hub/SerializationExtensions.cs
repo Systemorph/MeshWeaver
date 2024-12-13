@@ -37,14 +37,16 @@ public static class SerializationExtensions
         clonedOptions.Converters.Remove(toBeRemoved);
         return clonedOptions;
     }
-    public static string GetId(object instance)
-        => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.IdProperty, out var id)
-            ? id!.ToString()
-            : instance.ToString();
-    public static string GetType(object instance)
-        => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var type)
-            ? type!.ToString()
-            : instance.GetType().FullName;
+
+    public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
+    {
+        var s = instance.ToString();
+        var split = s.Split('/');
+        if(split.Length < 2)
+            throw new InvalidOperationException($"Address {s} is not in the correct format. Expected format is AddressType/AddressId");
+
+        return (split[0], string.Join('/', split.Skip(1)));
+    }
 
     public static JsonSerializerOptions CreateJsonSerializationOptions(this IMessageHub hub)
     {

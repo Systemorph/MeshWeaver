@@ -7,7 +7,7 @@ public static class KernelExtensions
 {
     public static MeshBuilder AddKernel(this MeshBuilder builder)
         => builder.ConfigureMesh(mesh => mesh
-            .WithMeshNodeFactory((addressType, addressId) =>
+            .AddMeshNodeFactory((addressType, addressId) =>
                 addressType == KernelAddress.TypeName
                     ? new(addressType, addressId, "Kernel", typeof(KernelExtensions).FullName)
                     {

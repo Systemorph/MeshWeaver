@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Data;
 using System.Reactive.Subjects;
 using System.Reflection;
 using MeshWeaver.Disposables;
@@ -197,6 +196,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void Dispose()
     {
+        lock (disposeLock)
+        {
+            if(isDisposed)
+                return;
+            isDisposed = true;
+        }
         synchronizationHub.Dispose();
     }
     private ConcurrentDictionary<string, object> Properties { get; } = new();
