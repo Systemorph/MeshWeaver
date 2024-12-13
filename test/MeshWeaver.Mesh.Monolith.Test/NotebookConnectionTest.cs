@@ -82,7 +82,7 @@ await client.AwaitResponse(
             .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
         var control = await stream
-            .GetControlStream(area)
+            .GetLayoutAreaStream(area)
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null);
 

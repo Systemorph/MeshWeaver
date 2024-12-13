@@ -44,4 +44,9 @@ public class KernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
         value.Value.Should().Be("Hello World\r\n");
     }
 
+    [Fact]
+    public async Task RoutingNorthwind()
+    {
+
+    }
 }
