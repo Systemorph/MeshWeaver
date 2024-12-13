@@ -1,18 +1,18 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using FluentAssertions;
+using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
 using Xunit;
 using Xunit.Abstractions;
-using KernelCommandEnvelope = MeshWeaver.Kernel.KernelCommandEnvelope;
-using KernelEventEnvelope = MeshWeaver.Kernel.KernelEventEnvelope;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class KernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -47,6 +47,9 @@ public class KernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
     [Fact]
     public async Task RoutingNorthwind()
     {
-
+        var client = CreateClient(x => x.AddLayoutClient());
+        var area = await client.GetLayoutAreaAsync(new ApplicationAddress("Northwind"), "Dashboard");
+        area.Should().NotBeNull();
+        area.Should().BeOfType<LayoutAreaControl>();
     }
 }
