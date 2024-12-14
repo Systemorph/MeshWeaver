@@ -77,8 +77,9 @@ public class MessageService : IMessageService
         if (delivery.Target is JsonNode node)
             delivery = delivery.WithTarget(node.Deserialize<object>(hub.JsonSerializerOptions));
 
-        if (Address.Equals(delivery.Target))
-            delivery = UnpackIfNecessary(delivery);
+        var targetAddress = delivery.Target is HostedAddress hosted ? hosted.Address : delivery.Target;
+        if (Address.Equals(targetAddress))
+            delivery = UnpackIfNecessary(delivery).WithTarget(targetAddress);
 
 
         // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
