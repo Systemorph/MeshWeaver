@@ -13,35 +13,15 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public static class TestHubExtensions
-{
-    public static IMessageHub CreateTestHub(IMessageHub mesh)
-    => mesh.ServiceProvider.CreateMessageHub(new ApplicationAddress(nameof(Test)), config => config
-        .AddLayout(layout =>
-            layout.WithView(ctx =>
-                    ctx.Area == "Dashboard",
-                (_, ctx) => new LayoutGridControl()
-            )
-        )
-    );
-
-}
-
 public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string Test = nameof(Test);
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-    {
-        return base.ConfigureMesh(builder)
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder)
             .AddKernel()
             .ConfigureMesh(config => config.AddMeshNodes(
-                new MeshNode(ApplicationAddress.TypeName, Test, "Test", GetType().Assembly.FullName)
-                {
-                    StartupScript = @$"#r ""{typeof(TestHubExtensions).Namespace}""
-{typeof(TestHubExtensions).FullName}.{nameof(TestHubExtensions.CreateTestHub)}(Mesh);"
-                }
+                TestHubExtensions.Node
             ));
-    }
 
     [Fact]
     public async Task HelloWorld()
@@ -74,13 +54,8 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task HubViaKernel()
     {
         var client = CreateClient();
-        var command = 
-@"
-using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
-await Mesh.GetLayoutAreaAsync(new ApplicationAddress(""Test""), ""Dashboard"")";
         client.Post(
-            new SubmitCodeRequest(command),
+            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
             o => o.WithTarget(new KernelAddress()));
         var kernelEvents = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
