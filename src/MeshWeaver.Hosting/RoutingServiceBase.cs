@@ -57,15 +57,15 @@ namespace MeshWeaver.Hosting
                 throw new MeshException($"No Mesh node was found for {addressType}/{addressId}");
 
             if (!string.IsNullOrWhiteSpace(node.StartupScript))
-                return RouteToKernel(delivery, node, addressId);
+                return await RouteToKernel(delivery, node, addressId, cancellationToken);
             return await RouteMessage(delivery, node, addressId, cancellationToken);
         }
 
-        protected virtual IMessageDelivery RouteToKernel(IMessageDelivery delivery, MeshNode node, string addressId)
+        protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, string addressId, CancellationToken ct)
         {
             var kernelId = GetKernelId(delivery, node, addressId);
             delivery = delivery.WithTarget(new HostedAddress(delivery.Target, new KernelAddress(){Id = kernelId}));
-            return delivery.Forwarded();
+            return RouteInMesh(delivery, ct);
         }
 
         protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, string addressId)

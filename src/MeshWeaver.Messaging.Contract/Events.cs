@@ -22,9 +22,23 @@ public class DeliveryFailureException : Exception
 
 public record DeliveryFailure(IMessageDelivery Delivery)
 {
+    public ErrorType ErrorType { get; init; }
     public string ExceptionType { get; init; }
     public string Message { get; init; }
     public string StackTrace { get; init; }
+
+}
+
+public enum ErrorType
+{
+    Unknown,
+    Exception,
+    NotFound,
+    Rejected,
+    Ignored,
+    Failed,
+    CompilationFailed,
+    StartupScriptFailed
 }
 
 public record PersistenceAddress();

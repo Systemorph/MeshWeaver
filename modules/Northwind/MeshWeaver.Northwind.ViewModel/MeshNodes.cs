@@ -18,11 +18,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     public override IEnumerable<MeshNode> Nodes
         =>
         [
-#if DEBUG
             Northwind
-#else
-            Northwind
-#endif
         ];
     /// <summary>
     /// Main definition of the mesh node.
@@ -34,9 +30,9 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
         typeof(NorthwindApplicationAttribute).FullName
     )
     {
-        StartupScript = @$"#r ""nuget:{typeof(NorthwindApplicationAttribute).FullName}""
-{typeof(NamedOptionExtensions).FullName}.{nameof(NorthwindApplicationExtensions.CreateNorthwind)}
-(Mesh, new {typeof(ApplicationAddress).FullName}(""{nameof(Northwind)}"");"
+        StartupScript = @$"#r ""nuget:{typeof(NorthwindApplicationAttribute).Namespace}""
+{typeof(NorthwindApplicationExtensions).FullName}.{nameof(NorthwindApplicationExtensions.CreateNorthwind)}
+(Mesh, new {typeof(ApplicationAddress).FullName}(""{nameof(Northwind)}""));"
     };
 
     //public static readonly MeshNode NorthwindDevelopment = new(

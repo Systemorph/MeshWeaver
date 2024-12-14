@@ -16,7 +16,7 @@ public record MeshHostApplicationBuilder : MeshBuilder
 }
 public record MeshHostBuilder : MeshBuilder
 {
-    public MeshHostBuilder(IHostBuilder Host, object address) : base(c => Host.ConfigureServices(services => c(services)), address)
+    public MeshHostBuilder(IHostBuilder Host, object address) : base(c => Host.ConfigureServices((_,services) => c(services)), address)
     {
         this.Host = Host;
         Host.UseServiceProviderFactory(new MessageHubServiceProviderFactory(BuildHub));
