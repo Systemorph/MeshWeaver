@@ -13,10 +13,10 @@ public interface IMeshCatalog
 
 }
 
-[GenerateSerializer]
+
 
 public record StreamInfo(string Id, string StreamProvider, string Namespace, string AddressType);
-[GenerateSerializer]
+
 public record NodeStorageInfo(string Id, string BaseDirectory, string AssemblyLocation, string AddressType);
 
 
