@@ -21,9 +21,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBase(output)
 {
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .AddKernel();
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
+        base.ConfigureMesh(builder)
+            .AddKernel()
+            .ConfigureMesh(config => config.AddMeshNodes(
+                TestHubExtensions.Node
+            ));
 
 
     [Fact]

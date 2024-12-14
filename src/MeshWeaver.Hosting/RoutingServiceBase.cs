@@ -44,7 +44,7 @@ namespace MeshWeaver.Hosting
             var address = GetHostAddress(delivery.Target);
 
             // if we have created the hub ==> route through us.
-            var hostedHub = Mesh.GetHostedHub(delivery.Target, true);
+            var hostedHub = Mesh.GetHostedHub(address, true);
             if (hostedHub is not null)
                 return hostedHub.DeliverMessage(delivery);
 
