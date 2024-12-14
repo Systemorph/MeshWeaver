@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace MeshWeaver.Mesh;
 
-[GenerateSerializer]
+
 public record MeshArticle
 {
     public string Id { get; init; }

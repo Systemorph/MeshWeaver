@@ -19,7 +19,11 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         return base.ConfigureMesh(builder)
             .AddKernel()
-            .ConfigureMesh(config => config.AddMeshNodes(NorthwindApplicationAttribute.Northwind));
+            .ConfigureMesh(config => config.AddMeshNodes(NorthwindApplicationAttribute.Northwind with
+                {
+                    StartupScript = NorthwindApplicationAttribute.Northwind.StartupScript.Replace("nuget:", "")
+                }
+            ));
     }
 
     [Fact]

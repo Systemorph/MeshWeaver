@@ -2,10 +2,6 @@
   <PropertyGroup>
     <RootNamespace>MeshWeaver.Mesh</RootNamespace>
   </PropertyGroup>
-  <ItemGroup>
-      <PackageReference Include="Microsoft.Orleans.Serialization.Abstractions" />
-      <PackageReference Include="Microsoft.Orleans.Sdk" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />

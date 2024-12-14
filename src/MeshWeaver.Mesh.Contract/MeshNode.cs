@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
-[GenerateSerializer]
+
 public record MeshNode(
     string AddressType,
     string AddressId, 

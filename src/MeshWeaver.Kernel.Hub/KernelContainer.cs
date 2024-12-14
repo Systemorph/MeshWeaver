@@ -24,6 +24,7 @@ public class KernelContainer : IDisposable
     public KernelContainer(IServiceProvider serviceProvider, string id)
     {
         meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
+        Kernel = CreateKernel(id);
         Hub = serviceProvider.CreateMessageHub(new KernelAddress(){Id = id}, config => config
             .AddLayout(layout =>
                 layout.WithView(ctx =>
@@ -32,13 +33,13 @@ public class KernelContainer : IDisposable
                 )
             )
             .WithRoutes(routes => routes.WithHandler((d,ct)=>RouteToSubHubs(routes.Hub, d, ct)))
+            .WithInitialization((_, ct) => Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>().Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub)))))
             .WithHandler<KernelCommandEnvelope>((_, request, ct) => HandleKernelCommandEnvelopeAsync(request, ct))
             .WithHandler<SubmitCodeRequest>((_, request, ct) => HandleKernelCommandAsync(request, ct))
             .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
             .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
             .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request))
         );
-        Kernel = CreateKernel(id);
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
         Hub.RegisterForDisposal(this);
     }
@@ -47,7 +48,7 @@ public class KernelContainer : IDisposable
     {
         try
         {
-            if (request.Target is not HostedAddress hosted || kernelHub.Address.Equals(hosted.Host))
+            if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
                 return request;
 
             var hub = kernelHub.GetHostedHub(hosted.Address, true);
@@ -67,7 +68,17 @@ public class KernelContainer : IDisposable
                 return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}",
                     hosted);
 
-            await Kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationtoken);
+            var result = await Kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationtoken);
+            if(!result.Events.Any(e => e is CommandSucceeded))
+                return DeliveryFailure(
+                    kernelHub, request,
+                    new DeliveryFailure(request)
+                {
+                    ErrorType = ErrorType.StartupScriptFailed,
+                    Message = $"Startup script failed: {string.Join(',', result.Events.OfType<DiagnosticsProduced>().Select(d => d.FormattedDiagnostics))}",
+
+                });
+
 
             hub = kernelHub.GetHostedHub(hosted.Address, true);
             if (hub is not null)
@@ -81,6 +92,7 @@ public class KernelContainer : IDisposable
         {
             kernelHub.Post(new DeliveryFailure(request)
             {
+                ErrorType = ErrorType.Exception,
                 ExceptionType = e.GetType().Name,
                 Message = e.Message,
             }, o => o.ResponseFor(request));
@@ -91,12 +103,18 @@ public class KernelContainer : IDisposable
     private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, string message,
         HostedAddress hosted)
     {
-        kernelHub.Post(new DeliveryFailure(request)
+        var deliveryFailure = new DeliveryFailure(request)
         {
             ExceptionType = "MeshNodeNotFound",
             Message = message,
-        }, o => o.ResponseFor(request));
-        return request.Failed(message);
+        };
+        return DeliveryFailure(kernelHub, request, deliveryFailure);
+    }
+
+    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, DeliveryFailure deliveryFailure)
+    {
+        kernelHub.Post(deliveryFailure, o => o.ResponseFor(request));
+        return request.Failed(deliveryFailure.Message);
     }
 
     private void PublishEventToContext(KernelEvent @event)
@@ -118,6 +136,7 @@ public class KernelContainer : IDisposable
         var ret = new CSharpKernel()
             .UseKernelHelpers()
             .UseValueSharing();
+        ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location]);
         var composite = new CompositeKernel("mesh");
         composite.Add(ret);
         return composite;
