@@ -5,6 +5,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.ViewModel;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
@@ -29,12 +30,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task HelloWorld()
     {
-        var kernelEvents = new Subject<KernelEventEnvelope>();
-        var client = CreateClient(config => config.WithHandler<KernelEventEnvelope>((_, e) =>
-        {
-            kernelEvents.OnNext(e.Message);
-            return e.Processed();
-        }));
+        var client = CreateClient();
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
             new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command))),
@@ -53,9 +49,19 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task RoutingNorthwind()
     {
-        var client = CreateClient(x => x.AddLayoutClient());
+        var client = CreateClient();
         var area = await client.GetLayoutAreaAsync(new ApplicationAddress("Northwind"), "Dashboard");
         area.Should().NotBeNull();
-        area.Should().BeOfType<LayoutAreaControl>();
+        area.Should().BeOfType<LayoutGridControl>();
+    }
+
+    private readonly ReplaySubject<KernelEventEnvelope> kernelEvents = new();
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration).AddLayoutClient().WithHandler<KernelEventEnvelope>((_, e) =>
+        {
+            kernelEvents.OnNext(e.Message);
+            return e.Processed();
+        });
     }
 }
