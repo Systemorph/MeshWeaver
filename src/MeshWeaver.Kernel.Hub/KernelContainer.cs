@@ -83,7 +83,7 @@ public class KernelContainer : IDisposable
             hub = kernelHub.GetHostedHub(hosted.Address, true);
             if (hub is not null)
             {
-                hub.DeliverMessage(request);
+                hub.DeliverMessage(request.ForwardTo(hosted.Address));
                 return request.Processed();
             }
             return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}", hosted);
