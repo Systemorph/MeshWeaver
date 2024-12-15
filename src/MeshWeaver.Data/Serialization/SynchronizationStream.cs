@@ -81,9 +81,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
-    //public readonly ConcurrentBag<IDisposable> Disposables = new();
-    //public readonly ConcurrentBag<IAsyncDisposable> AsyncDisposables = new();
-
     private bool isDisposed;
     private readonly object disposeLock = new();
 
