@@ -47,9 +47,15 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
 
 
         var subject = new Subject<string>();
+        connection.On<string>("kernelEvents", e => subject.OnNext(e));
         var receiver = KernelCommandAndEventReceiver.FromObservable(subject);
 
-        var kernel = new ProxyKernel( connectCommand.ConnectedKernelName, new KernelCommandAndEventSignalRHubConnectionSender(connection), receiver);
+        var kernel = new ProxyKernel( 
+            connectCommand.ConnectedKernelName, 
+            new KernelCommandAndEventSignalRHubConnectionSender(connection), 
+            receiver,
+            new Uri($"kernel://mesh/csharp")
+                );
         return [kernel];
     }
 }

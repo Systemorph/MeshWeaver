@@ -46,7 +46,7 @@ builder.UseMeshWeaver(
                 .AddAgGrid()
                 .AddNotebooks()
         )
-        .AddSignalRConnections()
+        .AddSignalRHubs()
         .UseMonolithMesh()
 );
 

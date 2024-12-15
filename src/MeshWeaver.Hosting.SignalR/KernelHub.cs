@@ -7,9 +7,11 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace MeshWeaver.Hosting.SignalR;
 
-public class KernelHub(IMessageHub hub) : Hub
+public class KernelHub : Hub
 {
     public const string EndPoint = "kernel";
+    public const string KernelEventsMethod = "kernelEvents";
+
 
     public void SubmitCommand(string kernelCommandEnvelope)
     {
@@ -18,32 +20,35 @@ public class KernelHub(IMessageHub hub) : Hub
 
     public void KernelCommandFromProxy(string kernelCommandEnvelope)
     {
-        PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope));
+        PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope), GetKernelId());
     }
     public void KernelEventFromProxy(string kernelEventEnvelope)
     {
-        PostToKernel(new KernelEventEnvelope(kernelEventEnvelope));
+        PostToKernel(new KernelEventEnvelope(kernelEventEnvelope), GetKernelId());
     }
 
-    private void PostToKernel(object message)
+    private string GetKernelId()
     {
-        if (!callers.TryGetValue(Context.ConnectionId, out var tuple))
-            throw new MeshException($"Could not find SignalR connection {Context.ConnectionId}");
-        hub.Post(message, o => o.WithTarget(tuple.Address));
+        if (!kernelByClient.TryGetValue(Context.ConnectionId, out var ret))
+            throw new MeshException($"No kernel mapped for connection {Context.ConnectionId}");
+        return ret;
+    }
+
+    private void PostToKernel(object message, string kernelId)
+    {
+        hub.Post(message, o => o.WithTarget(new KernelAddress(){Id = kernelId}));
     }
 
     public override Task OnConnectedAsync()
     {
         var clientId = Context.ConnectionId;
+        if (kernelByClient.ContainsKey(clientId))
+            return Task.CompletedTask;
+
         var kernelId = Guid.NewGuid().AsString();
-        callers.TryAdd(clientId, (new KernelAddress{Id = kernelId}, hub.Register<KernelEventEnvelope>(async (d, ct) =>
-                {
-                    await Clients.Client(clientId).SendCoreAsync("kernelEvents", [d.Message.Envelope], ct);
-                    return d.Processed();
-                },
-                d => d.Sender is KernelAddress ka && ka.Id == kernelId))
-        );
-;
+        kernelByClient[clientId] = kernelId;
+        clientByKernel[kernelId] = clientId;
+
         return Task.CompletedTask;
     }
 
@@ -54,18 +59,36 @@ public class KernelHub(IMessageHub hub) : Hub
     }
 
 
+    private readonly ConcurrentDictionary<string, string> kernelByClient = new();
+    private readonly ConcurrentDictionary<string, string> clientByKernel = new();
+    private readonly IMessageHub hub;
 
-    private bool isDisposing;
-    private readonly object locker = new();
-    private readonly ConcurrentDictionary<string, (KernelAddress Address,IDisposable Disposable)> callers = new();
+    public KernelHub(IMessageHub hub)
+    {
+        this.hub = hub;
+        hub.Register<KernelEventEnvelope>(async (d, ct) =>
+            {
+                var id = GetClientId(d.Sender);
+                if (id != null)
+                    await Clients.Client(id).SendCoreAsync(KernelEventsMethod, [d.Message.Envelope], ct);
+                return d.Processed();
+            });
+    }
+
+    private string GetClientId(object sender)
+    {
+        var kernelId = (sender as KernelAddress)?.Id;
+        if (kernelId is null)
+            return null; // TODO V10: Should we throw here? or clean up? (15.12.2024, Roland Bürgi)
+        return clientByKernel.GetValueOrDefault(kernelId);
+    }
 
     public override Task OnDisconnectedAsync(Exception exception)
     {
-        if (callers.TryRemove(Context.ConnectionId, out var d))
+        if (kernelByClient.TryRemove(Context.ConnectionId, out var kernelId))
         {
-            PostToKernel(new DisposeRequest());
-            d.Disposable.Dispose();
-            
+            PostToKernel(new DisposeRequest(), kernelId);
+            clientByKernel.TryRemove(kernelId, out _);
         }
         return base.OnDisconnectedAsync(exception);
     }
