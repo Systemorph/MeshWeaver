@@ -4,7 +4,6 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Notebook;
 using MeshWeaver.Data;
-using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -35,6 +34,7 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
     [Fact]
     public async Task HubViaKernel()
     {
+
         var kernel = await ConnectToRemoteKernelAsync();
 
         
@@ -151,18 +151,7 @@ await client.AwaitResponse(
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.Notebook\"");
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var connectMeshWeaver = await kernel.SubmitCodeAsync(
-@$"
-#r ""MeshWeaver.Connection.Notebook""
-using MeshWeaver.Messaging;
-using System.Threading;
-var client = await MeshWeaver.Connection.Notebook.MeshConnection
-    .Configure(""{SignalRUrl}"")
-    .ConnectAsync();
-"
-        );
 
-        connectMeshWeaver.Events.OfType<CommandSucceeded>().SingleOrDefault().Should().NotBeNull();
         return kernel;
     }
 

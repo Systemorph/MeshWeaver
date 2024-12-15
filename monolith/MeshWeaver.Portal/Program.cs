@@ -25,7 +25,7 @@ builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
     options.IncludeTimestamp = true;
 });
 
-builder.Services.AddScoped<KernelHub>();
+builder.Services.AddSingleton<KernelHub>();
 builder.Services.AddLogging(config => config.AddConsole(
     options =>
     {
@@ -46,6 +46,7 @@ builder.UseMeshWeaver(
                 .AddAgGrid()
                 .AddNotebooks()
         )
+        .AddSignalRConnections()
         .UseMonolithMesh()
 );
 
@@ -78,9 +79,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 app.MapBlazorHub();
-app.MapFallbackToPage("/_Host");
-// Map the NotebookHub endpoint
-app.MapHub<SignalRConnectionHub>("/connection");
-app.MapHub<KernelHub>("/kernel");
+app.MapMeshWeaverHubs();
+app.MapFallbackToPage("/_Host"); 
 app.Run();
 

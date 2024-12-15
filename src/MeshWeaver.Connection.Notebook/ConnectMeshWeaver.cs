@@ -32,6 +32,20 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
             .WithUrl(connectCommand.Url, ConnectionSettings.HttpConnectionOptions)
             .Build();
         await connection.StartAsync();
+        var tcs = new TaskCompletionSource<bool>(new CancellationTokenSource(10_000).Token);
+        connection.On<bool>("connected", x => tcs.SetResult(x));
+
+        try
+        {
+            await connection.SendAsync("connect");
+            await tcs.Task;
+        }
+        catch(Exception e)
+        {
+            throw new MeshWeaverKernelException($"Failed to connect to MeshWeaver instance on {connectCommand.Url}:\n{e}", e);
+        }
+
+
         var subject = new Subject<string>();
         var receiver = KernelCommandAndEventReceiver.FromObservable(subject);
 
