@@ -38,10 +38,8 @@ public static class SignalRClientExtensions
                 {
                     var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                         .CreateLogger(typeof(SignalRClientExtensions));
-                    var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
                     var address = hub.Address;
-                    var addressType = typeRegistry.GetCollectionName(address.GetType());
-                    var id = address.ToString();
+                    var (addressType, id) = MessageHubExtensions.GetAddressTypeAndId(address);
 
                     try
                     {
