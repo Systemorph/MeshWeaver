@@ -5,30 +5,24 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace MeshWeaver.Hosting.SignalR;
 
-public class KernelHub(IMessageHub hub) : Hub
+public class KernelHub : Hub
 {
 
-    private readonly KernelAddress KernelAddress = new();
+    private KernelAddress KernelAddress { get; } = new();
 
 
     public void SubmitCommand(string kernelCommandEnvelope)
     {
-        KernelCommandFromServer(kernelCommandEnvelope);
+        KernelCommandFromProxy(kernelCommandEnvelope);
     }
 
-    public void KernelCommandFromServer(string kernelCommandEnvelope)
+    public void KernelCommandFromProxy(string kernelCommandEnvelope)
     {
         hub.Post(new KernelCommandEnvelope(kernelCommandEnvelope), o => o.WithTarget(KernelAddress));
     }
-
-    public void KernelEvent(string kernelEventEnvelope)
+    public void KernelEventFromProxy(string kernelEventEnvelope)
     {
-        KernelEventFromServer(kernelEventEnvelope);
-    }
-
-    public void KernelEventFromServer(string kernelEventEnvelope)
-    {
-        hub.Post(new KernelEventEnvelope(kernelEventEnvelope));
+        hub.Post(new KernelEventEnvelope(kernelEventEnvelope), o => o.WithTarget(KernelAddress));
     }
 
     public async Task Connect()
@@ -40,6 +34,20 @@ public class KernelHub(IMessageHub hub) : Hub
 
     private bool isDisposing;
     private readonly object locker = new();
+    private readonly IMessageHub hub;
+    private readonly ISingleClientProxy Caller;
+
+    public KernelHub(IMessageHub hub)
+    {
+        this.hub = hub;
+        Caller = Clients.Caller;
+        hub.Register<KernelEventEnvelope>(async (d, ct) =>
+        {
+            await Caller.SendCoreAsync("kernelEvents", [d.Message.Envelope], ct);
+            return d.Processed();
+        });
+    }
+
     public override Task OnDisconnectedAsync(Exception exception)
     {
         lock (locker)

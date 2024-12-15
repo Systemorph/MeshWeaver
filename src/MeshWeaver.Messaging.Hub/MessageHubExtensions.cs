@@ -30,4 +30,15 @@ public static class MessageHubExtensions
         => hub.ServiceProvider.GetTypeRegistry();
     public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
         => serviceProvider.GetRequiredService<ITypeRegistry>();
+
+    public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
+    {
+        var s = instance.ToString();
+        var split = s.Split('/');
+        if (split.Length < 2)
+            throw new InvalidOperationException($"Address {s} is not in the correct format. Expected format is AddressType/AddressId");
+
+        return (split[0], string.Join('/', split.Skip(1)));
+    }
+
 }

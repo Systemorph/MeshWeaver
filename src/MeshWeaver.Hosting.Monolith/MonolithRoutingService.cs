@@ -11,13 +11,17 @@ public class MonolithRoutingService(IMessageHub meshHub) : RoutingServiceBase(me
 
     protected override async Task<IMessageDelivery> RouteMessage(
         IMessageDelivery delivery,
+        string addressType,
+        string addressId,
         MeshNode node,
-        string addressId, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
-        var key = (node.AddressType, addressId);
+        var key = (addressType, addressId);
         if (handlers.TryGetValue(key, out var handler))
             return await handler.Invoke(delivery, cancellationToken);
 
+        if (node == null)
+            throw new MeshException($"No Mesh node was found for {addressType}/{addressId}");
 
         var hub = Mesh.CreateHub(node, addressId);
         if (hub == null)

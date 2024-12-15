@@ -50,15 +50,13 @@ namespace MeshWeaver.Hosting
 
 
             var hostAddress = GetHostAddress(address);
-            var (addressType,addressId) = SerializationExtensions.GetAddressTypeAndId(hostAddress);
+            var (addressType,addressId) = MessageHubExtensions.GetAddressTypeAndId(hostAddress);
 
             var node = await meshCatalog.GetNodeAsync(addressType, addressId);
-            if (node == null)
-                throw new MeshException($"No Mesh node was found for {addressType}/{addressId}");
 
-            if (!string.IsNullOrWhiteSpace(node.StartupScript))
+            if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, addressId, cancellationToken);
-            return await RouteMessage(delivery, node, addressId, cancellationToken);
+            return await RouteMessage(delivery, addressType, addressId, node, cancellationToken);
         }
 
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, string addressId, CancellationToken ct)
@@ -80,8 +78,13 @@ namespace MeshWeaver.Hosting
         }
 
 
-        protected abstract Task<IMessageDelivery> RouteMessage(IMessageDelivery delivery, MeshNode node,
-            string addressId, CancellationToken cancellationToken);
+        protected abstract Task<IMessageDelivery> RouteMessage(
+                IMessageDelivery delivery,
+                string addressType,
+                string addressId,
+                MeshNode node,
+                CancellationToken cancellationToken
+            );
 
 
 

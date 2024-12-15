@@ -1,18 +1,17 @@
 ﻿using System.Collections.Concurrent;
+using MeshWeaver.Connection.Notebook;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Xunit.Abstractions;
-using MeshConnection = MeshWeaver.Connection.Notebook.MeshConnection;
 
 namespace MeshWeaver.Hosting.Monolith.Test
 {
@@ -20,7 +19,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
     {
         protected IHost Host;
         protected TestServer Server;
-        public static string SignalREndPoint = "connection";
+        public static string SignalREndPoint = "signalr";
+        public static string KernelEndPoint = "kernel";
         public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";
         public HttpMessageHandler HttpMessageHandler => Server.CreateHandler();
         public override async Task InitializeAsync()
@@ -49,14 +49,14 @@ namespace MeshWeaver.Hosting.Monolith.Test
                         app.UseEndpoints(endpoints =>
                         {
                             endpoints.MapHub<SignalRConnectionHub>($"/{SignalREndPoint}");
+                            endpoints.MapHub<KernelHub>($"/{KernelEndPoint}");
                         });
                     });
                 })
                 .StartAsync();
 
             Server = Host.GetTestServer();
-            MeshConnection.ConfigurationOptions =
-                connection => connection.WithUrl(SignalRUrl, options => options.HttpMessageHandlerFactory = (_ => Server.CreateHandler()));
+            ConnectionSettings.HttpConnectionOptions = _ => Server.CreateHandler();
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();

@@ -2,7 +2,9 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Connection.Notebook;
 using MeshWeaver.Data;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -29,7 +31,39 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
             ));
 
 
+
     [Fact]
+    public async Task HubViaKernel()
+    {
+        var kernel = await ConnectToRemoteKernelAsync();
+
+        
+        //client.Post(
+        //    new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
+        //    o => o.WithTarget(new KernelAddress()));
+        //var kernelEvents = await kernelEventsStream
+        //    .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
+        //    .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
+        //    //.TakeUntil(e => e is StandardOutputValueProduced)
+        //    .ToArray()
+        //    .FirstAsync();
+
+        //kernelEvents.OfType<CommandSucceeded>().Should().NotBeEmpty();
+
+        //await Task.Delay(1000).ConfigureAwait(false);
+        //kernelEventsStream.OnCompleted();
+        //var kernelEvents2 = await kernelEventsStream
+        //    .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
+        //    .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
+        //    .ToArray()
+        //    .FirstAsync();
+        //var standardOutput = kernelEvents.OfType<ReturnValueProduced>().Single();
+        //var value = standardOutput.FormattedValues.Single();
+        //value.Value.Should().Contain("iframe");
+    }
+
+
+    [Fact(Skip = "This cannot be currently supported because polyglot notebooks have troubles loading this. Will not be maintained for now.")]
     public async Task PingPongThroughNotebookHosting()
     {
 
@@ -92,6 +126,23 @@ await client.AwaitResponse(
 
         control.Should().BeOfType<MarkdownControl>().Which.Data.Should().Be("Hello World");
     }
+    protected async Task<CompositeKernel> ConnectToRemoteKernelAsync()
+    {
+        var kernel = await CreateCompositeKernelAsync();
+
+        // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
+        var loadModule = await kernel.SubmitCodeAsync($"#!connect mesh --url http://localhost/{KernelEndPoint} --kernel-name mesh");
+        loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
+        var connectMeshWeaver = await kernel.SubmitCodeAsync(
+            @$"
+#!mesh
+1+1
+"
+        );
+
+        connectMeshWeaver.Events.OfType<CommandSucceeded>().SingleOrDefault().Should().NotBeNull();
+        return kernel;
+    }
 
     protected async Task<CompositeKernel> ConnectHubAsync()
     {
@@ -124,9 +175,9 @@ var client = await MeshWeaver.Connection.Notebook.MeshConnection
         var csharpKernel = new CSharpKernel()
             .UseKernelHelpers()
             .UseValueSharing();
-
         var kernel = new CompositeKernel { csharpKernel };
         kernel.DefaultKernelName = csharpKernel.Name;
+        kernel.AddConnectDirective(new ConnectMeshWeaverDirective());
         Disposables.Add(kernel);
         return kernel;
     }
