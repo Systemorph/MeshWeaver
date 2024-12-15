@@ -3,7 +3,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
@@ -50,7 +49,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task InitializeTest()
     {
-        var workspace = GetWorkspace(GetHost());
+        var workspace = GetHost().GetWorkspace();
         var response = await workspace
             .GetObservable<MyData>()
             .Timeout(3.Seconds())
@@ -58,8 +57,6 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         response.Should().BeEquivalentTo(MyData.InitialData);
     }
 
-    private IWorkspace GetWorkspace(IMessageHub hub) =>
-        hub.ServiceProvider.GetRequiredService<IWorkspace>();
 
     [Fact]
     public async Task Update()
@@ -68,11 +65,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
-        var clientWorkspace = GetWorkspace(client);
+        var clientWorkspace = client.GetWorkspace();
         var data = (
             await clientWorkspace
                 .GetObservable<MyData>()
-                //.Timeout(3.Seconds())
+                .Timeout(3.Seconds())
                 .FirstOrDefaultAsync()
                 
         )
@@ -165,7 +162,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task CheckUsagesFromWorkspaceVariable()
     {
         var client = GetClient();
-        var workspace = GetWorkspace(client);
+        var workspace = client.GetWorkspace();
         var myInstance = await workspace
             .GetObservable<MyData>("1")
             .Timeout(3.Seconds())
@@ -179,7 +176,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         };
         workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client));
 
-        var hostWorkspace = GetWorkspace(GetHost());
+        var hostWorkspace = GetHost().GetWorkspace();
 
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
