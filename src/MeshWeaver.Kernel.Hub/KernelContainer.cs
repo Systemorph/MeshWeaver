@@ -123,9 +123,10 @@ public class KernelContainer : IDisposable
 
     private void PublishEventToContext(KernelEvent @event)
     {
-        var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event));
+        var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
+        var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
         foreach (var a in subscriptions)
-            Hub.Post(new KernelEventEnvelope(eventEnvelope), o => o.WithTarget(a));
+            Hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
     }
 
     private readonly ConcurrentDictionary<string, UiControl> areas = new();
@@ -140,6 +141,9 @@ public class KernelContainer : IDisposable
         var ret = new CSharpKernel()
             .UseKernelHelpers()
             .UseValueSharing();
+
+        ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
+
         ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
 
 
@@ -161,6 +165,7 @@ public class KernelContainer : IDisposable
             }, HtmlFormatter.MimeType);
 
         var composite = new CompositeKernel("mesh");
+        composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
         return composite;
     }

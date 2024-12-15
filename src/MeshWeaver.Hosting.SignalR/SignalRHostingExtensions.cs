@@ -7,9 +7,9 @@ namespace MeshWeaver.Hosting.SignalR;
 
 public static class SignalRHostingExtensions
 {
-    public static MeshBuilder AddSignalRConnections(this MeshBuilder builder)
-        => builder.ConfigureServices(services => services.AddSignalRConnections());
-    public static IServiceCollection AddSignalRConnections(this IServiceCollection services)
+    public static MeshBuilder AddSignalRHubs(this MeshBuilder builder)
+        => builder.ConfigureServices(services => services.AddSignalRHubs());
+    public static IServiceCollection AddSignalRHubs(this IServiceCollection services)
     {
         return services.AddSignalRHub().AddKernelHub();
     }
