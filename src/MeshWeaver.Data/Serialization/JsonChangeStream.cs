@@ -54,7 +54,7 @@ public static class JsonSynchronizationStream
         var request = hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
         var task = hub.RegisterCallback(request, c =>
         {
-            logger.LogInformation("Retrieved {reference} from {owner}.");
+            logger.LogInformation("Retrieved {reference} from {owner}.", reduced.Reference, reduced.Owner);
             return c;
         });
         reduced.BindToTask(task);
