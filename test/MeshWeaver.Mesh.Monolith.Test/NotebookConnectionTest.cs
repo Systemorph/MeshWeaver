@@ -32,13 +32,22 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
 
 
     [Fact]
-    public async Task HubViaKernel()
+    public async Task HelloWorld()
     {
 
         var kernel = await ConnectToRemoteKernelAsync();
+        var helloWorld = await kernel.SubmitCodeAsync(
+            @$"
+#!mesh
+Console.WriteLine(""Hello World"");
+"
+        );
 
-        
-        //client.Post(
+        helloWorld.Events.OfType<CommandSucceeded>().Should().NotBeEmpty();
+        var e = helloWorld.Events.OfType<StandardOutputValueProduced>().Single();
+        e.FormattedValues.Single().Value.Should().Be("Hello World\r\n");
+    }
+    //client.Post(
         //    new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
         //    o => o.WithTarget(new KernelAddress()));
         //var kernelEvents = await kernelEventsStream
@@ -60,29 +69,7 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
         //var standardOutput = kernelEvents.OfType<ReturnValueProduced>().Single();
         //var value = standardOutput.FormattedValues.Single();
         //value.Value.Should().Contain("iframe");
-    }
 
-
-    [Fact(Skip = "This cannot be currently supported because polyglot notebooks have troubles loading this. Will not be maintained for now.")]
-    public async Task PingPongThroughNotebookHosting()
-    {
-
-        var kernel = await ConnectHubAsync();
-
-        // Send Ping and receive Pong
-        var pingPong = await kernel.SubmitCodeAsync(
-@$"
-using MeshWeaver.Mesh;
-await client.AwaitResponse(
-    new PingRequest(), 
-    o => o.WithTarget(new {typeof(MeshAddress).FullName}())
-    , new CancellationTokenSource(10_000).Token
-)");
-
-        pingPong.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var result = pingPong.Events.OfType<ReturnValueProduced>().Single();
-        result.Value.Should().BeAssignableTo<IMessageDelivery>().Which.Message.Should().BeOfType<PingResponse>();
-    }
     [Fact]
     public async Task LayoutAreas()
     {
@@ -133,14 +120,6 @@ await client.AwaitResponse(
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync($"#!connect mesh --url http://localhost/{KernelEndPoint} --kernel-name mesh");
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
-        var connectMeshWeaver = await kernel.SubmitCodeAsync(
-            @$"
-#!mesh
-1+1
-"
-        );
-
-        connectMeshWeaver.Events.OfType<CommandSucceeded>().SingleOrDefault().Should().NotBeNull();
         return kernel;
     }
 

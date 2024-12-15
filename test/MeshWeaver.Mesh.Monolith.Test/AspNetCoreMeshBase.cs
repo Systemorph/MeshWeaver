@@ -40,6 +40,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                             {
                                 PayloadSerializerOptions = sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
                             })));
+                        services.AddSignalRHubs();
 
                     });
                     webBuilder.Configure(app =>
