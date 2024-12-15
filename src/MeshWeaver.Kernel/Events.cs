@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Kernel;
 
-public record KernelEventEnvelope(string Event);
+public record KernelEventEnvelope(string Envelope);
 public record KernelCommandEnvelope(string Command);
 
 public record SubmitCodeRequest(string Code);

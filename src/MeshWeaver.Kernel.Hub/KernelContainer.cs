@@ -60,15 +60,14 @@ public class KernelContainer : IDisposable
                 return request.Processed();
             }
 
-            var (addressType, addressId) = SerializationExtensions.GetAddressTypeAndId(hosted.Address);
+            var (addressType, addressId) = MessageHubExtensions.GetAddressTypeAndId(hosted.Address);
 
             var meshNode = await meshCatalog.GetNodeAsync(addressType, addressId);
             if (meshNode == null)
-                return DeliveryFailure(kernelHub, request, $"No mesh node was found for {hosted.Address}", hosted);
+                return DeliveryFailure(kernelHub, request, $"No mesh node was found for {hosted.Address}");
 
             if (meshNode.StartupScript is null)
-                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}",
-                    hosted);
+                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}");
 
             var result = await Kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
             if (!result.Events.Any(e => e is CommandSucceeded))
@@ -92,7 +91,7 @@ public class KernelContainer : IDisposable
                 hub.DeliverMessage(request.ForwardTo(hosted.Address));
                 return request.Processed();
             }
-            return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}", hosted);
+            return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}");
         }
         catch(Exception e)
         {
@@ -106,8 +105,7 @@ public class KernelContainer : IDisposable
         }
     }
 
-    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, string message,
-        HostedAddress hosted)
+    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, string message)
     {
         var deliveryFailure = new DeliveryFailure(request)
         {
@@ -148,15 +146,15 @@ public class KernelContainer : IDisposable
         Formatter.Register<UiControl>(
             formatter:(control, context) =>
             {
-                var id = Guid.NewGuid().AsString();
-                areas[id] = control;
+                var viewId = Guid.NewGuid().AsString();
+                areas[viewId] = control;
                 if (control is null)
                 {
                     var nullView = new PocketView("null");
                     nullView.WriteTo(context);
                     return true;
                 }
-                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{id}'></iframe>";
+                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}'></iframe>";
                 context.Writer.Write(view);
                 return true;
                 //PublishEventToContext(new DisplayedValueProduced(view, KernelInvocationContext.Current.Command));

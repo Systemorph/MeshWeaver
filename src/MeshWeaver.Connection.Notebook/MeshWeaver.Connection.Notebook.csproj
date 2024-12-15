@@ -2,20 +2,13 @@
 
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
     <PackageReference Include="Microsoft.DotNet.Interactive" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
-    <ItemGroup>
-        <None Include="extension.dib" Pack="true" PackagePath="interactive-extensions/dotnet" />
-    </ItemGroup>
 
 
 </Project>

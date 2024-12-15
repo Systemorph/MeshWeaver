@@ -32,7 +32,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command))),
             o => o.WithTarget(new KernelAddress()));
         var kernelEvent = await kernelEventsStream
-            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
+            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
             .ToArray()
             .FirstAsync();
@@ -58,7 +58,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
             o => o.WithTarget(new KernelAddress()));
         var kernelEvents = await kernelEventsStream
-            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
+            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
             //.TakeUntil(e => e is StandardOutputValueProduced)
             .ToArray()
@@ -69,7 +69,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         await Task.Delay(1000);
         kernelEventsStream.OnCompleted();
         var kernelEvents2 = await kernelEventsStream
-            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
+            .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
             .ToArray()
             .FirstAsync();
