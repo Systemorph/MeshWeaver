@@ -21,6 +21,9 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
+        if(hub.IsDisposing)
+            throw new ObjectDisposedException($"Hub {hub.Address} is disposing, cannot create stream.");
+
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(JsonSynchronizationStream));
         // link to deserialized world. Will also potentially link to workspace.

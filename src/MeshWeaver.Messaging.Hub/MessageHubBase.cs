@@ -145,7 +145,6 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
 
     private record TypeAndHandler(Type Type, AsyncDelivery Action);
 
-    protected virtual bool DefaultFilter(IMessageDelivery d) => true;
 
     public virtual bool Filter(IMessageDelivery d)
     {
@@ -186,10 +185,10 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
     }
 
     public IDisposable Register<TMessage>(SyncDelivery<TMessage> action) =>
-        Register(action, DefaultFilter);
+        Register(action, Filter);
 
     public IDisposable Register<TMessage>(AsyncDelivery<TMessage> action) =>
-        Register(action, DefaultFilter);
+        Register(action, Filter);
 
     public IDisposable Register<TMessage>(
         SyncDelivery<TMessage> action,
