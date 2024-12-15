@@ -25,7 +25,6 @@ builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
     options.IncludeTimestamp = true;
 });
 
-builder.Services.AddSingleton<KernelHub>();
 builder.Services.AddLogging(config => config.AddConsole(
     options =>
     {

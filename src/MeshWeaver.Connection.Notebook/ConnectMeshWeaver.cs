@@ -58,6 +58,12 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
                 );
         return [kernel];
     }
+
+    public static void Install()
+    {
+        if(Kernel.Current.RootKernel is CompositeKernel composite)
+            composite.AddConnectDirective(new ConnectMeshWeaverDirective());
+    }
 }
 
 public class ConnectMeshWeaverKernel(string connectedKernelName) : ConnectKernelCommand(connectedKernelName)

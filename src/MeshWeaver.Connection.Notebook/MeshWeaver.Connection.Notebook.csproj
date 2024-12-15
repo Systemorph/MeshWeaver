@@ -7,8 +7,8 @@
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
   </ItemGroup>
 
-  <ItemGroup>
-  </ItemGroup>
-
+    <ItemGroup>
+        <None Include="extension.dib" Pack="true" PackagePath="interactive-extensions/dotnet" />
+    </ItemGroup>
 
 </Project>
