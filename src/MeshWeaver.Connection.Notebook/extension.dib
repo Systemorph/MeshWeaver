@@ -1,1 +1,2 @@
 #!csharp
+MeshWeaver.Connection.Notebook.ConnectMeshWeaverDirective.Install();
