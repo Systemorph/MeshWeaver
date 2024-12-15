@@ -19,10 +19,9 @@ namespace MeshWeaver.Hosting.Monolith.Test
     {
         protected IHost Host;
         protected TestServer Server;
-        public static string SignalREndPoint = "signalr";
-        public static string KernelEndPoint = "kernel";
+        public static string SignalREndPoint = SignalRConnectionHub.EndPoint;
+        public static string KernelEndPoint = KernelHub.EndPoint;
         public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";
-        public HttpMessageHandler HttpMessageHandler => Server.CreateHandler();
         public override async Task InitializeAsync()
         {
             await base.InitializeAsync();
@@ -46,17 +45,13 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     webBuilder.Configure(app =>
                     {
                         app.UseRouting();
-                        app.UseEndpoints(endpoints =>
-                        {
-                            endpoints.MapHub<SignalRConnectionHub>($"/{SignalREndPoint}");
-                            endpoints.MapHub<KernelHub>($"/{KernelEndPoint}");
-                        });
+                        app.MapMeshWeaverHubs();
                     });
                 })
                 .StartAsync();
 
             Server = Host.GetTestServer();
-            ConnectionSettings.HttpConnectionOptions = _ => Server.CreateHandler();
+            ConnectionSettings.HttpConnectionOptions = x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler();
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();

@@ -9,6 +9,7 @@ namespace MeshWeaver.Hosting.SignalR;
 
 public class SignalRConnectionHub(IMessageHub hub) : Hub
 {
+    public const string EndPoint = "signalr";
     private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
 
     public async Task<MeshConnection> Connect(string addressType, string id)
