@@ -21,9 +21,7 @@ public record ExecutionRequest(Func<CancellationToken, Task> Action);
 
 public sealed class MessageHub
     : MessageHubBase,
-        IMessageHub,
-        IMessageHandler<DisposeRequest>,
-        IMessageHandlerAsync<ShutdownRequest>
+        IMessageHub
 {
     public override object Address => MessageService.Address;
 
@@ -63,7 +61,8 @@ public sealed class MessageHub
 
         Register(HandleCallbacks);
         Register(ExecuteRequest);
-
+        Register<DisposeRequest>(HandleDispose);
+        Register<ShutdownRequest>(HandleShutdownAsync);
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(
                 messageHandler.MessageType,
@@ -322,7 +321,7 @@ public sealed class MessageHub
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
-    private bool IsDisposing => disposingTaskCompletionSource != null;
+    public bool IsDisposing => disposingTaskCompletionSource != null;
 
     private TaskCompletionSource disposingTaskCompletionSource;
 
@@ -334,16 +333,15 @@ public sealed class MessageHub
     {
         lock (locker)
         {
-            if (!IsDisposing)
-            {
-                logger.LogDebug("Starting disposing of hub {address}", Address);
-                disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
-            }
+            if (IsDisposing)
+                return;
+            logger.LogDebug("Starting disposing of hub {address}", Address);
+            disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
         }
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
-    async Task<IMessageDelivery> IMessageHandlerAsync<ShutdownRequest>.HandleMessageAsync(
+    private async Task<IMessageDelivery> HandleShutdownAsync(
         IMessageDelivery<ShutdownRequest> request,
         CancellationToken ct
     )
@@ -457,7 +455,7 @@ public sealed class MessageHub
     }
 
 
-    IMessageDelivery IMessageHandler<DisposeRequest>.HandleMessage(IMessageDelivery<DisposeRequest> request)
+    private IMessageDelivery HandleDispose(IMessageDelivery<DisposeRequest> request)
     {
         Dispose();
         return request.Processed();
