@@ -13,6 +13,7 @@ using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Kernel.Hub;
 
@@ -22,6 +23,7 @@ public class KernelContainer : IDisposable
     private readonly HashSet<object> subscriptions = new();
     private readonly IMeshCatalog meshCatalog;
     private readonly IMessageHub executionHub;
+    private readonly ILogger<KernelContainer> logger;
     public KernelContainer(IServiceProvider serviceProvider, string id)
     {
         meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
@@ -44,6 +46,7 @@ public class KernelContainer : IDisposable
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
         Hub.RegisterForDisposal(this);
+        logger = Hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
     }
 
     private async Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
@@ -72,16 +75,12 @@ public class KernelContainer : IDisposable
             var result = await Kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
             if (!result.Events.Any(e => e is CommandSucceeded))
             {
-                var message = $"Startup script failed:\n{string.Join('\n', 
-                        result.Events.OfType<DiagnosticsProduced>().SelectMany(d => d.FormattedDiagnostics.Select(z => z.Value)))}";
+                var message = $"Startup script failed:\n{string.Join('\n',
+                    result.Events.OfType<DiagnosticsProduced>().SelectMany(d => d.FormattedDiagnostics.Select(z => z.Value)))}";
 
                 return DeliveryFailure(
                     kernelHub, request,
-                    new DeliveryFailure(request)
-                    {
-                        ErrorType = ErrorType.StartupScriptFailed,
-                        Message = message
-                    });
+                    new DeliveryFailure(request) { ErrorType = ErrorType.StartupScriptFailed, Message = message });
             }
 
 
@@ -91,9 +90,16 @@ public class KernelContainer : IDisposable
                 hub.DeliverMessage(request.ForwardTo(hosted.Address));
                 return request.Processed();
             }
+
             return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}");
         }
-        catch(Exception e)
+        catch (ObjectDisposedException)
+        {
+            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}: {Command}", Hub.Address, request);
+            Hub.Dispose();
+            return request.Failed($"Kernel disposed");
+        }
+        catch (Exception e)
         {
             kernelHub.Post(new DeliveryFailure(request)
             {

@@ -164,8 +164,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
-        synchronizationHub.RegisterForDisposal(_ => Store.Dispose());
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => 
+            Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+        synchronizationHub?.RegisterForDisposal(_ => Store.Dispose());
     }
 
     public string StreamId { get; } = Guid.NewGuid().AsString();

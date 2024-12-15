@@ -1,3 +1,3 @@
 #!csharp
 MeshWeaver.Connection.Notebook.ConnectMeshWeaverDirective.Install();
-Console.WriteLine("Usage:\n#!connect mesh --url <url> --kernel-name <kernel-name>");
+Console.WriteLine("Usage:\n#!connect mesh --url https://<mesh-weaver-host>/kernel --kernel-name <kernel-name>");
