@@ -166,7 +166,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
         synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => 
             Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
-        synchronizationHub?.RegisterForDisposal(_ => Store.Dispose());
+
+        if(synchronizationHub == null)
+            if(Hub.IsDisposing)
+                throw new ObjectDisposedException($"Hub {Hub.Address} is disposing. Cannot create synchronization stream.");
+            else
+                throw new InvalidOperationException("Could not create synchronization hub");
+
+        synchronizationHub.RegisterForDisposal(_ => Store.Dispose());
     }
 
     public string StreamId { get; } = Guid.NewGuid().AsString();

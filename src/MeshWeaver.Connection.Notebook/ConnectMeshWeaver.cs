@@ -54,8 +54,14 @@ public class ConnectMeshWeaverDirective : ConnectKernelDirective<ConnectMeshWeav
             connectCommand.ConnectedKernelName, 
             new KernelCommandAndEventSignalRHubConnectionSender(connection), 
             receiver,
-            new Uri($"kernel://mesh/csharp")
+            new Uri($"kernel://local/mesh")
                 );
+        var kernelInfo = kernel.KernelInfo;
+        kernelInfo.DisplayName = "Mesh - C#";
+        kernelInfo.LanguageName = "C#";
+        kernelInfo.LanguageVersion = "latest";
+        kernelInfo.RemoteUri = new Uri("kernel://mesh/mesh");
+        kernelInfo.Description = "Mesh Weaver connection";
         return [kernel];
     }
 
