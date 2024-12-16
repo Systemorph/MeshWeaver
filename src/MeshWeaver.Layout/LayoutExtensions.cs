@@ -6,7 +6,6 @@ using Json.Patch;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
@@ -27,9 +26,10 @@ public static class LayoutExtensions
                 data.Configure(reduction =>
                     reduction
                         .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
-                            (workspace, reference, configuration) => 
+                            (workspace, reference, configuration) =>
                                 reference is not LayoutAreaReference layoutArea ? null :
-                            workspace.RenderLayoutArea(layoutArea, configuration)
+                                new LayoutAreaHost(workspace, layoutArea, workspace.Hub.GetLayoutDefinition(), configuration)
+                                    .RenderLayoutArea()
                         )
                 )
             )
@@ -37,10 +37,6 @@ public static class LayoutExtensions
             .Set(config.GetListOfLambdas().Add(layoutDefinition));
     }
 
-    public static ISynchronizationStream<EntityStore> RenderLayoutArea(this IWorkspace workspace, LayoutAreaReference layoutArea,
-        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration = null) =>
-        new LayoutAreaHost(workspace, layoutArea, workspace.Hub.GetLayoutDefinition(), configuration)
-            .RenderLayoutArea();
 
     private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
         hub
@@ -73,43 +69,12 @@ public static class LayoutExtensions
                 typeof(Icon)
             );
 
-    public static IObservable<UiControl> GetLayoutAreaStream(
-        this ISynchronizationStream<JsonElement> stream,
+    public static IObservable<UiControl> GetControlStream(
+        this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
-    )
-    {
-        if (string.IsNullOrWhiteSpace(area))
-            throw new ArgumentNullException(nameof(area));
-
-        var first = true;
-
-        var serializedId = JsonSerializer.Serialize(area, stream.Hub.JsonSerializerOptions);
-        
-        return stream
-            .Where(i =>
-                first
-                || i.Updates is null
-                || i.Updates.Any(
-                    p => p.Collection == LayoutAreaReference.Areas && (p.Id == null || 
-                                                                       p.Id.ToString()!.StartsWith(serializedId)))
-            )
-            .Select(i =>
-                {
-                    first = false;
-                    var control = i.Value.GetLayoutArea(area, stream.Hub.JsonSerializerOptions);
-                    if(control is IContainerControl container)
-                        control = (UiControl)container.ScheduleRendering(x => i.Value.GetLayoutArea(x.Area.ToString(), stream.Hub.JsonSerializerOptions));
-                    return control;
-                }
-            );
-    }
-
-    public static UiControl GetLayoutArea(this JsonElement jsonElement, string area, JsonSerializerOptions options)
-    {
-        var pointer = JsonPointer.Parse(LayoutAreaReference.GetControlPointer(area));
-        var eval = pointer.Evaluate(jsonElement);
-        return eval?.Deserialize<UiControl>(options);
-    }
+    ) =>
+        synchronizationItems.GetStream<UiControl>(JsonPointer
+            .Parse(LayoutAreaReference.GetControlPointer(area)));
 
     public static IObservable<T> GetStream<T>(
         this ISynchronizationStream<JsonElement> stream,
@@ -131,19 +96,13 @@ public static class LayoutExtensions
             .Select(i =>
                 {
                     first = false;
-                    return GetPointerValue<T>(i,referencePointer, stream.Hub.JsonSerializerOptions);
+                    var evaluated = referencePointer
+                        .Evaluate(i.Value);
+                    return evaluated is null ? default
+                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
                 }
             );
     }
-
-    private static T GetPointerValue<T>(this ChangeItem<JsonElement> changeItem, JsonPointer referencePointer, JsonSerializerOptions options)
-    {
-        var evaluated = referencePointer
-            .Evaluate(changeItem.Value);
-        return evaluated is null ? default
-            : evaluated.Value.Deserialize<T>(options);
-    }
-
     public static object GetLayoutArea(
         this ISynchronizationStream<JsonElement> stream,
         string area
@@ -152,35 +111,36 @@ public static class LayoutExtensions
         .Evaluate(stream.Current.Value)
         ?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
 
-    public static IObservable<UiControl> GetLayoutAreaStream(
+    public static IObservable<object> GetControlStream(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
-    ) => synchronizationItems.Select(change => ExtractRenderableControl(change.Value, area));
+    ) =>
+        synchronizationItems.Select(i =>
+            i.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+                ?.Instances.GetValueOrDefault(area)
+        );
 
-    private static UiControl ExtractRenderableControl(EntityStore store, string area)
-    {
-        var ret = GetControl(store, area);
-        if (ret is IContainerControl container)
-            ret = (UiControl)container.ScheduleRendering(x => ExtractRenderableControl(store, x.Area.ToString()));
-        return ret;
-    }
-
-    private static UiControl GetControl(EntityStore store, string area)
-    {
-        return store.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
-            ?.Instances.GetValueOrDefault(area) as UiControl;
-    }
-
-    public static IObservable<UiControl> GetLayoutAreaStream(
+    public static async Task<object> GetLayoutAreaAsync(
         this IMessageHub hub,
         object address,
         string area,
         string id = null
-    ) => hub.GetWorkspace()
+    ) => await hub.GetWorkspace()
         .GetRemoteStream(address, new LayoutAreaReference(area){Id = id})
-        .GetLayoutAreaStream(area)
+        .GetControlStream(area)
+        .Catch<object, Exception>(ex => Observable.Throw<object>(new InvalidOperationException("An error occurred while retrieving the layout area stream.", ex)))
+        .FirstAsync(x => x != null)
 ;
 
+    public static async Task<object> GetLayoutAreaAsync(
+        this ISynchronizationStream<JsonElement> synchronizationItems,
+        string area
+    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
+
+    public static async Task<object> GetLayoutAreaAsync(
+        this ISynchronizationStream<EntityStore> synchronizationItems,
+        string area
+    ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
     public static async Task<object> GetDataAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,

@@ -50,7 +50,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 reference
             );
 
-            var control = await stream.GetLayoutAreaStream(reference.Area)
+            var control = await stream.GetLayoutAreaControl(reference.Area)
                 .Timeout(3.Seconds())
                 .FirstAsync();
             

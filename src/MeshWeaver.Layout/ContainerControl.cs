@@ -18,16 +18,7 @@ public interface IContainerControl : IUiControl
     /// Gets the collection of named area controls within the container.
     /// </summary>
     IReadOnlyCollection<NamedAreaControl> Areas { get; }
-
-
-    /// <summary>
-    /// This is used if the control needs to get reconstructed.
-    /// </summary>
-    /// <param name="controlMap"></param>
-    /// <returns></returns>
-    IContainerControl ScheduleRendering(Func<NamedAreaControl, object> controlMap);
 }
-
 /// <summary>
 /// Abstract base class for container controls.
 /// </summary>
@@ -49,8 +40,6 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     /// <returns>A string representing the automatic name.</returns>
     protected string GetAutoName() => $"{Renderers.Count + 1}";
     IReadOnlyCollection<NamedAreaControl> IContainerControl.Areas => Areas;
-
-
     /// <summary>
     /// Gets the collection of named area controls within the container.
     /// </summary>
@@ -220,18 +209,6 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             )
         );
     }
-
-    IContainerControl IContainerControl.ScheduleRendering(Func<NamedAreaControl, object> controlMap) =>
-        this with
-        {
-            Renderers = Areas.Aggregate(Renderers,
-                (r, area) =>
-                    r.Add((host, context, store) =>
-                        host.RenderArea(GetContextForArea(context, area.Id.ToString()), controlMap.Invoke(area), store)
-                    )
-            )
-        };
-
 
 }
 
