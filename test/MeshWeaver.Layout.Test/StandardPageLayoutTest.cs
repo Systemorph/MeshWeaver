@@ -1,6 +1,8 @@
-﻿using MeshWeaver.Messaging;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Messaging;
 using System.Text.Json;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Domain;
@@ -48,7 +50,10 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
                 reference
             );
 
-            var control = await stream.GetLayoutAreaAsync(reference.Area);
+            var control = await stream.GetLayoutAreaStream(reference.Area)
+                .Timeout(3.Seconds())
+                .FirstAsync();
+            
             control
                 .Should()
                 .BeOfType<NavMenuControl>()

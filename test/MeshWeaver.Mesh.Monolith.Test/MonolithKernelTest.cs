@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Kernel;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
@@ -46,7 +47,10 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task RoutingToHub()
     {
         var client = CreateClient();
-        var area = await client.GetLayoutAreaAsync(new ApplicationAddress(Test), "Dashboard");
+        var area = await client
+            .GetLayoutAreaStream(new ApplicationAddress(Test), "Dashboard")
+            .Timeout(3.Seconds())
+            .FirstAsync();
         area.Should().NotBeNull();
         area.Should().BeOfType<LayoutGridControl>();
     }

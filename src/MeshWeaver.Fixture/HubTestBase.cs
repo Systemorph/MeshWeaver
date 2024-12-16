@@ -47,14 +47,14 @@ public class HubTestBase : TestBase
         MessageHubConfiguration configuration
     ) => configuration.WithTypes(typeof(HostAddress), typeof(ClientAddress));
 
-    protected virtual IMessageHub GetHost()
+    protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        return Router.GetHostedHub(new HostAddress(), ConfigureHost);
+        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
     }
 
-    protected virtual IMessageHub GetClient()
+    protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
-        return Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
     }
 
     public override async Task DisposeAsync()

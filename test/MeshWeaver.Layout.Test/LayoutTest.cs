@@ -71,7 +71,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    ) => base.ConfigureClient(configuration).AddLayoutClient(d => d);
+    ) => base.ConfigureClient(configuration)
+        .AddLayoutClient(d => d);
 
     [HubFact]
     public async Task BasicArea()
@@ -542,6 +543,48 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
 
+    [HubFact]
+    public async Task GetLayoutArea()
+    {
+        Dictionary<string, IObservable<object>> areas = new();
+        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
+                layout.WithView(ctx =>
+                        areas.ContainsKey(ctx.Area),
+                    (host, ctx) => areas.GetValueOrDefault(ctx.Area)
+                )
+            )
+        );
+
+        var stream = hub.GetLayoutAreaStream(new HostAddress(), StaticView);
+
+        var view = await stream
+            .Timeout(3.Seconds())
+            .FirstAsync();
+
+
+        var stack = view.Should().BeOfType<LayoutStackControl>().Subject;
+        stack.Areas.Should().HaveCount(2);
+
+        const string NewId = nameof(NewId);
+        areas.Add(NewId, stream);
+
+        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
+
+        var control = await reRendered
+            .GetLayoutAreaStream(NewId)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+
+
+        stack = control.Should().BeOfType<LayoutStackControl>().Subject;
+        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
+
+        var firstArea = await reRendered
+            .GetLayoutAreaStream(na.Area.ToString())
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+        firstArea.Should().BeOfType<HtmlControl>();
+    }
 }
 
 public static class TestAreas
