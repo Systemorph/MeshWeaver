@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Xml.Serialization;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Charting;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout.Documentation.Model;
@@ -132,7 +133,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             new LayoutAreaReference(viewName)
         );
-        var dashboard = (await stream.GetLayoutAreaAsync(viewName))
+        var dashboard = (await stream
+                .GetLayoutAreaStream(viewName)
+                .Timeout(3.Seconds())
+                .FirstAsync()
+            )
             .Should()
             .BeOfType<LayoutGridControl>()
             .Subject;
@@ -145,7 +150,8 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                 .ToAsyncEnumerable()
                 .SelectAwait(async s => new KeyValuePair<string, object>(
                     s.Area.ToString(),
-                    await stream.GetLayoutAreaAsync(s.Area.ToString())
+                    await stream.GetLayoutAreaStream(s.Area.ToString()).Timeout(3.Seconds())
+                    .FirstAsync()
                 ))
                 .ToArrayAsync();
             controls.AddRange(children);
@@ -166,7 +172,10 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var controlName = $"{ViewName}"; 
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
-        var control = await stream.GetLayoutAreaAsync(controlName);
+        var control = await stream.GetLayoutAreaStream(controlName)
+            .Timeout(3.Seconds())
+            .FirstAsync();
+
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()
@@ -214,7 +223,10 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var controlName = $"{ViewName}"; 
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
-        var control = await stream.GetLayoutAreaAsync(controlName);
+        var control = await stream
+            .GetLayoutAreaStream(controlName)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()

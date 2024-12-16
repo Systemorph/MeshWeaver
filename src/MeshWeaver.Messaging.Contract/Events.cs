@@ -27,6 +27,14 @@ public record DeliveryFailure(IMessageDelivery Delivery)
     public string Message { get; init; }
     public string StackTrace { get; init; }
 
+    public static DeliveryFailure FromException(IMessageDelivery request, Exception e) =>
+        new(request)
+        {
+            ErrorType = ErrorType.Exception,
+            ExceptionType = e.GetType().Name,
+            Message = e.Message,
+            StackTrace = e.StackTrace
+        };
 }
 
 public enum ErrorType
