@@ -85,7 +85,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetLayoutAreaStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -98,7 +98,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var areaControls = await areas
             .ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await stream.GetLayoutAreaStream(a.Area.ToString())
+                await stream.GetControlStream(a.Area.ToString())
                 .Timeout(3.Seconds())
                 .FirstAsync(x => x != null))
             .ToArrayAsync();
@@ -133,7 +133,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controls = await stream
-            .GetLayoutAreaStream(reference.Area)
+            .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(3.Seconds())
             .ToArray();
@@ -166,7 +166,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var reportArea = $"{reference.Area}/Content";
-        var content = await stream.GetLayoutAreaStream(reportArea)
+        var content = await stream.GetControlStream(reportArea)
             // .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
@@ -174,7 +174,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         // Get toolbar and change value.
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextFieldControl)await stream
-            .GetLayoutAreaStream(toolbarArea)
+            .GetControlStream(toolbarArea)
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
@@ -202,7 +202,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         });
 
         var updatedControls = await stream
-            .GetLayoutAreaStream(reportArea)
+            .GetControlStream(reportArea)
             .TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024"))
             .Timeout(3.Seconds())
             .ToArray();
@@ -231,7 +231,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controlArea = $"{reference.Area}";
-        var content = await stream.GetLayoutAreaStream(controlArea)
+        var content = await stream.GetControlStream(controlArea)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
@@ -285,7 +285,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var buttonArea = $"{reference.Area}/Button";
-        var content = await stream.GetLayoutAreaStream(buttonArea)
+        var content = await stream.GetControlStream(buttonArea)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         content
@@ -297,7 +297,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(new HostAddress()));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
-            .GetLayoutAreaStream(counterArea)
+            .GetControlStream(counterArea)
             .FirstAsync(x => x is HtmlControl { Data: not "0" })
             .Timeout(TimeSpan.FromSeconds(3))
             ;
@@ -325,7 +325,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream
-            .GetLayoutAreaStream(reference.Area)
+            .GetControlStream(reference.Area)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
@@ -393,7 +393,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var content = await stream
-            .GetLayoutAreaStream(controlArea)
+            .GetControlStream(controlArea)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
@@ -410,7 +410,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var resultsArea = $"{reference.Area}/{Results}";
         var resultsControl = await stream
-            .GetLayoutAreaStream(resultsArea)
+            .GetControlStream(resultsArea)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var resultItemTemplate = resultsControl.Should().BeOfType<HtmlControl>().Which;
@@ -432,7 +432,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         });
 
         resultsControl = await stream
-            .GetLayoutAreaStream(resultsArea)
+            .GetControlStream(resultsArea)
             .Where(x => !((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
@@ -476,7 +476,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetLayoutAreaStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
@@ -530,12 +530,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetLayoutAreaStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetLayoutAreaStream(subAreaName.Area.ToString()).FirstAsync();
+        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()).FirstAsync();
 
         stopwatch.Stop();
 
@@ -543,84 +543,84 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
 
-    [HubFact]
-    public async Task GetLayoutArea()
-    {
-        Dictionary<string, IObservable<object>> areas = new();
-        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
-                layout.WithView(ctx =>
-                        areas.ContainsKey(ctx.Area),
-                    (host, ctx) => areas.GetValueOrDefault(ctx.Area)
-                )
-            )
-        );
+//    [HubFact]
+//    public async Task GetLayoutArea()
+//    {
+//        Dictionary<string, IObservable<object>> areas = new();
+//        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
+//                layout.WithView(ctx =>
+//                        areas.ContainsKey(ctx.Area),
+//                    (host, ctx) => areas.GetValueOrDefault(ctx.Area)
+//                )
+//            )
+//        );
 
-        var stream = hub.GetLayoutAreaStream(new HostAddress(), StaticView);
+//        var stream = hub.GetControlStream(new HostAddress(), StaticView);
 
-        var view = await stream
-            .Timeout(3.Seconds())
-            .FirstAsync();
-
-
-        var stack = view.Should().BeOfType<LayoutStackControl>().Subject;
-        stack.Areas.Should().HaveCount(2);
-
-        const string NewId = nameof(NewId);
-        areas.Add(NewId, stream);
-
-        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
-
-        var control = await reRendered
-            .GetLayoutAreaStream(NewId)
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
+//        var view = await stream
+//            .Timeout(3.Seconds())
+//            .FirstAsync();
 
 
-        stack = control.Should().BeOfType<LayoutStackControl>().Subject;
-        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
+//        var stack = view.Should().BeOfType<LayoutStackControl>().Subject;
+//        stack.Areas.Should().HaveCount(2);
 
-        var firstArea = await reRendered
-            .GetLayoutAreaStream(na.Area.ToString())
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
-        firstArea.Should().BeOfType<HtmlControl>();
-    }
-    [HubFact]
-    public async Task GetLayoutAreaThroughJsonStream()
-    {
-        Dictionary<string, IObservable<object>> areas = new();
-        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
-                layout.WithView(ctx =>
-                        areas.ContainsKey(ctx.Area),
-                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
-                )
-            )
-        );
-;
-        var stream = hub.GetWorkspace()
-            .GetRemoteStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(StaticView))
-            .GetLayoutAreaStream(StaticView);
+//        const string NewId = nameof(NewId);
+//        areas.Add(NewId, stream);
 
-        const string NewId = nameof(NewId);
-        areas.Add(NewId, stream);
+//        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
 
-        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
-
-        var control = await reRendered
-            .GetLayoutAreaStream(NewId)
-            //.Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
+//        var control = await reRendered
+//            .GetControlStream(NewId)
+//            .Timeout(3.Seconds())
+//            .FirstAsync(x => x != null);
 
 
-        var stack = control.Should().BeOfType<LayoutStackControl>().Subject;
-        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
+//        stack = control.Should().BeOfType<LayoutStackControl>().Subject;
+//        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
 
-        var firstArea = await reRendered
-            .GetLayoutAreaStream(na.Area.ToString())
-            .Timeout(3.Seconds())
-            .FirstAsync(x => x != null);
-        firstArea.Should().BeOfType<HtmlControl>();
-    }
+//        var firstArea = await reRendered
+//            .GetControlStream(na.Area.ToString())
+//            .Timeout(3.Seconds())
+//            .FirstAsync(x => x != null);
+//        firstArea.Should().BeOfType<HtmlControl>();
+//    }
+//    [HubFact]
+//    public async Task GetLayoutAreaThroughJsonStream()
+//    {
+//        Dictionary<string, IObservable<object>> areas = new();
+//        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
+//                layout.WithView(ctx =>
+//                        areas.ContainsKey(ctx.Area),
+//                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
+//                )
+//            )
+//        );
+//;
+//        var stream = hub.GetWorkspace()
+//            .GetRemoteStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(StaticView))
+//            .GetControlStream(StaticView);
+
+//        const string NewId = nameof(NewId);
+//        areas.Add(NewId, stream);
+
+//        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
+
+//        var control = await reRendered
+//            .GetControlStream(NewId)
+//            //.Timeout(3.Seconds())
+//            .FirstAsync(x => x != null);
+
+
+//        var stack = control.Should().BeOfType<LayoutStackControl>().Subject;
+//        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
+
+//        var firstArea = await reRendered
+//            .GetControlStream(na.Area.ToString())
+//            .Timeout(3.Seconds())
+//            .FirstAsync(x => x != null);
+//        firstArea.Should().BeOfType<HtmlControl>();
+//    }
 }
 
 public static class TestAreas

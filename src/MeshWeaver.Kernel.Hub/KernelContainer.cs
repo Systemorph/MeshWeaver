@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -29,9 +28,7 @@ public class KernelContainer : IDisposable
     {
         meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
         Kernel = CreateKernel(id);
-        Hub = serviceProvider.CreateMessageHub(
-            new KernelAddress(){Id = id}, 
-            config => config
+        Hub = serviceProvider.CreateMessageHub(new KernelAddress(){Id = id}, config => config
             .AddLayout(layout =>
                 layout.WithView(ctx =>
                         areas.ContainsKey(ctx.Area),
@@ -82,7 +79,7 @@ public class KernelContainer : IDisposable
                     result.Events.OfType<DiagnosticsProduced>().SelectMany(d => d.FormattedDiagnostics.Select(z => z.Value)))}";
 
                 return DeliveryFailure(
-                    kernelHub, 
+                    kernelHub, request,
                     new DeliveryFailure(request) { ErrorType = ErrorType.StartupScriptFailed, Message = message });
             }
 
@@ -99,6 +96,7 @@ public class KernelContainer : IDisposable
         catch (ObjectDisposedException)
         {
             logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}: {Command}", Hub.Address, request);
+            Hub.Dispose();
             return request.Failed($"Kernel disposed");
         }
         catch (Exception e)
@@ -120,13 +118,13 @@ public class KernelContainer : IDisposable
             ExceptionType = "MeshNodeNotFound",
             Message = message,
         };
-        return DeliveryFailure(kernelHub, deliveryFailure);
+        return DeliveryFailure(kernelHub, request, deliveryFailure);
     }
 
-    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, DeliveryFailure deliveryFailure)
+    private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, DeliveryFailure deliveryFailure)
     {
-        kernelHub.Post(deliveryFailure, o => o.ResponseFor(deliveryFailure.Delivery));
-        return deliveryFailure.Delivery.Failed(deliveryFailure.Message);
+        kernelHub.Post(deliveryFailure, o => o.ResponseFor(request));
+        return request.Failed(deliveryFailure.Message);
     }
 
     private void PublishEventToContext(KernelEvent @event)
@@ -137,7 +135,7 @@ public class KernelContainer : IDisposable
             Hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
     }
 
-    private readonly ConcurrentDictionary<string, IObservable<object>> areas = new();
+    private readonly ConcurrentDictionary<string, UiControl> areas = new();
     public IMessageHub Hub { get; }
     public CompositeKernel Kernel { get; }
     private string LayoutAreaUrl { get; set; } = "https://localhost:65260/area/";
@@ -155,30 +153,27 @@ public class KernelContainer : IDisposable
         ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
 
 
-        Formatter.Register<IObservable<UiControl>>(formatter: RenderLayoutArea, HtmlFormatter.MimeType);
-        Formatter.Register<UiControl>(formatter: (c,cc)=>RenderLayoutArea(Observable.Return(c), cc), HtmlFormatter.MimeType);
+        Formatter.Register<UiControl>(
+            formatter:(control, context) =>
+            {
+                var viewId = Guid.NewGuid().AsString();
+                areas[viewId] = control;
+                if (control is null)
+                {
+                    var nullView = new PocketView("null");
+                    nullView.WriteTo(context);
+                    return true;
+                }
+                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}'></iframe>";
+                context.Writer.Write(view);
+                return true;
+                //PublishEventToContext(new DisplayedValueProduced(view, KernelInvocationContext.Current.Command));
+            }, HtmlFormatter.MimeType);
 
         var composite = new CompositeKernel("mesh");
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
         return composite;
-    }
-
-    private bool RenderLayoutArea(IObservable<UiControl> control, FormatContext context)
-    {
-        var viewId = Guid.NewGuid().AsString();
-        areas[viewId] = control;
-        if (control is null)
-        {
-            var nullView = new PocketView("null");
-            nullView.WriteTo(context);
-            return true;
-        }
-
-        var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}'></iframe>";
-        context.Writer.Write(view);
-        return true;
-        //PublishEventToContext(new DisplayedValueProduced(view, KernelInvocationContext.Current.Command));
     }
 
 
@@ -215,15 +210,8 @@ public class KernelContainer : IDisposable
 
     private async Task<IMessageDelivery> SubmitCommand(IMessageDelivery request, CancellationToken ct, KernelCommand command)
     {
-        try
-        {
-            await Kernel.SendAsync(command, ct);
-            return request.Processed();
-        }
-        catch(Exception e)
-        {
-            return DeliveryFailure(Hub, Messaging.DeliveryFailure.FromException(request, e));
-        }
+        await Kernel.SendAsync(command, ct);
+        return request.Processed();
     }
 
     public IMessageDelivery HandleSubscribe(IMessageDelivery<SubscribeKernelEventsRequest> request)
