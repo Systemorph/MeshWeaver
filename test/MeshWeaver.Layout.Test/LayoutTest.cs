@@ -585,6 +585,42 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         firstArea.Should().BeOfType<HtmlControl>();
     }
+    [HubFact]
+    public async Task GetLayoutAreaThroughJsonStream()
+    {
+        Dictionary<string, IObservable<object>> areas = new();
+        var hub = GetClient(c => ConfigureClient(c).AddLayout(layout =>
+                layout.WithView(ctx =>
+                        areas.ContainsKey(ctx.Area),
+                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
+                )
+            )
+        );
+;
+        var stream = hub.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new HostAddress(), new LayoutAreaReference(StaticView))
+            .GetLayoutAreaStream(StaticView);
+
+        const string NewId = nameof(NewId);
+        areas.Add(NewId, stream);
+
+        var reRendered = hub.GetWorkspace().GetStream(new LayoutAreaReference(NewId));
+
+        var control = await reRendered
+            .GetLayoutAreaStream(NewId)
+            //.Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+
+
+        var stack = control.Should().BeOfType<LayoutStackControl>().Subject;
+        var na = stack.Areas.First().Should().BeOfType<NamedAreaControl>().Subject;
+
+        var firstArea = await reRendered
+            .GetLayoutAreaStream(na.Area.ToString())
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+        firstArea.Should().BeOfType<HtmlControl>();
+    }
 }
 
 public static class TestAreas

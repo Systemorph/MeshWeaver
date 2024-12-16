@@ -98,7 +98,7 @@ public static class LayoutExtensions
                     first = false;
                     var control = i.Value.GetLayoutArea(area, stream.Hub.JsonSerializerOptions);
                     if(control is IContainerControl container)
-                        control = (UiControl)container.ScheduleRendering(x => i.Value.GetLayoutArea(x.Id.ToString(), stream.Hub.JsonSerializerOptions));
+                        control = (UiControl)container.ScheduleRendering(x => i.Value.GetLayoutArea(x.Area.ToString(), stream.Hub.JsonSerializerOptions));
                     return control;
                 }
             );
@@ -106,10 +106,9 @@ public static class LayoutExtensions
 
     public static UiControl GetLayoutArea(this JsonElement jsonElement, string area, JsonSerializerOptions options)
     {
-        var control = jsonElement
-            .GetProperty(LayoutAreaReference.Areas)
-            .GetProperty(JsonSerializer.Serialize(area, options));
-        return control.Deserialize<UiControl>(options);
+        var pointer = JsonPointer.Parse(LayoutAreaReference.GetControlPointer(area));
+        var eval = pointer.Evaluate(jsonElement);
+        return eval?.Deserialize<UiControl>(options);
     }
 
     public static IObservable<T> GetStream<T>(
@@ -153,26 +152,26 @@ public static class LayoutExtensions
         .Evaluate(stream.Current.Value)
         ?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
 
-    public static IObservable<object> GetLayoutAreaStream(
+    public static IObservable<UiControl> GetLayoutAreaStream(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
     ) => synchronizationItems.Select(change => ExtractRenderableControl(change.Value, area));
 
-    private static object ExtractRenderableControl(EntityStore store, string area)
+    private static UiControl ExtractRenderableControl(EntityStore store, string area)
     {
         var ret = GetControl(store, area);
         if (ret is IContainerControl container)
-            ret = container.ScheduleRendering(x => ExtractRenderableControl(store, x.Area.ToString()));
+            ret = (UiControl)container.ScheduleRendering(x => ExtractRenderableControl(store, x.Area.ToString()));
         return ret;
     }
 
-    private static object GetControl(EntityStore store, string area)
+    private static UiControl GetControl(EntityStore store, string area)
     {
         return store.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
-            ?.Instances.GetValueOrDefault(area);
+            ?.Instances.GetValueOrDefault(area) as UiControl;
     }
 
-    public static IObservable<object> GetLayoutAreaStream(
+    public static IObservable<UiControl> GetLayoutAreaStream(
         this IMessageHub hub,
         object address,
         string area,
