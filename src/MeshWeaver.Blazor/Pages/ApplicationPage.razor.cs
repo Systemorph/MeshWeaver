@@ -1,8 +1,6 @@
-﻿using MeshWeaver.Application;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
 using System.Collections.Immutable;
-using MeshWeaver.Utils;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
@@ -53,10 +51,10 @@ public partial class ApplicationPage
 
 
 
-        ViewModel = new(Address, Reference)
+        ViewModel = Controls.LayoutArea(Address, Reference)
+            with
         {
-            ShowProgress = true,
-            DisplayArea = (GetDisplayNameFromId() ?? Reference.Area).Wordify()
+            ShowProgress = true
         };
         PageTitle = $"{ViewModel.DisplayArea} - {Application}";
 

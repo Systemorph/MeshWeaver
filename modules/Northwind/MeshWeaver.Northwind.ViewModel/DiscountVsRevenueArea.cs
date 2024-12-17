@@ -1,9 +1,12 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -19,7 +22,13 @@ public static class DiscountVsRevenueArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountVsRevenue(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountVsRevenue), Controls.Stack.WithView(DiscountVsRevenue));
+        => layout.WithView(nameof(DiscountVsRevenue), Controls.Stack.WithView(DiscountVsRevenue))
+            .WithNavMenu((menu, _, _) =>
+                menu.WithNavLink(
+                    nameof(DiscountVsRevenue),
+                    new LayoutAreaReference(nameof(DiscountVsRevenue)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+            )
+        ;
 
     /// <summary>
     /// Generates a view with a chart which has a combined representation of revenues and discounts for the specified layout area and rendering context.

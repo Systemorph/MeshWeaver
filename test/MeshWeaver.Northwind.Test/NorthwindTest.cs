@@ -134,7 +134,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             new LayoutAreaReference(viewName)
         );
         var dashboard = (await stream
-                .GetLayoutAreaControl(viewName)
+                .GetControlStream(viewName)
                 .Timeout(3.Seconds())
                 .FirstAsync()
             )
@@ -150,7 +150,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
                 .ToAsyncEnumerable()
                 .SelectAwait(async s => new KeyValuePair<string, object>(
                     s.Area.ToString(),
-                    await stream.GetLayoutAreaControl(s.Area.ToString()).Timeout(3.Seconds())
+                    await stream.GetControlStream(s.Area.ToString()).Timeout(3.Seconds())
                     .FirstAsync()
                 ))
                 .ToArrayAsync();
@@ -172,7 +172,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var controlName = $"{ViewName}"; 
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
-        var control = await stream.GetLayoutAreaControl(controlName)
+        var control = await stream.GetControlStream(controlName)
             .Timeout(3.Seconds())
             .FirstAsync();
 
@@ -224,7 +224,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream
-            .GetLayoutAreaControl(controlName)
+            .GetControlStream(controlName)
             .Timeout(3.Seconds())
             .FirstAsync();
         var grid = control.Should().BeOfType<GridControl>().Subject;

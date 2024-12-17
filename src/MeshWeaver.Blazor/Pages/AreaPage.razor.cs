@@ -53,8 +53,8 @@ namespace MeshWeaver.Blazor.Pages
 
 
 
-            ViewModel = new(Address, Reference)
-            {
+            ViewModel = Controls.LayoutArea(Address, Reference)
+            with {
                 ShowProgress = true,
             };
 

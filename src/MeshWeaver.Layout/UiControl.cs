@@ -148,7 +148,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
     public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) =>
         This with
         {
-            Style = styleBuilder(new StyleBuilder()).Build()
+            Style = styleBuilder(new StyleBuilder()).ToString()
         };
 
     public TControl WithClickAction(Func<UiActionContext, Task> onClick)

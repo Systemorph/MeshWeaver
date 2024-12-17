@@ -1,9 +1,12 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 
@@ -20,7 +23,13 @@ public static class ClientsOverviewArea
     /// <param name="layout">The layout to which the clients overview view will be added.</param>
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition AddClientsOverview(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopClients), Controls.Stack.WithView(TopClients));
+        => layout.WithView(nameof(TopClients), Controls.Stack.WithView(TopClients))
+            .WithNavMenu((menu, _, _) =>
+                menu.WithNavLink(
+                    nameof(TopClients),
+                    new LayoutAreaReference(nameof(TopClients)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+            )
+        ;
 
     /// <summary>
     /// Generates a bar chart of the top clients for the specified layout area and rendering context.

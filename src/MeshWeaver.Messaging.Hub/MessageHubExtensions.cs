@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
@@ -33,6 +35,9 @@ public static class MessageHubExtensions
 
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
+        if(instance is JsonObject jObj)
+            return (jObj[EntitySerializationExtensions.TypeProperty]?.ToString(), jObj[EntitySerializationExtensions.TypeProperty]?.ToString());
+
         var s = instance.ToString();
         var split = s.Split('/');
         if (split.Length < 2)

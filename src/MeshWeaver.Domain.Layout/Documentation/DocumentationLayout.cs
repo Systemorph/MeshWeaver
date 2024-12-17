@@ -75,7 +75,7 @@ public static class DocumentationLayout
                 ? new
                 {
                     Control =
-                        new LayoutAreaControl(layout.Hub.Address,
+                        Controls.LayoutArea(layout.Hub.Address,
                     new(nameof(Doc)) { Id = source.GetPath(type.FullName) })
                     ,
                     TabName = source.GetDocumentName(type.FullName),
@@ -95,7 +95,7 @@ public static class DocumentationLayout
         var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name);
         return layout.WithDocumentation(contextFilter,
                 (tabs, _, _) => tabs.WithView(
-                    new LayoutAreaControl(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
+                    Controls.LayoutArea(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
                         .WithDisplayArea(name),
                     name
                 )
