@@ -38,7 +38,7 @@ public static class DocumentationExtensions
         ?? new(hub);
 
     public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => new LayoutAreaControl(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
+        => Controls.LayoutArea(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
         {
             Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
         }).ToString();

@@ -1,8 +1,11 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -18,7 +21,13 @@ public static class DiscountPercentageArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountPercentage(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountPercentage), Controls.Stack.WithView(DiscountPercentage));
+        => layout.WithView(nameof(DiscountPercentage), Controls.Stack.WithView(DiscountPercentage))
+            .WithNavMenu((menu, _, _) =>
+                menu.WithNavLink(
+                    nameof(DiscountPercentage),
+                    new LayoutAreaReference(nameof(DiscountPercentage)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+            )
+        ;
 
     /// <summary>
     /// Generates a view with a chart which has pie chart with total sales by discount amounts for the specified layout area and rendering context.

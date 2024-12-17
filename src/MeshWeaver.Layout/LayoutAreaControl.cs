@@ -12,9 +12,11 @@ namespace MeshWeaver.Layout;
 /// <param name="Address">The address associated with the layout area control.</param>
 /// <param name="Reference">The reference to the layout area.</param>
 
-public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
+public record LayoutAreaControl(string AddressType, string AddressId, LayoutAreaReference Reference)
     : UiControl<LayoutAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
+
+
      /// <summary>
     /// Gets or initializes the display area of the layout area control.
     /// </summary>
@@ -40,8 +42,9 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
                && DisplayArea == other.DisplayArea
                && ShowProgress == other.ShowProgress 
                && Equals(Reference, other.Reference)
-               && JsonObjectEqualityComparer.Instance.Equals(Address, other.Address)
-               ;
+               && AddressType == other.AddressType
+                && AddressId == other.AddressId;
+        ;
     }
 /// <summary>
     /// Returns a string that represents the current <see cref="LayoutAreaControl"/>.
@@ -49,7 +52,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <returns>A string that represents the current <see cref="LayoutAreaControl"/>.</returns>
     public override string ToString()
     {
-        return Reference.ToAppHref(Address);
+        return Reference.ToAppHref(AddressType, AddressId);
     }
  /// <summary>
     /// Serves as the default hash function.
@@ -62,7 +65,8 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
             DisplayArea,
             ShowProgress,
             Reference,
-            Address.ToString()
+            AddressType.ToString(),
+            AddressId.ToString()
         );
     }
 }

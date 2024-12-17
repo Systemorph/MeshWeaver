@@ -164,7 +164,9 @@ public class KernelContainer : IDisposable
                     nullView.WriteTo(context);
                     return true;
                 }
-                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}'></iframe>";
+
+
+                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}' width='100%' style=\"{control.Style}\"></iframe>";
                 context.Writer.Write(view);
                 return true;
                 //PublishEventToContext(new DisplayedValueProduced(view, KernelInvocationContext.Current.Command));

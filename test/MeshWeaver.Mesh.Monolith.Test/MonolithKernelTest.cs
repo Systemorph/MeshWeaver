@@ -48,7 +48,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var client = CreateClient();
         var area = await client
-            .GetLayoutAreaControl(new ApplicationAddress(Test), "Dashboard")
+            .GetControlStream(new ApplicationAddress(Test), "Dashboard")
             .Timeout(3.Seconds())
             .FirstAsync();
         area.Should().NotBeNull();

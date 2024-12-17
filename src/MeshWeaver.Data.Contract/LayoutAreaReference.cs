@@ -68,6 +68,19 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
         return ret;
     }
+    /// <summary>
+    /// Converts the layout area reference to an application href.
+    /// </summary>
+    /// <param name="addressType">The type of address for the href.</param>
+    /// <param name="addressId">The id of address for the href.</param>
+    /// <returns>A string representing the application href.</returns>
+    public string ToAppHref(object addressType, object addressId)
+    {
+        var ret = $"{addressType}/{addressId}/{WorkspaceReference.Encode(Area)}";
+        if (Id?.ToString() is { } s)
+            ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        return ret;
+    }
 
     public string ToHref(string addressType, string addressId)
     {

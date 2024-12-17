@@ -1,9 +1,12 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -20,7 +23,13 @@ public static class DiscountSummaryArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountSummary), Controls.Stack.WithView(DiscountSummary));
+        => layout.WithView(nameof(DiscountSummary), Controls.Stack.WithView(DiscountSummary))
+            .WithNavMenu((menu, _, _) =>
+                menu.WithNavLink(
+                    nameof(DiscountSummary),
+                    new LayoutAreaReference(nameof(DiscountSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+            )
+        ;
 
     /// <summary>
     /// Generates a discount summary view for the specified layout area and rendering context.

@@ -2,6 +2,8 @@
 using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -165,7 +167,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
         synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => 
-            Configuration.HubConfigurations.Aggregate(config,(c,cc) => cc.Invoke(c)));
+            Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config),(c,cc) => cc.Invoke(c)));
 
         if(synchronizationHub == null)
             if(Hub.IsDisposing)
@@ -175,6 +177,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         synchronizationHub.RegisterForDisposal(_ => Store.Dispose());
     }
+
+    private static MessageHubConfiguration ConfigureDefaults(MessageHubConfiguration config)
+        => config.WithTypes(
+                typeof(EntityStore),
+                typeof(JsonElement),
+                typeof(SynchronizationStreamAddress)
+            );
 
     public string StreamId { get; } = Guid.NewGuid().AsString();
     public string ClientId => Configuration.ClientId;
