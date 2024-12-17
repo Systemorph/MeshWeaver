@@ -56,8 +56,8 @@ public static class LayoutClientExtensions
             ;
     }
 
-    public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream, JsonPointerReference reference, Func<object, T> conversion = null) =>
-        stream.GetStream<object>(JsonPointer.Parse(reference.Pointer))
+    public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream, string dataContext, JsonPointerReference reference, Func<object, T> conversion = null) =>
+        stream.GetStream<object>(JsonPointer.Parse($"{dataContext}{reference.Pointer}"))
             .Select(conversion ?? (x => stream.ConvertSingle<T>(x, null)));
 
 

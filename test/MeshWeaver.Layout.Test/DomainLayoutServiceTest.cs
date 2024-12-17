@@ -72,14 +72,14 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         dataContext.Should().NotBeNullOrWhiteSpace();
 
 
-        var namePointer = new JsonPointerReference($"{dataContext}/displayName");
-        var nameStream = stream.DataBind<string>(namePointer);
+        var namePointer = new JsonPointerReference($"/displayName");
+        var nameStream = stream.DataBind<string>(dataContext,namePointer);
         var value = await nameStream.Where(x => x != null).FirstAsync();
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
-        var objectPointer = new JsonPointerReference(dataContext);
-        var objectStream = stream.DataBind<JsonElement>(objectPointer);
+        var objectPointer = new JsonPointerReference("/");
+        var objectStream = stream.DataBind<JsonElement>(dataContext, objectPointer);
         var obj = await objectStream.FirstAsync();
         const string Universe = nameof(Universe);
         obj = obj.SetPointer("/displayName", JsonNode.Parse($"\"{Universe}\""));
@@ -87,7 +87,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var response = await stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [obj] }, o => o.WithTarget(stream.Owner));
         response.Message.Status.Should().Be(DataChangeStatus.Committed);
         value = await stream
-            .DataBind(namePointer, x => (string)x)
+            .DataBind(dataContext, namePointer, x => (string)x)
             .Where(x => x != "Hello")
             .Timeout(3.Seconds())
             .FirstAsync();
