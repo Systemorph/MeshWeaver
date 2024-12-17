@@ -5,6 +5,7 @@ using Microsoft.JSInterop;
 using Markdig.Syntax;
 using MeshWeaver.Markdown;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
+using System.ComponentModel;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -32,7 +33,7 @@ public partial class MarkdownView
                 var document = Markdig.Markdown.Parse(markdown, pipeline);
                 var newLayoutComponents =
                     document.Descendants<LayoutAreaComponentInfo>()
-                        .Select(component => new LayoutAreaControl(Stream.Owner, component.Reference) { Id = component.DivId })
+                        .Select(component => Controls.LayoutArea(Stream.Owner, component.Reference).WithId(component.DivId))
                         .ToArray();
                 var newHtml = document.ToHtml(pipeline);
                 if (newHtml == Html && LayoutAreaComponents.SequenceEqual(newLayoutComponents))

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 
@@ -43,11 +44,17 @@ public partial class LayoutAreaView
         DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
+        DataBind(ViewModel.AddressType, x => x.AddressType);
+        DataBind(ViewModel.AddressId, x => x.AddressId);
+        DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
+
+        Address = MeshExtensions.MapAddress(AddressType, AddressId);
     }
 
-
+    private object Address { get; set; }
     private bool ShowProgress { get; set; }
-
+    private string AddressType { get; set; }
+    private string AddressId { get; set; }
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {
@@ -64,8 +71,8 @@ public partial class LayoutAreaView
             Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
             AreaStream.Dispose();
         }
-        Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", ViewModel.Address, ViewModel.Reference);
-        AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(ViewModel.Address, ViewModel.Reference);
+        Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address, ViewModel.Reference);
+        AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
     }
 
     protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;

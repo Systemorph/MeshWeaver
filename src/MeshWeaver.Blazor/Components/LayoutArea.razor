@@ -1,4 +1,3 @@
-@using MeshWeaver.Application
 @using MeshWeaver.Mesh
 
 <LayoutAreaView ViewModel="@ViewModel" />
@@ -8,7 +7,7 @@
     [Parameter] public string Area { get; set; }
     [Parameter] public string Id { get; set; }
 
-    private LayoutAreaControl ViewModel => new(new ApplicationAddress(Application), new(Area)
+    private LayoutAreaControl ViewModel => Controls.LayoutArea(new ApplicationAddress(Application), new(Area)
     {
         Id = Id
     });

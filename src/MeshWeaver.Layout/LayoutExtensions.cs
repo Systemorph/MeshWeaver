@@ -103,13 +103,6 @@ public static class LayoutExtensions
                 }
             );
     }
-    public static object GetLayoutArea(
-        this ISynchronizationStream<JsonElement> stream,
-        string area
-    ) => JsonPointer
-        .Parse(LayoutAreaReference.GetControlPointer(area))
-        .Evaluate(stream.Current.Value)
-        ?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
 
     public static IObservable<object> GetControlStream(
         this ISynchronizationStream<EntityStore> synchronizationItems,
@@ -120,16 +113,14 @@ public static class LayoutExtensions
                 ?.Instances.GetValueOrDefault(area)
         );
 
-    public static async Task<object> GetLayoutAreaAsync(
+    public static IObservable<object> GetControlStream(
         this IMessageHub hub,
         object address,
         string area,
         string id = null
-    ) => await hub.GetWorkspace()
+    ) => hub.GetWorkspace()
         .GetRemoteStream(address, new LayoutAreaReference(area){Id = id})
         .GetControlStream(area)
-        .Catch<object, Exception>(ex => Observable.Throw<object>(new InvalidOperationException("An error occurred while retrieving the layout area stream.", ex)))
-        .FirstAsync(x => x != null)
 ;
 
     public static async Task<object> GetLayoutAreaAsync(

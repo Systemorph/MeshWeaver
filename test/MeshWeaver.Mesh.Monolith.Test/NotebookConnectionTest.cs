@@ -106,7 +106,7 @@ Console.WriteLine(""Hello World"");
             .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
         var control = await stream
-            .GetLayoutAreaControl(area)
+            .GetControlStream(area)
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null);
 
