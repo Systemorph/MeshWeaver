@@ -16,7 +16,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 {
     [Inject] protected ILogger<TView> Logger { get; set; }
 
-
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
@@ -24,6 +23,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     public ISynchronizationStream<JsonElement> Stream { get; set; }
     [Parameter]
     public string Area { get; set; }
+
+    [Parameter]
+    public string DataContext { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
     public ModelParameter Model { get; set; }
@@ -36,7 +38,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         BindDataAfterParameterReset();
     }
 
-
     protected virtual void BindDataAfterParameterReset()
     {
         Logger.LogDebug("Preparing data bindings for area {Area}", Area);
@@ -44,7 +45,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         BindData();
         Logger.LogDebug("Finished data bindings for area {Area}", Area);
     }
-
 
     protected string Label { get; set; }
 
@@ -63,7 +63,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         return default;
     }
 
-
     protected void AddBinding(IDisposable binding)
     {
         bindings.Add(binding);
@@ -81,7 +80,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
             if (Model is not null)
                 property.SetValue(this, Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             else
-                bindings.Add(Stream.DataBind(reference, conversion)
+                bindings.Add(Stream.DataBind(DataContext, reference, conversion)
                     .Subscribe(v =>
                         {
                             Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
@@ -111,33 +110,30 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         {
             if (Model != null)
                 return Observable.Return(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
-            return Stream.DataBind(reference, conversion);
+            return Stream.DataBind(DataContext, reference, conversion);
         }
 
         return Observable.Return(Stream.ConvertSingle(value, conversion));
     }
 
-
-
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-
     protected void UpdatePointer<T>(T value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, reference, ViewModel.DataContext, Model);
+        Stream.UpdatePointer(value, reference, DataContext, Model);
     }
-
 
     protected virtual void BindData()
     {
-
         if (ViewModel != null)
         {
             DataBind(ViewModel.Id, x => x.Id);
             DataBind(ViewModel.Label, x => x.Label);
             DataBind(ViewModel.Class, x => x.Class);
             DataBind(ViewModel.Style, x => x.Style);
+            if (ViewModel.DataContext != null)
+                DataContext = ViewModel.DataContext;
         }
     }
     private readonly List<IDisposable> bindings = new();
@@ -149,12 +145,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         bindings.Clear();
     }
 
-
     protected void OnClick()
     {
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
-
-
-
 }
