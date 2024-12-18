@@ -16,6 +16,7 @@
         {
             builder.AddAttribute(++index, parameter.Key, parameter.Value);
         }
+        builder.AddAttribute(++index, nameof(DataContext), DataContext);
 
         builder.CloseComponent();
     }))
