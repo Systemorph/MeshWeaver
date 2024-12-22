@@ -6,8 +6,8 @@ using MeshWeaver.Charting.Helpers;
 namespace MeshWeaver.Charting.Models.Line
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data) : 
-        DataSet<TDataSet>(Data), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
+    public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label = null) : 
+        DataSet<TDataSet>(Data, Label), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
      where TDataSet : LineDataSetBase<TDataSet>
     {
         #region General
@@ -236,7 +236,11 @@ namespace MeshWeaver.Charting.Models.Line
     {
         public LineDataSet(IEnumerable Data) : this(Data.Cast<object>().ToArray()) { }
 
+        internal override ChartType Type => ChartType.Line;
     }
 
-    public record TimeLineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<TimeLineDataSet>(Data);
+    public record TimeLineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<TimeLineDataSet>(Data)
+    {
+        internal override ChartType Type => ChartType.Line;
+    }
 }

@@ -13,7 +13,7 @@ public record PivotDoughnutChartBuilder<T, TTransformed, TIntermediate, TAggrega
     public PivotDoughnutChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new(ChartType.Doughnut);
+        Chart = new();
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

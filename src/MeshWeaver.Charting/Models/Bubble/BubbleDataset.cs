@@ -1,17 +1,47 @@
-﻿using System.Collections;
-using MeshWeaver.Charting.Enums;
+﻿using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Bubble
 {
     /// <summary>
     /// Represents a dataset for a bubble chart.
     /// </summary>
-    public record BubbleDataSet(IReadOnlyCollection<object> Data) : DataSet<BubbleDataSet>(Data), IDataSetWithOrder<BubbleDataSet>, IDataSetWithPointStyle<BubbleDataSet>
+    public record BubbleDataSet : DataSet<BubbleDataSet>, IDataSetWithOrder<BubbleDataSet>, IDataSetWithPointStyle<BubbleDataSet>
     {
-        public BubbleDataSet(IEnumerable data, string label = null) : this(data.Cast<object>().ToArray())
+        public BubbleDataSet(IReadOnlyCollection<BubbleData> Data, string Label = null) : base(Data, Label){}
+        public BubbleDataSet(IEnumerable<(int x, int y, int radius)> values)
+        : this(TransformBubbles(values))
         {
-            Label = label;
         }
+
+        private static IReadOnlyCollection<BubbleData> TransformBubbles(IEnumerable<(int x, int y, int radius)> values)
+        {
+            var valueTuples = values.ToList();
+            return valueTuples.Select(e => new BubbleData(e.x,  e.y, e.radius)).ToArray();
+        }
+
+        public BubbleDataSet(IEnumerable<int> x, IEnumerable<int> y, IEnumerable<double> radius)
+            : this(x.Select(e => (double)e).ToArray(), y.Select(e => (double)e).ToArray(), radius.ToArray()) {}
+
+        public BubbleDataSet(IEnumerable<double> x, IEnumerable<int> y, IEnumerable<double> radius)
+            : this(TransformBubbles(x.Select(a => a).ToArray(), y.Select(a => (double)a).ToArray(), radius.ToArray())) { }
+
+        public BubbleDataSet(IEnumerable<int> x, IEnumerable<double> y, IEnumerable<double> radius)
+            : this(TransformBubbles(x.Select(a => (double)a).ToArray(), y.ToArray(), radius.ToArray())){}
+
+        public BubbleDataSet(IReadOnlyCollection<double> x, IReadOnlyCollection<double> y, IReadOnlyCollection<double> radius)
+        : this(TransformBubbles(x, y, radius))
+        {
+        }
+
+        private static IReadOnlyCollection<BubbleData> TransformBubbles(IReadOnlyCollection<double> x, IReadOnlyCollection<double> y, IReadOnlyCollection<double> radius)
+        {
+            if (x.Count != y.Count || x.Count != radius.Count)
+                throw new InvalidOperationException();
+
+            return x.Zip(y, (a, b) => (a, b)).Zip(radius, (t, r) => new BubbleData(t.a, t.b, r )).ToArray();
+        }
+
+
         #region General
         // https://www.chartjs.org/docs/latest/charts/bubble.html#general
         /// <summary>
@@ -76,5 +106,7 @@ namespace MeshWeaver.Charting.Models.Bubble
         /// <returns>A new instance of <see cref="BubbleDataSet"/> with the specified point style.</returns>
         public BubbleDataSet WithPointStyle(Shapes? pointStyle) =>
             this with { PointStyle = pointStyle };
+
+        internal override ChartType Type => ChartType.Bubble;
     }
 }

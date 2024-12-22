@@ -1,6 +1,8 @@
-﻿namespace MeshWeaver.Charting.Models.Segmented;
+﻿using MeshWeaver.Charting.Enums;
 
-public record DoughnutDataSet(IReadOnlyCollection<object> Data) : SegmentDataSetBase<DoughnutDataSet>(Data)
+namespace MeshWeaver.Charting.Models.Segmented;
+
+public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = null) : SegmentDataSetBase<DoughnutDataSet>(Data, Label)
 {
     #region BorderAlign
 
@@ -145,4 +147,6 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data) : SegmentDataSet
         This with { HoverOffset = hoverOffset };
 
     #endregion Interactions
+
+    internal override ChartType Type => ChartType.Doughnut;
 }
