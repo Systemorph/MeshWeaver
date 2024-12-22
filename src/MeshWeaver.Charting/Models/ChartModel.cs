@@ -10,8 +10,6 @@ public record ChartModel
     {
         Data = Data.WithDataSets(dataSets);
         Options = GetAutoLegendOptions();
-
-        
     }
     public ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
 
