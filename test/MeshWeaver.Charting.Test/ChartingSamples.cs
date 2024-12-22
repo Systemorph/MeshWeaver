@@ -62,10 +62,10 @@ public class ChartingSamples
     [Fact]
     public async Task MixedChart()
     {
-        var dataSet1 = new LineDataSet(data1).WithLabel("First").SetType(ChartType.Line);
+        var dataSet1 = new LineDataSet(data1).WithLabel("First");
         var dataSet2 = new BarDataSet(data2).WithLabel("Second");
 
-        var actual = new ChartModel(ChartType.Bar, dataSet1, dataSet2)
+        var actual = new ChartModel(dataSet1, dataSet2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart");
@@ -183,7 +183,7 @@ public class ChartingSamples
     public async Task AreaChart()
     {
         var actual = Chart
-            .Line(new LineDataSet(data1).WithArea(), new LineDataSet(data2).WithArea())
+            .ToChart(new LineDataSet(data1).WithArea(), new LineDataSet(data2).WithArea())
             ;
 
         await actual.JsonShouldMatch(Options, "Sample_AreaChart.json");

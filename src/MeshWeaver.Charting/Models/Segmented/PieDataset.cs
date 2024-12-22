@@ -1,8 +1,9 @@
 ﻿using System.Collections;
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Segmented
 {
-    public record PieDataSet(IReadOnlyCollection<object> Data) : SegmentDataSetBase<PieDataSet>(Data)
+    public record PieDataSet(IReadOnlyCollection<object> Data, string Label = null) : SegmentDataSetBase<PieDataSet>(Data, Label)
     {
         public PieDataSet(IEnumerable data) : this(data.Cast<object>().ToArray()) { }
         #region Styling
@@ -65,6 +66,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         public int? HoverOffset { get; init; }
         #endregion Interactions
 
+        internal override ChartType Type => ChartType.Pie;
         internal override bool HasLabel() => false;
     }
 }

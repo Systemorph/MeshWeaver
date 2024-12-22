@@ -6,13 +6,14 @@ namespace MeshWeaver.Charting.Models;
 
 public record ChartModel
 {
-    public ChartModel(ChartType type, params IEnumerable<DataSet> dataSets)
+    public ChartModel(params IEnumerable<DataSet> dataSets)
     {
-        Type = type;
         Data = Data.WithDataSets(dataSets);
         Options = GetAutoLegendOptions();
+
+        
     }
-    public ChartType Type { get; init; }
+    public ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
 
     /// <summary>
     /// Chart data
@@ -24,7 +25,7 @@ public record ChartModel
     /// </summary>
     public ChartOptions Options { get; init; } = new();
 
-    protected bool AutoLabels { get; init; }
+    protected bool AutoLabels { get; init; } = true;
 
     public ChartModel WithDataSet<TDataSet2>(TDataSet2 dataSet) where TDataSet2 : DataSet
         => (this with { Data = Data.WithDataSets(dataSet), })
@@ -40,7 +41,7 @@ public record ChartModel
         this with { AutoLabels = false, Data = Data.WithLabels(labels), };
 
 
-    public ChartModel WithAutoLabels() => this with { AutoLabels = true, };
+    public ChartModel WithAutoLabels(bool autoLabels = true) => this with { AutoLabels = autoLabels, };
 
     protected IReadOnlyCollection<string> GetUpdatedLabels()
     {

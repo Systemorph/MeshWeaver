@@ -13,7 +13,7 @@ public record PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
     public PivotPieChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new(ChartType.Pie);
+        Chart = new();
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

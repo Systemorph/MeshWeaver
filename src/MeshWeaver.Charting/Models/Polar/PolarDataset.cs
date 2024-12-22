@@ -1,6 +1,8 @@
-﻿namespace MeshWeaver.Charting.Models.Polar
+﻿using MeshWeaver.Charting.Enums;
+
+namespace MeshWeaver.Charting.Models.Polar
 {
-    public record PolarDataSet(IReadOnlyCollection<object> Data) : DataSet(Data)
+    public record PolarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSet(Data, Label)
     {
         #region Styling
         // https://www.chartjs.org/docs/latest/charts/polar.html#styling
@@ -34,6 +36,7 @@
         public int? HoverBorderWidth { get; init; }
         #endregion Interactions
 
+        internal override ChartType Type => ChartType.PolarArea;
         internal override bool HasLabel() => false;
     }
 }

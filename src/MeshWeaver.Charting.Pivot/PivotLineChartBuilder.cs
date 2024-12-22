@@ -13,7 +13,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder, ds => new LineDataSet(ds))
     {
-        Chart = new(ChartType.Line);
+        Chart = new();
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

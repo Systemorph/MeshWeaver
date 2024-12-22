@@ -6,8 +6,7 @@ namespace MeshWeaver.Charting.Models
     public record ChartData
     {
         // ReSharper disable once StringLiteralTypo
-        [JsonPropertyName("datasets")]
-        public IReadOnlyCollection<DataSet> DataSets { get; init; }
+        [JsonPropertyName("datasets")] public ImmutableList<DataSet> DataSets { get; init; } = [];
 
         public IReadOnlyCollection<string> Labels { get; internal set; }
 
@@ -19,8 +18,27 @@ namespace MeshWeaver.Charting.Models
 
         public ChartData WithLabels(params string[] labels) => this with { Labels = labels };
 
-        public ChartData WithDataSets(IEnumerable<DataSet> dataSets) => this with { DataSets = (DataSets == null ? dataSets : DataSets.Concat(dataSets)).ToImmutableList(), };
+        public ChartData WithDataSets(IEnumerable<DataSet> dataSets)
+        {
+            return this with { DataSets = DataSets.AddRange(dataSets), Labels = GetUpdatedLabels() };
+        }
+
 
         public ChartData WithDataSets(params DataSet[] dataSets) => WithDataSets(dataSets.AsEnumerable());
+
+
+
+        protected IReadOnlyCollection<string> GetUpdatedLabels()
+        {
+            if (DataSets.Count > 1)
+            {
+                var maxLen = DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
+
+                return Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray();
+            }
+            return Labels;
+        }
+
     }
+
 }

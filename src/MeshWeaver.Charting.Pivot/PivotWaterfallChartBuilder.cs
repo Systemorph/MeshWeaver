@@ -23,7 +23,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new(ChartType.Bar);
+        Chart = new();
     }
 
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<WaterfallChartOptions, WaterfallChartOptions> option)
@@ -113,7 +113,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public PivotHorizontalWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = new(ChartType.Bar);
+        Chart = new();
     }
 
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> option)

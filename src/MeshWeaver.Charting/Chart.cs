@@ -1,6 +1,5 @@
 ﻿using System.Collections;
 using System.Globalization;
-using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Bubble;
@@ -24,7 +23,8 @@ public static class Chart
     public static ChartModel Bar(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Bar, new BarDataSet(dataArray));
+        // Refactored to use the Bar method with BarDataSet
+        return dataArray == null ? null : ToChart(new BarDataSet(dataArray));
     }
 
     /// <summary>
@@ -35,7 +35,8 @@ public static class Chart
     public static ChartModel Doughnut(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Doughnut, new DoughnutDataSet(dataArray));
+        // Refactored to use the Doughnut method with DoughnutDataSet
+        return dataArray == null ? null : ToChart(new DoughnutDataSet(dataArray));
     }
 
     /// <summary>
@@ -46,7 +47,8 @@ public static class Chart
     public static ChartModel Line(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Line, new LineDataSet(dataArray));
+        // Refactored to use the Line method with LineDataSet
+        return dataArray == null ? null : ToChart(new LineDataSet(dataArray));
     }
 
     /// <summary>
@@ -57,7 +59,8 @@ public static class Chart
     public static ChartModel Pie(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Pie, new PieDataSet(dataArray));
+        // Refactored to use the Pie method with PieDataSet
+        return dataArray == null ? null : ToChart(new PieDataSet(dataArray));
     }
 
     /// <summary>
@@ -68,7 +71,8 @@ public static class Chart
     public static ChartModel Polar(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.PolarArea, new PolarDataSet(dataArray));
+        // Refactored to use the Polar method with PolarDataSet
+        return dataArray == null ? null : ToChart(new PolarDataSet(dataArray));
     }
 
     /// <summary>
@@ -79,7 +83,8 @@ public static class Chart
     public static ChartModel Radar(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Radar, new RadarDataSet(dataArray));
+        // Refactored to use the Radar method with RadarDataSet
+        return dataArray == null ? null : ToChart(new RadarDataSet(dataArray));
     }
 
     /// <summary>
@@ -95,9 +100,9 @@ public static class Chart
         if (dataFromArray == null || dataToArray == null) return null;
 
         var rangeData = dataFromArray.Zip(dataToArray, (from, to) => new[] { from, to });
-        return new ChartModel(ChartType.Bar, new FloatingBarDataSet(rangeData.Cast<object>().ToArray()));
+        // Refactored to use the FloatingBar method with FloatingBarDataSet
+        return ToChart(new FloatingBarDataSet(rangeData.Cast<object>().ToArray()));
     }
-
 
     /// <summary>
     /// Creates a horizontal floating bar chart model.
@@ -107,7 +112,8 @@ public static class Chart
     public static ChartModel HorizontalFloatingBar(IEnumerable data)
     {
         var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : new ChartModel(ChartType.Bar, new HorizontalFloatingBarDataSet(dataArray));
+        // Refactored to use the HorizontalFloatingBar method with HorizontalFloatingBarDataSet
+        return dataArray == null ? null : ToChart(new HorizontalFloatingBarDataSet(dataArray));
     }
 
     /// <summary>
@@ -172,11 +178,11 @@ public static class Chart
             throw new InvalidOperationException();
 
         var pointData = Enumerable.Range(0, xArray.Count)
-            .Select(i => new BubbleData { X = xArray[i], Y = yArray[i], R = radiusArray[i] })
-            .Cast<object>()
+            .Select(i => new BubbleData(xArray[i], yArray[i], radiusArray[i]))
             .ToArray();
 
-        return new ChartModel(ChartType.Bubble, new BubbleDataSet(pointData));
+        // Refactored to use the Bubble method with BubbleDataSet
+        return ToChart(new BubbleDataSet(pointData));
     }
 
     /// <summary>
@@ -223,7 +229,8 @@ public static class Chart
             .Cast<object>()
             .ToArray();
 
-        return new ChartModel(ChartType.Line, new TimeLineDataSet(data));
+        // Refactored to use the TimeLine method with TimeLineDataSet
+        return ToChart(new TimeLineDataSet(data));
     }
 
     /// <summary>
@@ -267,7 +274,8 @@ public static class Chart
 
         var pointData = xArray.Zip(yArray, (a, v) => new PointData { X = a, Y = v }).Cast<object>().ToArray();
 
-        return new ChartModel(ChartType.Scatter, new LineScatterDataSet(pointData));
+        // Refactored to use the Scatter method with LineScatterDataSet
+        return ToChart(new LineScatterDataSet(pointData));
     }
 
     /// <summary>
@@ -311,7 +319,8 @@ public static class Chart
     public static ChartModel Scatter(IEnumerable<(double x, double y)> points)
     {
         var pointsArray = ToArrayIfNotEmpty(points);
-        return pointsArray == null ? null : new ChartModel(ChartType.Scatter, new LineScatterDataSet(pointsArray.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray()));
+        // Refactored to use the Scatter method with LineScatterDataSet
+        return pointsArray == null ? null : ToChart(new LineScatterDataSet(pointsArray.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray()));
     }
 
     /// <summary>
@@ -324,6 +333,16 @@ public static class Chart
         var dataArray = data?.Cast<object>().ToArray();
         return dataArray != null && dataArray.Any() ? dataArray : null;
     }
+
+
+    public static ChartModel ToChart(this IEnumerable<DataSet> dataSets) => ToChart(dataSets.ToArray());
+
+    public static ChartModel ToChart(params DataSet[] dataSets) => 
+        dataSets
+            .OfType<IChartOptionsConfiguration>()
+            .Aggregate(new ChartModel(dataSets), (r, c) => r.WithOptions(c.Configure));
+
+
     /// <summary>
     /// Checks if the data is null or empty after converting to an array.
     /// </summary>
@@ -336,91 +355,11 @@ public static class Chart
         return dataArray != null && dataArray.Any() ? dataArray : null;
     }
 
-    #region Multiple data sets
-    /// <summary>
-    /// Creates a bar chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bar chart.</returns>
-    public static ChartModel Bar(params IEnumerable<BarDataSet> data) => new ChartModel(ChartType.Bar, data);
-
-    /// <summary>
-    /// Creates a doughnut chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a doughnut chart.</returns>
-    public static ChartModel Doughnut(params IEnumerable<DoughnutDataSet> data) => new ChartModel(ChartType.Doughnut, data);
-
-    /// <summary>
-    /// Creates a line chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a line chart.</returns>
-    public static ChartModel Line(params IEnumerable<LineDataSet> data) => new ChartModel(ChartType.Line, data);
-
-    /// <summary>
-    /// Creates a pie chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a pie chart.</returns>
-    public static ChartModel Pie(params IEnumerable<PieDataSet> data) => new ChartModel(ChartType.Pie, data);
-
-    /// <summary>
-    /// Creates a polar area chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a polar area chart.</returns>
-    public static ChartModel Polar(params IEnumerable<PolarDataSet> data) => new ChartModel(ChartType.PolarArea, data);
-
-    /// <summary>
-    /// Creates a radar chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a radar chart.</returns>
-    public static ChartModel Radar(params IEnumerable<RadarDataSet> data) => new ChartModel(ChartType.Radar, data);
-
-    /// <summary>
-    /// Creates a floating bar chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
-    public static ChartModel FloatingBar(params IEnumerable<FloatingBarDataSet> data) => 
-        new ChartModel(ChartType.Bar, data)
-        .WithOptions(o => o.WithIndexAxis("y"));
-
-    /// <summary>
-    /// Creates a horizontal floating bar chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a horizontal floating bar chart.</returns>
-    public static ChartModel HorizontalFloatingBar(params IEnumerable<HorizontalFloatingBarDataSet> data) => 
-        new ChartModel(ChartType.Bar, data);
-
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(params IEnumerable<BubbleDataSet> data) => new ChartModel(ChartType.Bubble, data);
-
-    /// <summary>
-    /// Creates a time line chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(params IEnumerable<TimeLineDataSet> data) => new ChartModel(ChartType.Line, data);
-
-    /// <summary>
-    /// Creates a scatter chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(params IEnumerable<LineScatterDataSet> data) => new ChartModel(ChartType.Scatter, data);
 
     public static ChartModel Waterfall(List<double> deltas,
         Func<WaterfallChartOptions, WaterfallChartOptions> options = null
     )
-        => new ChartModel(ChartType.Bar)
+        => new ChartModel()
             .ToWaterfallChart(deltas, options)
             .WithOptions(o => o
                 .Stacked("x")
@@ -431,7 +370,7 @@ public static class Chart
     public static ChartModel HorizontalWaterfall(List<double> deltas,
         Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> options = null
     )
-        => new ChartModel(ChartType.Bar)
+        => new ChartModel()
             .ToWaterfallChart(deltas, options)
             .WithOptions(o => o
                 .Stacked("y")
@@ -442,56 +381,55 @@ public static class Chart
                 .ShortenAxisNumbers("x")
                 .WithIndexAxis("y")
             );
-    #endregion
     #region multiple enumerables
     /// <summary>
     /// Creates a bar chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bar chart.</returns>
-    public static ChartModel Bar(params IEnumerable<IEnumerable> data) => Bar(data.Select(d => new BarDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Bar(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new BarDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a doughnut chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a doughnut chart.</returns>
-    public static ChartModel Doughnut(params IEnumerable<IEnumerable> data) => Doughnut(data.Select(d => new DoughnutDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Doughnut(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new DoughnutDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a line chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a line chart.</returns>
-    public static ChartModel Line(params IEnumerable<IEnumerable> data) => Line(data.Select(d => new LineDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Line(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new LineDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a pie chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a pie chart.</returns>
-    public static ChartModel Pie(params IEnumerable<IEnumerable> data) => Pie(data.Select(d => new PieDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Pie(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new PieDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a polar area chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a polar area chart.</returns>
-    public static ChartModel Polar(params IEnumerable<IEnumerable> data) => Polar(data.Select(d => new PolarDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Polar(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new PolarDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a radar chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a radar chart.</returns>
-    public static ChartModel Radar(params IEnumerable<IEnumerable> data) => Radar(data.Select(d => new RadarDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Radar(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new RadarDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a floating bar chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
-    public static ChartModel FloatingBar(params IEnumerable<IEnumerable> data) => FloatingBar(data.Select(d => new FloatingBarDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel FloatingBar(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new FloatingBarDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a horizontal floating bar chart model.
@@ -505,21 +443,22 @@ public static class Chart
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(params IEnumerable<IEnumerable> data) => Bubble(data.Select(d => new BubbleDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Bubble(params IEnumerable<BubbleData> data) => ToChart(new BubbleDataSet(data.ToArray()));
 
     /// <summary>
     /// Creates a time line chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(params IEnumerable<IEnumerable> data) => TimeLine(data.Select(d => new TimeLineDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel TimeLine(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new TimeLineDataSet(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(params IEnumerable<IEnumerable> data) => Scatter(data.Select(d => new LineScatterDataSet(d.Cast<object>().ToArray())));
+    public static ChartModel Scatter(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => new LineScatterDataSet(d.Cast<object>().ToArray())));
 
     #endregion
+
 }

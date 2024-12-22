@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using FluentAssertions;
+using Json.Patch;
 
 namespace MeshWeaver.Json.Assertions;
 
@@ -28,8 +29,25 @@ public static class BenchmarkUtils
         else
         {
             var benchmark = await File.ReadAllTextAsync(filePath);
-            modelSerialized.Should().Be(benchmark);
+            var parsedModel = JsonSerializer.Deserialize<JsonElement>(modelSerialized);
+            var parsedBenchmark = JsonSerializer.Deserialize<JsonElement>(benchmark);
+            var patch = parsedModel.CreatePatch(parsedBenchmark);
+
+            patch.Operations.Should().BeNullOrEmpty("JSON should match the benchmark. Differences:\n" 
+                                                    + string.Join('\n', patch.Operations.Select(Format))
+                                                    + "\n\n");
         }
+    }
+
+    private static string Format(PatchOperation op)
+    {
+        return op.Op switch
+        {
+            OperationType.Add => $"{op.Path} missing {op.Value}",
+            OperationType.Remove => $"{op.Path} should be removed",
+            OperationType.Replace => $"{op.Path} should be {op.Value}",
+            _ => $"{op.Path} {op.Op} {op.Value}"
+        };
     }
 
     private static JsonSerializerOptions CloneOptions(JsonSerializerOptions options) => new(options);
