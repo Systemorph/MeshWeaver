@@ -1,6 +1,5 @@
-﻿using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Enums;
+﻿using MeshWeaver.Charting.Enums;
+using MeshWeaver.Charting.Models.Segmented;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 
@@ -14,7 +13,7 @@ public record PivotDoughnutChartBuilder<T, TTransformed, TIntermediate, TAggrega
     public PivotDoughnutChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = Charts.Doughnut([]);
+        Chart = new(ChartType.Doughnut);
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)
@@ -26,10 +25,8 @@ public record PivotDoughnutChartBuilder<T, TTransformed, TIntermediate, TAggrega
     {
         foreach (var row in pivotChartModel.Rows)
         {
-            var builder = new PieDataSetBuilder();
-            builder = builder.WithData(row.DataByColumns.Select(x => x.Value))
+            var dataset = new PieDataSet(row.DataByColumns.Select(x => x.Value).Cast<object>().ToArray())
                              .WithLabel(row.Descriptor.DisplayName);
-            var dataset = builder.Build();
             Chart = Chart.WithDataSet(dataset);
         }
 

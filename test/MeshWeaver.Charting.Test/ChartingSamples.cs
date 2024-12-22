@@ -1,14 +1,9 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
-using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
-using MeshWeaver.Charting.Models.Bubble;
+using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;
-using MeshWeaver.Charting.Models.Polar;
-using MeshWeaver.Charting.Models.Radar;
-using MeshWeaver.Charting.Models.Segmented;
 using MeshWeaver.Json.Assertions;
 
 namespace MeshWeaver.Charting.Test;
@@ -43,17 +38,8 @@ public class ChartingSamples
     [Fact]
     public async Task BarChart()
     {
-        var dataSet1 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(data1)
-            .WithLabel("First")
-            .Build();
-        var dataSet2 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(data2)
-            .WithLabel("Second")
-            .Build();
-
-        var actual = Charts
-            .Bar([dataSet1, dataSet2])
+        var actual = Chart
+            .Bar(data1, data2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Bar Chart");
@@ -64,19 +50,8 @@ public class ChartingSamples
     [Fact]
     public async Task LineChart()
     {
-        var dataSet1 = (LineDataSet)new LineDataSetBuilder()
-            .WithData(data1)
-            .WithLabel("First")
-            .Smoothed(0.3)
-            .Build();
-        var dataSet2 = (LineDataSet)new LineDataSetBuilder()
-            .WithData(data2)
-            .WithLabel("Second")
-            .Smoothed()
-            .Build();
-
-        var actual = Charts
-            .Line([dataSet1, dataSet2])
+        var actual = Chart
+            .Line(data1, data2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart");
@@ -87,20 +62,10 @@ public class ChartingSamples
     [Fact]
     public async Task MixedChart()
     {
-        var dataSet1 = (LineDataSet)new LineDataSetBuilder()
-            .WithData(data1)
-            .WithLabel("First")
-            .SetType(ChartType.Line)
-            .Build();
-        var dataSet2 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(data2)
-            .WithLabel("Second")
-            .Build();
+        var dataSet1 = new LineDataSet(data1).WithLabel("First").SetType(ChartType.Line);
+        var dataSet2 = new BarDataSet(data2).WithLabel("Second");
 
-        var actual = Charts
-            .Bar([])
-            .WithDataSet(dataSet1)
-            .WithDataSet(dataSet2)
+        var actual = new ChartModel(ChartType.Bar, dataSet1, dataSet2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart");
@@ -111,16 +76,8 @@ public class ChartingSamples
     [Fact]
     public async Task TimelineChart()
     {
-        var dataSet = (TimeLineDataSet)new TimeLineDataSetBuilder()
-            .WithData(dates, data1)
-            .WithLabel("First")
-            .WithLineWidth(3)
-            .WithoutPoint()
-            .Smoothed()
-            .Build();
-
-        var actual = Charts
-            .TimeLine([dataSet])
+        var actual = Chart
+            .TimeLine(dates, data1)
             .WithOptions(o =>
                 o.SetTimeUnit(TimeIntervals.Month).ShortenYAxisNumbers().SetTimeFormat("D MMM YYYY")
             )
@@ -132,13 +89,8 @@ public class ChartingSamples
     [Fact]
     public async Task FloatingBarChart()
     {
-        var dataSet = (FloatingBarDataSet)new FloatingBarDataSetBuilder()
-            .WithDataRange(data1, data2)
-            .WithLabel("First")
-            .Build();
-
-        var actual = Charts
-            .FloatingBar([dataSet])
+        var actual = Chart
+            .FloatingBar(data1, data2)
             .WithLabels(labels)
             .WithTitle("FloatingBar Chart");
 
@@ -149,17 +101,9 @@ public class ChartingSamples
     public async Task BubbleChart()
     {
         double[] radius = { 8.0, 11.0, 20.0, 18.0 };
-        var dataSet1 = (BubbleDataSet)new BubbleDataSetBuilder()
-            .WithData(x1, y, radius)
-            .WithLabel("First")
-            .Build();
-        var dataSet2 = (BubbleDataSet)new BubbleDataSetBuilder()
-            .WithData(x2, y, radius)
-            .WithLabel("Second")
-            .Build();
 
-        var actual = Charts
-            .Bubble([dataSet1, dataSet2])
+        var actual = Chart
+            .Bubble(x1, y, radius)
             .WithLegend()
             .WithTitle("Bubble Chart")
             .WithColorPalette(Palettes.Brewer.DarkTwo8);
@@ -170,12 +114,8 @@ public class ChartingSamples
     [Fact]
     public async Task PieChart()
     {
-        var dataSet = (PieDataSet)new PieDataSetBuilder()
-            .WithData(data1)
-            .Build();
-
-        var actual = Charts
-            .Pie([dataSet])
+        var actual = Chart
+            .Pie(data1)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Pie Chart");
@@ -186,12 +126,8 @@ public class ChartingSamples
     [Fact]
     public async Task Doughnut()
     {
-        var dataSet = (DoughnutDataSet)new DoughnutDataSetBuilder()
-            .WithData(data1)
-            .Build();
-
-        var actual = Charts
-            .Doughnut([dataSet])
+        var actual = Chart
+            .Doughnut(data1)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Doughnut Chart");
@@ -202,12 +138,8 @@ public class ChartingSamples
     [Fact]
     public async Task Polar()
     {
-        var dsBuilder = new PolarDataSetBuilder();
-        var dsBuilderq = dsBuilder.WithData(data1);
-        var dataSet = (PolarDataSet)dsBuilderq.Build();
-
-        var actual = Charts
-            .PolarArea([dataSet])
+        var actual = Chart
+            .Polar(data1)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Polar Chart");
@@ -218,17 +150,8 @@ public class ChartingSamples
     [Fact]
     public async Task Radar()
     {
-        var dataSet1 = (RadarDataSet)new RadarDataSetBuilder()
-            .WithData(data1)
-            .WithLabel("First")
-            .Build();
-        var dataSet2 = (RadarDataSet)new RadarDataSetBuilder()
-            .WithData(data2)
-            .WithLabel("Second")
-            .Build();
-
-        var actual = Charts
-            .Radar([dataSet1, dataSet2])
+        var actual = Chart
+            .Radar(data1, data2)
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Radar Chart");
@@ -239,17 +162,8 @@ public class ChartingSamples
     [Fact]
     public async Task Scatter()
     {
-        var dataSet1 = (LineScatterDataSet)new LineScatterDataSetBuilder()
-            .WithDataPoint(x1, y)
-            .WithLabel("First")
-            .Build();
-        var dataSet2 = (LineScatterDataSet)new LineScatterDataSetBuilder()
-            .WithDataPoint(x2, y)
-            .WithLabel("Second")
-            .Build();
-
-        var actual = Charts
-            .Scatter([dataSet1, dataSet2])
+        var actual = Chart
+            .Scatter(x1, y)
             .WithLegend()
             .WithTitle("Scatter Chart")
             .WithColorPalette(Palettes.Brewer.DarkTwo8);
@@ -260,17 +174,7 @@ public class ChartingSamples
     [Fact]
     public async Task QuickDraw()
     {
-        var dataSet1 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(data1)
-            .Build();
-        var dataSet2 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(data2)
-            .Build();
-        var dataSet3 = (BarDataSet)new BarDataSetBuilder()
-            .WithData(x1)
-            .Build();
-
-        var actual = Charts.Bar([dataSet1, dataSet2, dataSet3]);
+        var actual = Chart.Bar(data1, data2, x1);
 
         await actual.JsonShouldMatch(Options, "Sample_QuickDraw.json");
     }
@@ -278,17 +182,9 @@ public class ChartingSamples
     [Fact]
     public async Task AreaChart()
     {
-        var dataSet1 = (LineDataSet)new LineDataSetBuilder()
-            .WithData(data1)
-            .WithArea()
-            .Build();
-        var dataSet2 = (LineDataSet)new LineDataSetBuilder()
-            .WithData(data2)
-            .WithArea()
-            .Build();
-
-        var actual = Charts
-            .Line([dataSet1, dataSet2]);
+        var actual = Chart
+            .Line(new LineDataSet(data1).WithArea(), new LineDataSet(data2).WithArea())
+            ;
 
         await actual.JsonShouldMatch(Options, "Sample_AreaChart.json");
     }

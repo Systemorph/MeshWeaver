@@ -1,11 +1,14 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 
 namespace MeshWeaver.Charting.Models.Line
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public abstract record LineDataSetBase : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithPointStyle, IDataSetWithFill, IDataSetWithStack
+    public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data) : 
+        DataSet<TDataSet>(Data), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
+     where TDataSet : LineDataSetBase<TDataSet>
     {
         #region General
         // https://www.chartjs.org/docs/latest/charts/line.html#general
@@ -24,10 +27,16 @@ namespace MeshWeaver.Charting.Models.Line
         /// </summary>
         public int? Order { get; init; }
 
+        public TDataSet WithOrder(int? order)
+            => This with { Order = order };
+
         /// <summary>
         /// The ID of the group to which this dataset belongs to (when stacked, each group will be a separate stack). Defaults to dataset type.
         /// </summary>
         public string Stack { get; init; }
+
+        public TDataSet WithStack(string stack)
+        => This with { Stack = stack };
 
         /// <summary>
         /// The ID of the x axis to plot this dataset on.
@@ -67,15 +76,25 @@ namespace MeshWeaver.Charting.Models.Line
         /// </summary>
         public int? PointRadius { get; init; }
 
+        public TDataSet WithPointRadius(int? pointRadius)
+            => This with { PointRadius = pointRadius };
+
         /// <summary>
         /// The rotation of the point in degrees.
         /// </summary>
         public int? PointRotation { get; init; }
 
+        public TDataSet WithPointRadiusAndRotation(int? pointRadius, int? pointRotation)
+            => This with { PointRadius = pointRadius, PointRotation = pointRotation };
+
         /// <summary>
         /// The style of point. Options are 'circle', 'triangle', 'rect', 'rectRot', 'cross', 'crossRot', 'star', 'line', and 'dash'. If the option is an image, that image is drawn on the canvas using drawImage.
         /// </summary>
         public Shapes? PointStyle { get; init; }
+
+        public TDataSet WithPointStyle(Shapes? pointStyle)
+            => This with { PointStyle = pointStyle };
+
         #endregion PointStyling
 
         #region LineStyling
@@ -105,10 +124,16 @@ namespace MeshWeaver.Charting.Models.Line
         /// </summary>
         public object Fill { get; init; }
 
+        public TDataSet WithFill(object fill)
+            => This with { Fill = fill };
+
         /// <summary>
         /// Bezier curve tension of the line. Set to 0 to draw straightlines. This option is ignored if monotone cubic interpolation is used. Note This was renamed from 'tension' but the old name still works.
         /// </summary>
         public double? Tension { get; init; }
+
+        public TDataSet Smoothed(double? tension)
+            => This with { Tension = tension };
 
         /// <summary>
         /// If false, the line is not drawn for this dataset.
@@ -174,10 +199,44 @@ namespace MeshWeaver.Charting.Models.Line
         public object SteppedLine { get; init; }
         #endregion Stepped
 
+
+        public TDataSet WithLine(bool showLine = true)
+            => (TDataSet)(this with {  ShowLine = showLine } );
+
+        public TDataSet WithXAxis(string xAxisId)
+            => (TDataSet)(this with {  XAxisID = xAxisId } );
+
+        public TDataSet WithYAxis(string yAxisId)
+            => (TDataSet)(this with {  YAxisID = yAxisId } );
+
+        public TDataSet WithArea() => (TDataSet)(this with {  Fill = "origin" } );
+
+        public TDataSet Dashed()
+            => (TDataSet)(this with {  BorderDash = new[] { 7, 3 } } );
+
+        public TDataSet ThinLine()
+            => (TDataSet)(this with {  BorderWidth = 1, PointRadius = 0 } );
+
+        public TDataSet WithoutFill()
+            => This with { Fill = false } ;
+
+        public TDataSet WithoutPoint()
+            => This with {  PointRadius = 0  };
+
+        public TDataSet WithPointRotation(int r)
+            => This with { PointRotation = r } ;
+
+        public TDataSet WithPointRadius(int r)
+            => This with { PointRadius = r  };
+
     }
 
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public record LineDataSet : LineDataSetBase;
+    public record LineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<LineDataSet>(Data)
+    {
+        public LineDataSet(IEnumerable Data) : this(Data.Cast<object>().ToArray()) { }
 
-    public record TimeLineDataSet : LineDataSetBase;
+    }
+
+    public record TimeLineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<TimeLineDataSet>(Data);
 }
