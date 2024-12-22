@@ -2,7 +2,7 @@
 
 public static class ChartExtensions
 {
-    public static Chart AsHorizontal(this Chart chart) => chart.WithOptions(options => options.WithIndexAxis("y"));
+    public static ChartModel AsHorizontal(this ChartModel chart) => chart.WithOptions(options => options.WithIndexAxis("y"));
 
-    public static bool IsHorizontal(this Chart chart) => chart.Options.IndexAxis == "y";
+    public static bool IsHorizontal(this ChartModel chart) => chart.Options.IndexAxis == "y";
 }

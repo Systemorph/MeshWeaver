@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Charting.Models.Polar
 {
-    public record PolarDataSet : DataSet
+    public record PolarDataSet(IReadOnlyCollection<object> Data) : DataSet(Data)
     {
         #region Styling
         // https://www.chartjs.org/docs/latest/charts/polar.html#styling

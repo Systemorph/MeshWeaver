@@ -1,16 +1,16 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Helpers;
+using MeshWeaver.Charting.Models.Bar;
+using MeshWeaver.Charting.Models.Line;
 
-namespace MeshWeaver.Charting.Builders.Options;
+namespace MeshWeaver.Charting.Waterfall;
 
-public record WaterfallChartOptions : WaterfallChartOptions<WaterfallChartOptions, FloatingBarDataSetBuilder>;
+public record WaterfallChartOptions : WaterfallChartOptions<WaterfallChartOptions>;
 
-public record HorizontalWaterfallChartOptions : WaterfallChartOptions<HorizontalWaterfallChartOptions, HorizontalFloatingBarDataSetBuilder>;
+public record HorizontalWaterfallChartOptions : WaterfallChartOptions<HorizontalWaterfallChartOptions>;
 
-public record WaterfallChartOptions<TOptions, TDataSetBuilder>
-    where TOptions : WaterfallChartOptions<TOptions, TDataSetBuilder>
+public record WaterfallChartOptions<TOptions>
+    where TOptions : WaterfallChartOptions<TOptions>
 {
     internal string IncrementsLabel { get; init; } = ChartConst.Hidden;
     internal string DecrementsLabel { get; init; } = ChartConst.Hidden;
@@ -20,13 +20,13 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
 
     internal ImmutableHashSet<int> TotalIndexes { get; init; } = [];
 
-    internal Func<TDataSetBuilder, TDataSetBuilder> BarDataSetModifier { get; init; }
+    internal Func<BarDataSet, BarDataSet> BarDataSetModifier { get; init; }
 
     internal bool HasLastAsTotal { get; init; }
 
-    internal Func<LineDataSetBuilder, LineDataSetBuilder> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
+    internal Func<LineDataSet, LineDataSet> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
 
-    internal Func<WaterfallStylingBuilder, WaterfallStylingBuilder> StylingOptions { get; init; }
+    internal Func<WaterfallStyling, WaterfallStyling> StylingOptions { get; init; }
 
     internal ImmutableList<string> Labels { get; init; }
 
@@ -35,7 +35,7 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
     public TOptions WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
         => This with { IncrementsLabel = incrementsLabel, DecrementsLabel = decrementsLabel, TotalLabel = totalLabel, };
 
-    public TOptions WithConnectors(Func<LineDataSetBuilder, LineDataSetBuilder> connectorLineModifier = null)
+    public TOptions WithConnectors(Func<LineDataSet, LineDataSet> connectorLineModifier = null)
         => This with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
 
     public TOptions WithTotalsAtPositions(IEnumerable<int> totalIndexes)
@@ -44,12 +44,12 @@ public record WaterfallChartOptions<TOptions, TDataSetBuilder>
     public TOptions WithTotalsAtPositions(params int[] totalIndexes)
         => WithTotalsAtPositions(totalIndexes.AsEnumerable());
 
-    public TOptions WithBarDataSetOptions(Func<TDataSetBuilder, TDataSetBuilder> barDataSetModifier)
+    public TOptions WithBarDataSetOptions(Func<BarDataSet, BarDataSet> barDataSetModifier)
         => This with { BarDataSetModifier = barDataSetModifier, };
 
     public TOptions WithLastAsTotal() => This with { HasLastAsTotal = true, };
 
-    public TOptions WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> styling)
+    public TOptions WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> styling)
         => This with { StylingOptions = styling, };
 
     public TOptions WithLabels(IReadOnlyCollection<string> labels)

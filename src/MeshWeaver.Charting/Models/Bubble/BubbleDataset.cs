@@ -1,13 +1,21 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Collections;
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Bubble
 {
-    public record BubbleDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointStyle
+    /// <summary>
+    /// Represents a dataset for a bubble chart.
+    /// </summary>
+    public record BubbleDataSet(IReadOnlyCollection<object> Data) : DataSet<BubbleDataSet>(Data), IDataSetWithOrder<BubbleDataSet>, IDataSetWithPointStyle<BubbleDataSet>
     {
+        public BubbleDataSet(IEnumerable data, string label = null) : this(data.Cast<object>().ToArray())
+        {
+            Label = label;
+        }
         #region General
         // https://www.chartjs.org/docs/latest/charts/bubble.html#general
         /// <summary>
-        /// Draw the active points of a dataset over the other points of the dataset
+        /// Draw the active points of a dataset over the other points of the dataset.
         /// </summary>
         public bool? DrawActiveElementsOnTop { get; init; }
 
@@ -52,5 +60,21 @@ namespace MeshWeaver.Charting.Models.Bubble
         /// </summary>
         public int? HoverRadius { get; init; }
         #endregion Interactions
+
+        /// <summary>
+        /// Sets the drawing order of the dataset.
+        /// </summary>
+        /// <param name="order">The drawing order of the dataset.</param>
+        /// <returns>A new instance of <see cref="BubbleDataSet"/> with the specified order.</returns>
+        public BubbleDataSet WithOrder(int? order) =>
+            this with { Order = order };
+
+        /// <summary>
+        /// Sets the style of the point for the legend.
+        /// </summary>
+        /// <param name="pointStyle">The style of the point for the legend.</param>
+        /// <returns>A new instance of <see cref="BubbleDataSet"/> with the specified point style.</returns>
+        public BubbleDataSet WithPointStyle(Shapes? pointStyle) =>
+            this with { PointStyle = pointStyle };
     }
 }

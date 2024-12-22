@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Models;
+﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Pivot;
@@ -14,5 +12,5 @@ public interface IPivotChartBuilder
     IPivotChartBuilder WithColorScheme(Palettes scheme);
     IPivotChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor);
     IPivotChartBuilder WithRows(params string[] lineRows);
-    IObservable<Chart> Execute();
+    IObservable<Models.ChartModel> Execute();
 }

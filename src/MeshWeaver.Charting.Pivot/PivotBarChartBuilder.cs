@@ -1,7 +1,7 @@
-﻿using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Enums;
+﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bar;
+using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 using MeshWeaver.Pivot.Builder;
@@ -31,7 +31,6 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
     )
         : base(pivotBuilder)
     {
-        Chart = Charts.Bar([]);
     }
 
     public new IPivotBarChartBuilder WithOptions(Func<PivotChartModel, PivotChartModel> postProcessor)
@@ -40,7 +39,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         return this;
     }
 
-    public IPivotBarChartBuilder WithChartBuilder(Func<Chart, Chart> builder)
+    public IPivotBarChartBuilder WithChartBuilder(Func<Models.ChartModel, Models.ChartModel> builder)
     {
         return this with { Chart = builder(Chart), };
     }
@@ -130,71 +129,46 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             var values = pivotChartModel.ColumnDescriptors.Select(c =>
                 row.DataByColumns.FirstOrDefault(x => x.ColSystemName == c.Id).Value);
 
-            switch (row.DataSetType)
+            var dataSet = row.DataSetType switch
             {
-                case ChartType.Bar when row.Stack != null:
-                {
-                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
-                        .WithData(values)
-                        .SetType(ChartType.Bar)
+                ChartType.Bar when row.Stack != null =>
+                    AddDataSet(ChartType.Bar,
+                        new BarDataSet(values.Cast<object>().ToArray())
+                            .WithXAxis(PivotChartConst.XBarAxis)
+                            .WithLabel(row.Descriptor.DisplayName)
+                            .WithStack(row.Stack)),
+
+                ChartType.Bar => AddDataSet(ChartType.Bar,
+                    new BarDataSet(values.Cast<object>().ToArray()).SetType(ChartType.Bar)
                         .WithXAxis(PivotChartConst.XBarAxis)
                         .WithLabel(row.Descriptor.DisplayName)
-                        .WithStack(row.Stack)
-                        .Build()
-                    );
-                    break;
-                }
+                ),
 
-                case ChartType.Bar:
-                {
-                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
-                        .WithData(values)
-                        .SetType(ChartType.Bar)
-                        .WithXAxis(PivotChartConst.XBarAxis)
-                        .WithLabel(row.Descriptor.DisplayName)
-                        .Build()
-                    );
-                    break;
-                }
-
-                case ChartType.Scatter:
-                {
-                    var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1; // fix this! plus one was added just to have correct numbers in one example
-                    var dataPairs = values.Select((value, i) => (i + shift, value ?? 0))
-                        .ToList();
-                    Chart = Chart.WithDataSet(
-                        new LineScatterDataSetBuilder()
-                            .WithDataPoint(dataPairs)
-                            .WithXAxis(PivotChartConst.XScatterAxis)
-                            .WithLabel(row.Descriptor.DisplayName + ", total")
-                            .WithPointStyle(Shapes.Rectangle)
-                            .WithPointRadius(4)
-                            .SetType(ChartType.Scatter)
-                            .Build()
-                    );
-                    countStackPoints++;
-                    break;
-                }
-
-                case ChartType.Line:
-                {
-                    Chart = Chart.WithDataSet(new BarDataSetBuilder()
-                        .WithData(values)
+                ChartType.Scatter => AddDataSet(ChartType.Scatter,
+                    new LineScatterDataSet(
+                            values.Select((value, i) => (
+                                    i + -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1, value ?? 0))
+                                .Cast<object>().ToArray()
+                        )
+                        .WithXAxis(PivotChartConst.XScatterAxis)
+                        .WithLabel(row.Descriptor.DisplayName + ", total")
+                        .WithPointStyle(Shapes.Rectangle)
+                        .WithPointRadius(4)
+                        .SetType(ChartType.Scatter)),
+                ChartType.Line => AddDataSet(ChartType.Line,
+                    new BarDataSet(values.Cast<object>().ToArray())
                         .SetType(ChartType.Line)
                         .WithXAxis(PivotChartConst.XBarAxis)
-                        .WithLabel(row.Descriptor.DisplayName)
-                        .Build()
-                    );
-                    break;
-                }
-
-                default:
-                    throw new NotImplementedException(
+                        .WithLabel(row.Descriptor.DisplayName)),
+                _ => throw new NotImplementedException(
                         "Only bar, line and scatter data set types are supported"
-                    );
-            }
+                    )
+                
+            };
         }
     }
+
+    private ChartModel AddDataSet(ChartType type, DataSet dataSet) => Chart?.WithDataSet(dataSet) ?? new(type, dataSet);
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
     {

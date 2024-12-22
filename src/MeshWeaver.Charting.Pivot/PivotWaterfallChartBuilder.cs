@@ -1,11 +1,9 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Builders.Chart;
-using MeshWeaver.Charting.Builders.Options;
-using MeshWeaver.Charting.Builders.OptionsBuilders;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Charting.Waterfall;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 
@@ -25,7 +23,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public PivotWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = Charts.Bar([]);
+        Chart = new(ChartType.Bar);
     }
 
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<WaterfallChartOptions, WaterfallChartOptions> option)
@@ -34,7 +32,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
         => WithWaterfallOptions(w => w.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel));
 
-    public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
+    public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> func)
         => WithWaterfallOptions(w => w.WithStylingOptions(func));
 
     public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
@@ -93,7 +91,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = Chart.ToWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = Charting.Chart.Waterfall(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
@@ -115,7 +113,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public PivotHorizontalWaterfallChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder)
     {
-        Chart = Charts.Bar([]);
+        Chart = new(ChartType.Bar);
     }
 
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> option)
@@ -124,7 +122,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
         => WithWaterfallOptions(w => w.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel));
 
-    public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStylingBuilder, WaterfallStylingBuilder> func)
+    public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> func)
         => WithWaterfallOptions(w => w.WithStylingOptions(func));
 
     public IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func)
@@ -183,7 +181,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     protected override void ApplyCustomChartConfigs()
     {
         base.ApplyCustomChartConfigs();
-        Chart = Chart.ToHorizontalWaterfallChart(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
+        Chart = Charting.Chart.HorizontalWaterfall(deltas, o => WaterfallOptions.Concat(ExtraWaterfallOptions).Aggregate(o, (x, modifier) => modifier(x)));
     }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)

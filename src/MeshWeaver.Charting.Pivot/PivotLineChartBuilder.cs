@@ -1,7 +1,4 @@
-﻿using MeshWeaver.Charting.Builders;
-using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Models;
+﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Pivot.Builder;
@@ -10,13 +7,13 @@ using MeshWeaver.Pivot.Models;
 namespace MeshWeaver.Charting.Pivot;
 
 record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineDataSet, LineDataSetBuilder>, IPivotLineChartBuilder
+    : PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, LineDataSet>, IPivotLineChartBuilder
      where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
-        : base(pivotBuilder)
+        : base(pivotBuilder, ds => new LineDataSet(ds))
     {
-        Chart = Charts.Line([]);
+        Chart = new(ChartType.Line);
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

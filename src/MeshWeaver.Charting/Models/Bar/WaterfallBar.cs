@@ -67,5 +67,3 @@ public record TotalBar : WaterfallBar
         // TODO V10: for negative value handle differently (2023/08/30, Ekaterina Mishina)
     }
 }
-
-public record WaterfallStyling(string IncrementColor, string TotalColor, string DecrementColor, string LabelsFontColor, int LabelsFontSize, Func<double,string> FormatFuncIncrement, Func<double, string> FormatFuncDecrement, Func<double, string> FormatFuncTotal);

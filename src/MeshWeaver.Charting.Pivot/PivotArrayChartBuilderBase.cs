@@ -1,18 +1,21 @@
-﻿using MeshWeaver.Charting.Builders.DataSetBuilders;
-using MeshWeaver.Charting.Models;
+﻿using MeshWeaver.Charting.Models;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Charting.Pivot;
 
-public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TDataSet, TDataSetBuilder> :
+public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TDataSet> :
         PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotArrayChartBuilder
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TDataSet : DataSet, IDataSetWithPointStyle, IDataSetWithOrder, IDataSetWithFill, IDataSetWithTension, IDataSetWithPointRadiusAndRotation, new()
-        where TDataSetBuilder : ArrayDataSetWithTensionFillPointRadiusAndRotation<TDataSetBuilder, TDataSet>, new()
+        where TDataSet : DataSet<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithOrder<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>
 {
-    protected PivotArrayChartBuilderBase(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
+    private readonly Func<IReadOnlyCollection<object>, TDataSet> dataSetFactory;
+
+    protected PivotArrayChartBuilderBase(
+        PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IReadOnlyCollection<object>, TDataSet> dataSetFactory)
         : base(pivotBuilder)
     {
+        this.dataSetFactory = dataSetFactory;
     }
 
     public virtual IPivotArrayChartBuilder WithSmoothedLines(params string[] linesToSmooth)
@@ -59,15 +62,14 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
     {
         foreach (var row in pivotChartModel.Rows)
         {
-            var builder = new TDataSetBuilder();
-            builder = builder.WithData(row.DataByColumns.Select(x => x.Value))
-                             .WithLabel(row.Descriptor.DisplayName);
-            builder = row.Filled ? builder.WithArea() : builder.WithoutFill();
-            builder = row.SmoothingCoefficient != null ?
-                          builder.Smoothed((double)row.SmoothingCoefficient) :
-                          builder;
-            var dataset = builder.Build();
-            Chart = Chart.WithDataSet(dataset);
+            var dataSet = dataSetFactory.Invoke(
+                    row.DataByColumns.Select(x => x.Value).Cast<object>().ToArray()
+                    ).WithLabel(row.Descriptor.DisplayName);
+            dataSet = row.Filled ? dataSet.WithArea() : dataSet.WithoutFill();
+            dataSet = row.SmoothingCoefficient != null ?
+                dataSet.Smoothed((double)row.SmoothingCoefficient) :
+                dataSet;
+            Chart = Chart.WithDataSet(dataSet);
         }
 
 

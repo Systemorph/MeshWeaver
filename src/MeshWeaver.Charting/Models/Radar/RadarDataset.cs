@@ -1,123 +1,204 @@
 ﻿using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Helpers;
-using MeshWeaver.Charting.Models.Options.Scales;
 
-namespace MeshWeaver.Charting.Models.Radar
+namespace MeshWeaver.Charting.Models.Radar;
+
+/// <summary>
+/// Represents a dataset for a radar chart.
+/// </summary>
+public record RadarDataSet(IReadOnlyCollection<object> Data) : DataSet<RadarDataSet>(Data),
+    IDataSetWithOrder<RadarDataSet>, IDataSetWithPointStyle<RadarDataSet>, IDataSetWithFill<RadarDataSet>, IDataSetWithTension<RadarDataSet>, IDataSetWithPointRadiusAndRotation<RadarDataSet>
 {
-    public record RadarDataSet : DataSet, IDataSetWithOrder, IDataSetWithPointRadiusAndRotation, IDataSetWithTension, IDataSetWithFill, IDataSetWithPointStyle
-    {
-        #region General
-        /// <summary>
-        /// The drawing order of dataset. Also affects order for stacking, tooltip and legend.
-        /// </summary>
-        public int? Order { get; init; }
-        #endregion General
+    #region General
 
-        #region PointStyling
-        // https://www.chartjs.org/docs/latest/charts/radar.html#point-styling
-        /// <summary>
-        /// The fill color for points.
-        /// </summary>
-        public IEnumerable<ChartColor> PointBackgroundColor { get; init; }
+    // https://www.chartjs.org/docs/latest/charts/radar.html#general
+    /// <summary>
+    /// Draw the active points of a dataset over the other points of the dataset.
+    /// </summary>
+    public bool? DrawActiveElementsOnTop { get; init; }
 
-        /// <summary>
-        /// The border color for points.
-        /// </summary>
-        public IEnumerable<ChartColor> PointBorderColor { get; init; }
+    /// <summary>
+    /// Sets whether to draw the active points of a dataset over the other points of the dataset.
+    /// </summary>
+    /// <param name="drawActiveElementsOnTop">Whether to draw the active points of a dataset over the other points of the dataset.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified value.</returns>
+    public RadarDataSet WithDrawActiveElementsOnTop(bool? drawActiveElementsOnTop) =>
+        this with { DrawActiveElementsOnTop = drawActiveElementsOnTop };
 
-        /// <summary>
-        /// The width of the point border in pixels.
-        /// </summary>
-        public IEnumerable<int> PointBorderWidth { get; init; }
+    /// <summary>
+    /// The drawing order of dataset. Also affects order for stacking, tooltip and legend.
+    /// </summary>
+    public int? Order { get; init; }
 
-        /// <summary>
-        /// The pixel size of the non-displayed point that reacts to mouse events.
-        /// </summary>
-        public IEnumerable<int> PointHitRadius { get; init; }
+    #endregion General
 
-        /// <summary>
-        /// The radius of the point shape. If set to 0, nothing is rendered.
-        /// </summary>
-        public int? PointRadius { get; init; }
+    #region Styling
 
-        /// <summary>
-        /// The rotation of the point in degrees.
-        /// </summary>
-        public int? PointRotation { get; init; }
+    // https://www.chartjs.org/docs/latest/charts/radar.html#styling
+    /// <summary>
+    /// Bubble shape style.
+    /// </summary>
+    public Shapes? PointStyle { get; init; }
 
-        /// <summary>
-        /// The style of point. Options are 'circle', 'triangle', 'rect', 'rectRot', 'cross', 'crossRot', 'star', 'line', and 'dash'. If the option is an image, that image is drawn on the canvas using drawImage.
-        /// </summary>
-        public Shapes? PointStyle { get; init; }
-        #endregion PointStyling
+    /// <summary>
+    /// Bubble rotation (in degrees).
+    /// </summary>
+    public int? Rotation { get; init; }
 
-        #region LineStyling
-        // https://www.chartjs.org/docs/latest/charts/radar.html#line-styling
-        /// <summary>
-        /// Cap style of the line.
-        /// </summary>
-        public string BorderCapStyle { get; init; }
+    /// <summary>
+    /// Sets the bubble rotation (in degrees).
+    /// </summary>
+    /// <param name="rotation">The bubble rotation in degrees.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified rotation.</returns>
+    public RadarDataSet WithRotation(int? rotation) =>
+        this with { Rotation = rotation };
 
-        /// <summary>
-        /// Length and spacing of dashes.
-        /// </summary>
-        public IEnumerable<int> BorderDash { get; init; }
+    /// <summary>
+    /// Bubble radius (in pixels).
+    /// </summary>
+    public int? Radius { get; init; }
 
-        /// <summary>
-        /// Offset for line dashes.
-        /// </summary>
-        public double? BorderDashOffset { get; init; }
+    /// <summary>
+    /// Sets the bubble radius (in pixels).
+    /// </summary>
+    /// <param name="radius">The bubble radius in pixels.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified radius.</returns>
+    public RadarDataSet WithRadius(int? radius) =>
+        this with { Radius = radius };
 
-        /// <summary>
-        /// Line joint style.
-        /// </summary>
-        public string BorderJoinStyle { get; init; }
+    #endregion Styling
 
-        /// <summary>
-        /// If true, fill the area under the line.
-        /// </summary>
-        public object Fill { get; init; }
+    #region Interactions
 
-        /// <summary>
-        /// Bezier curve tension of the line. Set to 0 to draw straight lines. This option is ignored if monotone cubic interpolation is used. Note This was renamed from 'tension' but the old name still works.
-        /// </summary>
-        public double? Tension { get; init; }
+    // https://www.chartjs.org/docs/latest/charts/radar.html#interactions
+    /// <summary>
+    /// Bubble additional radius for hit detection (in pixels).
+    /// </summary>
+    public int? HitRadius { get; init; }
 
-        /// <summary>
-        /// If true, lines will be drawn between points with no or null data. If false, points with null data will create a break in the line. Can also be a number specifying the maximum gap length to span. The unit of the value depends on the scale used.
-        /// </summary>
-        public bool? SpanGaps { get; init; }
-        #endregion LineStyling
+    /// <summary>
+    /// Sets the bubble additional radius for hit detection (in pixels).
+    /// </summary>
+    /// <param name="hitRadius">The bubble additional radius for hit detection in pixels.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified hit radius.</returns>
+    public RadarDataSet WithHitRadius(int? hitRadius) =>
+        this with { HitRadius = hitRadius };
 
-        #region Interactions
-        // https://www.chartjs.org/docs/latest/charts/radar.html#interactions
-        /// <summary>
-        /// Point background color when hovered.
-        /// </summary>
-        public IEnumerable<ChartColor> PointHoverBackgroundColor { get; init; }
+    /// <summary>
+    /// Bubble border width when hovered (in pixels).
+    /// </summary>
+    public int? HoverBorderWidth { get; init; }
 
-        /// <summary>
-        /// Point border color when hovered.
-        /// </summary>
-        public IEnumerable<ChartColor> PointHoverBorderColor { get; init; }
+    /// <summary>
+    /// Sets the bubble border width when hovered (in pixels).
+    /// </summary>
+    /// <param name="hoverBorderWidth">The bubble border width when hovered in pixels.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified hover border width.</returns>
+    public RadarDataSet WithHoverBorderWidth(int? hoverBorderWidth) =>
+        this with { HoverBorderWidth = hoverBorderWidth };
 
-        /// <summary>
-        /// Border width of point when hovered.
-        /// </summary>
-        public IEnumerable<int> PointHoverBorderWidth { get; init; }
+    /// <summary>
+    /// Bubble additional radius when hovered (in pixels).
+    /// </summary>
+    public int? HoverRadius { get; init; }
 
-        /// <summary>
-        /// The radius of the point when hovered.
-        /// </summary>
-        public IEnumerable<int> PointHoverRadius { get; init; }
-        #endregion Interactions
+    /// <summary>
+    /// Sets the bubble additional radius when hovered (in pixels).
+    /// </summary>
+    /// <param name="hoverRadius">The bubble additional radius when hovered in pixels.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified hover radius.</returns>
+    public RadarDataSet WithHoverRadius(int? hoverRadius) =>
+        this with { HoverRadius = hoverRadius };
 
-        #region Scale
-        // https://www.chartjs.org/docs/latest/charts/radar.html#scale-options
-        /// <summary>
-        /// The radar chart supports only a single scale. The options for this scale are defined in the scales.r property
-        /// </summary>
-        public Scale Scale { get; init; }
-        #endregion Scale
-    }
+    #endregion Interactions
+
+    /// <summary>
+    /// Sets the drawing order of the dataset.
+    /// </summary>
+    /// <param name="order">The drawing order of the dataset.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified order.</returns>
+    public RadarDataSet WithOrder(int? order) =>
+        this with { Order = order };
+
+    /// <summary>
+    /// Sets the style of the point for the legend.
+    /// </summary>
+    /// <param name="pointStyle">The style of the point for the legend.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified point style.</returns>
+    public RadarDataSet WithPointStyle(Shapes? pointStyle) =>
+        this with { PointStyle = pointStyle };
+
+    /// <summary>
+    /// The fill option for the dataset.
+    /// </summary>
+    public object Fill { get; init; }
+
+    /// <summary>
+    /// Sets the fill option for the dataset.
+    /// </summary>
+    /// <param name="fill">The fill option.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified fill option.</returns>
+    public RadarDataSet WithFill(object fill) =>
+        this with { Fill = fill };
+
+    /// <summary>
+    /// Sets the fill option to fill the area under the line.
+    /// </summary>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the fill option set to fill the area under the line.</returns>
+    public RadarDataSet WithArea() =>
+        this with { Fill = "origin" };
+
+    /// <summary>
+    /// Disables the fill option for the dataset.
+    /// </summary>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the fill option disabled.</returns>
+    public RadarDataSet WithoutFill() =>
+        this with { Fill = false };
+
+    /// <summary>
+    /// Bezier curve tension of the line. Set to 0 to draw straight lines. This option is ignored if monotone cubic interpolation is used.
+    /// </summary>
+    public double? Tension { get; init; }
+
+    /// <summary>
+    /// Sets the Bezier curve tension of the line.
+    /// </summary>
+    /// <param name="tension">The Bezier curve tension of the line.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified tension.</returns>
+    public RadarDataSet Smoothed(double? tension) =>
+        this with { Tension = tension };
+
+    /// <summary>
+    /// The radius of the point shape. If set to 0, nothing is rendered.
+    /// </summary>
+    public int? PointRadius { get; init; }
+
+    /// <summary>
+    /// Sets the radius of the point shape.
+    /// </summary>
+    /// <param name="pointRadius">The radius of the point shape.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified point radius.</returns>
+    public RadarDataSet WithPointRadius(int? pointRadius) =>
+        this with { PointRadius = pointRadius };
+
+    /// <summary>
+    /// The rotation of the point in degrees.
+    /// </summary>
+    public int? PointRotation { get; init; }
+
+    /// <summary>
+    /// Sets the rotation of the point in degrees.
+    /// </summary>
+    /// <param name="pointRotation">The rotation of the point in degrees.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified point rotation.</returns>
+    public RadarDataSet WithPointRotation(int? pointRotation) =>
+        this with { PointRotation = pointRotation };
+
+    /// <summary>
+    /// Sets the radius and rotation of the point.
+    /// </summary>
+    /// <param name="pointRadius">The radius of the point shape.</param>
+    /// <param name="pointRotation">The rotation of the point in degrees.</param>
+    /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified point radius and rotation.</returns>
+    public RadarDataSet WithPointRadiusAndRotation(int? pointRadius, int? pointRotation) =>
+        this with { PointRadius = pointRadius, PointRotation = pointRotation };
 }
