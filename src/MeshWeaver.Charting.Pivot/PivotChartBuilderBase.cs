@@ -30,7 +30,7 @@ public abstract record PivotChartBuilderBase<
         TAggregate,
         TPivotBuilder
     > pivotBuilder = pivotBuilder;
-    protected Chart Chart;
+    protected ChartModel Chart;
     protected PivotChartModelBuilder PivotChartModelBuilder { get; init; } = new();
 
     public IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)
@@ -63,7 +63,7 @@ public abstract record PivotChartBuilderBase<
         return this;
     }
 
-    public IObservable<Chart> Execute()
+    public IObservable<ChartModel> Execute()
     {
         return pivotBuilder.Execute()
             .Select(pivotModel =>

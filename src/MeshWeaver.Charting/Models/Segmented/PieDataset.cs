@@ -1,7 +1,10 @@
-﻿namespace MeshWeaver.Charting.Models.Segmented
+﻿using System.Collections;
+
+namespace MeshWeaver.Charting.Models.Segmented
 {
-    public record PieDataSet : SegmentDataSetBase
+    public record PieDataSet(IReadOnlyCollection<object> Data) : SegmentDataSetBase<PieDataSet>(Data)
     {
+        public PieDataSet(IEnumerable data) : this(data.Cast<object>().ToArray()) { }
         #region Styling
         // https://www.chartjs.org/docs/latest/charts/doughnut.html#styling
         /// <summary>
