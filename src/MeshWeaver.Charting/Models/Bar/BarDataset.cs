@@ -1,7 +1,7 @@
 ﻿using System.Collections;
 using System.Diagnostics.CodeAnalysis;
-using System.Timers;
 using MeshWeaver.Charting.Enums;
+using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Utils;
 
@@ -11,7 +11,7 @@ namespace MeshWeaver.Charting.Models.Bar;
 /// https://www.chartjs.org/docs/latest/charts/bar.html
 /// </summary>
 [SuppressMessage("ReSharper", "InconsistentNaming")]
-public record BarDataSet(IReadOnlyCollection<object> Data) : DataSet<BarDataSet>(Data), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
+public record BarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSet<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
 {
     public BarDataSet(IEnumerable Data, string label = null) : this(Data.Cast<object>().ToArray())
     {
@@ -19,6 +19,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data) : DataSet<BarDataSet>
     }
 
     #region General
+
     /// <summary>
     /// Base value for the bar in data units along the value axis. If not set, defaults to the value axis base value.
     /// </summary>
@@ -200,6 +201,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data) : DataSet<BarDataSet>
     public BarDataSet WithBarThickness(object value)
         => this with { BarThickness = value };
 
+    internal override ChartType Type => ChartType.Bar;
 }
 
 
@@ -211,27 +213,32 @@ public record FloatingBarDataSet : BarDataSet
 
     public FloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
     {
-        Parsing = FloatingParsing;
+        //Parsing = FloatingParsing;
     }
 
     public FloatingBarDataSet(IReadOnlyCollection<object> Data) : base(Data)
     {
-        Parsing = FloatingParsing;
+        //Parsing = FloatingParsing;
     }
 }
 
-public record HorizontalFloatingBarDataSet : BarDataSet
+public record HorizontalFloatingBarDataSet : BarDataSet, IChartOptionsConfiguration
 {
     private static readonly Parsing HorizontalFloatingParsing =
         new Parsing($"{nameof(WaterfallBar.Range).ToCamelCase()}",
             $"{nameof(WaterfallBar.Label).ToCamelCase()}");
     public HorizontalFloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
     {
-        Parsing = HorizontalFloatingParsing;
+        //Parsing = HorizontalFloatingParsing;
     }
 
     public HorizontalFloatingBarDataSet(IReadOnlyCollection<object> Data) : base(Data)
     {
-        Parsing = HorizontalFloatingParsing;
+        //Parsing = HorizontalFloatingParsing;
+    }
+
+    public ChartOptions Configure(ChartOptions options)
+    {
+        return options.WithIndexAxis("y");
     }
 }

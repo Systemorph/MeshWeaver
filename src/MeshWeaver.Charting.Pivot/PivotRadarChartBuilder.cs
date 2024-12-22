@@ -14,7 +14,7 @@ public record PivotRadarChartBuilder<T, TTransformed, TIntermediate, TAggregate,
     public PivotRadarChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
         : base(pivotBuilder, ds => new RadarDataSet(ds))
     {
-        Chart = new ChartModel(ChartType.Radar, []);
+        Chart = new ChartModel([]);
     }
 
     protected override PivotChartModel CreatePivotModel(PivotModel pivotModel)

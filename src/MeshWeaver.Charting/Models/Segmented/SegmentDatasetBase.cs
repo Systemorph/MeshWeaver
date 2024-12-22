@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Charting.Models.Segmented;
 
-public abstract record SegmentDataSetBase<TDataSet>(IReadOnlyCollection<object> Data) : DataSet<TDataSet>(Data) where TDataSet : SegmentDataSetBase<TDataSet>
+public abstract record SegmentDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label) : DataSet<TDataSet>(Data, Label) where TDataSet : SegmentDataSetBase<TDataSet>
 {
     /// <summary>
     /// The portion of the chart that is cut out of the middle. If string and ending with '%', percentage of the chart radius. number is considered to be pixels.

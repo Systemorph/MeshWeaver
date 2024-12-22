@@ -5,7 +5,7 @@ using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Models;
 
-public abstract record DataSet(IReadOnlyCollection<object> Data)
+public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
 {
     /// <summary>
     /// The fill color under the line.
@@ -42,7 +42,7 @@ public abstract record DataSet(IReadOnlyCollection<object> Data)
     /// <summary>
     /// The label for the dataset which appears in the legend and tooltips.
     /// </summary>
-    public string Label { get; init; }
+    public string Label { get; init; } = Label;
 
     [JsonPropertyName("datalabels")]
     public DataLabels DataLabels { get; set; }
@@ -57,7 +57,8 @@ public abstract record DataSet(IReadOnlyCollection<object> Data)
     /// </summary>
     public bool? Hidden { get; init; }
 
-    public ChartType? Type { get; init; }
+    internal abstract ChartType Type { get; }
+
     internal virtual bool HasLabel() => Label != null;
 
 
@@ -65,9 +66,9 @@ public abstract record DataSet(IReadOnlyCollection<object> Data)
 }
 
 // https://www.chartjs.org/docs/3.5.1/general/data-structures.html
-public abstract record DataSet<TDataSet>(IReadOnlyCollection<object> Data) : DataSet(Data) where TDataSet : DataSet<TDataSet>
+public abstract record DataSet<TDataSet>(IReadOnlyCollection<object> Data, string Label) : DataSet(Data, Label) where TDataSet : DataSet<TDataSet>
 {
-    public TDataSet This => (TDataSet)this;
+    protected TDataSet This => (TDataSet)this;
 
     /// <summary>
     /// Sets the label for the dataset which appears in the legend and tooltips.
@@ -108,35 +109,6 @@ public abstract record DataSet<TDataSet>(IReadOnlyCollection<object> Data) : Dat
     public TDataSet WithBorderWidth(IEnumerable<int> widths) =>
         This with { BorderWidth = widths };
 
-    /// <summary>
-    /// Sets the type of the chart.
-    /// </summary>
-    /// <param name="type">The type of the chart.</param>
-    /// <returns>A new instance of <typeparamref name="TDataSet"/> with the specified chart type.</returns>
-    public TDataSet SetType(ChartType? type) =>
-        This with { Type = type };
-
-    /// <summary>
-    /// Sets the type of the chart.
-    /// </summary>
-    /// <param name="type">The type of the chart as a string.</param>
-    /// <returns>A new instance of <typeparamref name="TDataSet"/> with the specified chart type.</returns>
-    public TDataSet SetType(string type) =>
-        This with
-        {
-            Type = type switch
-            {
-                "bar" => ChartType.Bar,
-                "bubble" => ChartType.Bubble,
-                "radar" => ChartType.Radar,
-                "polarArea" => ChartType.PolarArea,
-                "pie" => ChartType.Pie,
-                "line" => ChartType.Line,
-                "doughnut" => ChartType.Doughnut,
-                "scatter" => ChartType.Scatter,
-                _ => throw new ArgumentException(nameof(type))
-            }
-        };
 
     /// <summary>
     /// Sets the background color for the dataset.
@@ -194,9 +166,4 @@ internal record PointData
     public double? Y { get; init; }
 }
 
-internal record BubbleData
-{
-    public double X { get; init; }
-    public double Y { get; init; }
-    public double R { get; init; }
-}
+public record BubbleData(double X, double Y, double R);
