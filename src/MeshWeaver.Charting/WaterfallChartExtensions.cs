@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;

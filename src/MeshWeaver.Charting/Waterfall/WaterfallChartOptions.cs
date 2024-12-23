@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;
+using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Waterfall;
 

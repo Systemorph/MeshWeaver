@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Helpers;
-
-namespace MeshWeaver.Charting.Models.Options.Scales
+﻿namespace MeshWeaver.Charting.Models.Options.Scales
 {
     // https://www.chartjs.org/docs/3.7.1/axes/labelling.html#scale-title-configuration
     public record ScaleTitle

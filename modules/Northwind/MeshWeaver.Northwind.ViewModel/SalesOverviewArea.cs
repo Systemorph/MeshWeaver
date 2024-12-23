@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -47,7 +48,7 @@ public static class SalesOverviewArea
                                         .WithAlign(DataLabelsAlign.End))
                                 )
                     )
-                    .Select(x => x.WithClass("chart sales-by-category-chart"))
+                    .Select(x => new ChartControl(x).WithClass("chart sales-by-category-chart"))
                     
             );
     }

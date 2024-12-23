@@ -108,9 +108,8 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
             
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
-            .ToBarChartPivotBuilder()
-            .WithTitle("AggregateByCountry")
-            .Execute()
+            .ToBarChart()
+            .Select(c => c.WithTitle("AggregateByCountry"))
             .FirstAsync();
         await charSlicedByName.JsonShouldMatch(
             Options,

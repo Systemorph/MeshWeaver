@@ -1,7 +1,20 @@
 ﻿using System.Globalization;
+
+/* Unmerged change from project 'MeshWeaver.Charting (net9.0)'
+Before:
+using Newtonsoft.Json;
+After:
+using MeshWeaver;
+using MeshWeaver.Charting;
+using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Options;
+using Newtonsoft.Json;
+*/
+using MeshWeaver.Charting.Models.Options;
 using Newtonsoft.Json;
 
-namespace MeshWeaver.Charting.Helpers
+namespace MeshWeaver.Charting.Models
 {
     [JsonConverter(typeof(ChartColorConverter))]
     public record ChartColor
@@ -44,7 +57,7 @@ namespace MeshWeaver.Charting.Helpers
         public static ChartColor FromRgba(byte r, byte g, byte b, double a)
         {
             if (a < 0 || a > 1)
-                throw new ArgumentOutOfRangeException(nameof(a),"The alpha value must be a value between 0.0 and 1.0");
+                throw new ArgumentOutOfRangeException(nameof(a), "The alpha value must be a value between 0.0 and 1.0");
 
             return new ChartColor { Red = r, Green = g, Blue = b, Alpha = a };
         }
@@ -122,8 +135,8 @@ namespace MeshWeaver.Charting.Helpers
                 Red = (byte)rand.Next(0, 256),
                 Green = (byte)rand.Next(0, 256),
                 Blue = (byte)rand.Next(0, 256),
-                Alpha = randomAlpha 
-                    ? rand.NextDouble() 
+                Alpha = randomAlpha
+                    ? rand.NextDouble()
                     : 1.0
             };
         }

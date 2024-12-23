@@ -1,6 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 
-namespace MeshWeaver.Charting.Helpers;
+namespace MeshWeaver.Charting.Models.Options;
 
 public static class ChartHelpers
 {

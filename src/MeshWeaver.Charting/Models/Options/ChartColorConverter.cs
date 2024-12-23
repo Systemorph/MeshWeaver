@@ -1,6 +1,6 @@
 ﻿using Newtonsoft.Json;
 
-namespace MeshWeaver.Charting.Helpers
+namespace MeshWeaver.Charting.Models.Options
 {
     internal class ChartColorConverter : JsonConverter
     {

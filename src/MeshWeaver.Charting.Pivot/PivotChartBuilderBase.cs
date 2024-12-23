@@ -7,6 +7,7 @@ using MeshWeaver.Pivot.Models;
 
 namespace MeshWeaver.Charting.Pivot;
 
+
 public abstract record PivotChartBuilderBase<
     T,
     TTransformed,
@@ -30,7 +31,7 @@ public abstract record PivotChartBuilderBase<
         TAggregate,
         TPivotBuilder
     > pivotBuilder = pivotBuilder;
-    protected ChartModel Chart;
+    protected ChartModel Chart = new();
     protected PivotChartModelBuilder PivotChartModelBuilder { get; init; } = new();
 
     public IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)
