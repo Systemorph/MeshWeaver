@@ -3,13 +3,6 @@
     "datasets": [
       {
         "barThickness": 20,
-        "backgroundColor": {
-          "red": 8,
-          "green": 191,
-          "blue": 209,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
-        },
         "data": [
           {
             "range": [
@@ -52,12 +45,19 @@
             "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar"
           }
         ],
+        "backgroundColor": {
+          "red": 8,
+          "green": 191,
+          "blue": 209,
+          "alpha": 1,
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
+        },
         "hoverBackgroundColor": {
           "red": 8,
           "green": 191,
           "blue": 209,
           "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
         },
         "label": "hidden",
         "parsing": {
@@ -65,17 +65,10 @@
           "yAxisKey": "range",
           "$type": "MeshWeaver.Charting.Models.Parsing"
         },
-        "$type": "MeshWeaver.Charting.Models.FloatingBarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
       },
       {
         "barThickness": 20,
-        "backgroundColor": {
-          "red": 1,
-          "green": 171,
-          "blue": 108,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
-        },
         "data": [
           {
             "label": "Italy.Alessandro",
@@ -106,12 +99,19 @@
             "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar"
           }
         ],
+        "backgroundColor": {
+          "red": 1,
+          "green": 171,
+          "blue": 108,
+          "alpha": 1,
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
+        },
         "hoverBackgroundColor": {
           "red": 1,
           "green": 171,
           "blue": 108,
           "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
         },
         "label": "hidden",
         "parsing": {
@@ -119,17 +119,10 @@
           "yAxisKey": "range",
           "$type": "MeshWeaver.Charting.Models.Parsing"
         },
-        "$type": "MeshWeaver.Charting.Models.FloatingBarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
       },
       {
         "barThickness": 20,
-        "backgroundColor": {
-          "red": 167,
-          "green": 225,
-          "blue": 237,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
-        },
         "data": [
           {
             "label": "Italy.Alessandro",
@@ -164,12 +157,19 @@
             "$type": "MeshWeaver.Charting.Models.Bar.TotalBar"
           }
         ],
+        "backgroundColor": {
+          "red": 167,
+          "green": 225,
+          "blue": 237,
+          "alpha": 1,
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
+        },
         "hoverBackgroundColor": {
           "red": 167,
           "green": 225,
           "blue": 237,
           "alpha": 1,
-          "$type": "MeshWeaver.Charting.Helpers.ChartColor"
+          "$type": "MeshWeaver.Charting.Models.ChartColor"
         },
         "label": "hidden",
         "parsing": {
@@ -177,7 +177,7 @@
           "yAxisKey": "range",
           "$type": "MeshWeaver.Charting.Models.Parsing"
         },
-        "$type": "MeshWeaver.Charting.Models.FloatingBarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
       }
     ],
     "labels": [
@@ -225,7 +225,7 @@
           "#A7E1ED",
           "#A7E1ED"
         ],
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "datalabels": {
         "align": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
@@ -239,5 +239,5 @@
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }

@@ -31,7 +31,7 @@ public record ChartData
         var chartType = DataSets.FirstOrDefault()?.ChartType;
         if (chartType is null)
             return ds;
-        return ds.Type is null && ds.Type !=  chartType ? ds with { Type = ds.ChartType } : ds;
+        return ds.Type is null && ds.ChartType !=  chartType ? ds with { Type = ds.ChartType } : ds;
     }
 
     private bool? AutoLabels { get; init; } 
