@@ -4,7 +4,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 public static class PivotChartingExtensions
 {
-    public static IPivotBarChartBuilder ToBarChartPivotBuilder<
+    internal static IPivotBarChartBuilder ToBarChartPivotBuilder<
         T,
         TTransformed,
         TIntermediate,
@@ -24,7 +24,7 @@ public static class PivotChartingExtensions
         );
     }
 
-    public static IPivotLineChartBuilder ToLineChart<
+    internal static IPivotLineChartBuilder ToLineChart<
         T,
         TTransformed,
         TIntermediate,
@@ -44,7 +44,7 @@ public static class PivotChartingExtensions
         );
     }
 
-    public static IPivotRadarChartBuilder ToRadarChart<
+    internal static IPivotRadarChartBuilder ToRadarChartBuilder<
         T,
         TTransformed,
         TIntermediate,
@@ -68,7 +68,7 @@ public static class PivotChartingExtensions
         >(pivotBuilder);
     }
 
-    public static IPivotWaterfallChartBuilder ToWaterfallChart<
+    internal static IPivotWaterfallChartBuilder ToWaterfallChartBuilder<
         T,
         TTransformed,
         TIntermediate,
@@ -92,7 +92,7 @@ public static class PivotChartingExtensions
         >(pivotBuilder);
     }
 
-    public static IPivotWaterfallChartBuilder ToHorizontalWaterfallChart<
+    internal static IPivotWaterfallChartBuilder ToHorizontalWaterfallChartBuilder<
         T,
         TTransformed,
         TIntermediate,
@@ -116,7 +116,7 @@ public static class PivotChartingExtensions
         >(pivotBuilder);
     }
 
-    public static IPivotChartBuilder ToPieChart<
+    internal static IPivotChartBuilder ToPieChartBuilder<
         T,
         TTransformed,
         TIntermediate,
@@ -132,7 +132,7 @@ public static class PivotChartingExtensions
             >
         => new PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(pivotBuilder);
 
-    public static IPivotChartBuilder ToDoughnutChart<
+    internal static IPivotChartBuilder ToDoughnutChartBuilder<
         T,
         TTransformed,
         TIntermediate,
