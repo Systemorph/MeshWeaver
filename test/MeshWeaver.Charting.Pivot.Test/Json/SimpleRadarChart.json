@@ -14,7 +14,7 @@
           4
         ],
         "label": "Alessandro",
-        "$type": "MeshWeaver.Charting.Models.RadarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
       },
       {
         "fill": false,
@@ -28,7 +28,7 @@
           null
         ],
         "label": "Paolo",
-        "$type": "MeshWeaver.Charting.Models.RadarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
       }
     ],
     "labels": [
@@ -50,11 +50,11 @@
       },
       "colorschemes": {
         "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }
