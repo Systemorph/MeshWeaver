@@ -218,6 +218,21 @@ public record FloatingBarDataSet : BarDataSet
     public FloatingBarDataSet(IReadOnlyCollection<object> Data) : base(Data)
     {
     }
+
+    public FloatingBarDataSet(IEnumerable dataFrom, IEnumerable dataTo, string label = null) : this(ConvertToFloatingData(dataFrom, dataTo), label)
+    {
+        
+    }
+
+    private static IReadOnlyCollection<object> ConvertToFloatingData(IEnumerable dataFrom, IEnumerable dataTo)
+    {
+        var dataFromArray = dataFrom?.Cast<object>().ToArray();
+        var dataToArray = dataTo?.Cast<object>().ToArray();
+        if (dataFromArray == null || dataToArray == null) return null;
+
+        var rangeData = dataFromArray.Zip(dataToArray, (from, to) => new[] { from, to });
+        return rangeData.Cast<object>().ToArray();
+    }
 }
 
 public record HorizontalFloatingBarDataSet : BarDataSet, IChartOptionsConfiguration
