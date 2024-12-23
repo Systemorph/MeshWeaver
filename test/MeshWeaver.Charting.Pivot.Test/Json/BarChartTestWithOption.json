@@ -17,22 +17,8 @@
           4
         ],
         "label": "Total",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       }
-    ],
-    "labels": [
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7",
-      "8",
-      "9",
-      "10",
-      "11"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
@@ -65,11 +51,11 @@
     "plugins": {
       "colorschemes": {
         "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }

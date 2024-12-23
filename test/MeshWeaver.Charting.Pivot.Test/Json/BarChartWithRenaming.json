@@ -13,8 +13,7 @@
           null
         ],
         "label": "Country1",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       },
       {
         "xAxisID": "x1",
@@ -28,18 +27,12 @@
           4
         ],
         "label": "Country2",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       }
     ],
     "labels": [
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-      "6",
-      "7"
+      "Country1",
+      "Country2"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
@@ -72,11 +65,11 @@
       },
       "colorschemes": {
         "scheme": "brewer.Blues3",
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }
