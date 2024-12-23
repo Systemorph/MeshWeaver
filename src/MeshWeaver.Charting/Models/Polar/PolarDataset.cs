@@ -36,7 +36,7 @@ namespace MeshWeaver.Charting.Models.Polar
         public int? HoverBorderWidth { get; init; }
         #endregion Interactions
 
-        internal override ChartType Type => ChartType.PolarArea;
+        internal override ChartType ChartType => ChartType.PolarArea;
         internal override bool HasLabel() => false;
     }
 }

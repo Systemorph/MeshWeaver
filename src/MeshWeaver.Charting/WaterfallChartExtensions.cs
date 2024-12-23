@@ -189,16 +189,15 @@ internal static class WaterfallChartExtensions
             totalIndexes = totalIndexes.Add(deltas.Count - 1);
         }
 
-        var tmp = chart;
 
         var labels = options.Labels ?? Enumerable.Range(1, deltas.Count).Select(i => i.ToString()).ToImmutableList();
-        tmp = tmp.WithLabels(labels);
+        chart = chart.WithLabels(labels);
 
         var dataModel = deltas.CalculateModel(labels, totalIndexes);
 
         var datasets = dataModel.BuildDataSets(styling, options);
 
-        tmp = tmp.WithDataSets(datasets);
+        chart = chart.WithDataSets(datasets);
 
         if (options.IncludeConnectors)
         {
@@ -209,17 +208,17 @@ internal static class WaterfallChartExtensions
                 new(dataModel.SecondDottedValues.Cast<object>()),
                 new(dataModel.ThirdDottedValues.Cast<object>())
             ];
+            connectors = connectors.Select(d => d.WithLabel(ChartConst.Hidden).WithDataLabels(new DataLabels { Display = false })).ToArray();
             if (options.ConnectorDataSetModifier is not null)
                 connectors = connectors.Select(options.ConnectorDataSetModifier).ToArray();
 
-            tmp = tmp.WithDataSets(connectors);
-
+            chart = chart.WithDataSets(connectors);
         }
 
         var palette = new[] { styling.IncrementColor, styling.DecrementColor, styling.TotalColor, styling.TotalColor, styling.TotalColor, styling.TotalColor };
-        tmp = tmp.ApplyFinalStyling(palette);
+        chart = chart.ApplyFinalStyling(palette);
 
-        return tmp;
+        return chart;
     }
 
     private static ChartModel ApplyFinalStyling(this ChartModel chart, string[] palette)
