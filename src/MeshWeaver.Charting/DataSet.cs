@@ -155,75 +155,77 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
     /// <param name="radius">The radius values.</param>
+    /// <param name="label"></param>
     /// <returns>A new instance of <see cref="BubbleDataSet"/>.</returns>
-    public static BubbleDataSet Bubble(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius) => new(x, y, radius);
+    public static BubbleDataSet Bubble(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string label = null) => new(x, y, radius, label);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/>.
+    /// Creates a new instance of <see cref="ScatterDataSet"/>.
     /// </summary>
     /// <param name="data">The data for the dataset.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable data) => new(data.Cast<object>().ToArray());
+    /// <param name="label"></param>
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable data, string label = null) => new(data.Cast<object>().ToArray(), label);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from separate collections.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<double> x, IEnumerable<int> y) => new(x, y);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<double> x, IEnumerable<int> y) => new(x, y);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from separate collections.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<double> y) => new(x, y);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<double> y) => new(x, y);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from separate collections.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<int> y) => new(x, y);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<int> y) => new(x, y);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from separate collections.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<double> x, IEnumerable<double> y) => new(x, y);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<double> x, IEnumerable<double> y) => new(x, y);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from tuples.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
     /// </summary>
     /// <param name="points">The tuples representing the data points.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<(int x, int y)> points) => new(points);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<(int x, int y)> points) => new(points);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from tuples.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
     /// </summary>
     /// <param name="points">The tuples representing the data points.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<(int x, double y)> points) => new(points);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<(int x, double y)> points) => new(points);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from tuples.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
     /// </summary>
     /// <param name="points">The tuples representing the data points.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<(double x, int y)> points) => new(points);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<(double x, int y)> points) => new(points);
 
     /// <summary>
-    /// Creates a new instance of <see cref="LineScatterDataSet"/> from tuples.
+    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
     /// </summary>
     /// <param name="points">The tuples representing the data points.</param>
-    /// <returns>A new instance of <see cref="LineScatterDataSet"/>.</returns>
-    public static LineScatterDataSet Scatter(IEnumerable<(double x, double y)> points) => new(points);
+    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
+    public static ScatterDataSet Scatter(IEnumerable<(double x, double y)> points) => new(points);
 
     /// <summary>
     /// Creates a new instance of <see cref="TimeLineDataSet"/>.
