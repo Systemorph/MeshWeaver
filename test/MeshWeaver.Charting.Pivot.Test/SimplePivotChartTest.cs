@@ -122,11 +122,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var charSliceByCountry = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChartPivotBuilder()
-            .Execute()
+            .ToBarChart()
             .FirstAsync();
         await charSliceByCountry.JsonShouldMatch(
             Options,
@@ -139,13 +137,12 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var charStacked = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
-            .ToBarChartPivotBuilder()
-            .AsStackedWithScatterTotals()
-            .WithOptions(m => m.WithLabelsFromLevels(0, 1))
-            .Execute()
+            .ToBarChart(chart =>
+                chart.AsStackedWithScatterTotals()
+                    .WithOptions(m => m.WithLabelsFromLevels(0, 1))
+            )
             .FirstAsync();
         await charStacked.JsonShouldMatch(
             Options,
@@ -158,11 +155,8 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var doubleColumnSlice = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex), nameof(Country))
-            .ToBarChartPivotBuilder()
-            .WithOptions(m => m)
-            .Execute()
+            .ToBarChart(chart => chart.WithOptions(m => m))
             .FirstAsync();
         await doubleColumnSlice.JsonShouldMatch(Options, $"{nameof(BarChartTestWithOption)}.json");
     }
@@ -172,11 +166,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var doubleColumnSliceTwoRows = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(Country), nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name))
-            .ToBarChartPivotBuilder()
-            .Execute()
+            .ToBarChart()
             .FirstAsync();
         await doubleColumnSliceTwoRows.JsonShouldMatch(
             Options,
@@ -189,10 +181,8 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var noColumnSlice = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceRowsBy(nameof(RecordWithValues.ValueIndex))
-            .ToBarChartPivotBuilder()
-            .Execute()
+            .ToBarChart()
             .FirstAsync();
         await noColumnSlice.JsonShouldMatch(
             Options,
@@ -205,12 +195,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var stackOneOne = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChartPivotBuilder()
-            .AsStackedWithScatterTotals()
-            .Execute()
+            .ToBarChart(chart => chart.AsStackedWithScatterTotals())
             .FirstAsync();
         await stackOneOne.JsonShouldMatch(
             Options,
@@ -223,12 +210,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var stackTwoTwo = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(Name))
             .SliceRowsBy(nameof(Country))
-            .ToBarChartPivotBuilder()
-            .AsStackedWithScatterTotals()
-            .Execute()
+            .ToBarChart(chart => chart.AsStackedWithScatterTotals())
             .FirstAsync();
         await stackTwoTwo.JsonShouldMatch(
             Options,
@@ -241,17 +225,16 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var charSlicedByName = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Country))
-            .ToBarChartPivotBuilder()
-            .WithOptions(model =>
-                model
-                    .WithLabels("A", "B", "C", "D", "E", "F", "G", "H")
-                    .WithLegendItems("Country1", "Country2", "Country3")
+            .ToBarChart(chart =>
+                chart.WithOptions(model =>
+                    model
+                        .WithLabels("A", "B", "C", "D", "E", "F", "G", "H")
+                        .WithLegendItems("Country1", "Country2", "Country3")
+                )
+                .WithColorScheme(Palettes.Brewer.Blues3)
             )
-            .WithColorScheme(Palettes.Brewer.Blues3)
-            .Execute()
             .FirstAsync();
         await charSlicedByName.JsonShouldMatch(Options, $"{nameof(BarChartWithRenaming)}.json");
     }
@@ -261,21 +244,20 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var charSliceByName = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .SliceRowsBy(nameof(Name), nameof(Country))
-            .ToBarChartPivotBuilder()
-            .WithOptions(model =>
-                (
-                    model with
-                    {
-                        Rows = model
-                            .Rows.Where(row => row.Descriptor.Coordinates.Count == 2)
-                            .ToList()
-                    }
-                ).WithLegendItemsFromLevels(".", 1, 0)
+            .ToBarChart(chart =>
+                chart.WithOptions(model =>
+                    (
+                        model with
+                        {
+                            Rows = model
+                                .Rows.Where(row => row.Descriptor.Coordinates.Count == 2)
+                                .ToList()
+                        }
+                    ).WithLegendItemsFromLevels(".", 1, 0)
+                )
             )
-            .Execute()
             .FirstAsync();
         await charSliceByName.JsonShouldMatch(
             Options,
@@ -288,12 +270,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var mixedPlot1 = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceRowsBy(nameof(Name))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-            .ToBarChartPivotBuilder()
-            .WithRowsAsLine("Paolo")
-            .Execute()
+            .ToBarChart(chart => chart.WithRowsAsLine("Paolo"))
             .FirstAsync();
         await mixedPlot1.JsonShouldMatch(Options, $"{nameof(MixedChart)}.json");
     }
@@ -303,15 +282,14 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var linePlot1 = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceRowsBy(nameof(Name), nameof(Country))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-            .ToLineChart()
-            .WithSmoothedLines("Paolo.Italy")
-            .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.5 } })
-            .WithRows("Alessandro.Italy", "Paolo.Italy")
-            .WithOptions(model => model.WithLabels("8", "9", "10", "11", "12", "13", "14"))
-            .Execute()
+            .ToLineChart(chart =>
+                chart.WithSmoothedLines("Paolo.Italy")
+                    .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.5 } })
+                    .WithRows("Alessandro.Italy", "Paolo.Italy")
+                    .WithOptions(model => model.WithLabels("8", "9", "10", "11", "12", "13", "14"))
+            )
             .FirstAsync();
         await linePlot1.JsonShouldMatch(Options, $"{nameof(LineChart)}.json");
     }
@@ -321,11 +299,9 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var radarChart = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceRowsBy((nameof(Name)))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
             .ToRadarChart()
-            .Execute()
             .FirstAsync();
         await radarChart.JsonShouldMatch(Options, $"{nameof(SimpleRadarChart)}.json");
     }
@@ -335,40 +311,36 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         var radarChart = await GetHost().GetWorkspace()
             .Pivot(CubeWithValues)
-            
             .SliceRowsBy(nameof(Name), nameof(Country))
             .SliceColumnsBy(nameof(RecordWithValues.ValueIndex))
-            .ToRadarChart()
-            .WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.2 } })
-            .WithFilledArea()
-            .WithRows("Alessandro.Italy", "Paolo.Italy")
-            .WithColorScheme(new string[] { "#1ECBE1", "#E1341E" })
-            .WithTitle("Two lines radar plot", t => t.WithFontSize(15).AlignAtStart())
-            .Execute()
+            .ToRadarChart(chart =>
+                chart.WithSmoothedLines(new Dictionary<string, double>() { { "Alessandro.Italy", 0.2 } })
+                    .WithFilledArea()
+                    .WithRows("Alessandro.Italy", "Paolo.Italy")
+                    .WithColorScheme(new string[] { "#1ECBE1", "#E1341E" })
+                    .WithTitle("Two lines radar plot", t => t.WithFontSize(15).AlignAtStart())
+            )
             .FirstAsync();
         await radarChart.JsonShouldMatch(Options, $"{nameof(RadarChartWithExtraOptions)}.json");
     }
 
-    [Fact()]
+    [Fact]
     public async Task SimpleWaterfallChart()
     {
         var filteredCube = CubeWithValues;
-        //.Filter(x => x.Country == "RU" && x.Name == "A");
         var waterfall = await GetHost().GetWorkspace()
             .Pivot(filteredCube)
-            
             .SliceColumnsBy(nameof(Country), nameof(Name))
-            .ToWaterfallChart()
-            .WithStylingOptions(b =>
-                b.WithIncrementColor("#08BFD1")
-                    .WithDecrementColor("#01AB6C")
-                    .WithTotalColor("#A7E1ED")
-                    .WithLabelsFontColor("white")
-                    .WithLabelsFontSize(14)
+            .ToWaterfallChart(chart =>
+                chart.WithStylingOptions(b =>
+                    b.WithIncrementColor("#08BFD1")
+                        .WithDecrementColor("#01AB6C")
+                        .WithTotalColor("#A7E1ED")
+                        .WithLabelsFontColor("white")
+                        .WithLabelsFontSize(14)
+                )
+                .WithTotals(col => col.IsTotalForSlice(nameof(Country)))
             )
-            .WithTotals(col => col.IsTotalForSlice(nameof(Country)))
-            //.WithLegendItems("Increments", "Decrements", "Total")
-            .Execute()
             .FirstAsync();
         await waterfall.JsonShouldMatch(Options, $"{nameof(SimpleWaterfallChart)}.json");
     }

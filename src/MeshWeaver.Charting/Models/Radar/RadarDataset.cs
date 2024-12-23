@@ -145,7 +145,7 @@ public record RadarDataSet(IReadOnlyCollection<object> Data, string Label = null
     /// </summary>
     /// <returns>A new instance of <see cref="RadarDataSet"/> with the fill option set to fill the area under the line.</returns>
     public RadarDataSet WithArea() =>
-        this with { Fill = "origin" };
+        this with { Fill = true };
 
     /// <summary>
     /// Disables the fill option for the dataset.

@@ -15,7 +15,7 @@
           null
         ],
         "label": "Alessandro.Italy",
-        "$type": "MeshWeaver.Charting.Models.RadarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
       },
       {
         "fill": true,
@@ -29,7 +29,7 @@
           null
         ],
         "label": "Paolo.Italy",
-        "$type": "MeshWeaver.Charting.Models.RadarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
       }
     ],
     "labels": [
@@ -67,11 +67,11 @@
           "#1ECBE1",
           "#E1341E"
         ],
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }

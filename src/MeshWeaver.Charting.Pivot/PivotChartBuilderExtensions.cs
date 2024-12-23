@@ -8,14 +8,32 @@ public static class PivotChartBuilderExtensions
 {
     public static IObservable<ChartModel> ToBarChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotBarChartBuilder, IPivotBarChartBuilder> builder = null
+        Func<IPivotBarChartBuilder, IPivotChartBuilder> builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         => pivotBuilder.ToChart(b => b.ToBarChartPivotBuilder(), builder);
+    public static IObservable<ChartModel> ToRadarChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IPivotRadarChartBuilder, IPivotChartBuilder> builder = null
+    )
+        where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+        => pivotBuilder.ToChart(b => b.ToRadarChartBuilder(), builder);
+    public static IObservable<ChartModel> ToWaterfallChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder> builder = null
+    )
+        where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+        => pivotBuilder.ToChart(b => b.ToWaterfallChartBuilder(), builder);
+    public static IObservable<ChartModel> ToHorizontalWaterfallChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
+        this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
+        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder> builder = null
+    )
+        where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+        => pivotBuilder.ToChart(b => b.ToHorizontalWaterfallChartBuilder(), builder);
 
     public static IObservable<ChartModel> ToLineChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotLineChartBuilder, IPivotLineChartBuilder> builder = null
+        Func<IPivotLineChartBuilder, IPivotChartBuilder> builder = null
     )
         where TPivotBuilder : PivotBuilderBase<
             T,
@@ -43,7 +61,7 @@ public static class PivotChartBuilderExtensions
             TAggregate,
             TPivotBuilder
         >
-        => pivotBuilder.ToChart(b => b.ToPieChart(), builder);
+        => pivotBuilder.ToChart(b => b.ToPieChartBuilder(), builder);
 
     public static IObservable<ChartModel> ToDoughnutChart<
         T,
@@ -62,27 +80,19 @@ public static class PivotChartBuilderExtensions
             TAggregate,
             TPivotBuilder
         >
-        => pivotBuilder.ToChart(b => b.ToDoughnutChart(), builder);
+        => pivotBuilder.ToChart(b => b.ToDoughnutChartBuilder(), builder);
 
     private static IObservable<ChartModel> ToChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder,
         TPivotChartBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
         Func<PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, TPivotChartBuilder>
             pivotChartFactory,
-        Func<TPivotChartBuilder, TPivotChartBuilder> builder = null
+        Func<TPivotChartBuilder, IPivotChartBuilder> builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         where TPivotChartBuilder : IPivotChartBuilder
     {
-        var pivotChartBuilder = pivotChartFactory(pivotBuilder);
-
-        if (builder is not null)
-        {
-            pivotChartBuilder = builder(pivotChartBuilder);
-        }
-
-        var chartModel = pivotChartBuilder.Execute();
-
-        return chartModel;
+        builder ??= x => x;
+        return builder(pivotChartFactory(pivotBuilder)).Execute();
     }
 }
