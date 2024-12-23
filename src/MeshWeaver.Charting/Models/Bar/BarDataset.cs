@@ -11,7 +11,7 @@ namespace MeshWeaver.Charting.Models.Bar;
 /// https://www.chartjs.org/docs/latest/charts/bar.html
 /// </summary>
 [SuppressMessage("ReSharper", "InconsistentNaming")]
-public record BarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSet<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
+public record BarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSetBase<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
 {
     public BarDataSet(IEnumerable Data, string label = null) : this(Data.Cast<object>().ToArray())
     {
@@ -213,28 +213,21 @@ public record FloatingBarDataSet : BarDataSet
 
     public FloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
     {
-        //Parsing = FloatingParsing;
     }
 
     public FloatingBarDataSet(IReadOnlyCollection<object> Data) : base(Data)
     {
-        //Parsing = FloatingParsing;
     }
 }
 
 public record HorizontalFloatingBarDataSet : BarDataSet, IChartOptionsConfiguration
 {
-    private static readonly Parsing HorizontalFloatingParsing =
-        new Parsing($"{nameof(WaterfallBar.Range).ToCamelCase()}",
-            $"{nameof(WaterfallBar.Label).ToCamelCase()}");
     public HorizontalFloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
     {
-        //Parsing = HorizontalFloatingParsing;
     }
 
     public HorizontalFloatingBarDataSet(IReadOnlyCollection<object> Data) : base(Data)
     {
-        //Parsing = HorizontalFloatingParsing;
     }
 
     public ChartOptions Configure(ChartOptions options)
