@@ -1,6 +1,4 @@
 ﻿using System.Collections;
-using System.Globalization;
-using System.Reflection.Metadata.Ecma335;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Options.Scales;
@@ -83,139 +81,97 @@ public static class Chart
 
 
     /// <summary>
-    /// Creates a time line chart model.
-    /// </summary>
-    /// <param name="dates">The dates for the x-axis.</param>
-    /// <param name="rawData">The data values for the y-axis.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<DateTime> dates, IEnumerable<int> rawData) => TimeLine(dates, rawData.Select(x => (double)x));
-
-    /// <summary>
-    /// Creates a time line chart model.
+    /// Creates a timeline chart model.
     /// </summary>
     /// <param name="times">The times for the x-axis.</param>
     /// <param name="rawData">The data values for the y-axis.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<string> times, IEnumerable<double> rawData) => TimeLine(times.Select(DateTime.Parse), rawData);
+    public static ChartModel TimeLine(IEnumerable<string> times, IEnumerable<double> rawData, string label = null) => new(DataSet.TimeLine(times.Select(DateTime.Parse), rawData, label));
+
 
     /// <summary>
-    /// Creates a time line chart model.
-    /// </summary>
-    /// <param name="times">The times for the x-axis.</param>
-    /// <param name="rawData">The data values for the y-axis.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<string> times, IEnumerable<int> rawData) => TimeLine(times.Select(DateTime.Parse), rawData);
-
-    /// <summary>
-    /// Creates a time line chart model.
+    /// Creates a timeline chart model.
     /// </summary>
     /// <param name="dates">The dates for the x-axis.</param>
     /// <param name="rawData">The data values for the y-axis.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<DateTime> dates, IEnumerable<double> rawData)
-    {
-        var datesArray = ToArrayIfNotEmpty(dates);
-        var rawDataArray = ToArrayIfNotEmpty(rawData);
-        if (datesArray == null || rawDataArray == null) return null;
-
-        if (rawDataArray.Count != datesArray.Count)
-            throw new ArgumentException($"'{nameof(dates)}' and '{nameof(rawData)}' arrays MUST have the same length");
-
-        var data = datesArray
-            .Select((t, index) => new TimePointData { X = t.ToString("o", CultureInfo.InvariantCulture), Y = rawDataArray[index] })
-            .Cast<object>()
-            .ToArray();
-
-        return Create(DataSet.TimeLine(data));
-    }
+    /// <param name="label">The label of the data set.</param>
+    /// <returns>A new instance of <see cref="ChartModel"/> representing a timeline chart.</returns>
+    public static ChartModel TimeLine(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string label = null)
+    => new(DataSet.TimeLine(dates, rawData, label));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<double> x, IEnumerable<int> y) => Scatter(x, y.Select(v => (double)v));
+    public static ChartModel Scatter(IEnumerable<double> x, IEnumerable<int> y, string label = null) => Scatter(x, y.Select(v => (double)v), label);
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<int> x, IEnumerable<double> y) => Scatter(x.Select(v => (double)v), y);
+    public static ChartModel Scatter(IEnumerable<int> x, IEnumerable<double> y, string label = null) => Scatter(x.Select(v => (double)v), y, label);
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<int> x, IEnumerable<int> y) => Scatter(x.Select(v => (double)v), y.Select(v => (double)v));
+    public static ChartModel Scatter(IEnumerable<int> x, IEnumerable<int> y, string label = null) => Scatter(x.Select(v => (double)v), y.Select(v => (double)v), label);
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="x">The x values.</param>
     /// <param name="y">The y values.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<double> x, IEnumerable<double> y)
-    {
-        var xArray = ToArrayIfNotEmpty(x);
-        var yArray = ToArrayIfNotEmpty(y);
-        if (xArray == null || yArray == null) return null;
-
-        if (xArray.Count != yArray.Count)
-            throw new InvalidOperationException();
-
-        var pointData = xArray.Zip(yArray, (a, v) => new PointData { X = a, Y = v }).Cast<object>().ToArray();
-
-        return Create(DataSet.Scatter(pointData));
-    }
+    public static ChartModel Scatter(IEnumerable<double> x, IEnumerable<double> y, string label = null)
+        => new(DataSet.Scatter(x, y, label));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<(int x, int y)> points)
-    {
-        var pointsArray = ToArrayIfNotEmpty(points);
-        return pointsArray == null ? null : Scatter(pointsArray.Select(p => ((double)p.x, (double)p.y)));
-    }
+    public static ChartModel Scatter(IEnumerable<(int x, int y)> points, string label = null)
+        => new(DataSet.Scatter(points, label));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<(int x, double y)> points)
-    {
-        var pointsArray = ToArrayIfNotEmpty(points);
-        return pointsArray == null ? null : Scatter(pointsArray.Select(p => ((double)p.x, p.y)));
-    }
+    public static ChartModel Scatter(IEnumerable<(int x, double y)> points, string label = null)
+        => new(DataSet.Scatter(points, label));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</param>
-    public static ChartModel Scatter(IEnumerable<(double x, int y)> points)
-    {
-        var pointsArray = ToArrayIfNotEmpty(points);
-        return pointsArray == null ? null : Scatter(pointsArray.Select(p => (p.x, (double)p.y)));
-    }
+    /// <param name="label">The label of the data set.</param>
+    /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
+    public static ChartModel Scatter(IEnumerable<(double x, int y)> points, string label = null)
+        => new(DataSet.Scatter(points, label));
 
     /// <summary>
     /// Creates a scatter chart model.
     /// </summary>
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<(double x, double y)> points)
-    {
-        var pointsArray = ToArrayIfNotEmpty(points);
-        return pointsArray == null ? null : Create(DataSet.Scatter(pointsArray.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray()));
-    }
+    public static ChartModel Scatter(IEnumerable<(double x, double y)> points, string label = null)
+        => new(DataSet.Scatter(points, label));
 
 
     public static ChartModel ToChart(this IEnumerable<DataSet> dataSets) => Create(dataSets.ToArray());
@@ -226,17 +182,6 @@ public static class Chart
             .Aggregate(new ChartModel(dataSets), (r, c) => r.WithOptions(c.Configure));
 
 
-    /// <summary>
-    /// Checks if the data is null or empty after converting to an array.
-    /// </summary>
-    /// <typeparam name="T">The type of the data.</typeparam>
-    /// <param name="data">The data to check.</param>
-    /// <returns>The data as an array if it is not null or empty; otherwise, null.</returns>
-    private static IReadOnlyList<T> ToArrayIfNotEmpty<T>(IEnumerable<T> data)
-    {
-        var dataArray = data?.ToArray();
-        return dataArray != null && dataArray.Any() ? dataArray : null;
-    }
 
 
     public static ChartModel Waterfall(List<double> deltas,
@@ -325,12 +270,14 @@ public static class Chart
     /// Creates a bubble chart model.
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
     public static ChartModel Bubble(IEnumerable<BubbleData> data, string label = null) => Create(DataSet.Bubble(data.ToArray(), label));
     /// <summary>
     /// Creates a new instance of <see cref="ChartModel"/> from tuples.
     /// </summary>
     /// <param name="values">The tuples representing the data points.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/>.</returns>
     public static ChartModel Bubble(IEnumerable<(double x, double y, double radius)> values, string label = null) => new(DataSet.Bubble(values, label));
 
@@ -345,12 +292,6 @@ public static class Chart
     public static ChartModel Bubble(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string label = null) => new(DataSet.Bubble(x, y, radius, label));
 
 
-    /// <summary>
-    /// Creates a time line chart model.
-    /// </summary>
-    /// <param name="data">The data sets to plot.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(params IEnumerable<IEnumerable> data) => ToChart(data.Select(d => DataSet.TimeLine(d.Cast<object>().ToArray())));
 
     /// <summary>
     /// Creates a scatter chart model.
