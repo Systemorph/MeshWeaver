@@ -103,69 +103,6 @@ public static class Chart
         return dataArray == null ? null : Create(DataSet.HorizontalFloatingBar(dataArray));
     }
 
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="values">The values to plot, each represented as a tuple of (x, y, radius).</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(IEnumerable<(int x, int y, int radius)> values)
-    {
-        var valuesArray = ToArrayIfNotEmpty(values);
-        if (valuesArray == null) return null;
-
-        var valueTuples = valuesArray.ToList();
-        return Bubble(valueTuples.Select(e => (double)e.x), valueTuples.Select(e => (double)e.y), valueTuples.Select(e => (double)e.radius));
-    }
-
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="radius">The radius values.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(IEnumerable<int> x, IEnumerable<int> y, IEnumerable<double> radius)
-        => Bubble(x.Select(e => (double)e), y.Select(e => (double)e), radius);
-
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="radius">The radius values.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(IEnumerable<double> x, IEnumerable<int> y, IEnumerable<double> radius)
-        => Bubble(x.Select(e => e), y.Select(e => (double)e), radius);
-
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="radius">The radius values.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(IEnumerable<int> x, IEnumerable<double> y, IEnumerable<double> radius)
-        => Bubble(x.Select(e => (double)e), y.Select(e => e), radius);
-
-    /// <summary>
-    /// Creates a bubble chart model.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="radius">The radius values.</param>
-    /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius)
-    {
-        var xArray = ToArrayIfNotEmpty(x);
-        var yArray = ToArrayIfNotEmpty(y);
-        var radiusArray = ToArrayIfNotEmpty(radius);
-        if (xArray == null || yArray == null || radiusArray == null) return null;
-
-        if (xArray.Count != yArray.Count || xArray.Count != radiusArray.Count)
-            throw new InvalidOperationException();
-
-        return Create(DataSet.Bubble(xArray, yArray, radiusArray));
-    }
 
     /// <summary>
     /// Creates a time line chart model.
@@ -422,7 +359,24 @@ public static class Chart
     /// </summary>
     /// <param name="data">The data sets to plot.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bubble chart.</returns>
-    public static ChartModel Bubble(params IEnumerable<BubbleData> data) => Create(DataSet.Bubble(data.ToArray()));
+    public static ChartModel Bubble(IEnumerable<BubbleData> data, string label = null) => Create(DataSet.Bubble(data.ToArray(), label));
+    /// <summary>
+    /// Creates a new instance of <see cref="ChartModel"/> from tuples.
+    /// </summary>
+    /// <param name="values">The tuples representing the data points.</param>
+    /// <returns>A new instance of <see cref="ChartModel"/>.</returns>
+    public static ChartModel Bubble(IEnumerable<(double x, double y, double radius)> values, string label = null) => new(DataSet.Bubble(values, label));
+
+    /// <summary>
+    /// Creates a new instance of <see cref="ChartModel"/> from separate collections.
+    /// </summary>
+    /// <param name="x">The x values.</param>
+    /// <param name="y">The y values.</param>
+    /// <param name="radius">The radius values.</param>
+    /// <param name="label"></param>
+    /// <returns>A new instance of <see cref="ChartModel"/>.</returns>
+    public static ChartModel Bubble(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string label = null) => new(DataSet.Bubble(x, y, radius, label));
+
 
     /// <summary>
     /// Creates a time line chart model.

@@ -39,7 +39,7 @@ public class ChartingSamples
     public async Task BarChart()
     {
         var actual = Chart
-            .Bar(data1, data2)
+            .Create(DataSet.Bar(data1, "First"), DataSet.Bar(data2, "Second"))
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Bar Chart");
@@ -51,7 +51,7 @@ public class ChartingSamples
     public async Task LineChart()
     {
         var actual = Chart
-            .Line(data1, data2)
+            .Create(DataSet.Line(data1, "First"), DataSet.Line(data2, "Second"))
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart");
@@ -62,10 +62,8 @@ public class ChartingSamples
     [Fact]
     public async Task MixedChart()
     {
-        var dataSet1 = new LineDataSet(data1).WithLabel("First");
-        var dataSet2 = new BarDataSet(data2).WithLabel("Second");
 
-        var actual = new ChartModel(dataSet1, dataSet2)
+        var actual = Chart.Create(DataSet.Line(data1, "First"), DataSet.Bar(data2, "Second"))
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Line Chart");
@@ -103,7 +101,7 @@ public class ChartingSamples
         double[] radius = { 8.0, 11.0, 20.0, 18.0 };
 
         var actual = Chart
-            .Bubble(x1, y, radius)
+            .Create(DataSet.Bubble(x1, y, radius, "First"), DataSet.Bubble(x2,y,radius, "Second"))
             .WithLegend()
             .WithTitle("Bubble Chart")
             .WithColorPalette(Palettes.Brewer.DarkTwo8);
@@ -151,7 +149,7 @@ public class ChartingSamples
     public async Task Radar()
     {
         var actual = Chart
-            .Radar(data1, data2)
+            .Create(DataSet.Radar(data1, "First"), DataSet.Radar(data2, "Second"))
             .WithLabels(labels)
             .WithLegend()
             .WithTitle("Radar Chart");

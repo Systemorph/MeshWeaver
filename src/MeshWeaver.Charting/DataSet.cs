@@ -107,8 +107,9 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// Creates a new instance of <see cref="LineDataSet"/>.
     /// </summary>
     /// <param name="data">The data for the dataset.</param>
+    /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <see cref="LineDataSet"/>.</returns>
-    public static LineDataSet Line(IEnumerable data) => new(data.Cast<object>().ToArray());
+    public static LineDataSet Line(IEnumerable data, string label = null) => new(data.Cast<object>().ToArray(), label);
 
     /// <summary>
     /// Creates a new instance of <see cref="PieDataSet"/>.
@@ -146,8 +147,9 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// Creates a new instance of <see cref="BubbleDataSet"/> from tuples.
     /// </summary>
     /// <param name="values">The tuples representing the data points.</param>
+    /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <see cref="BubbleDataSet"/>.</returns>
-    public static BubbleDataSet Bubble(IEnumerable<(double x, double y, double radius)> values) => new(values);
+    public static BubbleDataSet Bubble(IEnumerable<(double x, double y, double radius)> values, string label = null) => new(values, label);
 
     /// <summary>
     /// Creates a new instance of <see cref="BubbleDataSet"/> from separate collections.
