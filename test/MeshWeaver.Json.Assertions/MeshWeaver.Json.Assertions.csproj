@@ -2,7 +2,6 @@
 
 	<ItemGroup>
 	    <PackageReference Include="FluentAssertions.Json" />
-	    <PackageReference Include="JsonDiffPatch.Net" />
 	</ItemGroup>
 
 	<ItemGroup>
