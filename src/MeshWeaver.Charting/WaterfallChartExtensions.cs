@@ -142,16 +142,16 @@ internal static class WaterfallChartExtensions
 
         BarDataSet[] dataSets =
         [
-            new BarDataSet(incrementRanges)
+            new FloatingBarDataSet(incrementRanges)
                 .WithLabel(options.IncrementsLabel)
                 .WithBackgroundColor(ChartColor.FromHexString(styling.IncrementColor))
                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.IncrementColor)),
-            new BarDataSet(decrementRanges)
+            new FloatingBarDataSet(decrementRanges)
                 .WithLabel(options.DecrementsLabel)
                 //.WithBarThickness("flex")
                 .WithBackgroundColor(ChartColor.FromHexString(styling.DecrementColor))
                 .WithHoverBackgroundColor(ChartColor.FromHexString(styling.DecrementColor)),
-            new BarDataSet(totalRanges)
+            new FloatingBarDataSet(totalRanges)
                 .WithLabel(options.TotalLabel)
                 //.WithBarThickness("flex")
                 .WithBackgroundColor(ChartColor.FromHexString(styling.TotalColor))

@@ -8,8 +8,7 @@
           11
         ],
         "label": "Italy",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       },
       {
         "xAxisID": "x1",
@@ -18,13 +17,12 @@
           null
         ],
         "label": "Russia",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       }
     ],
     "labels": [
-      "1",
-      "2"
+      "Italy",
+      "Russia"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
@@ -52,11 +50,11 @@
       },
       "colorschemes": {
         "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }
