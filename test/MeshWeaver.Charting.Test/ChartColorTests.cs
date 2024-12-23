@@ -1,6 +1,6 @@
 ﻿using System.Globalization;
 using FluentAssertions;
-using MeshWeaver.Charting.Helpers;
+using MeshWeaver.Charting.Models;
 
 namespace MeshWeaver.Charting.Test;
 

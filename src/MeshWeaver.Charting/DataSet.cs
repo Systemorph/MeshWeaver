@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using System.Text.Json.Serialization;
 using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Helpers;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Bubble;

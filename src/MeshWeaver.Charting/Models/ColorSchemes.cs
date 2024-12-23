@@ -2,7 +2,16 @@
 using Newtonsoft.Json.Linq;
 using MeshWeaver.Charting.Enums;
 
-namespace MeshWeaver.Charting.Models.Options;
+/* Unmerged change from project 'MeshWeaver.Charting (net9.0)'
+Added:
+using MeshWeaver;
+using MeshWeaver.Charting;
+using MeshWeaver.Charting.Models;
+using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Charting.Models;
+*/
+
+namespace MeshWeaver.Charting.Models;
 
 public record ColorSchemes
 {

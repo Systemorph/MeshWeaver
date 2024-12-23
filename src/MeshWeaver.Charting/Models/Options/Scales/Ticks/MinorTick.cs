@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Helpers;
-
-namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
+﻿namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     public record MinorTick
     {
