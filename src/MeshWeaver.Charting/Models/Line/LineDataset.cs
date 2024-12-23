@@ -232,9 +232,9 @@ namespace MeshWeaver.Charting.Models.Line
     }
 
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public record LineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<LineDataSet>(Data)
+    public record LineDataSet(IReadOnlyCollection<object> Data, string Label = null) : LineDataSetBase<LineDataSet>(Data, Label)
     {
-        public LineDataSet(IEnumerable Data) : this(Data.Cast<object>().ToArray()) { }
+        public LineDataSet(IEnumerable Data, string Label = null) : this(Data.Cast<object>().ToArray(), Label) { }
 
         internal override ChartType ChartType => ChartType.Line;
     }

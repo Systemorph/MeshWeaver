@@ -1,4 +1,5 @@
 {
+  "type": 5,
   "data": {
     "datasets": [
       {
@@ -8,8 +9,7 @@
           3,
           2
         ],
-        "label": "First",
-        "type": 5
+        "label": "First"
       },
       {
         "data": [

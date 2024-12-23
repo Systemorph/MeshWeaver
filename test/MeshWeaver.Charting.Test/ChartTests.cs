@@ -485,7 +485,7 @@ public class ChartTests
             exes[i] = i - 5 * Math.Floor((double)i / 5);
         }
 
-        var dataSet = (LineScatterDataSet)new LineScatterDataSet(exes, whys)
+        var dataSet = (ScatterDataSet)new ScatterDataSet(exes, whys)
             .WithLabel("pp");
 
         var plot = Chart
