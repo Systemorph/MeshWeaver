@@ -236,11 +236,11 @@ namespace MeshWeaver.Charting.Models.Line
     {
         public LineDataSet(IEnumerable Data) : this(Data.Cast<object>().ToArray()) { }
 
-        internal override ChartType Type => ChartType.Line;
+        internal override ChartType ChartType => ChartType.Line;
     }
 
     public record TimeLineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<TimeLineDataSet>(Data)
     {
-        internal override ChartType Type => ChartType.Line;
+        internal override ChartType ChartType => ChartType.Line;
     }
 }

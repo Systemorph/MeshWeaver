@@ -201,7 +201,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string Label = null) 
     public BarDataSet WithBarThickness(object value)
         => this with { BarThickness = value };
 
-    internal override ChartType Type => ChartType.Bar;
+    internal override ChartType ChartType => ChartType.Bar;
 }
 
 

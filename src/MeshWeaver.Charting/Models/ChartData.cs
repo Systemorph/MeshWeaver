@@ -14,25 +14,30 @@ public record ChartData
 
     public IEnumerable<string> YLabels { get; init; }
 
-    public ChartData WithLabels(IReadOnlyCollection<string> labels) => this with { Labels = labels };
+    public ChartData WithLabels(params IEnumerable<string> labels) => 
+        (this with { Labels = labels.ToArray(), AutoLabels = false })
+        .WithAutoUpdatedLabels();
 
-    public ChartData WithLabels(params string[] labels) => this with { Labels = labels };
 
-    public ChartData WithDataSets(IEnumerable<DataSet> dataSets)
+    public ChartData WithDataSets(params IEnumerable<DataSet> dataSets)
     {
-        return (this with { DataSets = DataSets.AddRange(dataSets) }).WithAutoUpdatedLabels();
+        return (this with { DataSets = DataSets.AddRange(dataSets.Select(AdjustForChartType)) })
+            .WithAutoUpdatedLabels();
     }
 
 
-    public ChartData WithDataSets(params DataSet[] dataSets) => WithDataSets(dataSets.AsEnumerable());
+    private DataSet AdjustForChartType(DataSet ds)
+    {
+        var chartType = DataSets.FirstOrDefault()?.ChartType;
+        if (chartType is null)
+            return ds;
+        return ds.Type is null && ds.Type !=  chartType ? ds with { Type = ds.ChartType } : ds;
+    }
 
-
-
-
-    private bool AutoLabels => DataSets.Count > 1;
+    private bool AutoLabels { get; init; } = true;
     protected IReadOnlyCollection<string> GetUpdatedLabels()
     {
-        if (AutoLabels && DataSets.Count > 0)
+        if (AutoLabels && DataSets.Count > 1)
         {
             var maxLen = DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
 

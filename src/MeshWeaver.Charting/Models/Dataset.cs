@@ -57,7 +57,8 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// </summary>
     public bool? Hidden { get; init; }
 
-    internal abstract ChartType Type { get; }
+    internal abstract ChartType ChartType { get; }
+    public ChartType? Type { get; init;  }
 
     internal virtual bool HasLabel() => Label != null;
 
@@ -108,7 +109,6 @@ public abstract record DataSet<TDataSet>(IReadOnlyCollection<object> Data, strin
     /// <returns>A new instance of <typeparamref name="TDataSet"/> with the specified border widths.</returns>
     public TDataSet WithBorderWidth(IEnumerable<int> widths) =>
         This with { BorderWidth = widths };
-
 
     /// <summary>
     /// Sets the background color for the dataset.
