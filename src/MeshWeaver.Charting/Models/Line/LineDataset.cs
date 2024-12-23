@@ -7,7 +7,7 @@ namespace MeshWeaver.Charting.Models.Line
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
     public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label = null) : 
-        DataSet<TDataSet>(Data, Label), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
+        DataSetBase<TDataSet>(Data, Label), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
      where TDataSet : LineDataSetBase<TDataSet>
     {
         #region General
