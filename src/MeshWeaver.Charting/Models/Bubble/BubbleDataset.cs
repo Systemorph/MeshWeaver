@@ -107,6 +107,6 @@ namespace MeshWeaver.Charting.Models.Bubble
         public BubbleDataSet WithPointStyle(Shapes? pointStyle) =>
             this with { PointStyle = pointStyle };
 
-        internal override ChartType Type => ChartType.Bubble;
+        internal override ChartType ChartType => ChartType.Bubble;
     }
 }

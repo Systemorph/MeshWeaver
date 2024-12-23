@@ -148,5 +148,5 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = n
 
     #endregion Interactions
 
-    internal override ChartType Type => ChartType.Doughnut;
+    internal override ChartType ChartType => ChartType.Doughnut;
 }

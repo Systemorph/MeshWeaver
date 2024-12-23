@@ -4,7 +4,7 @@ namespace MeshWeaver.Charting.Models.Line
 {
     public record LineScatterDataSet(IReadOnlyCollection<object> Data) : LineDataSet(Data)
     {
-        internal override ChartType Type => ChartType.Scatter;
+        internal override ChartType ChartType => ChartType.Scatter;
         public LineScatterDataSet(IEnumerable<double> x, IEnumerable<int> y) : this(x, y.Select(v => (double)v)){}
         public LineScatterDataSet(IEnumerable<int> x, IEnumerable<double> y) : this(x.Select(v => (double)v), y){}
         public LineScatterDataSet(IEnumerable<int> x, IEnumerable<int> y) : this(x.Select(v => (double)v), y.Select(v => (double)v)){}

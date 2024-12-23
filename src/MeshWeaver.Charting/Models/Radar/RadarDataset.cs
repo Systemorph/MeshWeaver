@@ -202,5 +202,5 @@ public record RadarDataSet(IReadOnlyCollection<object> Data, string Label = null
     public RadarDataSet WithPointRadiusAndRotation(int? pointRadius, int? pointRotation) =>
         this with { PointRadius = pointRadius, PointRotation = pointRotation };
 
-    internal override ChartType Type => ChartType.Radar;
+    internal override ChartType ChartType => ChartType.Radar;
 }

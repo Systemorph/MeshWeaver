@@ -66,7 +66,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         public int? HoverOffset { get; init; }
         #endregion Interactions
 
-        internal override ChartType Type => ChartType.Pie;
+        internal override ChartType ChartType => ChartType.Pie;
         internal override bool HasLabel() => false;
     }
 }

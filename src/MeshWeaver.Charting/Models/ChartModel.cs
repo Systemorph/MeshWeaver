@@ -11,7 +11,7 @@ public record ChartModel
         Data = Data.WithDataSets(dataSets);
         Options = GetAutoLegendOptions();
     }
-    public ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
+    public ChartType Type => Data.DataSets.FirstOrDefault()?.ChartType ?? default;
 
     /// <summary>
     /// Chart data
@@ -23,36 +23,18 @@ public record ChartModel
     /// </summary>
     public ChartOptions Options { get; init; } = new();
 
-    protected bool AutoLabels { get; init; } = true;
 
     public ChartModel WithDataSet<TDataSet2>(TDataSet2 dataSet) where TDataSet2 : DataSet
         => (this with { Data = Data.WithDataSets(dataSet), })
-            .WithAutoUpdatedLabels()
             .WithAutoLegend();
 
-    public virtual ChartModel WithLabels(params string[] labels) =>
-        WithLabels(labels.AsReadOnly())
-            .WithAutoUpdatedLabels()
+    public virtual ChartModel WithLabels(params IEnumerable<string> labels) =>
+        (this with {Data = Data.WithLabels(labels)})
             .WithAutoLegend();
 
-    public virtual ChartModel WithLabels(IReadOnlyCollection<string> labels) =>
-        this with { AutoLabels = false, Data = Data.WithLabels(labels), };
 
 
-    public ChartModel WithAutoLabels(bool autoLabels = true) => this with { AutoLabels = autoLabels, };
 
-    protected IReadOnlyCollection<string> GetUpdatedLabels()
-    {
-        if (AutoLabels && Data.DataSets.Count > 0)
-        {
-            var maxLen = Data.DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
-
-            return Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray();
-        }
-        return Data.Labels;
-    }
-
-    internal ChartModel WithAutoUpdatedLabels() => this with { Data = Data with { Labels = GetUpdatedLabels(), } };
 
     private ChartOptions GetAutoLegendOptions()
     {
