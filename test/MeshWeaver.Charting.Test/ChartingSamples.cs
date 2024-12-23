@@ -163,7 +163,12 @@ public class ChartingSamples
     public async Task Scatter()
     {
         var actual = Chart
-            .Scatter(x1, y)
+            .Create(
+                DataSet.Scatter(x1, y)
+                    .WithLabel("First"),
+                DataSet.Scatter(x2, y)
+                    .WithLabel("Second")
+            )
             .WithLegend()
             .WithTitle("Scatter Chart")
             .WithColorPalette(Palettes.Brewer.DarkTwo8);

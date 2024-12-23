@@ -34,14 +34,16 @@ public record ChartData
         return ds.Type is null && ds.Type !=  chartType ? ds with { Type = ds.ChartType } : ds;
     }
 
-    private bool AutoLabels { get; init; } = true;
+    private bool? AutoLabels { get; init; } 
+
+    
     protected IReadOnlyCollection<string> GetUpdatedLabels()
     {
-        if (AutoLabels && DataSets.Count > 1)
+        if (AutoLabels == true || (AutoLabels is null && DataSets.Count > 1))
         {
             var maxLen = DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
 
-            return Enumerable.Range(1, maxLen).Select(i => i.ToString()).ToArray();
+            return DataSets.Take(maxLen).Select((x,i) => x.Label ?? (i+1).ToString()).ToArray();
         }
         return Labels;
     }

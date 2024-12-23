@@ -14,8 +14,8 @@ namespace MeshWeaver.Charting.Models.Bubble
         }
 
 
-        public BubbleDataSet(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius)
-            : this(TransformBubbles(x.Select(a => (double)a).ToArray(), y.ToArray(), radius.ToArray())){}
+        public BubbleDataSet(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string Label = null)
+            : this(TransformBubbles(x.Select(a => (double)a).ToArray(), y.ToArray(), radius.ToArray()), Label){}
 
         public BubbleDataSet(IReadOnlyCollection<double> x, IReadOnlyCollection<double> y, IReadOnlyCollection<double> radius)
         : this(TransformBubbles(x, y, radius))

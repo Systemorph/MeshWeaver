@@ -145,7 +145,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                 ),
 
                 ChartType.Scatter => AddDataSet(ChartType.Scatter,
-                    new LineScatterDataSet(
+                    new ScatterDataSet(
                             values.Select((value, i) => (
                                     i + -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1, value ?? 0))
                                 .Cast<object>().ToArray()
