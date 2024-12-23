@@ -129,23 +129,20 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
             var values = pivotChartModel.ColumnDescriptors.Select(c =>
                 row.DataByColumns.FirstOrDefault(x => x.ColSystemName == c.Id).Value);
 
-            var dataSet = row.DataSetType switch
+            Chart = row.DataSetType switch
             {
                 ChartType.Bar when row.Stack != null =>
-                    AddDataSet(ChartType.Bar,
-                        new BarDataSet(values.Cast<object>().ToArray())
+                    AddDataSet(new BarDataSet(values.Cast<object>().ToArray())
                             .WithXAxis(PivotChartConst.XBarAxis)
                             .WithLabel(row.Descriptor.DisplayName)
                             .WithStack(row.Stack)),
 
-                ChartType.Bar => AddDataSet(ChartType.Bar,
-                    new BarDataSet(values.Cast<object>().ToArray())
+                ChartType.Bar => AddDataSet(new BarDataSet(values.Cast<object>().ToArray())
                         .WithXAxis(PivotChartConst.XBarAxis)
                         .WithLabel(row.Descriptor.DisplayName)
                 ),
 
-                ChartType.Scatter => AddDataSet(ChartType.Scatter,
-                    new ScatterDataSet(
+                ChartType.Scatter => AddDataSet(new ScatterDataSet(
                             values.Select((value, i) => (
                                     i + -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1, value ?? 0))
                                 .Cast<object>().ToArray()
@@ -154,8 +151,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
                         .WithLabel(row.Descriptor.DisplayName + ", total")
                         .WithPointStyle(Shapes.Rectangle)
                         .WithPointRadius(4)),
-                ChartType.Line => AddDataSet(ChartType.Line,
-                    new BarDataSet(values.Cast<object>().ToArray())
+                ChartType.Line => AddDataSet(new BarDataSet(values.Cast<object>().ToArray())
                         .WithXAxis(PivotChartConst.XBarAxis)
                         .WithLabel(row.Descriptor.DisplayName)),
                 _ => throw new NotImplementedException(
@@ -166,7 +162,7 @@ public record PivotBarChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         }
     }
 
-    private ChartModel AddDataSet(ChartType type, DataSet dataSet) => Chart?.WithDataSet(dataSet) ?? new(dataSet);
+    private ChartModel AddDataSet(DataSet dataSet) => Chart?.WithDataSet(dataSet) ?? new(dataSet);
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
     {

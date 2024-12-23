@@ -2,7 +2,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Helpers;
 
 namespace MeshWeaver.Charting.Models.Line
 {

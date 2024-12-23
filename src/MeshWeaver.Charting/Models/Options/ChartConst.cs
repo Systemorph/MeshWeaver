@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Charting.Helpers;
+﻿namespace MeshWeaver.Charting.Models.Options;
 
 internal static class ChartConst
 {

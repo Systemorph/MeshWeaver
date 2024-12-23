@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Helpers;
-
-namespace MeshWeaver.Charting.Models.Options
+﻿namespace MeshWeaver.Charting.Models.Options
 {
     public record LegendLabel
     {

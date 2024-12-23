@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Charting.Helpers;
-using MeshWeaver.Charting.Models.Options;
+﻿using MeshWeaver.Charting.Models.Options;
 
 namespace MeshWeaver.Charting.Models;
 

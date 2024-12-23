@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Charting.Models.Options;
 
-namespace MeshWeaver.Charting.Helpers;
+namespace MeshWeaver.Charting.Models;
 
 public static class ChartFonts
 {

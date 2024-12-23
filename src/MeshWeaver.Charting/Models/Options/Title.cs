@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Helpers;
 
 namespace MeshWeaver.Charting.Models.Options
 {

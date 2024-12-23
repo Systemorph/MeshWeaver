@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Charting.Helpers;
-
-namespace MeshWeaver.Charting.Models.Options.Tooltips
+﻿namespace MeshWeaver.Charting.Models.Options.Tooltips
 {
     /// <summary>
     /// Tooltip configuration.
