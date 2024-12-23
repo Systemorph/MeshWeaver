@@ -87,6 +87,17 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <see cref="BarDataSet"/>.</returns>
     public static FloatingBarDataSet FloatingBar(IEnumerable data, string label = null) => new(data.Cast<object>().ToArray(), label);
+
+
+    /// <summary>
+    /// Creates a floating bar chart model.
+    /// </summary>
+    /// <param name="dataFrom">The starting values of the data range.</param>
+    /// <param name="dataTo">The ending values of the data range.</param>
+    /// <param name="label">The label for the dataset.</param>
+    /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
+    public static FloatingBarDataSet FloatingBar(IEnumerable dataFrom, IEnumerable dataTo, string label = null)
+        => new(dataFrom, dataTo, label);
     /// <summary>
     /// Creates a new instance of <see cref="HorizontalFloatingBarDataSet"/>.
     /// </summary>
@@ -235,6 +246,19 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="data">The data for the dataset.</param>
     /// <returns>A new instance of <see cref="TimeLineDataSet"/>.</returns>
     public static TimeLineDataSet TimeLine(IEnumerable data) => new(data.Cast<object>().ToArray());
+    
+    
+    /// <summary>
+    /// Checks if the data is null or empty after converting to an array.
+    /// </summary>
+    /// <param name="data">The data to check.</param>
+    /// <returns>The data as an array if it is not null or empty; otherwise, null.</returns>
+    private static IReadOnlyCollection<object> ToArrayIfNotEmpty(IEnumerable data)
+    {
+        var dataArray = data?.Cast<object>().ToArray();
+        return dataArray != null && dataArray.Any() ? dataArray : null;
+    }
+
 
     #endregion    #endregion
 }

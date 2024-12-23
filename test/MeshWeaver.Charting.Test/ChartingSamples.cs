@@ -88,7 +88,7 @@ public class ChartingSamples
     public async Task FloatingBarChart()
     {
         var actual = Chart
-            .FloatingBar(data1, data2)
+            .FloatingBar(data1, data2, "First")
             .WithLabels(labels)
             .WithTitle("FloatingBar Chart");
 

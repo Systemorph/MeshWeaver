@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Globalization;
+using System.Reflection.Metadata.Ecma335;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Options.Scales;
@@ -9,99 +10,76 @@ namespace MeshWeaver.Charting;
 
 public static class Chart
 {
-
     /// <summary>
     /// Creates a bar chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bar chart.</returns>
-    public static ChartModel Bar(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Bar(dataArray));
-    }
+    public static ChartModel Bar(IEnumerable data, string label = null) => new(DataSet.Bar(data, label));
 
     /// <summary>
     /// Creates a doughnut chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a doughnut chart.</returns>
-    public static ChartModel Doughnut(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Doughnut(dataArray));
-    }
+    public static ChartModel Doughnut(IEnumerable data, string label = null)
+        => new(DataSet.Doughnut(data, label));
 
     /// <summary>
     /// Creates a line chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a line chart.</returns>
-    public static ChartModel Line(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Line(dataArray));
-    }
-
+    public static ChartModel Line(IEnumerable data, string label = null)
+        => new(DataSet.Line(data, label));
     /// <summary>
     /// Creates a pie chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a pie chart.</returns>
-    public static ChartModel Pie(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Pie(dataArray));
-    }
+    public static ChartModel Pie(IEnumerable data, string label = null)
+        => new(DataSet.Pie(data, label));
 
     /// <summary>
     /// Creates a polar area chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a polar area chart.</returns>
-    public static ChartModel Polar(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Polar(dataArray));
-    }
+    public static ChartModel Polar(IEnumerable data, string label = null)
+        => new(DataSet.Polar(data, label));
 
     /// <summary>
     /// Creates a radar chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a radar chart.</returns>
-    public static ChartModel Radar(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.Radar(dataArray));
-    }
+    public static ChartModel Radar(IEnumerable data, string label = null)
+        => new(DataSet.Radar(data, label));
 
     /// <summary>
     /// Creates a floating bar chart model.
     /// </summary>
     /// <param name="dataFrom">The starting values of the data range.</param>
     /// <param name="dataTo">The ending values of the data range.</param>
+    /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
-    public static ChartModel FloatingBar(IEnumerable dataFrom, IEnumerable dataTo)
-    {
-        var dataFromArray = ToArrayIfNotEmpty(dataFrom);
-        var dataToArray = ToArrayIfNotEmpty(dataTo);
-        if (dataFromArray == null || dataToArray == null) return null;
-
-        var rangeData = dataFromArray.Zip(dataToArray, (from, to) => new[] { from, to });
-        return Create(DataSet.FloatingBar(rangeData.Cast<object>().ToArray()));
-    }
+    public static ChartModel FloatingBar(IEnumerable dataFrom, IEnumerable dataTo, string label = null) =>
+        new(DataSet.FloatingBar(dataFrom, dataTo, label));
 
     /// <summary>
     /// Creates a horizontal floating bar chart model.
     /// </summary>
     /// <param name="data">The data to plot.</param>
+    /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a horizontal floating bar chart.</returns>
-    public static ChartModel HorizontalFloatingBar(IEnumerable data)
-    {
-        var dataArray = ToArrayIfNotEmpty(data);
-        return dataArray == null ? null : Create(DataSet.HorizontalFloatingBar(dataArray));
-    }
+    public static ChartModel HorizontalFloatingBar(IEnumerable data, string label = null)
+        => new(DataSet.HorizontalFloatingBar(data, label));
 
 
     /// <summary>
@@ -237,17 +215,6 @@ public static class Chart
     {
         var pointsArray = ToArrayIfNotEmpty(points);
         return pointsArray == null ? null : Create(DataSet.Scatter(pointsArray.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray()));
-    }
-
-    /// <summary>
-    /// Checks if the data is null or empty after converting to an array.
-    /// </summary>
-    /// <param name="data">The data to check.</param>
-    /// <returns>The data as an array if it is not null or empty; otherwise, null.</returns>
-    private static IReadOnlyCollection<object> ToArrayIfNotEmpty(IEnumerable data)
-    {
-        var dataArray = data?.Cast<object>().ToArray();
-        return dataArray != null && dataArray.Any() ? dataArray : null;
     }
 
 
