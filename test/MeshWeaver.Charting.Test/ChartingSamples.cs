@@ -75,7 +75,7 @@ public class ChartingSamples
     public async Task TimelineChart()
     {
         var actual = Chart
-            .TimeLine(dates, data1)
+            .TimeLine(dates, data1, "First")
             .WithOptions(o =>
                 o.SetTimeUnit(TimeIntervals.Month).ShortenYAxisNumbers().SetTimeFormat("D MMM YYYY")
             )

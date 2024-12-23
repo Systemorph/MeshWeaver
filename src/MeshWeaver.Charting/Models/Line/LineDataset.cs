@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Helpers;
 
@@ -239,8 +240,29 @@ namespace MeshWeaver.Charting.Models.Line
         internal override ChartType ChartType => ChartType.Line;
     }
 
-    public record TimeLineDataSet(IReadOnlyCollection<object> Data) : LineDataSetBase<TimeLineDataSet>(Data)
+    public record TimeLineDataSet(IReadOnlyCollection<object> Data, string Label = null) : LineDataSetBase<TimeLineDataSet>(Data, Label)
     {
+        public TimeLineDataSet(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string label = null) : this(ConvertTimeLine(dates, rawData), label){}
+
+        public TimeLineDataSet(IEnumerable<string> times, IEnumerable<double> rawData, string label) : this(ConvertTimeLine(times.Select(DateTime.Parse), rawData), label)
+        { }
+
+
+        private static IReadOnlyCollection<object> ConvertTimeLine(IEnumerable<DateTime> dates, IEnumerable<double> rawData)
+        {
+            var datesArray = dates?.ToArray();
+            var rawDataArray = rawData?.ToArray();
+            if (datesArray == null || rawDataArray == null) return null;
+
+            if (rawDataArray.Length != datesArray.Length)
+                throw new ArgumentException($"'{nameof(dates)}' and '{nameof(rawData)}' arrays MUST have the same length");
+
+            return datesArray
+                .Select((t, index) => new TimePointData { X = t.ToString("o", CultureInfo.InvariantCulture), Y = rawDataArray[index] })
+                .Cast<object>()
+                .ToArray();
+
+        }
         internal override ChartType ChartType => ChartType.Line;
     }
 }

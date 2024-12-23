@@ -6,11 +6,11 @@ namespace MeshWeaver.Charting.Models.Line
         : LineDataSetBase<ScatterDataSet>(Data, Label)
     {
         internal override ChartType ChartType => ChartType.Scatter;
-        public ScatterDataSet(IEnumerable<double> x, IEnumerable<int> y) : this(x, y.Select(v => (double)v)){}
-        public ScatterDataSet(IEnumerable<int> x, IEnumerable<double> y) : this(x.Select(v => (double)v), y){}
-        public ScatterDataSet(IEnumerable<int> x, IEnumerable<int> y) : this(x.Select(v => (double)v), y.Select(v => (double)v)){}
+        public ScatterDataSet(IEnumerable<double> x, IEnumerable<int> y, string label = null) : this(x, y.Select(v => (double)v), label){}
+        public ScatterDataSet(IEnumerable<int> x, IEnumerable<double> y, string label = null) : this(x.Select(v => (double)v), y, label){}
+        public ScatterDataSet(IEnumerable<int> x, IEnumerable<int> y, string label = null) : this(x.Select(v => (double)v), y.Select(v => (double)v), label){}
 
-        public ScatterDataSet(IEnumerable<double> x, IEnumerable<double> y) : this(ConvertToData(x,y)) { }
+        public ScatterDataSet(IEnumerable<double> x, IEnumerable<double> y, string label = null) : this(ConvertToData(x,y), label) { }
 
         private static IReadOnlyCollection<object> ConvertToData(IEnumerable<double> x, IEnumerable<double> y)
         {
@@ -26,15 +26,11 @@ namespace MeshWeaver.Charting.Models.Line
 
         }
 
-        public ScatterDataSet(IEnumerable<(int x, int y)> points) : this(points.Select(p => ((double)p.x, (double)p.y))){}
-        public ScatterDataSet(IEnumerable<(int x, double y)> points) : this(points.Select(p => ((double)p.x, p.y))){}
-        public ScatterDataSet(IEnumerable<(double x, int y)> points) : this(points.Select(p => (p.x, (double)p.y))){}
+        public ScatterDataSet(IEnumerable<(int x, int y)> points, string label = null) : this(points.Select(p => ((double)p.x, (double)p.y)), label){}
+        public ScatterDataSet(IEnumerable<(int x, double y)> points, string label = null) : this(points.Select(p => ((double)p.x, p.y)), label){}
+        public ScatterDataSet(IEnumerable<(double x, int y)> points, string label = null) : this(points.Select(p => (p.x, (double)p.y)), label){}
 
-        public ScatterDataSet(IEnumerable<(double x, double y)> points) : this(points.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray()) { }
+        public ScatterDataSet(IEnumerable<(double x, double y)> points, string label = null) : this(points.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray(), label) { }
 
-        public void Deconstruct(out IReadOnlyCollection<object> Data)
-        {
-            Data = this.Data;
-        }
     }
 }
