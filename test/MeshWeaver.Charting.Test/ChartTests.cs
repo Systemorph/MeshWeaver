@@ -76,7 +76,7 @@ public class ChartTests
         var dataSet2 = new BarDataSet(data2).WithLabel("Two");
 
         var myChart = Chart
-            .ToChart(new[] { dataSet1, dataSet2 })
+            .Create(new[] { dataSet1, dataSet2 })
             .Stacked()
             .WithLabels(labels)
             .WithTitle("Stacked", o => o.AtPosition(Positions.Top));
@@ -95,7 +95,7 @@ public class ChartTests
         var dataSet2 = new BarDataSet(data2).WithLabel("Two");
 
         var myChart = Chart
-            .ToChart(new[] { dataSet1, dataSet2 })
+            .Create(new[] { dataSet1, dataSet2 })
             .WithOptions(o => o.WithoutAnimation())
             .WithLabels(labels)
             .WithTitle("No animation", o => o.AtPosition(Positions.Top));
@@ -107,7 +107,7 @@ public class ChartTests
     public async Task EmptyBarChart()
     {
         var myChart = Chart
-            .ToChart(Array.Empty<BarDataSet>())
+            .Create(Array.Empty<BarDataSet>())
             .WithTitle("Empty Chart", o => o.AtPosition(Positions.Top));
         await myChart.JsonShouldMatch(Options, "Empty_Bar_Chart.json");
     }
@@ -138,7 +138,7 @@ public class ChartTests
         var dataSet1 = new FloatingBarDataSet(first, "first");
         var dataSet2 = new FloatingBarDataSet(second, "second");
 
-        var chart3 = Chart.ToChart(dataSet1, dataSet2)
+        var chart3 = Chart.Create(dataSet1, dataSet2)
             .Stacked()
             .WithLabels(labels)
             .WithTitle("Floating stacked", o => o.AtPosition(Positions.Top));
@@ -320,7 +320,7 @@ public class ChartTests
         var dataSet2 = new HorizontalFloatingBarDataSet(second, "second");
 
         var chart3 = Chart
-            .ToChart(new[] { dataSet1, dataSet2 })
+            .Create(new[] { dataSet1, dataSet2 })
             .WithLabels(labels)
             .WithTitle("Horizontal floating", o => o.AtPosition(Positions.Top));
 
@@ -353,13 +353,13 @@ public class ChartTests
         var dataSet2 = new BarDataSet(data2).WithLabel("Second");
 
         var myChart = Chart
-            .ToChart(new[] { dataSet1, dataSet2 })
+            .Create(new[] { dataSet1, dataSet2 })
             .WithLabels(labels);
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_AutoLegend.json");
 
         var myChart2 = Chart
-            .ToChart(new[] { dataSet1, dataSet2 })
+            .Create(new[] { dataSet1, dataSet2 })
             .WithLabels(labels)
             .WithTitle("My First Chart", o => o.AtPosition(Positions.Left));
 
@@ -372,15 +372,19 @@ public class ChartTests
         int[] data = { 1, 2, 3, 4 };
         string[] labels = { "One", "Two", "Three", "Four" };
 
-        var myChart = Chart
-            .Bar(data)
+        var myChart = Chart.Create(
+            DataSet.Bar(data)
+                .WithLabel("First")
+            )
             .WithLabels(labels)
             .WithOptions(o => o.WithYAxisMin(-1));
 
         await myChart.JsonShouldMatch(Options, "Bar_Chart_SetMin.json");
 
-        var myChart2 = Chart
-            .Bar(data)
+        var myChart2 = Chart.Create(
+                DataSet.Bar(data)
+                    .WithLabel("First")
+            )
             .WithLabels(labels)
             .WithOptions(o => o.WithYAxisMin(-1).WithYAxisMax(10).ShortenYAxisNumbers());
 
@@ -437,7 +441,7 @@ public class ChartTests
         var data = new BubbleData[] { new(20, 30, 15), new(40, 10, 10) };
 
         var actual = Chart
-            .ToChart(new BubbleDataSet(data, "Bubble Dataset")
+            .Create(new BubbleDataSet(data, "Bubble Dataset")
             .WithBackgroundColor(ChartColor.FromRgb(255, 99, 132))
             .WithHoverBackgroundColor(ChartColor.FromRgb(255, 99, 132)));
 
@@ -485,7 +489,7 @@ public class ChartTests
             .WithLabel("pp");
 
         var plot = Chart
-            .ToChart(dataSet)
+            .Create(dataSet)
             .WithLegend(l =>
                 l with
                 {

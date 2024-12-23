@@ -183,7 +183,7 @@ public class ChartingSamples
     public async Task AreaChart()
     {
         var actual = Chart
-            .ToChart(new LineDataSet(data1).WithArea(), new LineDataSet(data2).WithArea())
+            .Create(new LineDataSet(data1).WithArea(), new LineDataSet(data2).WithArea())
             ;
 
         await actual.JsonShouldMatch(Options, "Sample_AreaChart.json");

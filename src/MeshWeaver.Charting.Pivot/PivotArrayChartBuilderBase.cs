@@ -6,7 +6,7 @@ namespace MeshWeaver.Charting.Pivot;
 public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TDataSet> :
         PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotArrayChartBuilder
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TDataSet : DataSet<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithOrder<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>
+        where TDataSet : DataSetBase<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithOrder<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>
 {
     private readonly Func<IReadOnlyCollection<object>, TDataSet> dataSetFactory;
 
