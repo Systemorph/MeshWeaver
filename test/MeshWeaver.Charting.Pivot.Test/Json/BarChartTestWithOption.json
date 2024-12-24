@@ -20,6 +20,19 @@
         "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       }
     ],
+    "labels": [
+      "1.Italy",
+      "1.Russia",
+      "2.Italy",
+      "2.Russia",
+      "3.Italy",
+      "3.Russia",
+      "4.Italy",
+      "4.Russia",
+      "5.Russia",
+      "6.Russia",
+      "7.Russia"
+    ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
   "options": {

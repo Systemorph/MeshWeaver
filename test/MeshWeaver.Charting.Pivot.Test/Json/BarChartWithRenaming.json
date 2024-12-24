@@ -31,8 +31,13 @@
       }
     ],
     "labels": [
-      "Country1",
-      "Country2"
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F",
+      "G"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
