@@ -59,7 +59,7 @@
       }
     ],
     "labels": [
-      "1"
+      ""
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
@@ -67,9 +67,7 @@
     "responsive": true,
     "scales": {
       "x1": {
-        "labels": [
-          ""
-        ],
+        "labels": [],
         "display": true,
         "stacked": false,
         "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
