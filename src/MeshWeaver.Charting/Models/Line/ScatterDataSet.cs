@@ -20,7 +20,7 @@ namespace MeshWeaver.Charting.Models.Line
                 throw new InvalidOperationException();
 
             return xList
-                .Zip(yList, (a, v) => new PointData { X = a, Y = v })
+                .Zip(yList, (a, v) => new PointData (a, v))
                 .Cast<object>()
                 .ToArray();
 
@@ -30,7 +30,7 @@ namespace MeshWeaver.Charting.Models.Line
         public ScatterDataSet(IEnumerable<(int x, double y)> points, string label = null) : this(points.Select(p => ((double)p.x, p.y)), label){}
         public ScatterDataSet(IEnumerable<(double x, int y)> points, string label = null) : this(points.Select(p => (p.x, (double)p.y)), label){}
 
-        public ScatterDataSet(IEnumerable<(double x, double y)> points, string label = null) : this(points.Select(p => new PointData { X = p.x, Y = p.y }).Cast<object>().ToArray(), label) { }
+        public ScatterDataSet(IEnumerable<(double x, double y)> points, string label = null) : this(points.Select(p => new PointData (p.x, p.y)).Cast<object>().ToArray(), label) { }
 
     }
 }

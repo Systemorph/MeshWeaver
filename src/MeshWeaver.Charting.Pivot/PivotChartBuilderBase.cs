@@ -98,13 +98,15 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
 
     protected virtual void AddDataSets(PivotChartModel pivotChartModel)
     {
+        var countStackPoints = 0;
 
         foreach (var row in pivotChartModel.Rows)
         {
             var dataSet = CreateDataSet(
                 pivotChartModel,
                 row.DataByColumns.Select(x => x.Value).Cast<object>().ToArray(),
-                row
+                row,
+                ref countStackPoints
             ) with{Label = row.Descriptor.DisplayName };
             dataSet = dataSet is not IDataSetWithFill<TDataSet> fill ? dataSet : row.Filled  ? fill.WithArea() : fill.WithoutFill();
             dataSet = dataSet is not IDataSetWithTension<TDataSet> smoothed
@@ -121,12 +123,8 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
     }
 
 
-    protected virtual DataSet CreateDataSet(PivotChartModel pivotChartModel, IReadOnlyCollection<object> values, PivotChartRow row)
+    protected virtual DataSet CreateDataSet(PivotChartModel pivotChartModel, IReadOnlyCollection<object> values, PivotChartRow row, ref int countStackPoints)
     {
-        var countStackPoints = 0;
-        var totalNbStackPoints = pivotChartModel.Rows.Count(row =>
-            row.DataSetType == ChartType.Scatter
-        );
 
         return row.DataSetType switch
         {
@@ -140,18 +138,13 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
                 .WithXAxis(PivotChartConst.XBarAxis)
                 .WithLabel(row.Descriptor.DisplayName),
 
-            ChartType.Scatter => new ScatterDataSet(
-                    values.Select((value, i) => (
-                            i + -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) + 1, value ?? 0))
-                        .Cast<object>().ToArray())
-                .WithXAxis(PivotChartConst.XScatterAxis)
-                .WithLabel(row.Descriptor.DisplayName + ", total")
-                .WithPointStyle(Shapes.Rectangle)
-                .WithPointRadius(4),
-            ChartType.Line => new BarDataSet(values.Cast<object>().ToArray())
+            ChartType.Scatter => 
+                
+            CreateScatterDataSet(pivotChartModel, values, row,  ref countStackPoints),
+            ChartType.Line => new LineDataSet(values)
                 .WithXAxis(PivotChartConst.XBarAxis)
                 .WithLabel(row.Descriptor.DisplayName),
-            ChartType.Radar => new RadarDataSet(values.Cast<object>().ToArray())
+            ChartType.Radar => new RadarDataSet(values)
                 .WithLabel(row.Descriptor.DisplayName),
 
             _ => throw new NotImplementedException(
@@ -159,6 +152,23 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
             )
 
         };
+    }
+
+    private static ScatterDataSet CreateScatterDataSet(PivotChartModel pivotChartModel,
+        IReadOnlyCollection<object> values, PivotChartRow row, ref int countStackPoints)
+    {
+        var totalNbStackPoints = pivotChartModel.Rows.Count(r => r.DataSetType == ChartType.Scatter);
+        var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) +
+                    1; // fix this! plus one was added just to have correct numbers in one example
+        var dataPairs = values
+            .Select((value, i) => new PointData(i + shift, Convert.ToDouble(value ?? 0)))
+            .Cast<object>()
+            .ToList();
+        countStackPoints++;
+        return new ScatterDataSet(dataPairs)
+            .WithXAxis(PivotChartConst.XScatterAxis)
+            .WithPointStyle(Shapes.Rectangle)
+            .WithPointRadius(4);
     }
 
     protected virtual void AddOptions(PivotChartModel pivotChartModel)

@@ -13,8 +13,7 @@
           4
         ],
         "label": "Alessandro",
-        "type": "bar",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       },
       {
         "xAxisID": "x1",
@@ -29,7 +28,7 @@
         ],
         "label": "Paolo",
         "type": "line",
-        "$type": "MeshWeaver.Charting.Models.BarDataSet"
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet"
       }
     ],
     "labels": [
@@ -72,11 +71,11 @@
       },
       "colorschemes": {
         "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.Options.ColorSchemes"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
       },
       "$type": "MeshWeaver.Charting.Models.Options.Plugins"
     },
     "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
   },
-  "$type": "MeshWeaver.Charting.Models.Chart"
+  "$type": "MeshWeaver.Charting.Models.ChartModel"
 }
