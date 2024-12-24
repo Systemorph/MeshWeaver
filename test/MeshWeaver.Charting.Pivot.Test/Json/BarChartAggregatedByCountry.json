@@ -31,8 +31,13 @@
       }
     ],
     "labels": [
-      "Alessandro",
-      "Paolo"
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },

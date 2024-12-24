@@ -39,8 +39,17 @@
       }
     ],
     "labels": [
-      "Alessandro",
-      "Paolo"
+      "Italy.1",
+      "Italy.2",
+      "Italy.3",
+      "Italy.4",
+      "Russia.1",
+      "Russia.2",
+      "Russia.3",
+      "Russia.4",
+      "Russia.5",
+      "Russia.6",
+      "Russia.7"
     ],
     "$type": "MeshWeaver.Charting.Models.ChartData"
   },
