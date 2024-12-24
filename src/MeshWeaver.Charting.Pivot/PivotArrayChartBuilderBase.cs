@@ -4,18 +4,13 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Charting.Pivot;
 
 public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TDataSet> :
-        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotArrayChartBuilder
-        where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-        where TDataSet : DataSetBase<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithOrder<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>
+        PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, TDataSet>, IPivotArrayChartBuilder
+    where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
+    where TDataSet : DataSetBase<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithOrder<TDataSet>,
+    IDataSetWithFill<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>
 {
-    private readonly Func<IReadOnlyCollection<object>, TDataSet> dataSetFactory;
-
-    protected PivotArrayChartBuilderBase(
-        PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IReadOnlyCollection<object>, TDataSet> dataSetFactory)
-        : base(pivotBuilder)
+    protected PivotArrayChartBuilderBase(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder) : base(pivotBuilder)
     {
-        this.dataSetFactory = dataSetFactory;
     }
 
     public virtual IPivotArrayChartBuilder WithSmoothedLines(params string[] linesToSmooth)
@@ -58,25 +53,10 @@ public abstract record PivotArrayChartBuilderBase<T, TTransformed, TIntermediate
         return this;
     }
 
-    protected override void AddDataSets(PivotChartModel pivotChartModel)
-    {
-        foreach (var row in pivotChartModel.Rows)
-        {
-            var dataSet = dataSetFactory.Invoke(
-                    row.DataByColumns.Select(x => x.Value).Cast<object>().ToArray()
-                    ).WithLabel(row.Descriptor.DisplayName);
-            dataSet = row.Filled ? dataSet.WithArea() : dataSet.WithoutFill();
-            dataSet = row.SmoothingCoefficient != null ?
-                dataSet.Smoothed((double)row.SmoothingCoefficient) :
-                dataSet;
-            Chart = Chart.WithDataSet(dataSet);
-        }
-
-
-        Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
-    }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
     {
     }
+
+
 }

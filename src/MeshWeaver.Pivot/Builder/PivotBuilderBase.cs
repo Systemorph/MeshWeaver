@@ -1,7 +1,4 @@
-﻿using System.Reactive.Linq;
-using System.Reflection;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder.Interfaces;
 using MeshWeaver.Pivot.Models;
@@ -63,6 +60,5 @@ public abstract record PivotBuilderBase<
 
     protected abstract PivotProcessorBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         GetReportProcessor();
-
 
 }

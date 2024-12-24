@@ -11,7 +11,7 @@ record PivotLineChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotB
      where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotLineChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
-        : base(pivotBuilder, ds => new LineDataSet(ds))
+        : base(pivotBuilder)
     {
         Chart = new();
     }
