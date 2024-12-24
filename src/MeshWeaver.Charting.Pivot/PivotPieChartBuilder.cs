@@ -6,7 +6,7 @@ using MeshWeaver.Pivot.Models;
 namespace MeshWeaver.Charting.Pivot;
 
 public record PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> :
-    PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>,
+    PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, PieDataSet>,
     IPivotChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
@@ -21,17 +21,7 @@ public record PivotPieChartBuilder<T, TTransformed, TIntermediate, TAggregate, T
         return PivotChartModelBuilder.BuildFromPivotModel(pivotModel, ChartType.Pie);
     }
 
-    protected override void AddDataSets(PivotChartModel pivotChartModel)
-    {
-        foreach (var row in pivotChartModel.Rows)
-        {
-            var dataset = new PieDataSet(row.DataByColumns.Select(x => x.Value))
-                             .WithLabel(row.Descriptor.DisplayName);
-            Chart = Chart.WithDataSet(dataset);
-        }
 
-        Chart = Chart.WithLabels(pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToArray());
-    }
 
     protected override void AddOptions(PivotChartModel pivotChartModel)
     {
