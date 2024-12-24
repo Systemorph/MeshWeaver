@@ -168,7 +168,11 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
 
     protected void AddScales(PivotChartModel pivotChartModel)
     {
-        var labels = pivotChartModel.ColumnDescriptors.Select(x => x.DisplayName).ToList();
+        var labels = pivotChartModel
+            .ColumnDescriptors
+            .Select(x => x.DisplayName)
+            .Where(x => !string.IsNullOrEmpty(x))
+            .ToList();
         var linearScaleMax = labels.Count;
         var dataSetTypes = pivotChartModel.Rows.Select(row => row.DataSetType).ToHashSet();
         var barStacked = pivotChartModel.Rows.Any(row =>
