@@ -12,7 +12,7 @@ public record PivotRadarChartBuilder<T, TTransformed, TIntermediate, TAggregate,
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     public PivotRadarChartBuilder(PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder)
-        : base(pivotBuilder, ds => new RadarDataSet(ds))
+        : base(pivotBuilder)
     {
         Chart = new ChartModel([]);
     }

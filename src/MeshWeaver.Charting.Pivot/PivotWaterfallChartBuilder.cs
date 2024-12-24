@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Waterfall;
@@ -11,7 +10,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 
 public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, FloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
@@ -55,11 +54,10 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
         return PivotChartModelBuilder.BuildFromPivotModel(pivotModel, ChartType.Bar, totalsFilter != null);
     }
 
+    
+
     protected override void AddDataSets(PivotChartModel pivotChartModel)
     {
-        if (pivotChartModel.Rows.Count != 1)
-            throw new InvalidOperationException("There can be only 1 row");
-
         var row = pivotChartModel.Rows.Single();
 
         if (row.DataSetType == ChartType.Bar)
@@ -101,7 +99,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
 
 // TODO V10: extract common base to avoid duplication (2023/10/05, Ekaterina Mishina)
 public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
-    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, IPivotWaterfallChartBuilder
+    : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalFloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
     private Func<PivotElementDescriptor, bool> totalsFilter;
