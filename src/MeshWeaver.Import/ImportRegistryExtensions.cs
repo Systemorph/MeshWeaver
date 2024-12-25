@@ -40,7 +40,7 @@ public static class ImportExtensions
                 (h,d) =>
                     h.ServiceProvider
                         .GetRequiredService<ImportManager>()
-                        .DeliverMessage(d)
+                        .HandleImportRequest(d)
                 );
     }
 
