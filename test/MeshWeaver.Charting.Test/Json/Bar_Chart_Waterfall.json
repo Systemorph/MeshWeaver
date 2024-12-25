@@ -2,12 +2,6 @@
   "data": {
     "datasets": [
       {
-        "backgroundColor": {
-          "red": 102,
-          "green": 183,
-          "blue": 255,
-          "alpha": 1
-        },
         "data": [
           {
             "range": [
@@ -62,6 +56,12 @@
             "dataLabelAlignment": "end"
           }
         ],
+        "backgroundColor": {
+          "red": 102,
+          "green": 183,
+          "blue": 255,
+          "alpha": 1
+        },
         "hoverBackgroundColor": {
           "red": 102,
           "green": 183,
@@ -75,12 +75,6 @@
         }
       },
       {
-        "backgroundColor": {
-          "red": 245,
-          "green": 98,
-          "blue": 149,
-          "alpha": 1
-        },
         "data": [
           {
             "label": "Jan",
@@ -127,6 +121,12 @@
             "dataLabelAlignment": "end"
           }
         ],
+        "backgroundColor": {
+          "red": 245,
+          "green": 98,
+          "blue": 149,
+          "alpha": 1
+        },
         "hoverBackgroundColor": {
           "red": 245,
           "green": 98,
@@ -140,12 +140,6 @@
         }
       },
       {
-        "backgroundColor": {
-          "red": 166,
-          "green": 171,
-          "blue": 194,
-          "alpha": 1
-        },
         "data": [
           {
             "label": "Jan",
@@ -184,6 +178,12 @@
             "dataLabelAlignment": "end"
           }
         ],
+        "backgroundColor": {
+          "red": 166,
+          "green": 171,
+          "blue": 194,
+          "alpha": 1
+        },
         "hoverBackgroundColor": {
           "red": 166,
           "green": 171,
@@ -197,7 +197,6 @@
         }
       },
       {
-        "borderWidth": 1,
         "data": [
           1,
           1,
@@ -206,6 +205,7 @@
           0,
           null
         ],
+        "borderWidth": 1,
         "label": "hidden",
         "datalabels": {
           "display": false
@@ -213,7 +213,6 @@
         "type": 5
       },
       {
-        "borderWidth": 1,
         "data": [
           null,
           5,
@@ -222,6 +221,7 @@
           8,
           8
         ],
+        "borderWidth": 1,
         "label": "hidden",
         "datalabels": {
           "display": false
@@ -229,7 +229,6 @@
         "type": 5
       },
       {
-        "borderWidth": 1,
         "data": [
           null,
           null,
@@ -238,6 +237,7 @@
           null,
           null
         ],
+        "borderWidth": 1,
         "label": "hidden",
         "datalabels": {
           "display": false
