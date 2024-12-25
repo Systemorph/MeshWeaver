@@ -24,19 +24,16 @@ public class ImportManager
         Hub = hub;
         Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
         importHub = hub.GetHostedHub(
-            new ImportAddress(), 
-            config => 
-                config.WithHandler<ImportRequest>((_,r,ct) => 
-                    HandleImportRequestAsync(r,ct)));
+            new ImportAddress());
     }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery message)
+    public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
     {
-        importHub.DeliverMessage(message.ForwardTo(importHub.Address));
-        return message.Forwarded();
+        importHub.InvokeAsync(ct => DoImport(request, ct));
+        return request.Processed();
     }
 
-    private async Task<IMessageDelivery> HandleImportRequestAsync(
+    private async Task<IMessageDelivery> DoImport(
         IMessageDelivery<ImportRequest> request,
         CancellationToken cancellationToken
     )

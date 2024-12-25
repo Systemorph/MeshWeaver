@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Execution;
+using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -26,31 +27,17 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .WithHostedHub(
-                new TestDomain.ImportAddress(),
-                config =>
-                    config
-                        .AddData(data =>
-                            data.FromHub(
-                                configuration.Address,
-                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
+            .AddImport(import =>
+                import
+                    .WithFormat(
+                        RemappingTestFormat,
+                        format =>
+                            format.WithMappings(ti =>
+                                ti.WithTableMapping(nameof(MyRecord), MapMyRecord)
                             )
-                        )
-                        .AddImport(import =>
-                            import
-                            //// TODO V10: There is no way to override behavior for Default format (2024/02/15, Dmitry Kalabin)
-                            //.WithFormat(ImportFormat.Default,
-                            //    format => format.WithAutoMappings(ti => ti.WithTableMapping(nameof(MyRecord), MapMyRecord))
-                            //)
-                            .WithFormat(
-                                RemappingTestFormat,
-                                format =>
-                                    format.WithMappings(ti =>
-                                        ti.WithTableMapping(nameof(MyRecord), MapMyRecord)
-                                    )
-                            )
-                        )
-            );
+                    )
+            )
+;
 
     private Task<EntityStore> MapMyRecord(IDataSet set, IDataTable table, IWorkspace workspace,EntityStore store)
         => Task.FromResult(MapMyRecordInd(set, table, workspace, store));
@@ -110,15 +97,14 @@ public class ImportRemappingTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new HostAddress())
+            , new CancellationTokenSource(3.Seconds()).Token
         );
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
-            .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
+        var ret = await host.GetWorkspace().GetObservable<MyRecord>().FirstAsync(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
         resRecord.Should().NotBeNull();
