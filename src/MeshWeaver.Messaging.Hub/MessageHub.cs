@@ -168,17 +168,39 @@ public sealed class MessageHub
         CancellationToken cancellationToken
     )
     {
-        var tcs = new TaskCompletionSource<TResult>(cancellationToken);
-        var callbackTask = RegisterCallback(
+        var response = RegisterCallback(
             request,
-            d =>
-            {
-                tcs.SetResult(selector((IMessageDelivery<TResponse>)d));
-                return d.Processed();
-            },
+            d => d,
             cancellationToken
         );
-        return callbackTask.ContinueWith(_ => tcs.Task.Result, cancellationToken);
+        var task = response
+            .ContinueWith(t =>
+                    InnerCallback(request, t.Result, selector, cancellationToken),
+                cancellationToken
+            );
+        return task;
+    }
+
+    private TResult InnerCallback<TResponse, TResult>(
+        IMessageDelivery request,
+        IMessageDelivery response,
+        Func<IMessageDelivery<TResponse>, TResult> selector,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+           if (response is IMessageDelivery<TResponse> tResponse)
+                return selector.Invoke(tResponse);
+           throw new DeliveryFailureException($"Response for {request} was of unexpected type: {response}");
+        }
+        catch(DeliveryFailureException ex)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            throw new DeliveryFailureException($"Error while awaiting response for {request}", e);
+        }
     }
 
     public IMessageDelivery RegisterCallback<TMessage, TResponse>(

@@ -6,7 +6,7 @@ public class DeliveryFailureException : Exception
         : base() { }
 
     public DeliveryFailureException(DeliveryFailure failure)
-        : base($"Delivery of message {failure.Delivery.Id} failed : {failure.Delivery.Message}")
+        : base(failure.Message)
     {
         Failure = failure;
     }

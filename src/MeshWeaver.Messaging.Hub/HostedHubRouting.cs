@@ -93,7 +93,14 @@ internal class HostedHubRouting
                     hostedHub.DeliverMessage(delivery.WithTarget(hosted.Address));
                     return delivery.Forwarded();
                 }
-
+                logger.LogDebug("No route found for {Address}. Last tried in {Hub}", hosted.Address, hub.Address);
+                hub.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.NotFound,
+                        Message = $"No route found for host {hosted.Address}. Last tried in {hub.Address}"
+                    }, o => o.ResponseFor(delivery)
+                );
                 return delivery.NotFound();
             }
         }
@@ -108,11 +115,22 @@ internal class HostedHubRouting
         }
 
         if (parentHub == null)
+        {
+            logger.LogDebug("No route found for {Address}. Last tried in {Hub}", delivery.Target, hub.Address);
+            hub.Post(
+                new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.NotFound,
+                    Message = $"No route found for host {delivery.Target}. Last tried in {hub.Address}"
+                }, o => o.ResponseFor(delivery)
+            );
             return delivery.NotFound();
+
+        }
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        parentHub.DeliverMessage(delivery);
+        parentHub.DeliverMessage(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)));
         return delivery.Forwarded();
     }
 }
