@@ -3,12 +3,6 @@
   "data": {
     "datasets": [
       {
-        "backgroundColor": {
-          "red": 255,
-          "green": 99,
-          "blue": 132,
-          "alpha": 1
-        },
         "data": [
           {
             "x": 20,
@@ -21,6 +15,12 @@
             "r": 10
           }
         ],
+        "backgroundColor": {
+          "red": 255,
+          "green": 99,
+          "blue": 132,
+          "alpha": 1
+        },
         "hoverBackgroundColor": {
           "red": 255,
           "green": 99,

@@ -3,7 +3,6 @@
   "data": {
     "datasets": [
       {
-        "borderWidth": 3,
         "data": [
           {
             "x": "2020-01-01T09:00:00.0000000",
@@ -22,6 +21,7 @@
             "y": 2
           }
         ],
+        "borderWidth": 3,
         "label": "First"
       }
     ]
