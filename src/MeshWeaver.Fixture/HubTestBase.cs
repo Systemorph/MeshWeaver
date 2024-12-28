@@ -9,11 +9,20 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress;
+    protected record RouterAddress
+    {
+        public override string ToString() => "router/1";
+    }
 
-    protected record HostAddress;
+    protected record HostAddress
+    {
+        public override string ToString() => "host/1";
+    };
 
-    protected record ClientAddress;
+    protected record ClientAddress
+    {
+        public override string ToString() => "client/1";
+    }
 
     [Inject]
     protected IMessageHub Router;
