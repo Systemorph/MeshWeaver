@@ -20,7 +20,7 @@ namespace MeshWeaver.Charting.Models.Line
                 throw new InvalidOperationException();
 
             return xList
-                .Zip(yList, (a, v) => (a, v))
+                .Zip(yList, (a, v) => new PointData(a, v))
                 .Cast<object>()
                 .ToArray();
 

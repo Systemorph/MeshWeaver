@@ -96,6 +96,6 @@ internal record TimePointData
     public double? Y { get; init; }
 }
 
-public record PointData(double X, double Y);
+public record PointData(double? X, double? Y);
 
-public record BubbleData(double X, double Y, double R);
+public record BubbleData(double? X, double? Y, double? R);

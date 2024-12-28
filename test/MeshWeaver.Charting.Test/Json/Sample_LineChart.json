@@ -1,5 +1,4 @@
 {
-  "type": 5,
   "data": {
     "datasets": [
       {
@@ -9,7 +8,8 @@
           3,
           2
         ],
-        "label": "First"
+        "label": "First",
+        "type": "Line"
       },
       {
         "data": [
@@ -18,7 +18,8 @@
           6,
           3
         ],
-        "label": "Second"
+        "label": "Second",
+        "type": "Line"
       }
     ],
     "labels": [

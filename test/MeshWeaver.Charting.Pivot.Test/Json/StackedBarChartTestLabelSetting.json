@@ -1,8 +1,8 @@
 {
-  "type": "scatter",
   "data": {
     "datasets": [
       {
+        "type": "scatter",
         "xAxisID": "x2",
         "pointRadius": 4,
         "pointStyle": "rect",
@@ -49,6 +49,7 @@
       {
         "stack": "A",
         "xAxisID": "x1",
+        "type": "bar",
         "data": [
           -3.9,
           3.4,
@@ -59,12 +60,12 @@
           null
         ],
         "label": "Alessandro.Italy",
-        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       },
       {
         "stack": "A",
         "xAxisID": "x1",
+        "type": "bar",
         "data": [
           4.1,
           4,
@@ -75,10 +76,10 @@
           4
         ],
         "label": "Alessandro.Russia",
-        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       },
       {
+        "type": "scatter",
         "xAxisID": "x2",
         "pointRadius": 4,
         "pointStyle": "rect",
@@ -105,14 +106,17 @@
           },
           {
             "x": 5.2,
+            "y": 0,
             "$type": "MeshWeaver.Charting.Models.PointData"
           },
           {
             "x": 6.2,
+            "y": 0,
             "$type": "MeshWeaver.Charting.Models.PointData"
           },
           {
             "x": 7.2,
+            "y": 0,
             "$type": "MeshWeaver.Charting.Models.PointData"
           }
         ],
@@ -122,6 +126,7 @@
       {
         "stack": "P",
         "xAxisID": "x1",
+        "type": "bar",
         "data": [
           1.1,
           2.2,
@@ -132,7 +137,6 @@
           null
         ],
         "label": "Paolo.Italy",
-        "type": "bar",
         "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
       }
     ],

@@ -167,8 +167,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
         var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) +
                     1; // fix this! plus one was added just to have correct numbers in one example
         var dataPairs = values
-            .Select((value, i) => (i + shift, Convert.ToDouble(value ?? 0)))
-            .Cast<object>()
+            .Select((value, i) => new PointData(i + shift, Convert.ToDouble(value ?? 0))).Cast<object>()
             .ToList();
         countStackPoints++;
         return new ScatterDataSet(dataPairs)

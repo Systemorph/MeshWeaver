@@ -1,5 +1,4 @@
 {
-  "type": 1,
   "data": {
     "datasets": [
       {
@@ -25,7 +24,8 @@
             "r": 18
           }
         ],
-        "label": "First"
+        "label": "First",
+        "type": "Bubble"
       },
       {
         "data": [
@@ -50,7 +50,8 @@
             "r": 18
           }
         ],
-        "label": "Second"
+        "label": "Second",
+        "type": "Bubble"
       }
     ],
     "labels": [
