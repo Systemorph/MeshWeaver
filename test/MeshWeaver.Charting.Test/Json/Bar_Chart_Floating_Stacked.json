@@ -14,7 +14,8 @@
           null,
           null
         ],
-        "label": "first"
+        "label": "first",
+        "type": "Bar"
       },
       {
         "data": [
@@ -32,7 +33,8 @@
             6
           ]
         ],
-        "label": "second"
+        "label": "second",
+        "type": "Bar"
       }
     ],
     "labels": [
@@ -57,6 +59,7 @@
       },
       "title": {
         "display": true,
+        "position": "Top",
         "font": {
           "family": "Ov\u0435rpass",
           "size": 22,

@@ -1,8 +1,8 @@
 {
-  "type": "line",
   "data": {
     "datasets": [
       {
+        "type": "line",
         "xAxisID": "x1",
         "fill": false,
         "tension": 0.5,
@@ -19,6 +19,7 @@
         "$type": "MeshWeaver.Charting.Models.Line.LineDataSet"
       },
       {
+        "type": "line",
         "xAxisID": "x1",
         "fill": false,
         "tension": 0.4,

@@ -15,7 +15,7 @@ public record ChartModel : IRenderableObject
     {
         Data = Data.WithDataSets(dataSets);
     }
-    public ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
+    internal ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
 
     /// <summary>
     /// Chart data

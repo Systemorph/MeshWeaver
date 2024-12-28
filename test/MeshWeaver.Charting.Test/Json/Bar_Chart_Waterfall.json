@@ -72,7 +72,8 @@
         "parsing": {
           "xAxisKey": "label",
           "yAxisKey": "range"
-        }
+        },
+        "type": "Bar"
       },
       {
         "data": [
@@ -137,7 +138,8 @@
         "parsing": {
           "xAxisKey": "label",
           "yAxisKey": "range"
-        }
+        },
+        "type": "Bar"
       },
       {
         "data": [
@@ -194,7 +196,8 @@
         "parsing": {
           "xAxisKey": "label",
           "yAxisKey": "range"
-        }
+        },
+        "type": "Bar"
       },
       {
         "data": [
@@ -210,7 +213,7 @@
         "datalabels": {
           "display": false
         },
-        "type": 5
+        "type": "Line"
       },
       {
         "data": [
@@ -226,7 +229,7 @@
         "datalabels": {
           "display": false
         },
-        "type": 5
+        "type": "Line"
       },
       {
         "data": [
@@ -242,7 +245,7 @@
         "datalabels": {
           "display": false
         },
-        "type": 5
+        "type": "Line"
       }
     ],
     "labels": [
@@ -275,6 +278,7 @@
       },
       "title": {
         "display": true,
+        "position": "Top",
         "font": {
           "family": "Ov\u0435rpass",
           "size": 22,

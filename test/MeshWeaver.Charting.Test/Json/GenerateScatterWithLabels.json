@@ -1,23 +1,30 @@
 {
-  "type": 7,
   "data": {
     "datasets": [
       {
         "data": [
-          {},
           {
-            "x": 1
+            "x": 0,
+            "y": 0
           },
           {
-            "x": 2
+            "x": 1,
+            "y": 0
           },
           {
-            "x": 3
+            "x": 2,
+            "y": 0
           },
           {
-            "x": 4
+            "x": 3,
+            "y": 0
           },
           {
+            "x": 4,
+            "y": 0
+          },
+          {
+            "x": 0,
             "y": 1
           },
           {
@@ -37,6 +44,7 @@
             "y": 1
           },
           {
+            "x": 0,
             "y": 2
           },
           {
@@ -56,7 +64,8 @@
             "y": 2
           }
         ],
-        "label": "pp"
+        "label": "pp",
+        "type": "Scatter"
       }
     ]
   },
@@ -64,7 +73,7 @@
     "plugins": {
       "legend": {
         "display": true,
-        "position": 1,
+        "position": "Bottom",
         "labels": {
           "boxWidth": 3,
           "boxHeight": 3

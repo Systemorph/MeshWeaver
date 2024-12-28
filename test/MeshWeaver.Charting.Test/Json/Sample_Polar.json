@@ -1,5 +1,4 @@
 {
-  "type": 3,
   "data": {
     "datasets": [
       {
@@ -8,7 +7,8 @@
           4,
           3,
           2
-        ]
+        ],
+        "type": "PolarArea"
       }
     ],
     "labels": [

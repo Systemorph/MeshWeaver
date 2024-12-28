@@ -1,5 +1,4 @@
 {
-  "type": 1,
   "data": {
     "datasets": [
       {
@@ -27,7 +26,8 @@
           "blue": 132,
           "alpha": 1
         },
-        "label": "Bubble Dataset"
+        "label": "Bubble Dataset",
+        "type": "Bubble"
       }
     ]
   },

@@ -6,6 +6,7 @@
     "plugins": {
       "title": {
         "display": true,
+        "position": "Top",
         "font": {
           "family": "Ov\u0435rpass",
           "size": 22,

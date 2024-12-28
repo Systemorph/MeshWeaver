@@ -19,7 +19,8 @@ public class ChartTests
         {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault,
+            Converters = { new JsonStringEnumConverter() }
         };
 
     [Fact]
