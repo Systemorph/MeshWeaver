@@ -5,7 +5,7 @@ namespace MeshWeaver.Charting.Models.Line
     public record ScatterDataSet(IReadOnlyCollection<object> Data, string Label = null)
         : LineDataSetBase<ScatterDataSet>(Data, Label)
     {
-        internal override ChartType ChartType => ChartType.Scatter;
+        public override ChartType? Type => ChartType.Scatter;
         public ScatterDataSet(IEnumerable<double> x, IEnumerable<int> y, string label = null) : this(x, y.Select(v => (double)v), label){}
         public ScatterDataSet(IEnumerable<int> x, IEnumerable<double> y, string label = null) : this(x.Select(v => (double)v), y, label){}
         public ScatterDataSet(IEnumerable<int> x, IEnumerable<int> y, string label = null) : this(x.Select(v => (double)v), y.Select(v => (double)v), label){}
@@ -20,7 +20,7 @@ namespace MeshWeaver.Charting.Models.Line
                 throw new InvalidOperationException();
 
             return xList
-                .Zip(yList, (a, v) => new PointData (a, v))
+                .Zip(yList, (a, v) => (a, v))
                 .Cast<object>()
                 .ToArray();
 

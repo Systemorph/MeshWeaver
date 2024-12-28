@@ -1,4 +1,8 @@
-﻿namespace MeshWeaver.Charting
+﻿using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MeshWeaver.Charting
 {
     public static class ModuleSetup
     {

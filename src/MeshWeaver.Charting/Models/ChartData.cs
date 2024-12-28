@@ -21,18 +21,10 @@ public record ChartData
 
     public ChartData WithDataSets(params IEnumerable<DataSet> dataSets)
     {
-        return (this with { DataSets = DataSets.AddRange(dataSets.Select(AdjustForChartType)) })
+        return (this with { DataSets = DataSets.AddRange(dataSets) })
             .WithAutoUpdatedLabels();
     }
 
-
-    private DataSet AdjustForChartType(DataSet ds)
-    {
-        var chartType = DataSets.FirstOrDefault()?.ChartType;
-        if (chartType is null)
-            return ds;
-        return ds.Type is null && ds.ChartType !=  chartType ? ds with { Type = ds.ChartType } : ds;
-    }
 
     private bool? AutoLabels { get; init; } 
 

@@ -22,13 +22,20 @@ public static class LayoutExtensions
     )
     {
         return config
+            .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
             .AddData(data =>
                 data.Configure(reduction =>
                     reduction
                         .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
                             (workspace, reference, configuration) =>
                                 reference is not LayoutAreaReference layoutArea ? null :
-                                new LayoutAreaHost(workspace, layoutArea, workspace.Hub.GetLayoutDefinition(), configuration)
+                                new LayoutAreaHost(
+                                        workspace, 
+                                        layoutArea, 
+                                        workspace.Hub.GetLayoutDefinition(),
+                                        workspace.Hub.ServiceProvider
+                                            .GetRequiredService<IUiControlService>(),
+                                        configuration)
                                     .RenderLayoutArea()
                         )
                 )
