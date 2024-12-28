@@ -236,7 +236,7 @@ namespace MeshWeaver.Charting.Models.Line
     {
         public LineDataSet(IEnumerable Data, string Label = null) : this(Data.Cast<object>().ToArray(), Label) { }
 
-        internal override ChartType ChartType => ChartType.Line;
+        public override ChartType? Type => ChartType.Line;
     }
 
     public record TimeLineDataSet(IReadOnlyCollection<object> Data, string Label = null) : LineDataSetBase<TimeLineDataSet>(Data, Label)
@@ -262,6 +262,6 @@ namespace MeshWeaver.Charting.Models.Line
                 .ToArray();
 
         }
-        internal override ChartType ChartType => ChartType.Line;
+        public override ChartType? Type => ChartType.Line;
     }
 }

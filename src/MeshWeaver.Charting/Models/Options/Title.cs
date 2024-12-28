@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Options
 {
@@ -28,7 +29,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Position of title.
         /// </summary>
-        public Positions Position { get; init; }
+        public Positions? Position { get; init; }
 
         /// <summary>
         /// Font of the title.

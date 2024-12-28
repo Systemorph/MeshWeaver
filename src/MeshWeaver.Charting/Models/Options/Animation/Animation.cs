@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Options.Animation
 {

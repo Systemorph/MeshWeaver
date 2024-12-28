@@ -102,9 +102,15 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
 
         foreach (var row in pivotChartModel.Rows)
         {
+            var values = pivotChartModel.ColumnDescriptors.Select(c =>
+                    row.DataByColumns
+                        .FirstOrDefault(x => x.ColSystemName == c.Id).Value)
+                .Cast<object>()
+                .ToArray();
+
             var dataSet = CreateDataSet(
                 pivotChartModel,
-                row.DataByColumns.Select(x => x.Value).Cast<object>().ToArray(),
+                values,
                 row,
                 ref countStackPoints
             ) with{Label = row.Descriptor.DisplayName };
@@ -129,7 +135,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
         return row.DataSetType switch
         {
             ChartType.Bar when row.Stack != null =>
-                new BarDataSet(values.Cast<object>().ToArray())
+                new BarDataSet(values)
                     .WithXAxis(PivotChartConst.XBarAxis)
                     .WithLabel(row.Descriptor.DisplayName)
             .WithStack(row.Stack),
@@ -161,7 +167,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
         var shift = -0.4 + (0.4 / totalNbStackPoints) * (2 * countStackPoints + 1) +
                     1; // fix this! plus one was added just to have correct numbers in one example
         var dataPairs = values
-            .Select((value, i) => new PointData(i + shift, Convert.ToDouble(value ?? 0)))
+            .Select((value, i) => (i + shift, Convert.ToDouble(value ?? 0)))
             .Cast<object>()
             .ToList();
         countStackPoints++;

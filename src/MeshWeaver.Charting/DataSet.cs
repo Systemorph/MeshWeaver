@@ -64,9 +64,15 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// </summary>
     public bool? Hidden { get; init; }
 
-    internal abstract ChartType ChartType { get; }
-    public ChartType? Type { get; init; }
+    /// <summary>
+    /// The type of the chart
+    /// </summary>
+    public abstract ChartType? Type { get; }
 
+    /// <summary>
+    /// Whether the dataset is hidden.
+    /// </summary>
+    /// <returns></returns>
     internal virtual bool HasLabel() => Label != null;
 
 

@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Charting;
-using MeshWeaver.Domain;
+using MeshWeaver.Charting.Models;
 using MeshWeaver.Layout.Client;
-using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Blazor.ChartJs;
 
@@ -9,7 +9,12 @@ public static class BlazorChartJsExtensions
 {
     public static LayoutClientConfiguration AddChartJs(this LayoutClientConfiguration config)
     {
-        config.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(typeof(ChartControl));
+        config.Hub.GetTypeRegistry().WithTypes(ChartTypes);
         return config.WithView<ChartControl, ChartView>();
     }
+
+    private static readonly Type[] ChartTypes = [typeof(ChartControl)];
+    //typeof(ChartModel).Assembly.GetTypes()
+    //.Where(t => t.IsAssignableTo(typeof(ChartModel)) || t.IsAssignableTo(typeof(DataSet)) || t.IsAssignableTo(typeof(ChartControl)))
+    //.ToArray();
 }

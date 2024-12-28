@@ -102,6 +102,6 @@ public record BubbleDataSet : DataSetBase<BubbleDataSet>, IDataSetWithOrder<Bubb
     public BubbleDataSet WithPointStyle(Shapes? pointStyle) =>
         this with { PointStyle = pointStyle };
 
-    internal override ChartType ChartType => ChartType.Bubble;
+    public override ChartType? Type => ChartType.Bubble;
 
 }

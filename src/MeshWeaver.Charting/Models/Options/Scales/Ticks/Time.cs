@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
@@ -42,7 +43,7 @@ namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
         /// <summary>
         /// If defined, will force the unit to be a certain type.
         /// </summary>
-        public TimeIntervals Unit { get; init; }
+        public TimeIntervals? Unit { get; init; }
 
         /// <summary>
         /// The number of units between grid lines.
