@@ -25,18 +25,8 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             )
-            .WithHostedHub(
-                new HostAddress(),
-                config =>
-                    config
-                        .AddData(data =>
-                            data.FromHub(
-                                configuration.Address,
-                                source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
-                            )
-                        )
-                        .AddImport()
-            );
+            .AddImport()
+            ;
 
     private const char CustomDelimiter = ';';
 
@@ -66,12 +56,13 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new HostAddress())
+            , new CancellationTokenSource(3.Seconds()).Token
         );
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new HostAddress())
+        var workspace = host
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
             .Timeout(3.Seconds())
