@@ -29,7 +29,7 @@ namespace MeshWeaver.Charting.Pivot
             WithTotals = withTotals;
             MapPivotToChartModel(defaultChartType);
             PivotChartModel PostProcessor(PivotChartModel model) =>
-                postProcessors.Aggregate(model, (current, next) => next(current));
+                 postProcessors.Aggregate(model, (current, next) => next(current));
             PivotChartModel = PostProcessor(PivotChartModel);
             return PivotChartModel;
         }

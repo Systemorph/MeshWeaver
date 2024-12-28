@@ -4,7 +4,7 @@ namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
 {
     public record TimeDisplayFormat
     {
-        public TimeDisplayFormat(TimeIntervals timeUnit, string timeFormat)
+        public TimeDisplayFormat(TimeIntervals? timeUnit, string timeFormat)
         {
             switch (timeUnit)
             {
@@ -36,7 +36,8 @@ namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
                     Year = timeFormat;
                     break;
                 default:
-                    throw new ArgumentOutOfRangeException(nameof(timeUnit), timeUnit, null);
+                    Millisecond = timeFormat;
+                    break;
             }
         }
 

@@ -1,16 +1,21 @@
 ﻿using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Charting.Models;
 
-public record ChartModel
+public record ChartModel : IRenderableObject
 {
-    public ChartModel(params IEnumerable<DataSet> dataSets)
+    public ChartModel()
     {
-        Data = Data.WithDataSets(dataSets);
         Options = GetAutoLegendOptions();
     }
-    public ChartType Type => Data.DataSets.FirstOrDefault()?.ChartType ?? default;
+    public ChartModel(params IEnumerable<DataSet> dataSets) : this()
+    {
+        Data = Data.WithDataSets(dataSets);
+    }
+    public ChartType Type => Data.DataSets.FirstOrDefault()?.Type ?? default;
 
     /// <summary>
     /// Chart data
@@ -83,4 +88,7 @@ public record ChartModel
 
     public ChartModel WithDataSets(IEnumerable<DataSet> dataSets)
         => this with { Data = Data.WithDataSets(dataSets) };
+
+    public UiControl ToControl()
+        => new ChartControl(this);
 }

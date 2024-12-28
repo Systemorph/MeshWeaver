@@ -26,7 +26,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
                 )
             )
             .WithHostedHub(
-                new TestDomain.ImportAddress(),
+                new HostAddress(),
                 config =>
                     config
                         .AddData(data =>
@@ -65,13 +65,13 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         // act
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new HostAddress())
         );
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var host = GetHost();
-        var workspace = host.GetHostedHub(new TestDomain.ImportAddress())
+        var workspace = host.GetHostedHub(new HostAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
             .Timeout(3.Seconds())

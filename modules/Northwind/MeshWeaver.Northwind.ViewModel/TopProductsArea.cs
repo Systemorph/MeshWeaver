@@ -39,12 +39,12 @@ namespace MeshWeaver.Northwind.ViewModel
                         .SliceColumnsBy(nameof(Product))
                         .ToBarChart(builder => builder
                             .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                            .WithChartBuilder(o =>
-                                o
-                                    .AsHorizontal()
-                                    .WithDataLabels()
-                            )
                         )
+                        .Select(c => c
+                            .AsHorizontal()
+                            .WithDataLabels()
+                        )
+
                 );
     }
 }

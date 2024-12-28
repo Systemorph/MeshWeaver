@@ -136,7 +136,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var dashboard = (await stream
                 .GetControlStream(viewName)
                 .Timeout(3.Seconds())
-                .FirstAsync()
+                .FirstAsync(x => x != null)
             )
             .Should()
             .BeOfType<LayoutGridControl>()
@@ -174,7 +174,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var control = await stream.GetControlStream(controlName)
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
 
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
@@ -226,7 +226,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var control = await stream
             .GetControlStream(controlName)
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()

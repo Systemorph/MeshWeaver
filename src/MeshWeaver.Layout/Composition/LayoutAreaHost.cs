@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using Microsoft.DotNet.Interactive.Formatting;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -13,6 +12,7 @@ namespace MeshWeaver.Layout.Composition;
 
 public record LayoutAreaHost : IDisposable
 {
+    private readonly IUiControlService uiControlService;
     public LayoutAreaReference Reference { get; }
     public ISynchronizationStream<EntityStore> Stream { get; }
     public IMessageHub Hub => Workspace.Hub;
@@ -37,8 +37,10 @@ public record LayoutAreaHost : IDisposable
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
         LayoutDefinition layoutDefinition,
+        IUiControlService uiControlService,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration)
     {
+        this.uiControlService = uiControlService;
         Workspace = workspace;
         LayoutDefinition = layoutDefinition;
         Stream = new SynchronizationStream<EntityStore>(
@@ -81,14 +83,8 @@ public record LayoutAreaHost : IDisposable
 
 
 
-    private static UiControl ConvertToControl(object instance)
-    {
-        if (instance is UiControl control)
-            return control;
-
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
-        return Controls.Html(instance.ToDisplayString(mimeType));
-    }
+    private UiControl ConvertToControl(object instance)
+        => uiControlService.Convert(instance);
 
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, object view, EntityStore store)
