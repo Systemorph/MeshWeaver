@@ -7,7 +7,8 @@
           2,
           3,
           4
-        ]
+        ],
+        "type": "Bar"
       }
     ],
     "labels": [
@@ -21,7 +22,7 @@
     "plugins": {
       "title": {
         "display": true,
-        "position": 2,
+        "position": "Left",
         "font": {
           "family": "Ov\u0435rpass",
           "size": 22,

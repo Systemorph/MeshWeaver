@@ -3,6 +3,7 @@
     "datasets": [
       {
         "barThickness": 20,
+        "type": "bar",
         "data": [
           {
             "range": [
@@ -69,6 +70,7 @@
       },
       {
         "barThickness": 20,
+        "type": "bar",
         "data": [
           {
             "label": "Italy.Alessandro",
@@ -123,6 +125,7 @@
       },
       {
         "barThickness": 20,
+        "type": "bar",
         "data": [
           {
             "label": "Italy.Alessandro",

@@ -1,5 +1,4 @@
 {
-  "type": 4,
   "data": {
     "datasets": [
       {
@@ -8,7 +7,8 @@
           2,
           3,
           4
-        ]
+        ],
+        "type": "Pie"
       }
     ],
     "labels": [

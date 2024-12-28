@@ -1,5 +1,4 @@
 {
-  "type": 5,
   "data": {
     "datasets": [
       {
@@ -20,7 +19,8 @@
             "x": "2019-11-10T00:00:00.0000000",
             "y": 4
           }
-        ]
+        ],
+        "type": "Line"
       }
     ]
   },
@@ -33,7 +33,7 @@
     "plugins": {
       "title": {
         "display": true,
-        "position": 1,
+        "position": "Bottom",
         "font": {
           "family": "Ov\u0435rpass",
           "size": 20,

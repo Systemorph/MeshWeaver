@@ -3,6 +3,7 @@
     "datasets": [
       {
         "xAxisID": "x1",
+        "type": "bar",
         "data": [
           -3.9,
           3.4,
@@ -21,6 +22,7 @@
       },
       {
         "xAxisID": "x1",
+        "type": "bar",
         "data": [
           1.1,
           2.2,
