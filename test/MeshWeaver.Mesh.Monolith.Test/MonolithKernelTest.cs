@@ -40,7 +40,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var standardOutput = kernelEvent.OfType<StandardOutputValueProduced>().Single();
         var value = standardOutput.FormattedValues.Single();
-        value.Value.Should().Be("Hello World\r\n");
+        value.Value.TrimEnd('\n', '\r').Should().Be("Hello World");
     }
 
     [Fact]

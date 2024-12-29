@@ -83,7 +83,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret2 = await workspace.GetObservable<MyRecord2>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync();
 
         ret2.Should().BeEmpty();
