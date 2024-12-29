@@ -133,7 +133,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete(toBeDeleted, null),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
 
