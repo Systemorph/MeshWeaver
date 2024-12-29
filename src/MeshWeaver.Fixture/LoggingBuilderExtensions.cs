@@ -38,16 +38,11 @@ public class TestOutputHelperAccessor
 }
 
 [ProviderAlias("XUnitLogger")]
-public class XUnitLoggerProvider : ILoggerProvider, ISupportExternalScope
+public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor)
+    : ILoggerProvider, ISupportExternalScope
 {
-    private readonly TestOutputHelperAccessor testOutputHelperAccessor;
     private readonly ConcurrentDictionary<string, XUnitLogger> loggers = new();
     private IExternalScopeProvider scopeProvider;
-
-    public XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor)
-    {
-        this.testOutputHelperAccessor = testOutputHelperAccessor;
-    }
 
     // ReSharper disable once ParameterHidesMember
     void ISupportExternalScope.SetScopeProvider(IExternalScopeProvider scopeProvider)
@@ -66,23 +61,12 @@ public class XUnitLoggerProvider : ILoggerProvider, ISupportExternalScope
     }
 }
 
-public class XUnitLogger : ILogger
+public class XUnitLogger(
+    string categoryName,
+    TestOutputHelperAccessor testOutputHelperAccessor,
+    IExternalScopeProvider scopeProvider)
+    : ILogger
 {
-    private readonly TestOutputHelperAccessor testOutputHelperAccessor;
-    private readonly string categoryName;
-    private readonly IExternalScopeProvider scopeProvider;
-
-    public XUnitLogger(
-        string categoryName,
-        TestOutputHelperAccessor testOutputHelperAccessor,
-        IExternalScopeProvider scopeProvider
-    )
-    {
-        this.testOutputHelperAccessor = testOutputHelperAccessor;
-        this.categoryName = categoryName;
-        this.scopeProvider = scopeProvider;
-    }
-
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
     public IDisposable BeginScope<TState>(TState state) => scopeProvider.Push(state);
