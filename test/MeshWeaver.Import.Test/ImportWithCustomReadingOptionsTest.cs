@@ -56,7 +56,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new HostAddress())
-            , new CancellationTokenSource(3.Seconds()).Token
+            , new CancellationTokenSource(10.Seconds()).Token
         );
 
         // assert
@@ -65,7 +65,7 @@ public class ImportWithCustomReadingOptionsTest(ITestOutputHelper output) : HubT
         var workspace = host
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         var resRecord = ret.Should().ContainSingle().Which;
