@@ -3,12 +3,17 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using Json.More;
+using Json.Patch;
+using Json.Pointer;
+using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
+using Microsoft.VisualBasic;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
@@ -73,33 +78,37 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
         var namePointer = new JsonPointerReference($"/displayName");
-        var nameStream = stream.DataBind<string>(dataContext,namePointer);
-        var value = await nameStream.Where(x => x != null).FirstAsync();
+        var nameStream = stream.DataBind<string>(namePointer, dataContext);
+        var value = await nameStream
+            .Where(x => x != null)
+            .Timeout(3.Seconds())
+            .FirstAsync();
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
-        var objectPointer = new JsonPointerReference("/");
-        var objectStream = stream.DataBind<JsonElement>(dataContext, objectPointer);
-        var obj = await objectStream.FirstAsync();
+        var objectStream = stream.DataBind<JsonElement>(new(dataContext));
+        var obj = await objectStream.Timeout(3.Seconds()).FirstAsync();
         const string Universe = nameof(Universe);
-        obj = obj.SetPointer("/displayName", JsonNode.Parse($"\"{Universe}\""));
 
-        var response = await stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [obj] }, o => o.WithTarget(stream.Owner));
-        response.Message.Status.Should().Be(DataChangeStatus.Committed);
+        var model = new ModelParameter(obj.AsNode());
+        model.Update(new JsonPatch(PatchOperation.Replace(JsonPointer.Parse("/displayName"), JsonNode.Parse($"\"{Universe}\""))));
+
+        var log = await stream.SubmitModel(model);
+        log.Status.Should().Be(ActivityStatus.Succeeded);
+
         value = await stream
-            .DataBind(dataContext, namePointer, x => (string)x)
+            .DataBind(namePointer, dataContext, x => (string)x)
             .Where(x => x != "Hello")
             .Timeout(3.Seconds())
             .FirstAsync();
         value.Should().Be(Universe);
-
         stream.Dispose();
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
         );
         value = await stream
-            .GetDataBoundObservable<string>(namePointer)
+            .GetDataBoundObservable<string>(namePointer, dataContext)
             .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
 

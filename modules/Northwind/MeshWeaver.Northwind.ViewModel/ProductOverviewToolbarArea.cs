@@ -28,7 +28,7 @@ public static class ProductOverviewToolbarArea
         => Controls.Toolbar.WithView((_, _) =>
             layoutArea.GetProductCategories()
                 .Select(categories =>
-                    Template.Bind(new ProductOverviewToolbar(0), nameof(ProductOverviewToolbar),
+                    Template.Bind(new ProductOverviewToolbar(0),
                         tb =>
                             Controls.Select(tb.Category)
                                 .WithOptions(
@@ -36,8 +36,7 @@ public static class ProductOverviewToolbarArea
                                         .Prepend(new Option<int>(0, "All Categories"))
                                         .Cast<Option>()
                                         .ToArray()
-                                )
-                    )
+                                ), nameof(ProductOverviewToolbar))
                 )
         )
     ;

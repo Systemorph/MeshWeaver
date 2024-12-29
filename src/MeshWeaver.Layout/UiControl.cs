@@ -32,7 +32,6 @@ public abstract record UiControl : IUiControl
     void IDisposable.Dispose() => Dispose();
 
 
-    protected abstract void Dispose();
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
 
@@ -71,6 +70,8 @@ public abstract record UiControl : IUiControl
 
     protected ImmutableList<Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates>> Buildup { get; init; } = [];
 
+    protected ImmutableList<Action> DisposeActions { get; init; } =
+        ImmutableList<Action>.Empty;
 
     public virtual bool Equals(UiControl other)
     {
@@ -121,7 +122,18 @@ public abstract record UiControl : IUiControl
     {
         return this with { Buildup = Buildup.Add(buildup) };
     }
+    public UiControl RegisterForDisposal(Action action)
+    {
+        return this with { DisposeActions = DisposeActions.Add(action) };
+    }
 
+    protected virtual void Dispose()
+    {
+        foreach (var disposable in DisposeActions)
+        {
+            disposable();
+        }
+    }
 
 }
 
@@ -156,7 +168,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
         return This with { ClickAction = onClick, };
     }
 
-    public TControl WithDisposeAction(Action<TControl> action)
+    public new TControl RegisterForDisposal(Action action)
     {
         return This with { DisposeActions = DisposeActions.Add(action) };
     }
@@ -168,16 +180,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             return Task.CompletedTask;
         });
 
-    protected override void Dispose()
-    {
-        foreach (var disposable in DisposeActions)
-        {
-            disposable(This);
-        }
-    }
-
-    private ImmutableList<Action<TControl>> DisposeActions { get; init; } =
-        ImmutableList<Action<TControl>>.Empty;
 
 
     public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };

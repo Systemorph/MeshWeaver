@@ -100,7 +100,14 @@ public record LayoutAreaHost : IDisposable
         control = control with { DataContext = dataContext, };
 
 
-        return ((IUiControl)control).Render(this, context, store);
+        var ret = ((IUiControl)control).Render(this, context, store);
+        foreach (var (a, c) in ret.Updates
+                     .Where(x => x.Collection == LayoutAreaReference.Areas)
+                     .Select(x => (x.Id.ToString(), Control: x.Value as UiControl))
+                     .Where(x => x.Control != null))
+            AddDisposable(a, c);
+
+        return ret;
     }
 
 

@@ -3,6 +3,7 @@ using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Reflection;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Layout;
 
@@ -12,16 +13,11 @@ public static class Template{
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
     [ReplaceBindMethod]
-    public static TView Bind<T, TView>(
-        T data,
-        string id,
-        Expression<Func<T, TView>> dataTemplate
-    )
-        where TView : UiControl => BindObject(data, id, dataTemplate);
+    public static TView Bind<T, TView>(T data,
+        Expression<Func<T, TView>> dataTemplate,
+        string id = null)
+        where TView : UiControl => BindObject(data, dataTemplate, id);
 
-    private static readonly MethodInfo BindManyMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => BindMany<object, UiControl>(default(IEnumerable<object>),  null)
-    );
     /// <summary>
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
@@ -35,7 +31,6 @@ public static class Template{
         var view = dataTemplate.Build("/", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
-
 
         return new ItemTemplateControl(view, data);
     }
@@ -56,7 +51,7 @@ public static class Template{
 
         object current = null;
         
-        return new ItemTemplateControl(view, LayoutAreaReference.GetDataPointer(id))
+        return new ItemTemplateControl(view, "/")
             {
                 DataContext = LayoutAreaReference.GetDataPointer(id)
             }
@@ -78,11 +73,9 @@ public static class Template{
     /// Takes expression tree of data template and replaces all property getters by binding instances and sets data context property
     /// </summary>
     [ReplaceBindMethod]
-    public static TView Bind<T, TView>(
-        this IObservable<T> stream,
-        string id,
-        Expression<Func<T, TView>> dataTemplate
-    )
+    public static TView Bind<T, TView>(this IObservable<T> stream,
+        Expression<Func<T, TView>> dataTemplate,
+        string id = null)
         where TView : UiControl
     {
         object current = null;
@@ -137,16 +130,17 @@ public static class Template{
     ).MakeGenericMethod(method.GetGenericArguments());
 
     private static readonly MethodInfo BindObjectMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => BindObject<object, UiControl>(null, default, null)
+        () => BindObject<object, UiControl>(default, default, default)
     );
 
     internal static TView BindObject<T, TView>(
         object data,
-        string id,
-        Expression<Func<T, TView>> dataTemplate
+        Expression<Func<T, TView>> dataTemplate,
+        string id
     )
         where TView : UiControl
     {
+        id ??= Guid.NewGuid().AsString();
         var view = GetTemplateControl(id, dataTemplate);
         if(data != null)
             view = (TView)view.WithBuildup((_,_,store) => store.UpdateData(id, data));
@@ -163,13 +157,6 @@ public static class Template{
         return view;
     }
 
-    private static string UpdateData(object data, string id)
-    {
-        if (data is JsonPointerReference reference)
-            return reference.Pointer;
-
-        return LayoutAreaReference.GetDataPointer(id);
-    }
 
     [ReplaceBindMethod]
     public static UiControl Bind<T, TView>(
@@ -204,6 +191,9 @@ public static class Template{
     }
 
 
+    private static readonly MethodInfo BindManyMethod = ReflectionHelper.GetStaticMethodGeneric(
+        () => BindMany<object, UiControl>(default(IEnumerable<object>), null)
+    );
 
 }
 

@@ -72,7 +72,7 @@ public static class DataCubeLayoutExtensions
     {
         
 
-        return Template.Bind<DataCubeFilter, UiControl>(filter, filterId, f =>
+        return Template.Bind<DataCubeFilter, UiControl>(filter, f =>
             Stack
                 .WithView(Header("Filter"))
                 .WithView(
@@ -98,8 +98,7 @@ public static class DataCubeLayoutExtensions
                             .WithView((a, c) => ToDimensionValues(a, filterId))
                             .WithVerticalGap(16)
                         )
-                )
-        );
+                ), filterId);
     }
 
     public static DataCubeFilter CreateFilter(this IDataCube cube) => new(cube.GetAvailableDimensions());

@@ -15,7 +15,7 @@ public static class TemplateBuilder
 {
     public static TView Build<T, TView>(
         this Expression<Func<T, TView>> layout,
-        string rootName,
+        string dataContext,
         out IReadOnlyCollection<Type> types
     )
         where TView : UiControl
@@ -26,7 +26,7 @@ public static class TemplateBuilder
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
         types = visitor.DataBoundTypes;
-        return ret with { DataContext = rootName };
+        return ret with { DataContext = dataContext };
     }
 
     private class TemplateBuilderVisitor : ExpressionVisitor

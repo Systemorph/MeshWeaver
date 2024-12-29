@@ -1,12 +1,11 @@
 ﻿using MeshWeaver.Catalog.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
-using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Catalog.Views;
 
-public static class LayoutClientExtensions
+public static class DomainLayoutExtensions
 {
     public static LayoutClientConfiguration AddCatalogViews(this LayoutClientConfiguration config)
     {
@@ -16,4 +15,6 @@ public static class LayoutClientExtensions
         return config
             .WithView<CatalogItemControl, CatalogItemView>();
     }
+
+
 }
