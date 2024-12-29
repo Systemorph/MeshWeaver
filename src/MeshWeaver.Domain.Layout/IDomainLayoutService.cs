@@ -32,7 +32,6 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
     public object GetCatalog(EntityRenderingContext context)
     {
         return configuration.GetCatalog(context);
-
     }
 }
 public record DomainViewConfiguration
@@ -96,23 +95,22 @@ public record DomainViewConfiguration
 
     public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
     {
-       var stream = host.Workspace
+        var stream = host.Workspace
             .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
-        var ret = 
-            
-            stream.Bind(ctx.Area,
-            oo =>
+        var ret = stream
+            .Select(x => x.Value)
+            .Bind(_ =>
                 context.TypeDefinition.Type.GetProperties()
                     .Aggregate(Controls.EditForm, (grid, property) =>
                         PropertyViewBuilders
-                        .Select(b => b.Invoke(grid, new PropertyRenderingContext(context, property)))
-                        .FirstOrDefault(x => x != null)
-                        )
-        );
-
-
+                            .Select(b =>
+                                b.Invoke(grid, new PropertyRenderingContext(context, property))
+                            )
+                            .FirstOrDefault(x => x != null)
+                    ), ctx.Area);
         return ret;
     }
+
 
     private EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
     {

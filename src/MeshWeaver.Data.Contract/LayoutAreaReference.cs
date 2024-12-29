@@ -30,14 +30,14 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <returns>A string representing the data pointer.</returns>
     public static string GetDataPointer(string id, params string[] extraSegments) =>
         JsonPointer.Create(
-            new[] { Data, EncodeId(id) }
+            new[] { Data, Encode(id) }
             .Concat(extraSegments)
             .Select(x => (PointerSegment)x)
             .ToArray()
         )
         .ToString();
 
-    public static string EncodeId(string id)
+    public static string Encode(string id)
         => JsonSerializer.Serialize(id);
 
     /// <summary>
@@ -48,13 +48,6 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     public static string GetControlPointer(string area) =>
         JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
 
-    /// <summary>
-    /// Gets the properties pointer for the specified ID.
-    /// </summary>
-    /// <param name="id">The ID for the properties pointer.</param>
-    /// <returns>A string representing the properties pointer.</returns>
-    public static string GetPropertiesPointer(string id) =>
-        JsonPointer.Create(Properties, id).ToString();
 
     /// <summary>
     /// Converts the layout area reference to an application href.
