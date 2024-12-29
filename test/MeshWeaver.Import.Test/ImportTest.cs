@@ -78,7 +78,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .GetObservable<ComputedData>()
             .Timeout(timeout)
-            .FirstAsync();
+            .FirstAsync(x => x != null);
 
         using (new AssertionScope())
         {
