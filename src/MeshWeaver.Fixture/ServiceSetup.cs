@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Fixture;
@@ -12,7 +14,17 @@ public class ServiceSetup
 
     public ServiceSetup()
     {
-        Services.AddLogging(logging => logging.AddXUnitLogger());
+        // Build configuration
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
+
+        // Configure logging
+        Services.AddLogging(logging =>
+        {
+            logging.AddConfiguration(configuration.GetSection("Logging"));
+            logging.AddXUnitLogger();
+        });
         Services.AddOptions();
     }
 
