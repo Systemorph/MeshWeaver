@@ -24,9 +24,9 @@ namespace MeshWeaver.Hosting.Monolith.Test
         };
         public static readonly string GetDashboardCommand =
             @"
-using MeshWeaver.Layout;
+using static MeshWeaver.Layout.Controls;
 using MeshWeaver.Mesh;
-await Mesh.GetLayoutAreaAsync(new ApplicationAddress(""Test""), ""Dashboard"")";
+LayoutArea(new ApplicationAddress(""Test""), ""Dashboard"")";
 
     }
 }
