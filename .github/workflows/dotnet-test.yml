@@ -11,8 +11,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-net8:
-    name: Build and Run Unit tests for .NET 8
+  build:
+    name: Build Projects
 
     runs-on: ubuntu-latest
 
@@ -21,13 +21,26 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: 9.0.x
     - name: Restore workloads
       run: dotnet workload restore
     - name: Restore dependencies
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
+
+  test-net8:
+    name: Run Unit tests for .NET 8
+
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
     - name: Run Tests
       continue-on-error: true
       run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000
@@ -47,11 +60,11 @@ jobs:
         compression-level: 9
         retention-days: 15
 
-  build-net9:
-    name: Build and Run Unit tests for .NET 9
+  test-net9:
+    name: Run Unit tests for .NET 9
 
     runs-on: ubuntu-latest
-    needs: build-net8
+    needs: build
 
     steps:
     - uses: actions/checkout@v4
@@ -59,12 +72,6 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
-    - name: Restore workloads
-      run: dotnet workload restore
-    - name: Restore dependencies
-      run: dotnet restore
-    - name: Build
-      run: dotnet build --no-restore -p:CIRun=true
     - name: Run Tests
       continue-on-error: true
       run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000
