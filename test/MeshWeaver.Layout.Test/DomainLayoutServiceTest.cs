@@ -13,7 +13,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using Microsoft.VisualBasic;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
@@ -103,6 +102,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .FirstAsync(x => x != null);
         value.Should().Be(Universe);
         stream.Dispose();
+        await Task.Delay(10);
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new HostAddress(),
             reference
