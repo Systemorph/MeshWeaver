@@ -68,25 +68,32 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         bindings.Add(binding);
     }
 
-    protected void DataBind<T>(object value, Expression<Func<TView, T>> propertySelector, Func<object, T> conversion = null)
+    protected void DataBind<T>(
+        object value, 
+        Expression<Func<TView, T>> propertySelector, Func<object, T> conversion = null)
     {
         var expr = propertySelector?.Body as MemberExpression;
-        var property = expr?.Member as PropertyInfo;
-        if (property == null)
-            throw new ArgumentException("Expression needs to point to a property.");
+        Action<object> setter = expr?.Member is PropertyInfo pi 
+            ? o => pi.SetValue(this,o) 
+            : expr?.Member is FieldInfo fi 
+                ? o => fi.SetValue(this, o) 
+                : throw new ArgumentException(
+                    "Expression provided must point to a property or field.", 
+                    nameof(propertySelector)
+                    );
 
         if (value is JsonPointerReference reference)
         {
             if (Model is not null)
-                property.SetValue(this, Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
+                setter(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             else
-                bindings.Add(Stream.DataBind(DataContext, reference, conversion)
+                bindings.Add(Stream.DataBind(reference, DataContext, conversion)
                     .Subscribe(v =>
                         {
-                            Logger.LogTrace("Binding property {property} of {area}", property.Name, Area);
+                            Logger.LogTrace("Binding property in Area {area}", Area);
                             InvokeAsync(() =>
                             {
-                                property.SetValue(this, v);
+                                setter(v);
                                 RequestStateChange();
                             });
                         }
@@ -96,7 +103,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         }
         else
         {
-            property.SetValue(this, Stream.ConvertSingle(value, conversion));
+            setter(Stream.ConvertSingle(value, conversion));
         }
     }
 
@@ -110,7 +117,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         {
             if (Model != null)
                 return Observable.Return(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
-            return Stream.DataBind(DataContext, reference, conversion);
+            return Stream.DataBind(reference, DataContext, conversion);
         }
 
         return Observable.Return(Stream.ConvertSingle(value, conversion));
@@ -121,7 +128,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected void UpdatePointer<T>(T value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, reference, DataContext, Model);
+        Stream.UpdatePointer(value, DataContext, reference, Model);
     }
 
     protected virtual void BindData()
@@ -133,7 +140,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
             DataBind(ViewModel.Class, x => x.Class);
             DataBind(ViewModel.Style, x => x.Style);
             if (ViewModel.DataContext != null)
-                DataContext = ViewModel.DataContext;
+                DataContext = WorkspaceReference.Decode(ViewModel.DataContext).ToString();
         }
     }
     private readonly List<IDisposable> bindings = new();

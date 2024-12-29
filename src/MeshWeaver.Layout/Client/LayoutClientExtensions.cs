@@ -3,15 +3,18 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
+using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
     public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, T value,
-        JsonPointerReference reference, string dataContext, ModelParameter model = null)
+        string dataContext,
+        JsonPointerReference reference, ModelParameter model = null)
     {
         if (reference != null)
         {
@@ -56,8 +59,11 @@ public static class LayoutClientExtensions
             ;
     }
 
-    public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream, string dataContext, JsonPointerReference reference, Func<object, T> conversion = null) =>
-        stream.GetStream<object>(JsonPointer.Parse($"{dataContext}{reference.Pointer}"))
+    public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
+        JsonPointerReference reference, 
+        string dataContext = null, 
+        Func<object, T> conversion = null) =>
+        stream.GetStream<object>(JsonPointer.Parse($"{dataContext}{reference.Pointer.TrimEnd('/')}"))
             .Select(conversion ?? (x => stream.ConvertSingle<T>(x, null)));
 
 
@@ -91,9 +97,9 @@ public static class LayoutClientExtensions
     }
 
     public static IObservable<T> GetDataBoundObservable<T>(this ISynchronizationStream<JsonElement> stream,
-        JsonPointerReference reference)
+        JsonPointerReference reference, string dataContext = null)
     {
-        var jsonPointer = JsonPointer.Parse(reference.Pointer);
+        var jsonPointer = JsonPointer.Parse($"{dataContext}{reference.Pointer}");
         return stream.Select(s =>
         {
             var ret = jsonPointer.Evaluate(s.Value);
@@ -152,5 +158,31 @@ public static class LayoutClientExtensions
             return conversion(value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
         return value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
     }
+    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter data)
+    {
+        try
+        {
+            var response = await stream.Hub.AwaitResponse(
+                new DataChangeRequest { Updates = [data.Submit()] },
+                o => o.WithTarget(stream.Owner));
+            if (response.Message.Status == DataChangeStatus.Committed)
+            {
+                data.Confirm();
+                return response.Message.Log;
+            }
+            else
+                return response.Message.Log;
+        }
+        catch (Exception e)
+        {
+            return new ActivityLog(ActivityCategory.DataUpdate)
+            {
+                End = DateTime.UtcNow,
+                Messages = [new(e.Message, LogLevel.Error)]
+            };
+        }
+
+    }
+
 
 }

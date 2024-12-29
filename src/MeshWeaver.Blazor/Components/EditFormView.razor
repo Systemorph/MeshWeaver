@@ -1,22 +1,18 @@
-@using System.Text.Json
-@using System.Text.Json.Nodes
-@using MeshWeaver.Activities
-@using MeshWeaver.Layout.Client
 @using Microsoft.AspNetCore.Components.Forms
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits SkinnedView<EditFormControl, EditFormSkin, EditFormView>
 @inject IToastService ToastService;
 
-@if (Data == null)
+@if (data == null)
 {    
     <FluentProgressRing style="width: 102px; height: 102px;" />
 }
 else
 {
-    <EditForm Model="@Data" OnValidSubmit="Submit" >
+    <EditForm Model="@data" OnValidSubmit="Submit" >
         <div>
             <dl class="form-group">
-                <CascadingValue Name="Model" Value="@Data">
+                <CascadingValue Name="Model" Value="@data">
                     <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
                 </CascadingValue>
             </dl>
@@ -34,72 +30,8 @@ else
                     </ul>
                 </div>
             }
-            <FluentButton Appearance="Appearance.Accent" type="@ButtonType.Submit" class="btn btn-primary" disabled="@Data.IsUpToDate">Update</FluentButton>
-            <FluentButton Appearance="Appearance.Lightweight" type="@ButtonType.Reset" class="btn btn-secondary" @onclick="Reset" disabled="@Data.IsUpToDate">Reset</FluentButton>
+            <FluentButton Appearance="Appearance.Accent" type="@ButtonType.Submit" class="btn btn-primary" disabled="@data.IsUpToDate">Update</FluentButton>
+            <FluentButton Appearance="Appearance.Lightweight" type="@ButtonType.Reset" class="btn btn-secondary" @onclick="Reset" disabled="@data.IsUpToDate">Reset</FluentButton>
         </div>
     </EditForm>
-}
-
-@code
-{
-    private ModelParameter Data { get; set; }
-    private ActivityLog Log { get; set; }
-    protected override void BindData()
-    {
-        DataBind(new JsonPointerReference(ViewModel.DataContext), x => x.Data, jsonObject => Convert((JsonObject)jsonObject));
-    }
-
-    private async void Submit(EditContext context)
-    {
-        var response = await Stream.Hub.AwaitResponse(new DataChangeRequest { Updates = [Data.Submit()] }, o => o.WithTarget(Stream.Owner));
-        if (response.Message.Status == DataChangeStatus.Committed)
-        {
-            Data.Confirm();
-            ShowSuccess();
-            Log = null;
-        }
-        else
-        {
-            Log = response.Message.Log;
-            ShowError();
-        }
-    }
-
-    private ModelParameter Convert(JsonObject jsonObject)
-    {
-        if (jsonObject == null)
-            return null; 
-        var ret = new ModelParameter(jsonObject);
-        ret.ElementChanged += OnModelChanged;
-        return ret;
-    }
-
-    private void Reset()
-    {
-        Data.Reset();
-        InvokeAsync(StateHasChanged);
-    }
-
-    private void ShowSuccess()
-    {
-        var message = "Saved successfully";
-        ToastService.ShowToast(ToastIntent.Success, message);
-    }
-    private void ShowError()
-    {
-        var message = "Saving failed";
-        ToastService.ShowToast(ToastIntent.Error, message);
-    }
-
-    public override ValueTask DisposeAsync()
-    {
-        if(Data != null)
-            Data.ElementChanged -= OnModelChanged;
-        return base.DisposeAsync();
-    }
-
-    private void OnModelChanged(object sender, JsonElement e)
-    {
-        InvokeAsync(StateHasChanged);
-    }
 }
