@@ -84,10 +84,12 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
 
-        ret = await workspace.GetObservable<MyRecord>().FirstAsync();
+        ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Count != 4);
 
         ret.Should().HaveCount(1);
-        ret.Should().ContainSingle().Which.Number.Equals(5);
+        ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
         var host = GetHost().GetWorkspace();
         var ret2 = await host
@@ -95,7 +97,7 @@ SystemName,DisplayName
             .Timeout(3.Seconds())
             .FirstAsync(x => x.Count != 4);
         ret2.Should().HaveCount(1);
-        ret2.Should().ContainSingle().Which.Number.Equals(5);
+        ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
 
     [Fact]

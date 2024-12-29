@@ -65,7 +65,6 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var host = GetHost();
         var transactionalItems1 = await GetWorkspace(
                 Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
             )
@@ -78,7 +77,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             )
             .GetObservable<ComputedData>()
             .Timeout(timeout)
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x is { Count: > 0 });
 
         using (new AssertionScope())
         {
