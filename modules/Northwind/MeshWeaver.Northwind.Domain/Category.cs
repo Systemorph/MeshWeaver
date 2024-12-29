@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Domain

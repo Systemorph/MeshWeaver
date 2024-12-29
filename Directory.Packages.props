@@ -91,8 +91,8 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.12.9" />
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.12.9" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.12.9" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.10.4" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.10.4" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.11.0" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.0" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Aspire.Hosting.Redis" Version="9.0.0" />
