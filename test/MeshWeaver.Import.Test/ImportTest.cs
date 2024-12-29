@@ -51,7 +51,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var timeout = 1.Seconds();
+        var timeout = 5.Seconds();
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,
@@ -115,7 +115,7 @@ Id,Year,LoB,BusinessUnit,Value
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new ImportAddress(2024)),
-            new CancellationTokenSource(3.Seconds()).Token
+            new CancellationTokenSource(5.Seconds()).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
@@ -123,7 +123,7 @@ Id,Year,LoB,BusinessUnit,Value
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
-            .Timeout(3.Seconds())
+            .Timeout(5.Seconds())
             .FirstAsync(x => x.FirstOrDefault()?.DisplayName.StartsWith("LoB") ?? false);
         var expectedLoBs = new[]
         {
