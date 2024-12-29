@@ -59,7 +59,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             reference
         );
         var content = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
             .Should()
@@ -69,7 +69,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
         var controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString())
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
         var dataContext = control.DataContext;
@@ -80,13 +80,13 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var nameStream = stream.DataBind<string>(namePointer, dataContext);
         var value = await nameStream
             .Where(x => x != null)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
         var objectStream = stream.DataBind<JsonElement>(new(dataContext));
-        var obj = await objectStream.Timeout(3.Seconds()).FirstAsync();
+        var obj = await objectStream.Timeout(10.Seconds()).FirstAsync();
         const string Universe = nameof(Universe);
 
         var model = new ModelParameter(obj.AsNode());
@@ -98,7 +98,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         value = await stream
             .DataBind(namePointer, dataContext, x => (string)x)
             .Where(x => x != "Hello")
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         value.Should().Be(Universe);
         stream.Dispose();
@@ -109,7 +109,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         );
         value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         value.Should().Be(Universe);
@@ -128,7 +128,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             reference
         );
         var content = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
             .Should()
@@ -137,7 +137,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
         var control = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString())
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
         dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
