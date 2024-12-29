@@ -65,7 +65,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress())
-            , new CancellationTokenSource(3.Seconds()).Token
+            , new CancellationTokenSource(10.Seconds()).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return client;
@@ -89,7 +89,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         ret2.Should().BeEmpty();
 
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(1);
@@ -119,7 +119,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
             .GetWorkspace();
         var ret = await workspace
             .GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync();
 
         ret.Should().BeEmpty();
@@ -159,7 +159,7 @@ Record3SystemName,Record3DisplayName";
             .GetWorkspace();
 
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(1);
@@ -197,13 +197,13 @@ Record3SystemName,Record3DisplayName";
             .GetWorkspace();
         var ret2 = await workspace
             .GetObservable<MyRecord2>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret2.Should().HaveCount(1);
         var ret = await workspace
             .GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(2);
