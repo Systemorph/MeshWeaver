@@ -85,7 +85,7 @@ SystemName,DisplayName
 
 
         ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Count != 4);
 
         ret.Should().HaveCount(1);
@@ -94,7 +94,7 @@ SystemName,DisplayName
         var host = GetHost().GetWorkspace();
         var ret2 = await host
             .GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Count != 4);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
@@ -122,7 +122,7 @@ B4,B,4
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(4);

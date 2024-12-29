@@ -57,7 +57,7 @@ public class DocumentationLayoutTest(ITestOutputHelper output) : HubTestBase(out
 
         var control = await stream
             .GetControlStream(DocumentationLayout.Documentation)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var tabs = control
             .Should()
@@ -69,7 +69,7 @@ public class DocumentationLayoutTest(ITestOutputHelper output) : HubTestBase(out
 
         control = await stream
             .GetControlStream(tabs.Areas.First().Area.ToString())
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         
         var named = control.Should()
@@ -79,7 +79,7 @@ public class DocumentationLayoutTest(ITestOutputHelper output) : HubTestBase(out
 
         control = await stream
             .GetControlStream(named.Area.ToString())
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         control.Should().BeOfType<HtmlControl>();

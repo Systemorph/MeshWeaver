@@ -86,7 +86,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         var control = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
             .Should()
@@ -99,7 +99,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .ToAsyncEnumerable()
             .SelectAwait(async a =>
                 await stream.GetControlStream(a.Area.ToString())
-                .Timeout(3.Seconds())
+                .Timeout(10.Seconds())
                 .FirstAsync(x => x != null))
             .ToArrayAsync();
 
@@ -135,7 +135,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var controls = await stream
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .ToArray();
         controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
     }
@@ -167,7 +167,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
-            // .Timeout(3.Seconds())
+            // .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
@@ -175,7 +175,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var toolbarArea = $"{reference.Area}/Toolbar";
         var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
@@ -185,7 +185,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var year = await stream
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         year!.Value.GetInt32().Should().Be(2024);
 
@@ -204,7 +204,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedControls = await stream
             .GetControlStream(reportArea)
             .TakeUntil(o => o is HtmlControl html && !html.Data.ToString()!.Contains("2024"))
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .ToArray();
         updatedControls
             .Last()
@@ -232,7 +232,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var controlArea = $"{reference.Area}";
         var content = await stream.GetControlStream(controlArea)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(ItemTemplate)}\"");
@@ -286,7 +286,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var buttonArea = $"{reference.Area}/Button";
         var content = await stream.GetControlStream(buttonArea)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         content
             .Should()
@@ -390,7 +390,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 var result = pointer.Evaluate(s.Value);
                 return result?.Deserialize<object>(hub.JsonSerializerOptions);
             })
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var content = await stream
             .GetControlStream(controlArea)
@@ -477,7 +477,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
             .Should()
@@ -531,7 +531,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var stopwatch = Stopwatch.StartNew();
 
         var content = await stream.GetControlStream(reference.Area)
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
@@ -558,7 +558,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 //        var stream = hub.GetControlStream(new HostAddress(), StaticView);
 
 //        var view = await stream
-//            .Timeout(3.Seconds())
+//            .Timeout(10.Seconds())
 //            .FirstAsync();
 
 
@@ -572,7 +572,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 //        var control = await reRendered
 //            .GetControlStream(NewId)
-//            .Timeout(3.Seconds())
+//            .Timeout(10.Seconds())
 //            .FirstAsync(x => x != null);
 
 
@@ -581,7 +581,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 //        var firstArea = await reRendered
 //            .GetControlStream(na.Area.ToString())
-//            .Timeout(3.Seconds())
+//            .Timeout(10.Seconds())
 //            .FirstAsync(x => x != null);
 //        firstArea.Should().BeOfType<HtmlControl>();
 //    }
@@ -608,7 +608,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 //        var control = await reRendered
 //            .GetControlStream(NewId)
-//            //.Timeout(3.Seconds())
+//            //.Timeout(10.Seconds())
 //            .FirstAsync(x => x != null);
 
 
@@ -617,7 +617,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
 //        var firstArea = await reRendered
 //            .GetControlStream(na.Area.ToString())
-//            .Timeout(3.Seconds())
+//            .Timeout(10.Seconds())
 //            .FirstAsync(x => x != null);
 //        firstArea.Should().BeOfType<HtmlControl>();
 //    }

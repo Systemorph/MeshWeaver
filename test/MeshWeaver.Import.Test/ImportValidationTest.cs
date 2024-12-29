@@ -197,7 +197,7 @@ A,B";
 
         //var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
         //var ret = await workspace.GetObservable<ActivityLog>()
-        //    .Timeout(3.Seconds())
+        //    .Timeout(10.Seconds())
         //    .FirstAsync(x => x.Any());
 
         //ret.Should().HaveCount(1);
