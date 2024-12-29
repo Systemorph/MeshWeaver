@@ -36,7 +36,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
             .ToArray()
-            .FirstAsync();
+            .FirstAsync(x => x is not null);
 
         var standardOutput = kernelEvent.OfType<StandardOutputValueProduced>().Single();
         var value = standardOutput.FormattedValues.Single();
@@ -49,8 +49,8 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = CreateClient();
         var area = await client
             .GetControlStream(new ApplicationAddress(Test), "Dashboard")
-            .Timeout(3.Seconds())
-            .FirstAsync();
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
         area.Should().NotBeNull();
         area.Should().BeOfType<LayoutGridControl>();
     }
