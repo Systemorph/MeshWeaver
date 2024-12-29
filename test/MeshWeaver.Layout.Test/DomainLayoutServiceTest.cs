@@ -138,7 +138,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var control = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString())
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
         dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
 
