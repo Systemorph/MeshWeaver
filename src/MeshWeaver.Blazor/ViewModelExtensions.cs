@@ -3,7 +3,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Application.Styles;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Icon = MeshWeaver.Domain.Icon;
-using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 using MeshWeaver.Data;
 
 namespace MeshWeaver.Blazor;
@@ -14,7 +13,7 @@ public static class ViewModelExtensions
         icon.Provider switch
         {
             FluentIcons.Provider =>
-                Icons.GetInstance(new IconInfo { Name = icon.Id, Size = IconSize.Size24 }),
+                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size }.GetInstance(),
             _ => null
         };
 

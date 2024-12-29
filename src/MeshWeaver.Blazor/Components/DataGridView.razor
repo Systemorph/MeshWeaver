@@ -1,6 +1,6 @@
 @using System.Text.Json.Nodes
 @using MeshWeaver.Layout.DataGrid
-@using MeshWeaver.Messaging.Serialization
+@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @inherits BlazorView<DataGridControl, DataGridView>
 @inject NavigationManager NavigationManager
 
@@ -22,7 +22,7 @@
                 else if(column is TemplateColumnControl templateColumn)
                 {
                     <TemplateColumn TGridItem="JsonObject">
-                        <FluentButton aria-label="Details" IconEnd="@(new Icons.Regular.Size16.Edit())" OnClick="@(() => NavigateToUrl(context, Details))" />
+                        <FluentButton aria-label="Details" IconEnd="@(new Size16.Edit())" OnClick="@(() => NavigateToUrl(context, Details))" />
 @*                         <FluentButton aria-label="Delete" IconEnd="@(new Icons.Regular.Size16.Delete())" OnClick="@(() => NavigateToUrl(context, Delete))" />
  *@
                     </TemplateColumn>

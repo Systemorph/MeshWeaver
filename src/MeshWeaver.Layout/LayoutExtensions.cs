@@ -6,7 +6,6 @@ using Json.Patch;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -70,10 +69,9 @@ public static class LayoutExtensions
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
-                typeof(PropertyColumnControl<>), // this is not a control
+                typeof(PropertyColumnControl<>),
                 typeof(Option), // this is not a control
-                typeof(Option<>), // this is not a control
-                typeof(Icon)
+                typeof(Option<>) // this is not a control
             );
 
     public static IObservable<UiControl> GetControlStream(
