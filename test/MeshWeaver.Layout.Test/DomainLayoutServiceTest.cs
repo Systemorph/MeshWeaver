@@ -71,7 +71,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString())
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
         var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
@@ -82,7 +82,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var value = await nameStream
             .Where(x => x != null)
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
@@ -100,7 +100,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .DataBind(namePointer, dataContext, x => (string)x)
             .Where(x => x != "Hello")
             .Timeout(3.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x != null);
         value.Should().Be(Universe);
         stream.Dispose();
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

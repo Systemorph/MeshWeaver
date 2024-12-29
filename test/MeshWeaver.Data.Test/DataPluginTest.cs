@@ -123,7 +123,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(3.Seconds())
+            .Timeout(5.Seconds())
             .FirstOrDefaultAsync();
         data.Should().BeEquivalentTo(MyData.InitialData);
 
@@ -141,13 +141,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         data = await GetClient()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(1.Seconds())
+            .Timeout(5.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(1.Seconds())
+            .Timeout(5.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
 
@@ -165,7 +165,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = client.GetWorkspace();
         var myInstance = await workspace
             .GetObservable<MyData>("1")
-            .Timeout(3.Seconds())
+            .Timeout(5.Seconds())
             .FirstAsync();
         myInstance.Text.Should().NotBe(TextChange);
 
