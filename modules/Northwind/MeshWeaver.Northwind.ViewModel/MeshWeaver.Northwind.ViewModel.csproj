@@ -4,6 +4,7 @@
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
     <ItemGroup>
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Domain.Layout\MeshWeaver.Domain.Layout.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

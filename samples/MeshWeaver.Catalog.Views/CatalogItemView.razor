@@ -1,4 +1,5 @@
 @using System.Reflection
+@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @inherits BlazorView<CatalogItemControl, CatalogItemView>
 
 <article>
@@ -20,13 +21,13 @@
                 <span class="label">
                     <FluentIcon
                         Title="Views"
-                        Value="@(new Icons.Regular.Size20.Eye())"/>
+                        Value="@(new Size20.Eye())"/>
                     <span>@Data.Views</span>
                 </span>
                 <span class="label">
                     <FluentIcon 
                         Title="Likes"
-                        Value="@(new Icons.Regular.Size20.ThumbLike())"/>
+                        Value="@(new Size20.ThumbLike())"/>
                     <span>@Data.Likes</span>
                 </span>
             </div>
