@@ -1,0 +1,19 @@
+﻿<FluentAutocomplete @ref="searchAutocomplete"
+                    TOption="NavItem"
+                    Width="250px"
+                    AutoComplete="off"
+                    Placeholder="Type / to search..."
+                    MaximumSelectedOptions="1"
+                    OptionText="@(item => item.Title)"
+                    @bind-ValueText="@searchTerm"
+                    @bind-SelectedOptions="selectedOptions"
+                    @bind-SelectedOptions:after="HandleSearchClicked"
+                    OnOptionsSearch="@HandleSearchInput"
+                    ShowOverlayOnEmptyResults="false">
+    <OptionTemplate>
+        <span slot="start">
+            <FluentIcon Value="@(context.Icon)" Class="search-result-icon" Color="Color.Neutral" Slot="start"/>
+        </span>
+        @((MarkupString)@context.Title)
+    </OptionTemplate>
+</FluentAutocomplete>
