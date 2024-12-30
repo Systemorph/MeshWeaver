@@ -5,7 +5,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Text;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Data.Documentation;
 
 public record PdbDocumentationSource
 : DocumentationSource<PdbDocumentationSource>

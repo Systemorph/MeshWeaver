@@ -1,18 +1,17 @@
 ﻿using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout.Documentation;
-using MeshWeaver.Layout;
+using MeshWeaver.Data.Documentation;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Domain.Layout;
+namespace MeshWeaver.Layout.Domain;
 
 public static class DomainViews
 {
     public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
         => config
-            .AddDocumentation()
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)

@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Domain.Layout.Documentation;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
+using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Documentation.Test;
@@ -18,7 +18,6 @@ public static class DocumentationHubConfiguration
     public static MessageHubConfiguration ConfigureDocumentationTestHost(this MessageHubConfiguration configuration)
     {
         return configuration
-                .AddDocumentation()
                 .AddLayout(layout => layout
                     .AddDocumentationMenuForAssemblies(typeof(DocumentationHubConfiguration).Assembly)
                     .WithView(HtmlView, Controls.Html("Hello World"))

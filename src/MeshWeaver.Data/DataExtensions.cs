@@ -2,6 +2,7 @@
 using Json.Patch;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Activities;
+using MeshWeaver.Data.Documentation;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -26,6 +27,7 @@ public static class DataExtensions
             if(existingLambdas.Any())
                 return ret;
             return ret.AddActivities()
+                    .AddDocumentation()
             .WithServices(sc => sc.AddScoped<IWorkspace, Workspace>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>

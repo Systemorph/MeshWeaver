@@ -1,8 +1,7 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Data.Documentation;
 
 public record DocumentationContext(IMessageHub Hub)
 {

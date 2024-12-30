@@ -1,6 +1,6 @@
 ﻿using System.Xml.Serialization;
 
-namespace MeshWeaver.Domain.Layout.Documentation.Model;
+namespace MeshWeaver.Data.Documentation.Model;
 
 public record See
 {

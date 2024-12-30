@@ -6,7 +6,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Charting;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout.Documentation.Model;
+using MeshWeaver.Data.Documentation.Model;
 using MeshWeaver.Fixture;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
