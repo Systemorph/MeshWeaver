@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Portal;
+﻿namespace MeshWeaver.Portal.Shared;
 
 public partial class App
 {
