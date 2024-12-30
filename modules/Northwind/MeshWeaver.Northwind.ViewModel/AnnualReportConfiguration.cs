@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Collections;
 using MeshWeaver.Domain;
-using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;

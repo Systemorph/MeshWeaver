@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Data.Documentation;
 
 public record EmbeddedDocumentationSource :
     DocumentationSource<EmbeddedDocumentationSource>

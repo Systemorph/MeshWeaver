@@ -1,19 +1,16 @@
 ﻿using System.Collections.Immutable;
-using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
-using Json.More;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout.Documentation;
-using MeshWeaver.Layout;
+using MeshWeaver.Data.Documentation;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
-using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Domain.Layout;
+namespace MeshWeaver.Layout.Domain;
 
 public interface IDomainLayoutService
 {
@@ -44,7 +41,8 @@ public record DomainViewConfiguration
         this.Hub = hub;
         DocumentationService = hub.ServiceProvider.GetRequiredService<IDocumentationService>();
         ViewBuilders = [DefaultViewBuilder];
-        PropertyViewBuilders = [MapToControl];
+        PropertyViewBuilders = [(editor, ctx)=> 
+            hub.ServiceProvider.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
         CatalogBuilders = [DefaultCatalog];
     }
 
@@ -112,71 +110,6 @@ public record DomainViewConfiguration
     }
 
 
-    private EditFormControl MapToControl(EditFormControl grid, PropertyRenderingContext context)
-    {
-        var propertyInfo = context.Property;
-        var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
-        var jsonPointerReference = GetJsonPointerReference(propertyInfo);
-        var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
-        var description = DocumentationService.GetDocumentation(context.Property)?.Summary?.Text;
-
-        Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin => skin with{Name = propertyInfo.Name.ToCamelCase(), Description = description, Label = label};
-        if (dimensionAttribute != null)
-            return grid.WithView((host,_) => host.Workspace
-                        .GetStream(
-                            new CollectionReference(
-                                host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)))
-                        .Select(changeItem =>
-                            Controls.Select(jsonPointerReference)
-                                .WithOptions(ConvertToOptions(changeItem.Value, host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)))), skinConfiguration)
-                ;
-
-
-        if (propertyInfo.PropertyType.IsNumber())
-            return grid.WithView(RenderNumber(jsonPointerReference, context.EntityContext.Host, propertyInfo), skinConfiguration);
-        if (propertyInfo.PropertyType == typeof(string))
-            return grid.WithView(RenderText(jsonPointerReference), skinConfiguration);
-        if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return grid.WithView(RenderDateTime(jsonPointerReference), skinConfiguration);
-
-        // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
-        return grid;
-    }
-
-    private DateTimeControl RenderDateTime(JsonPointerReference jsonPointerReference)
-    {
-        return Controls.DateTime(jsonPointerReference);
-    }
-
-    private static TextFieldControl RenderText(JsonPointerReference jsonPointerReference)
-    {
-        // TODO V10: Add validations. (17.09.2024, Roland Bürgi)
-        return Controls.Text(jsonPointerReference);
-    }
-
-    private static NumberFieldControl RenderNumber(JsonPointerReference jsonPointerReference, LayoutAreaHost host, PropertyInfo propertyInfo)
-    {
-        // TODO V10: Add range validation, etc. (17.09.2024, Roland Bürgi)
-        return Controls.Number(jsonPointerReference, host.Workspace.DataContext.TypeRegistry.GetOrAddType(propertyInfo.PropertyType));
-    }
-
-    private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
-    {
-        return new JsonPointerReference($"/{propertyInfo.Name.ToCamelCase()}");
-    }
-
-    private static IReadOnlyCollection<Option> ConvertToOptions(InstanceCollection instances, ITypeDefinition dimensionType)
-    {
-        var displayNameSelector =
-            typeof(INamed).IsAssignableFrom(dimensionType.Type)
-                ? (Func<object, string>)(x => ((INamed)x).DisplayName)
-                : o => o.ToString();
-
-        var keyType = dimensionType.GetKeyType();
-        var optionType = typeof(Option<>).MakeGenericType(keyType);
-        return instances.Instances
-            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])).ToArray();
-    }
 
 
     public object GetCatalog(EntityRenderingContext context) =>
@@ -193,5 +126,3 @@ public record EntityRenderingContext(
     RenderingContext RenderingContext);
 
 public record PropertyRenderingContext(EntityRenderingContext EntityContext, PropertyInfo Property);
-
-

@@ -6,7 +6,6 @@
     <ItemGroup>
         <ProjectReference Include="..\..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
-        <ProjectReference Include="..\..\..\src\MeshWeaver.Domain.Layout\MeshWeaver.Domain.Layout.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />

@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Domain.Layout.Documentation;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Northwind.ViewModel

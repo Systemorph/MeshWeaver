@@ -178,4 +178,8 @@ public static class Controls
         => LayoutArea(addressType, addressId, new(area) { Id = id });
     public static LayoutAreaControl LayoutArea(string addressType, string addressId, LayoutAreaReference reference)
         => new(addressType, addressId, reference);
+
+
+    //public EditorControl Editor(object instance)
+    //=> new(instance);
 }
