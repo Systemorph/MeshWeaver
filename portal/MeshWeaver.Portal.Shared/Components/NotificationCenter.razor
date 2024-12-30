@@ -1,9 +1,9 @@
-﻿@using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled
+﻿@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @implements IDisposable
 @inject IDialogService DialogService
 @inject IMessageService MessageService
 
-<FluentButton BackgroundColor="var(--neutral-layer-4)" OnClick="OpenNotificationCenterAsync" Title="Notification center">
+<FluentButton BackgroundColor="transparent" OnClick="OpenNotificationCenterAsync" Title="Notification center">
     @if (MessageService.Count(App.MessagesNotificationCenter) > 0)
 {
         <FluentCounterBadge Count="@MessageService.Count(App.MessagesNotificationCenter)"

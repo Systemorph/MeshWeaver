@@ -3,6 +3,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using MeshWeaver.Portal.Shared.Infrastructure;
 
 namespace MeshWeaver.Portal
 {
@@ -16,7 +17,7 @@ namespace MeshWeaver.Portal
             builder.ConfigureOpenTelemetry();
 
             builder.AddDefaultHealthChecks();
-
+            builder.Services.AddPortalServices();
 
             return builder;
         }

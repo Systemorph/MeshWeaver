@@ -6,17 +6,15 @@ namespace MeshWeaver.Portal.Shared.Components;
 
 public partial class SearchBar : IAsyncDisposable
 {
-
-
     [Inject]
     public required NavigationManager NavigationManager { get; set; }
 
     [Inject]
     public required IKeyCodeService KeyCodeService { get; set; }
 
-    private FluentAutocomplete<NavItem>? searchAutocomplete = default!;
-    private string? searchTerm = "";
-    private IEnumerable<NavItem>? selectedOptions = [];
+    private FluentAutocomplete<NavItem> searchAutocomplete = default!;
+    private string searchTerm = "";
+    private IEnumerable<NavItem> selectedOptions = [];
 
     protected override void OnInitialized()
     {
