@@ -23,8 +23,8 @@
       <Content Include="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
     <ItemGroup>
