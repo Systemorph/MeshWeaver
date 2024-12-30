@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+    <PropertyGroup>
+        <TargetFrameworks>net9.0</TargetFrameworks>
+    </PropertyGroup>
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.DotNet.Interactive" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
+    <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="wwwroot\" />
+  </ItemGroup>
+
+</Project>
