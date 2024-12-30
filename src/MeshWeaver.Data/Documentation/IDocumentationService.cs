@@ -2,11 +2,11 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Xml.Serialization;
-using MeshWeaver.Domain.Layout.Documentation.Model;
+using MeshWeaver.Data.Documentation.Model;
 using MeshWeaver.Messaging;
 using Assembly = System.Reflection.Assembly;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Data.Documentation;
 
 public interface IDocumentationService
 {

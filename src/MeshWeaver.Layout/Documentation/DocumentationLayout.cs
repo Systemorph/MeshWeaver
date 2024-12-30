@@ -2,12 +2,12 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
-using MeshWeaver.Layout;
+using MeshWeaver.Data.Documentation;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Layout.Controls;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Layout.Documentation;
 
 public static class DocumentationLayout
 {

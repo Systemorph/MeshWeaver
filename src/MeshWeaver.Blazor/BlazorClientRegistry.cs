@@ -86,6 +86,7 @@ public static class BlazorClientRegistry
             MainSkin main => StandardSkinnedView<MainView>(main, stream, area, control),
             ToolbarSkin toolbar => StandardSkinnedView<ToolbarView>(toolbar, stream, area, control),
             LayoutStackSkin stack => StandardSkinnedView<LayoutStackView>(stack, stream, area, control),
+            EditorSkin editor => StandardSkinnedView<EditorView>(editor, stream, area, control),
             EditFormSkin edit => StandardSkinnedView<EditFormView>(edit, stream, area, control),
             EditFormItemSkin editItem => StandardSkinnedView<EditFormItemView>(editItem, stream, area, control),
             SplitterSkin splitter => StandardSkinnedView<SplitterView>(splitter, stream, area, control),

@@ -8,10 +8,10 @@ using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 

@@ -1,11 +1,10 @@
-﻿using System.Linq;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Domain.Layout.Documentation;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Utils;

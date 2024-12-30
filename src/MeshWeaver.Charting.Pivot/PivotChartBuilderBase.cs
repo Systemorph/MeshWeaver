@@ -146,9 +146,11 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
                 .WithXAxis(PivotChartConst.XBarAxis)
                 .WithLabel(row.Descriptor.DisplayName),
 
-            ChartType.Scatter => 
-                
-            CreateScatterDataSet(pivotChartModel, values, row,  ref countStackPoints),
+            ChartType.Scatter => CreateScatterDataSet(
+                pivotChartModel,
+                values,
+                row,
+                ref countStackPoints),
             ChartType.Line => new LineDataSet(values)
                 .WithXAxis(PivotChartConst.XBarAxis)
                 .WithLabel(row.Descriptor.DisplayName),

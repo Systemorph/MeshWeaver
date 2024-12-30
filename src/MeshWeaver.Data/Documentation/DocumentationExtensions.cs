@@ -1,13 +1,8 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
-using MeshWeaver.Data;
-using Microsoft.Extensions.DependencyInjection;
-using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Domain.Layout.Documentation;
+namespace MeshWeaver.Data.Documentation;
 
 public static class DocumentationExtensions
 {
@@ -20,7 +15,7 @@ public static class DocumentationExtensions
         .Set(AddLambda(hubConf.Get<ImmutableList<Func<DocumentationContext, DocumentationContext>>>()
                        ?? ImmutableList<Func<DocumentationContext, DocumentationContext>>.Empty, configuration))
         .WithServices(services => services.AddScoped<IDocumentationService, DocumentationService>())
-        .AddLayout(layout => layout.AddDocumentation());
+        ;
 
     private static ImmutableList<Func<DocumentationContext, DocumentationContext>> AddLambda(
         ImmutableList<Func<DocumentationContext, DocumentationContext>> existing,
@@ -37,28 +32,4 @@ public static class DocumentationExtensions
             ?.Aggregate(new DocumentationContext(hub), (context, config) => config(context))
         ?? new(hub);
 
-    public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => Controls.LayoutArea(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
-        {
-            Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
-        }).ToString();
-
-    public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout, params Assembly[] assemblies)
-        => layout.WithNavMenu
-        (
-            (menu, _, _) => assemblies.Aggregate
-            (
-                menu,
-                (mm, assembly) =>
-                    layout.Hub.GetDocumentationService().Context
-                        .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name)
-                        ?.DocumentPaths
-                        .Aggregate
-                        (
-                            mm,
-                            (m, i) =>
-                                m.WithNavLink(i.Key, layout.DocumentationPath(assembly, i.Key))
-                        )
-            )
-        );
 }
