@@ -8,7 +8,11 @@ export default defineConfig({
                 {
                     src: 'node_modules/highlight.js/styles/*.min.css',
                     dest: './'
-                }
+                },
+                {
+                    src: 'node_modules/@primer/css/dist/markdown.css',
+                    dest: './'
+                },
             ],
             structured: true
         })
