@@ -1,6 +1,6 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Portal.Components;
+namespace MeshWeaver.Portal.Shared.Components;
 
 public partial class SiteSettings
 {

@@ -1,9 +1,11 @@
-﻿using MeshWeaver.Portal.Infrastructure;
+﻿#nullable enable
+using MeshWeaver.Portal.Infrastructure;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Extensions;
 
-namespace MeshWeaver.Portal.Components;
+namespace MeshWeaver.Portal.Shared.Components;
 
 public partial class SiteSettingsPanel
 {

@@ -2,6 +2,7 @@
 
     <PropertyGroup>
         <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+        <NoWarn>NU1604;AD0001</NoWarn>
     </PropertyGroup>
 
   <ItemGroup>

@@ -221,6 +221,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.AppHost",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Orleans", "portal\aspire\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj", "{07388A75-7B6C-4371-9AA3-1606409553C7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Shared", "portal\MeshWeaver.Portal.Shared\MeshWeaver.Portal.Shared.csproj", "{796CD904-DAE6-4993-889C-85456BF487A9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -599,6 +601,10 @@ Global
 		{07388A75-7B6C-4371-9AA3-1606409553C7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{07388A75-7B6C-4371-9AA3-1606409553C7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{07388A75-7B6C-4371-9AA3-1606409553C7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{796CD904-DAE6-4993-889C-85456BF487A9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{796CD904-DAE6-4993-889C-85456BF487A9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{796CD904-DAE6-4993-889C-85456BF487A9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{796CD904-DAE6-4993-889C-85456BF487A9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -699,6 +705,7 @@ Global
 		{863DBE48-65E0-41E5-8B16-4C732003EEBB} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
 		{C6A22DF9-C892-4979-A224-6E79B712E576} = {4C68D283-B46D-4CC1-B02C-4B212D01B4A6}
 		{07388A75-7B6C-4371-9AA3-1606409553C7} = {4C68D283-B46D-4CC1-B02C-4B212D01B4A6}
+		{796CD904-DAE6-4993-889C-85456BF487A9} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
