@@ -42,9 +42,10 @@ public record DomainViewConfiguration
         DocumentationService = hub.ServiceProvider.GetRequiredService<IDocumentationService>();
         ViewBuilders = [DefaultViewBuilder];
         PropertyViewBuilders = [(editor, ctx)=> 
-            hub.ServiceProvider.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
+            EditorLayout.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
         CatalogBuilders = [DefaultCatalog];
-    }
+    } 
+
 
     private object DefaultCatalog(EntityRenderingContext context)
     {
