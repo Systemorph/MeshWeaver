@@ -6,7 +6,9 @@ using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Scales.Ticks;
+using MeshWeaver.Charting.Models.Polar;
 using MeshWeaver.Charting.Models.Radar;
+using MeshWeaver.Charting.Models.Segmented;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Pivot.Models;
 
@@ -152,7 +154,10 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
                 .WithLabel(row.Descriptor.DisplayName),
             ChartType.Radar => new RadarDataSet(values)
                 .WithLabel(row.Descriptor.DisplayName),
-
+            ChartType.Pie => new PieDataSet(values)
+                .WithLabel(row.Descriptor.DisplayName),
+            ChartType.PolarArea => new PolarDataSet(values)
+                .WithLabel(row.Descriptor.DisplayName),
             _ => throw new NotImplementedException(
                 "Only bar, line and scatter data set types are supported"
             )

@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Charting.Models.Polar
 {
-    public record PolarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSet(Data, Label)
+    public record PolarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSetBase<PolarDataSet>(Data, Label)
     {
         #region Styling
         // https://www.chartjs.org/docs/latest/charts/polar.html#styling
