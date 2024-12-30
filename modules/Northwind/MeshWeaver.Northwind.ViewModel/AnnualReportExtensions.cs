@@ -23,7 +23,7 @@ namespace MeshWeaver.Northwind.ViewModel
                 return year;
             }
 
-            return DateTime.Now.Year;
+            return 2023;
         }
     }
 }
