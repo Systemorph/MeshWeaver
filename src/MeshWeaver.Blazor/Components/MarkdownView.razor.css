@@ -31,8 +31,5 @@
         height: 20px;
     }
 
-    .markdown-body ::deep .copy-to-clipboard:hover {
-        background: #eee;
-    }
 
 
