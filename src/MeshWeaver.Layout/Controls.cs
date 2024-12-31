@@ -1,5 +1,7 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 
@@ -153,7 +155,6 @@ public static class Controls
 
 
     public static SpacerControl Spacer => new();
-    public static EditFormControl EditForm => new();
 
     public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
 
@@ -180,6 +181,4 @@ public static class Controls
         => new(addressType, addressId, reference);
 
 
-    //public EditorControl Editor(object instance)
-    //=> new(instance);
 }

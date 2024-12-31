@@ -42,7 +42,7 @@ public record DomainViewConfiguration
         DocumentationService = hub.ServiceProvider.GetRequiredService<IDocumentationService>();
         ViewBuilders = [DefaultViewBuilder];
         PropertyViewBuilders = [(editor, ctx)=> 
-            EditorLayout.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
+            hub.ServiceProvider.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
         CatalogBuilders = [DefaultCatalog];
     } 
 
@@ -100,7 +100,7 @@ public record DomainViewConfiguration
             .Select(x => x.Value)
             .Bind(_ =>
                 context.TypeDefinition.Type.GetProperties()
-                    .Aggregate(Controls.EditForm, (grid, property) =>
+                    .Aggregate(new EditFormControl(), (grid, property) =>
                         PropertyViewBuilders
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
