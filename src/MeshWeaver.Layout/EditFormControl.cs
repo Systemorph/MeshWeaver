@@ -4,14 +4,14 @@
 /// Represents an edit form control with customizable properties.
 /// </summary>
 public record EditFormControl()
-    : ContainerControlWithItemSkin<EditFormControl, EditFormSkin, EditFormItemSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
+    : ContainerControlWithItemSkin<EditFormControl, EditFormSkin, PropertySkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
 {
     /// <summary>
-    /// Creates a new instance of <see cref="EditFormItemSkin"/> for the specified named area.
+    /// Creates a new instance of <see cref="PropertySkin"/> for the specified named area.
     /// </summary>
     /// <param name="namedArea">The named area control.</param>
-    /// <returns>A new instance of <see cref="EditFormItemSkin"/>.</returns>
-    protected override EditFormItemSkin CreateItemSkin(NamedAreaControl namedArea)
+    /// <returns>A new instance of <see cref="PropertySkin"/>.</returns>
+    protected override PropertySkin CreateItemSkin(NamedAreaControl namedArea)
         => new();
 }
 
@@ -23,7 +23,7 @@ public record EditFormSkin : Skin<EditFormSkin>;
 /// <summary>
 /// Represents the skin for an item in an edit form control.
 /// </summary>
-public record EditFormItemSkin : Skin<EditFormItemSkin>
+public record PropertySkin : Skin<PropertySkin>
 {
     /// <summary>
     /// Gets or initializes the description of the item.

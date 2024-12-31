@@ -32,7 +32,6 @@ public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleS
     public object Title { get; init; }
     public object TooltipText { get; init; }
     public TColumn WithTitle(object title) => This with { Title = title };
-    public TColumn WithTooltip(object tooltip) => This with { Tooltip = tooltip };
     public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
 
 }

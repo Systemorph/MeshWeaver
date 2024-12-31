@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -11,7 +12,14 @@ using Xunit.Abstractions;
 namespace MeshWeaver.Layout.Test;
 
 
-public record Calculator(double X, double Y);
+public record Calculator
+{
+    [Description("This is the X value")] 
+    public double X { get; init; }
+    [Description("This is the Y value")]
+    public double Y { get; init; }
+
+}
 public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 {
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
@@ -23,9 +31,9 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator(1, 1));
+        host.Hub.Edit(new Calculator());
     private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator(1, 1), (_,_,c) => Controls.Markdown($"Sum: {c.X + c.Y}"));
+        host.Hub.Edit(new Calculator(), (_,_,c) => Controls.Markdown($"Sum: {c.X + c.Y}"));
 
 
     [Fact]
@@ -40,13 +48,23 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x is not null);
 
         var editor = control.Should().BeOfType<EditorControl>().Subject;
-        editor.Areas.Should().HaveCount(2);
+        editor.Areas.Should()
+            .HaveCount(2)
+            .And.AllSatisfy(e =>
+            {
+                var skin = e.Skins.OfType<PropertySkin>().Should().ContainSingle().Subject;
+                skin.Label.Should().NotBeNull();
+                skin.Description.Should().NotBeNull();
+            });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => 
                 await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync())
             .ToArrayAsync();
 
         editorAreas.Should().HaveCount(2);
-        editorAreas.Should().AllBeOfType<NumberFieldControl>();
+        editorAreas.Should()
+            .AllBeOfType<NumberFieldControl>()
+            ;
+
     }
 }

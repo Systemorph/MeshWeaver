@@ -133,7 +133,7 @@ public static class DataCubeLayoutExtensions
         .Select(selectedDimension => 
                 BindEnumerable<FilterItem, CheckBoxControl>(
                     new(LayoutAreaReference.GetDataPointer(filterId, "filterItems", selectedDimension)),
-                f => CheckBox(f.Label, f.Selected)
+                f => CheckBox(f.Selected)
             ));
     }
 
