@@ -362,7 +362,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         ]);
 
         return Controls.Stack
-            .WithView(Template.Bind(data, x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Label, y.Value)), nameof(DataBoundCheckboxes)), Filter)
+            .WithView(Template.Bind(data, x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Value)), nameof(DataBoundCheckboxes)), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
                 .Select(d => d.Data.All(y => y.Value)
                 ), Results);

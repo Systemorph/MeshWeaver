@@ -1,7 +1,5 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 
@@ -139,8 +137,8 @@ public static class Controls
     public static BadgeControl Badge(object data) => new(data);
 
 
-    public static CheckBoxControl CheckBox(object label, object isChecked) =>
-        new(isChecked) { Label = label };
+    public static CheckBoxControl CheckBox(object isChecked) =>
+        new(isChecked);
 
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 

@@ -9,8 +9,6 @@ public interface IUiControl : IDisposable
     object Id { get; init; }
     string DataContext { get; init; }
     object Style { get; init; }
-    object Label { get; init; }
-    object Tooltip { get; init; }
     object Class { get; init; }
 
     EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
@@ -20,7 +18,6 @@ public interface IUiControl : IDisposable
 public interface IUiControl<out TControl> : IUiControl
     where TControl : IUiControl<TControl>
 {
-    TControl WithLabel(object label);
     TControl WithClickAction(Func<UiActionContext, Task> onClick);
 }
 
@@ -35,10 +32,8 @@ public abstract record UiControl : IUiControl
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
 
-    public object Tooltip { get; init; }
     public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
 
-    public object Label { get; init; }
     public ImmutableList<Skin> Skins { get; init; } = [];
     public object Class { get; init; }
 
@@ -82,9 +77,7 @@ public abstract record UiControl : IUiControl
 
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
-               Tooltip == other.Tooltip &&
                IsReadonly == other.IsReadonly &&
-               ((Label == null && other.Label == null) || (Label != null && Label.Equals(other.Label))) &&
                (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
@@ -92,23 +85,16 @@ public abstract record UiControl : IUiControl
 
 
 
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(
-            HashCode.Combine(
-                Id,
-                Style,
-                Tooltip
-            ),
-            HashCode.Combine(
-                IsReadonly,
-                Label,
-                Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
-                Class,
-                DataContext
-            )
+    public override int GetHashCode() =>
+        HashCode.Combine(
+            Id,
+            Style,
+            IsReadonly,
+            Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+            Class,
+            DataContext
         );
-    }
+
     EntityStoreAndUpdates IUiControl.Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
         => Render(host, context, store);
 
@@ -145,11 +131,6 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
     protected TControl This => (TControl)this;
 
     public TControl WithId(object id) => This with { Id = id };
-
-    public TControl WithLabel(object label)
-    {
-        return This with { Label = label };
-    }
 
     public override bool IsUpToDate(object other) => Equals(other);
     public new TControl WithBuildup(Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates> buildup)
