@@ -169,12 +169,11 @@ public static class LayoutExtensions
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id)).Cast<T>();
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))
+        .Select(x => (T)x.Value)
+        .Distinct()
+    ;
 
-    public static T GetData<T>(
-        this ISynchronizationStream<EntityStore> stream,
-        string id
-    ) => (T)stream.Current.Value.Reduce(new EntityReference(LayoutAreaReference.Data, id));
 
     public static void SetData(
         this ISynchronizationStream<EntityStore> stream,

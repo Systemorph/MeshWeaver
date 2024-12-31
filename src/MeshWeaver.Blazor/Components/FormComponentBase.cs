@@ -10,7 +10,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     private TValue value;
 
     public const string Edit = nameof(Edit);
-
+    protected string Label { get; set; }
     protected TValue Value
     {
         get => value;
@@ -26,6 +26,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     protected override void BindData()
     {
         base.BindData();
+        DataBind(ViewModel.Label, x => x.Label);
         DataBind(ViewModel.Data, x => x.Value, ConversionToValue);
         Pointer = ViewModel.Data as JsonPointerReference;
     }

@@ -26,7 +26,7 @@ public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewMode
     protected bool AutoFocus { get; set; }
     protected bool Immediate { get; set; }
     protected int ImmediateDelay { get; set; }
-
+    protected string Label { get; set; }
     private JsonPointerReference DataPointer { get; set; }
 
 
@@ -35,6 +35,7 @@ public abstract class InputBase<TViewModel, TView, TData> : BlazorView<TViewMode
         base.BindData();
         if (ViewModel != null)
         {
+            DataBind(ViewModel.Label, x => x.Label);
             DataBind(ViewModel.Data, x => x.InnerData);
             DataBind(ViewModel.Placeholder, x => x.Placeholder);
             DataBind(ViewModel.Disabled, x => x.Disabled);

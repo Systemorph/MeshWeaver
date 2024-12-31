@@ -46,7 +46,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         Logger.LogDebug("Finished data bindings for area {Area}", Area);
     }
 
-    protected string Label { get; set; }
 
     protected string Class { get; set; }
     protected string Id { get; set; }
@@ -136,7 +135,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (ViewModel != null)
         {
             DataBind(ViewModel.Id, x => x.Id);
-            DataBind(ViewModel.Label, x => x.Label);
             DataBind(ViewModel.Class, x => x.Class);
             DataBind(ViewModel.Style, x => x.Style);
             if (ViewModel.DataContext != null)

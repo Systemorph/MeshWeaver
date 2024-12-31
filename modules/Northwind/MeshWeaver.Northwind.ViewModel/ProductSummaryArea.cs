@@ -36,7 +36,7 @@ public static class ProductSummaryArea
     /// <remarks>
     /// This method constructs the Product Summary view, incorporating various UI components to display detailed product information. The specific contents and layout of the view are determined at runtime based on the rendering context.
     /// </remarks>
-    public static LayoutStackControl ProductSummary(
+    public static StackControl ProductSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     ) =>

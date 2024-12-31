@@ -27,7 +27,7 @@ public interface IInputControl : IFormComponent
 }
 
 public abstract record InputBaseControl<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+    : FormComponentBase<TControl>(Data)
     where TControl : InputBaseControl<TControl>, IInputControl
 {
     public object AutoFocus { get; init; }
@@ -49,7 +49,7 @@ public abstract record InputBaseControl<TControl>(object Data)
     /// Gets or initializes the delay for immediate updates of the input control.
     /// </summary>
     public object ImmediateDelay { get; init; }
-    
+
     public TControl WithAutoFocus(object autoFocus) => (TControl) this with { AutoFocus = autoFocus };
 
     public TControl WithDisabled(object disabled) => (TControl) this with { Disabled = disabled };

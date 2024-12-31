@@ -1,33 +1,4 @@
-@inherits BlazorView<CheckBoxControl, Checkbox>
+@inherits FormComponentBase<CheckBoxControl, Checkbox, bool>
 
-<FluentCheckbox @bind-Value="@IsChecked" Label="@Label" />
+<FluentCheckbox @bind-Value="@Value" Label="@Label" />
     
-@code
-{
-
-    private bool IsChecked
-    {
-        get => isChecked;
-        set
-        {
-            var needsUpdate = isChecked != value;
-            isChecked = value;
-            if (needsUpdate)
-                UpdatePointer(isChecked, Pointer);
-        }
-    }
-
-    private JsonPointerReference Pointer { get; set; }
-
-    protected override void BindData()
-    {
-        base.BindData();
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Data, x => x.IsChecked);
-            Pointer = ViewModel.Data as JsonPointerReference;
-        }
-    }
-
-    private bool isChecked;
-}

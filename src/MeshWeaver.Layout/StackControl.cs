@@ -10,8 +10,8 @@ namespace MeshWeaver.Layout;
 /// <a href="https://www.fluentui-blazor.net/layoutstack">Fluent UI Blazor LayoutStack documentation</a>.
 /// </remarks>
 
-public record LayoutStackControl()
-    : ContainerControl<LayoutStackControl, LayoutStackSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion,
+public record StackControl()
+    : ContainerControl<StackControl, LayoutStackSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion,
         new());
 /// <summary>
 /// Represents the skin for a layout stack control.
@@ -102,25 +102,25 @@ public static class LayoutStackExtensions
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="horizontalAlignment">The horizontal alignment to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified horizontal alignment.</returns>
-    public static LayoutStackControl WithHorizontalAlignment(this LayoutStackControl control, object horizontalAlignment)
+    /// <returns>A new <see cref="StackControl"/> instance with the specified horizontal alignment.</returns>
+    public static StackControl WithHorizontalAlignment(this StackControl control, object horizontalAlignment)
         => control.WithSkin(skin => skin.WithHorizontalAlignment(horizontalAlignment));
         /// <summary>
     /// Sets the vertical alignment of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="verticalAlignment">The vertical alignment to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified vertical alignment.</returns>
+    /// <returns>A new <see cref="StackControl"/> instance with the specified vertical alignment.</returns>
 
-    public static LayoutStackControl WithVerticalAlignment(this LayoutStackControl control, object verticalAlignment)
+    public static StackControl WithVerticalAlignment(this StackControl control, object verticalAlignment)
         => control.WithSkin(skin => skin.WithVerticalAlignment(verticalAlignment));
 /// <summary>
     /// Sets the horizontal gap between elements in the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="horizontalGap">The horizontal gap to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified horizontal gap.</returns>
-    public static LayoutStackControl WithHorizontalGap(this LayoutStackControl control, object horizontalGap)
+    /// <returns>A new <see cref="StackControl"/> instance with the specified horizontal gap.</returns>
+    public static StackControl WithHorizontalGap(this StackControl control, object horizontalGap)
         => control.WithSkin(skin => skin.WithHorizontalGap(horizontalGap));
 
  /// <summary>
@@ -128,24 +128,24 @@ public static class LayoutStackExtensions
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="verticalGap">The vertical gap to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified vertical gap.</returns>
-    public static LayoutStackControl WithVerticalGap(this LayoutStackControl control, object verticalGap)
+    /// <returns>A new <see cref="StackControl"/> instance with the specified vertical gap.</returns>
+    public static StackControl WithVerticalGap(this StackControl control, object verticalGap)
         => control.WithSkin(skin => skin.WithVerticalGap(verticalGap));
         /// <summary>
     /// Sets the orientation of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="orientation">The orientation to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified orientation.</returns>
+    /// <returns>A new <see cref="StackControl"/> instance with the specified orientation.</returns>
 
-    public static LayoutStackControl WithOrientation(this LayoutStackControl control, object orientation)
+    public static StackControl WithOrientation(this StackControl control, object orientation)
         => control.WithSkin(skin => skin.WithOrientation(orientation));
 /// <summary>
     /// Sets the wrap state of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="wrap">The wrap state to set.</param>
-    public static LayoutStackControl WithWrap(this LayoutStackControl control, object wrap)
+    public static StackControl WithWrap(this StackControl control, object wrap)
         => control.WithSkin(skin => skin.WithWrap(wrap));
 
 /// <summary>
@@ -153,15 +153,15 @@ public static class LayoutStackExtensions
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="width">The width to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified width.</returns>
-    public static LayoutStackControl WithWidth(this LayoutStackControl control, object width)
+    /// <returns>A new <see cref="StackControl"/> instance with the specified width.</returns>
+    public static StackControl WithWidth(this StackControl control, object width)
         => control.WithSkin(skin => skin.WithWidth(width));
 /// <summary>
     /// Sets the height of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
     /// <param name="height">The height to set.</param>
-    /// <returns>A new <see cref="LayoutStackControl"/> instance with the specified height.</returns>
-    public static LayoutStackControl WithHeight(this LayoutStackControl control, object height)
+    /// <returns>A new <see cref="StackControl"/> instance with the specified height.</returns>
+    public static StackControl WithHeight(this StackControl control, object height)
         => control.WithSkin(skin => skin.WithHeight(height));
 }

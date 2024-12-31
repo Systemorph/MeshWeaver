@@ -157,7 +157,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             controls.AddRange(children);
             areas = children
                 .SelectMany(c =>
-                    (c.Value as LayoutStackControl)?.Areas ?? Enumerable.Empty<NamedAreaControl>()
+                    (c.Value as StackControl)?.Areas ?? Enumerable.Empty<NamedAreaControl>()
                 )
                 .ToImmutableList();
         }

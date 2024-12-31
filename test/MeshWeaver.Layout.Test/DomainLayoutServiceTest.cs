@@ -63,7 +63,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .FirstAsync(x => x != null);
         var stack = content
             .Should()
-            .BeOfType<LayoutStackControl>()
+            .BeOfType<StackControl>()
             .Which;
 
 
@@ -132,7 +132,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .FirstAsync(x => x != null);
         var stack = content
             .Should()
-            .BeOfType<LayoutStackControl>()
+            .BeOfType<StackControl>()
             .Which;
 
         var control = await stream

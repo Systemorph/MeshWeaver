@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Layout;
-using MeshWeaver.Layout.DataGrid;
+﻿using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -13,9 +12,9 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class DataGridView
 {
-    private bool Virtualize { get; set; }
-    private float ItemSize { get; set; }
-    private bool ResizableColumns { get; set; }
+    private bool virtualize;
+    private float itemSize;
+    private bool resizableColumns;
 
     private PaginationState Pagination { get; } = new()
     {
@@ -27,8 +26,8 @@ public partial class DataGridView
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Virtualize, x => x.Virtualize);
-        DataBind(ViewModel.ItemSize, x => x.ItemSize);
+        DataBind(ViewModel.Virtualize, x => x.virtualize);
+        DataBind(ViewModel.ItemSize, x => x.itemSize);
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
@@ -55,10 +54,8 @@ public partial class DataGridView
         if (column.Sortable is not null)
             builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable));
         if (column.Tooltip is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Tooltip), Stream.GetDataBoundValue<bool>(column.Tooltip));
-        if (column.TooltipText is not null)
             builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText),
-                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.TooltipText)));
+                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip)));
 
         builder.CloseComponent();
 
