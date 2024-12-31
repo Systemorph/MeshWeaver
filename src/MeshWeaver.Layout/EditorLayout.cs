@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,24 +15,41 @@ namespace MeshWeaver.Layout;
 
 public static class EditorLayout
 {
-    public static LayoutStackControl Edit<T>(
-        this IObservable<T> observable,
+
+    public static UiControl Edit<T>(this IMessageHub hub, T instance,
+        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        => hub.ServiceProvider.Edit(Observable.Return(instance), result);
+    public static UiControl Edit<T>(this IServiceProvider serviceProvider, T instance,
+        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        => serviceProvider.Edit(Observable.Return(instance), result);
+
+    public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
+        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+    => hub.ServiceProvider.Edit(observable, result);
+
+    public static UiControl Edit<T>(
+        this IServiceProvider serviceProvider,
+            IObservable<T> observable,
         Func<LayoutAreaHost, RenderingContext, T, object> result = null)
     {
         var id = Guid.NewGuid().AsString();
         var editor = observable.Bind(_ =>
                 typeof(T).GetProperties()
-                    .Aggregate(new EditorControl(), MapToControl<EditorControl, EditorSkin>),
+                    .Aggregate(new EditorControl(),
+                        serviceProvider.MapToControl<EditorControl, EditorSkin>),
             id);
-        var ret = Controls.Stack.WithView(editor);
         if (result == null)
-            return ret;
-        return ret.WithView((host, ctx) =>
+            return editor;
+        return Controls
+            .Stack
+            .WithView(editor)
+            .WithView((host, ctx) =>
             host.Stream.GetDataStream<T>(id).Distinct().Select(x => result.Invoke(host, ctx, x)));
     }
 
 
     public static T MapToControl<T, TSkin>(
+        this IServiceProvider serviceProvider,
         T editor, 
         PropertyInfo propertyInfo)
         where T: ContainerControlWithItemSkin<T,TSkin, EditFormItemSkin>
@@ -41,11 +59,11 @@ public static class EditorLayout
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
 
-        Func<LayoutAreaHost, RenderingContext, EditFormItemSkin, EditFormItemSkin> skinConfiguration = (host, _, skin) =>
+        Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
-                Description = host.Hub.ServiceProvider
+                Description = serviceProvider
                     .GetRequiredService<IDocumentationService>()
                     .GetDocumentation(propertyInfo)?.Summary?.Text,
                 Label = label
