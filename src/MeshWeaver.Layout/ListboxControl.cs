@@ -34,6 +34,20 @@ public abstract record ListControlBase<TControl>(object Data)
     public IReadOnlyCollection<Option> Options { get; init; }
 
     /// <summary>
+    /// The label bound to this control
+    /// </summary>
+    public object Label { get; init; }
+
+
+    /// <summary>
+    /// Sets the label.
+    /// </summary>
+    /// <param name="label"></param>
+    /// <returns></returns>
+    public TControl WithLabel(object label)
+        => This with { Label = label };
+
+    /// <summary>
     /// Sets the options for the list control.
     /// </summary>
     /// <param name="options">The options to set.</param>

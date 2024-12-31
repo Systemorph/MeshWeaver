@@ -90,7 +90,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         var areas = control
             .Should()
-            .BeOfType<LayoutStackControl>()
+            .BeOfType<StackControl>()
             .Which.Areas.Should()
             .HaveCount(2)
             .And.Subject;
@@ -534,7 +534,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
-        var subAreaName = content.Should().BeOfType<LayoutStackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
+        var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
         var subArea = await stream.GetControlStream(subAreaName.Area.ToString()).FirstAsync();
 
         stopwatch.Stop();

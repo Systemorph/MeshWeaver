@@ -62,9 +62,9 @@ public static class Controls
     public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, icon, href);
 
     /// <summary>
-    /// Gets a new instance of <see cref="LayoutStackControl"/>.
+    /// Gets a new instance of <see cref="StackControl"/>.
     /// </summary>
-    public static LayoutStackControl Stack => new();
+    public static StackControl Stack => new();
 
     /// <summary>
     /// Gets a new instance of <see cref="ToolbarControl"/>.

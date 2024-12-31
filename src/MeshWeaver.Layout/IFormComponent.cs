@@ -9,5 +9,9 @@
         /// Gets or initializes the data associated with the form component.
         /// </summary>
         object Data { get; init; }
+        /// <summary>
+        /// Label of the form component
+        /// </summary>
+        object Label { get; init; }
     }
 }

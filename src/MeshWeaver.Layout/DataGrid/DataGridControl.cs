@@ -30,9 +30,9 @@ public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleS
     where TColumn : DataColumnControl<TColumn>
 {
     public object Title { get; init; }
-    public object TooltipText { get; init; }
+    public object Tooltip { get; init; }
     public TColumn WithTitle(object title) => This with { Title = title };
-    public TColumn WithTooltipText(object tooltipText) => This with { TooltipText = tooltipText };
+    public TColumn WithTooltipText(object tooltipText) => This with { Tooltip = tooltipText };
 
 }
 public abstract record PropertyColumnControl() : DataColumnControl<PropertyColumnControl> 
