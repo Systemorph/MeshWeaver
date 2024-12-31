@@ -152,7 +152,7 @@ public static class StandardWorkspaceReferenceImplementations
                     case OperationType.Add:
                         var entity = stream.GetEntity(entityPointer, updatedJson);
                         currentCollection = currentCollection.Update(id, entity);
-                        updates.Add(new(collection, eg.Key.Id, entity));
+                        updates.Add(new(collection, JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions), entity));
                         break;
                     case OperationType.Replace:
                         entity = stream.GetEntity(entityPointer, updatedJson);

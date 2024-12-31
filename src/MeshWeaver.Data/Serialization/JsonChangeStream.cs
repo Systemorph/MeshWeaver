@@ -15,9 +15,9 @@ public static class JsonSynchronizationStream
 {
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
-    object owner,
-    TReference reference
-)
+        object owner,
+        TReference reference
+    )
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;

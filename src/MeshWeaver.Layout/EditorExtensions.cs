@@ -14,9 +14,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout;
 
-public static class EditorLayout
+public static class EditorExtensions
 {
-
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
         Func<LayoutAreaHost, RenderingContext, T, object> result = null)
         => hub.ServiceProvider.Edit(Observable.Return(instance), result);
@@ -45,7 +44,8 @@ public static class EditorLayout
             .Stack
             .WithView(editor)
             .WithView((host, ctx) =>
-            host.Stream.GetDataStream<T>(id).Distinct().Select(x => result.Invoke(host, ctx, x)));
+            host.Stream.GetDataStream<T>(id)
+                .Select(x => result.Invoke(host, ctx, x)));
     }
 
 
@@ -92,7 +92,7 @@ public static class EditorLayout
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
     }
-    public static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
+    private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
     {
         return new JsonPointerReference($"/{propertyInfo.Name.ToCamelCase()}");
     }

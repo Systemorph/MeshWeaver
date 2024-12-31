@@ -74,7 +74,7 @@ public record DomainViewConfiguration
 
     private object DefaultViewBuilder(EntityRenderingContext context)
     {
-        var ret = new LayoutStackControl()
+        var ret = new StackControl()
             .WithView(Controls.Title(context.TypeDefinition.DisplayName, 1));
         var description = DocumentationService.GetDocumentation(context.TypeDefinition.Type)?.Summary?.Text;
         if(!string.IsNullOrWhiteSpace(description))

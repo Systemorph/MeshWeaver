@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Domain;
-
-namespace MeshWeaver.Layout;
+﻿namespace MeshWeaver.Layout;
 /// <summary>
 /// Represents a number control.
 /// </summary>
@@ -19,7 +17,7 @@ namespace MeshWeaver.Layout;
 /// </remarks>
 /// <param name="Data">The data associated with the date control.</param>
 public record DateControl(object Data)
-    : UiControl<DateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion); // TODO V10: Add date formatter (2023.09.07, Armen Sirotenko)
+    : UiControl<DateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion); 
 /// <summary>
 /// Represents an exception control.
 /// </summary>
@@ -42,7 +40,7 @@ public record CodeSampleControl(object Data)
     : UiControl<CodeSampleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 
 public record CheckBoxControl(object Data)
-    : UiControl<CheckBoxControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
+    : FormComponentBase<CheckBoxControl>(Data);
 
 /// <summary>
 /// Control representing a progress bar.

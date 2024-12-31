@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
