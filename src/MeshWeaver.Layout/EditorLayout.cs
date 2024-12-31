@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using Json.More;
@@ -52,20 +53,21 @@ public static class EditorLayout
         this IServiceProvider serviceProvider,
         T editor, 
         PropertyInfo propertyInfo)
-        where T: ContainerControlWithItemSkin<T,TSkin, EditFormItemSkin>
+        where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
 
-        Func<EditFormItemSkin, EditFormItemSkin> skinConfiguration = skin =>
+        Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
-                Description = serviceProvider
-                    .GetRequiredService<IDocumentationService>()
-                    .GetDocumentation(propertyInfo)?.Summary?.Text,
+                Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
+                              ?? serviceProvider
+                                  .GetRequiredService<IDocumentationService>()
+                                  .GetDocumentation(propertyInfo)?.Summary?.Text,
                 Label = label
             };
         if (dimensionAttribute != null)
