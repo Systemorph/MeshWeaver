@@ -20,11 +20,10 @@ public class DeliveryFailureException : Exception
     internal DeliveryFailure Failure { get; }
 }
 
-public record DeliveryFailure(IMessageDelivery Delivery)
+public record DeliveryFailure(IMessageDelivery Delivery, string Message = null)
 {
     public ErrorType ErrorType { get; init; }
     public string ExceptionType { get; init; }
-    public string Message { get; init; }
     public string StackTrace { get; init; }
 
     public static DeliveryFailure FromException(IMessageDelivery request, Exception e) =>

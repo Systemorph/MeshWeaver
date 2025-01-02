@@ -15,9 +15,9 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     {
         var client = await SignalRMeshClient
             .Configure(SignalRUrl)
-            .ConfigureConnection(c => c
+            .ConfigureConnection(c => c.WithSignalRConfiguration(signalr => signalr
                 .WithUrl(SignalRUrl, x => 
-                x.HttpMessageHandlerFactory = (_ => Server.CreateHandler())))
+                x.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))))
             .ConnectAsync();
 
         var response = await client.AwaitResponse(new PingRequest(),

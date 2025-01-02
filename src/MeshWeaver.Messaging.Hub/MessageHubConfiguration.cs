@@ -33,13 +33,13 @@ public record MessageHubConfiguration
 
     internal IMessageHub HubInstance { get; set; }
 
-    public MessageHubConfiguration WithDisposeAction(Action<IMessageHub> disposeAction)
-        => WithDisposeAction(m =>
+    public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
+        => RegisterForDisposal(m =>
         {
             disposeAction.Invoke(m);
             return Task.CompletedTask;
         });
-    public MessageHubConfiguration WithDisposeAction(Func<IMessageHub, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
+    public MessageHubConfiguration RegisterForDisposal(Func<IMessageHub, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
 
 

@@ -46,4 +46,12 @@ public static class MessageHubExtensions
         return (split[0], string.Join('/', split.Skip(1)));
     }
 
+    public static T GetAddressOfType<T>(object address)
+    {
+        if (address is T ret)
+            return ret;
+        if (address is HostedAddress hosted)
+            return GetAddressOfType<T>(hosted.Address);
+        return default;
+    }
 }
