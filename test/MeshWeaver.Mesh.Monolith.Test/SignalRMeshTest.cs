@@ -2,6 +2,7 @@
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.SignalR;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.SignalR.Client;
 using Xunit;
 using Xunit.Abstractions;
@@ -13,12 +14,11 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     [Fact]
     public async Task PingPong()
     {
-        var client = await SignalRMeshClient
-            .Configure(SignalRUrl)
-            .ConfigureConnection(c => c.WithSignalRConfiguration(signalr => signalr
-                .WithUrl(SignalRUrl, x => 
-                x.HttpMessageHandlerFactory = (_ => Server.CreateHandler()))))
-            .ConnectAsync();
+        var client = ServiceProvider.CreateMessageHub(
+            new SignalRClientAddress(),
+                config => config
+            .UseSignalRClient(SignalRUrl)
+            );
 
         var response = await client.AwaitResponse(new PingRequest(),
             o => o.WithTarget(new MeshAddress()),

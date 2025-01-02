@@ -7,8 +7,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.SignalR;
 
-public class SignalRConnectionHub(IMessageHub hub) : Hub
+public class SignalRConnectionHub() : Hub
 {
+    private IMessageHub hub;
     public const string EndPoint = "signalr";
     private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
 

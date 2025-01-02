@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Connection.Notebook;
+using MeshWeaver.Connection.SignalR;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -52,7 +53,12 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 .StartAsync();
 
             Server = Host.GetTestServer();
-            ConnectionSettings.HttpConnectionOptions = x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler();
+            //for notebooks
+            ConnectionSettings.HttpConnectionOptions = 
+                // for signalR clients
+                SignalRClientExtensions.HttpConnectionOptions = 
+                    // map to test server
+                    x => x.HttpMessageHandlerFactory = _ => Server.CreateHandler();
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();
