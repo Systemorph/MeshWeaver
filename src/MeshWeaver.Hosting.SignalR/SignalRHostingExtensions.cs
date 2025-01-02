@@ -17,6 +17,7 @@ public static class SignalRHostingExtensions
     {
         services.AddSignalR();
         services.AddSingleton<SignalRConnectionHub>();
+        services.AddMemoryCache();
         return services;
     }
     public static IServiceCollection AddKernelHub(this IServiceCollection services)

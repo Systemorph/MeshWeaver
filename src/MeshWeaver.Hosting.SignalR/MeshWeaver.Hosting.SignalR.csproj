@@ -6,6 +6,7 @@
 
     <ItemGroup>
       <PackageReference Include="DocumentFormat.OpenXml" />
+      <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     </ItemGroup>
 
     <ItemGroup>

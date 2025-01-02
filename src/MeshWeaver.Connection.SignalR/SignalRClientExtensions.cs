@@ -1,73 +1,52 @@
-﻿using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
-using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Connection.SignalR;
 
 public static class SignalRClientExtensions
 {
+
     public static MessageHubConfiguration UseSignalRClient(
         this MessageHubConfiguration config, 
-        Func<HubConnectionBuilder, IHubConnectionBuilder> connectionConfiguration)
+        string url,
+        Func<SignalRMeshConnectionBuilder, SignalRMeshConnectionBuilder> connectionConfiguration)
     {
         return config
-            .WithServices(services =>
-            {
-                return services.AddScoped(sp =>
-                    {
-                        var builder= connectionConfiguration.Invoke(new());
-
-
-                        builder.Services.AddSingleton<IHubProtocol>(_ =>
-                            new JsonHubProtocol(new OptionsWrapper<JsonHubProtocolOptions>(new()
-                            {
-                                PayloadSerializerOptions =
-                                    sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
-                            })));
-                        return builder.Build();
-                    });
-
-            })
+            .WithServices(services => services.AddScoped(sp => connectionConfiguration.Invoke(new(sp, config.Address, url)).Build()))
             .WithInitialization(async (hub, ct) =>
                 {
                     var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                         .CreateLogger(typeof(SignalRClientExtensions));
-                    var address = hub.Address;
-                    var (addressType, id) = MessageHubExtensions.GetAddressTypeAndId(address);
 
                     try
                     {
+
+                        logger.LogInformation("Creating SignalR connection for {Address}", hub.Address);
                         var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
+                        await hubConnection.StartAsync(ct);
                         hub.RegisterForDisposal(async _ =>
                         {
                             await hubConnection.StopAsync(ct);
                             await hubConnection.DisposeAsync();
                         });
-                        logger.LogInformation("Creating SignalR connection for {AddressType} {Id}", addressType, id);
-                        await hubConnection.StartAsync(ct);
 
-                        var connection =
-                            await hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id, ct);
-                        if (connection.Status != ConnectionStatus.Connected)
-                            throw new MeshException("Couldn't connect.");
+
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
                         {
                             // Handle the received message
-                            logger.LogDebug($"Received message for address {address}: {message}");
+                            logger.LogDebug("Received message for address {address}: {message}", hub.Address, 
+                                message);
                             hub.DeliverMessage(message);
                         });
 
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError("Unable connecting SignalR connection for {AddressType} {Id}:\n{Exception}",
-                            addressType, id, ex);
+                        logger.LogError("Unable connecting SignalR connection for {Address} :\n{Exception}",
+                            hub.Address, ex);
                         throw;
                     }
                 })
