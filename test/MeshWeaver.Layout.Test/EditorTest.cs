@@ -106,7 +106,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync())
+                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null))
             .ToArrayAsync();
 
         editorAreas.Should().HaveCount(2);

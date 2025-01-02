@@ -2,7 +2,6 @@
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -32,11 +31,11 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient> where TClient 
     }
     
 
-    protected ImmutableList<Func<IHubConnectionBuilder, IHubConnectionBuilder>> ConnectionConfiguration { get; set; } =
+    protected ImmutableList<Func<SignalRMeshConnectionBuilder, SignalRMeshConnectionBuilder>> ConnectionConfiguration { get; set; } =
         [];
 
     public TClient ConfigureConnection(
-        Func<IHubConnectionBuilder, IHubConnectionBuilder> connectionConfiguration)
+        Func<SignalRMeshConnectionBuilder, SignalRMeshConnectionBuilder> connectionConfiguration)
     {
         ConnectionConfiguration = ConnectionConfiguration.Add(connectionConfiguration);
         return This;
@@ -45,9 +44,8 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient> where TClient 
     {
         ConfigureHub(config =>
             config
-                .UseSignalRClient(x =>
-                    ConnectionConfiguration.Aggregate(
-                        x.WithUrl(Url),
+                .UseSignalRClient(Url, x =>
+                    ConnectionConfiguration.Aggregate(x,
                         (c, cc) => cc.Invoke(c)
                     )
                 )
@@ -72,3 +70,4 @@ public class SignalRMeshClientBase<TClient> : HubBuilder<TClient> where TClient 
         return ret;
     }
 }
+
