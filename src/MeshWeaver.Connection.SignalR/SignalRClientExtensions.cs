@@ -25,20 +25,20 @@ public static class SignalRClientExtensions
                 return services.AddScoped(sp =>
                 {
                     var builder = new HubConnectionBuilder()
-                        .WithUrl(url,  HttpConnectionOptions)
+                        .WithUrl(url, HttpConnectionOptions)
                         .WithAutomaticReconnect();
-                    
-                    if(configuration is not null)
+
+                    if (configuration is not null)
                         builder = configuration(builder);
 
                     builder.Services.AddSingleton<IHubProtocol>(_ =>
-                            new JsonHubProtocol(new OptionsWrapper<JsonHubProtocolOptions>(new()
-                            {
-                                PayloadSerializerOptions =
-                                    sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
-                            })));
-                        return builder.Build();
-                    });
+                        new JsonHubProtocol(new OptionsWrapper<JsonHubProtocolOptions>(new()
+                        {
+                            PayloadSerializerOptions =
+                                sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
+                        })));
+                    return builder.Build();
+                });
 
             })
             .WithInitialization(async (hub, ct) =>
@@ -67,7 +67,7 @@ public static class SignalRClientExtensions
                                 var connected =
                                     await hubConnection.InvokeAsync<MeshConnection>(
                                         "Connect",
-                                        hub.Address.ToString());
+                                        hub.Address.ToString(), cancellationToken: ct);
 
                                 if (connected.Status != ConnectionStatus.Connected)
                                     throw new MeshException("Couldn't connect.");

@@ -36,13 +36,13 @@ public class KernelHub : Hub
 
 
 
-    public async Task Connect(string clientId)
+    public async Task<bool> Connect(string clientId)
     {
         var kernel = await kernelService.GetKernelIdAsync(clientId);
         connectionsByKernel.AddOrUpdate(
             kernel, x => [x], (x, l) => l.Add(x));
 
-        await Clients.Caller.SendAsync("connected", true);
+        return true;
     }
 
 
@@ -52,7 +52,7 @@ public class KernelHub : Hub
         this.kernelService = kernelService;
         hub.Register<KernelEventEnvelope>(async (d, ct) =>
         {
-            var (type,kernelId) = MessageHubExtensions.GetAddressTypeAndId(d.Sender);
+            var (type, kernelId) = MessageHubExtensions.GetAddressTypeAndId(d.Sender);
 
             if (type != KernelAddress.TypeName)
                 return d;
@@ -63,11 +63,5 @@ public class KernelHub : Hub
 
             return d.Processed();
         });
-
     }
-
-
-
-
-
 }

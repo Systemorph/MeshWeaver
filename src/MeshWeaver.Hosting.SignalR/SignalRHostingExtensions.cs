@@ -24,6 +24,7 @@ public static class SignalRHostingExtensions
     {
         services.AddSignalR();
         services.AddSingleton<KernelHub>();
+        services.AddSingleton<IKernelService, KernelService>();
         return services;
     }
 
