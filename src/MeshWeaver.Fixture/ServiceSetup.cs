@@ -8,11 +8,11 @@ namespace MeshWeaver.Fixture;
 
 public class ServiceSetup
 {
-    public readonly ServiceCollection Services = new();
+    public readonly ServiceCollection Services = CreateServiceCollection();
     public readonly List<Action<IServiceProvider>> Initializations = new();
     public IServiceProvider ServiceProvider { get; private set; }
 
-    public ServiceSetup()
+    protected static ServiceCollection CreateServiceCollection()
     {
         // Build configuration
         var configuration = new ConfigurationBuilder()
@@ -20,12 +20,14 @@ public class ServiceSetup
             .Build();
 
         // Configure logging
-        Services.AddLogging(logging =>
+        var services = new ServiceCollection();
+        services.AddLogging(logging =>
         {
             logging.AddConfiguration(configuration.GetSection("Logging"));
             logging.AddXUnitLogger();
         });
-        Services.AddOptions();
+        services.AddOptions();
+        return services;
     }
 
     protected virtual void Initialize()

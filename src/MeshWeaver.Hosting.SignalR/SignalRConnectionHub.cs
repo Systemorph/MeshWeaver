@@ -12,12 +12,15 @@ public class SignalRConnectionHub(IMessageHub hub) : Hub
     public const string EndPoint = "signalr";
     private readonly ConcurrentDictionary<(string addressType, string id), MeshConnection> connections = new();
 
-    public async Task<MeshConnection> Connect(string addressType, string id)
+    public async Task<MeshConnection> Connect(string address)
     {
-        if (string.IsNullOrEmpty(addressType) || string.IsNullOrEmpty(id))
-        {
-            throw new HubException("addressType and id are required query parameters");
-        }
+        var split = address.Split('/');
+        if (split.Length < 2)
+            throw new HubException("Invalid address format");
+
+        var addressType = split[0];
+        var id = split[1];
+
         var routingService = hub.ServiceProvider.GetRequiredService<IRoutingService>();
         var caller = Clients.Caller;
         var key = (addressType, id);

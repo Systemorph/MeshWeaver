@@ -11,53 +11,68 @@ public class KernelHub : Hub
 {
     public const string EndPoint = "kernel";
     public const string KernelEventsMethod = "kernelEvents";
-    private readonly ConcurrentDictionary<string, ImmutableList<string>> connectionsByKernel = new();
-    private readonly ConcurrentDictionary<string, string> clientByConnection = new();
+    private readonly ConcurrentDictionary<KernelAddress, ImmutableList<string>> connectionsByKernel = new();
+    private readonly ConcurrentDictionary<string, KernelAddress> kernelByConnection = new();
     private readonly IKernelService kernelService;
 
 
     public Task SubmitCommand(string kernelCommandEnvelope)
     {
-        var clientId = GetClientId(Context.ConnectionId);
-        return kernelService.SubmitCommandAsync(clientId, kernelCommandEnvelope);
+        if (!kernelByConnection.TryGetValue(Context.ConnectionId, out var kernelAddress))
+            throw new HubException("Kernel is not connected.");
+        return kernelService.SubmitCommandAsync(kernelAddress, kernelCommandEnvelope);
     }
 
-    private string GetClientId(string connectionId)
-        => clientByConnection.GetValueOrDefault(connectionId);
 
-    public void KernelCommandFromProxy(string kernelCommandEnvelope)
+    public Task SubmitEvent(string kernelEventEnvelope)
     {
-        // TODO V10: Need to understand how to implement this (01.01.2025, Roland Bürgi)
-    }
-    public void KernelEventFromProxy(string kernelEventEnvelope)
-    {
-        // TODO V10: Need to understand how to implement this (01.01.2025, Roland Bürgi)
+        if (!kernelByConnection.TryGetValue(Context.ConnectionId, out var kernelAddress))
+            throw new HubException("Kernel is not connected.");
+        return kernelService.SubmitEventAsync(kernelAddress, kernelEventEnvelope);
     }
 
 
 
-    public async Task<bool> Connect(string clientId)
+    public bool Connect(string kernelId)
     {
-        var kernel = await kernelService.GetKernelIdAsync(clientId);
+        var kernel = new KernelAddress{Id = kernelId};
+        kernelByConnection[Context.ConnectionId] = kernel;
         connectionsByKernel.AddOrUpdate(
-            kernel, x => [x], (x, l) => l.Add(x));
+            kernel, _ => [Context.ConnectionId],
+            (_, l) => l.Add(Context.ConnectionId)
+        );
 
         return true;
     }
 
+    public bool DisposeKernel()
+    {
+        if (!kernelByConnection.TryGetValue(Context.ConnectionId, out var kernelAddress))
+            return false;
+        kernelService.DisposeKernel(kernelAddress);
+        return true;
+    }
 
+    public override Task OnDisconnectedAsync(Exception exception)
+    {
+        if(kernelByConnection.TryRemove(Context.ConnectionId, out var id))
+            connectionsByKernel.AddOrUpdate(
+                id, _ => ImmutableList<string>.Empty,
+                (_, l) => l.Remove(Context.ConnectionId)
+            );
+        return base.OnDisconnectedAsync(exception);
+    }
 
     public KernelHub(IMessageHub hub, IKernelService kernelService)
     {
         this.kernelService = kernelService;
         hub.Register<KernelEventEnvelope>(async (d, ct) =>
         {
-            var (type, kernelId) = MessageHubExtensions.GetAddressTypeAndId(d.Sender);
-
-            if (type != KernelAddress.TypeName)
+            var kernelAddress = MessageHubExtensions.GetAddressOfType<KernelAddress>(d.Sender);
+            if (kernelAddress is null)
                 return d;
 
-            if (connectionsByKernel.TryGetValue(kernelId, out var connections))
+            if (connectionsByKernel.TryGetValue(kernelAddress, out var connections))
                 foreach (var connection in connections)
                     await Clients.Client(connection).SendCoreAsync(KernelEventsMethod, [d.Message.Envelope], ct);
 
