@@ -48,21 +48,16 @@ namespace MeshWeaver.Connection.Notebook
                 .WithUrl(connectCommand.Url, ConnectionSettings.HttpConnectionOptions)
                 .WithAutomaticReconnect()
                 .Build();
-            await connection.StartAsync();
-            var tcs = new TaskCompletionSource<bool>(new CancellationTokenSource(10_000).Token);
-            connection.On<bool>("connected", x => tcs.SetResult(x));
-            var clientId = $"notebook/{Guid.NewGuid().ToString()}";
-            connection.Reconnecting += async (exception) =>
-            {
-                //if (exception is not null)
-                //    logger.LogWarning("Disconnected from SignalR connection for {Address}:\n{Exception}", clientId, exception);
+            var kernelId = $"{Guid.NewGuid().ToString()}";
 
+            async Task ConnectAsync(object exception = null)
+            {
                 try
                 {
                     var connected =
                         await connection.InvokeAsync<bool>(
                             "Connect",
-                            clientId);
+                            kernelId);
 
                     if (!connected)
                         throw new MeshWeaverKernelException("Couldn't connect.");
@@ -75,19 +70,10 @@ namespace MeshWeaver.Connection.Notebook
                 }
                 // Your callback logic here
                 Console.WriteLine("Reconnecting...");
-            };
 
+            }
 
-            //try
-            //{
-            //    await connection.SendAsync("connect", connectCommand.);
-            //    await tcs.Task;
-            //}
-            //catch(Exception e)
-            //{
-            //    throw new MeshWeaverKernelException($"Failed to connect to MeshWeaver instance on {connectCommand.Url}:\n{e}", e);
-            //}
-
+            connection.Reconnecting += ConnectAsync;
 
             var subject = new Subject<string>();
             connection.On<string>("kernelEvents", e => subject.OnNext(e));
@@ -95,10 +81,20 @@ namespace MeshWeaver.Connection.Notebook
 
             var kernel = new ProxyKernel( 
                 connectCommand.ConnectedKernelName, 
-                new KernelCommandAndEventSignalRHubConnectionSender(connection), 
+                new KernelCommandAndEventSignalRHubConnectionSender(connection, kernelId), 
                 receiver,
                 new Uri($"kernel://mesh/csharp")
             );
+            connection.Closed += async (error) =>
+            {
+                connection.Reconnecting -= ConnectAsync;
+            };
+            kernel.RegisterForDisposal(() =>
+            {
+                connection.InvokeAsync<bool>("DisposeKernel").Wait();
+                connection.StopAsync().Wait();
+            });
+
             var language = connectCommand.Language == null
                 ? LanguageDescriptors.Values.First()
                 : LanguageDescriptors.GetValueOrDefault(connectCommand.Language) ??
@@ -110,9 +106,13 @@ namespace MeshWeaver.Connection.Notebook
             kernelInfo.LanguageVersion = language.LanguageVersion;
             kernelInfo.RemoteUri = new Uri($"kernel://mesh/{language.Name}");
             kernelInfo.Description = $"Mesh Weaver connection in {language.DisplayName}";
+
+            await connection.StartAsync();
+            await ConnectAsync();
             return [kernel];
         }
 
+        
         public static void Install()
         {
             if(Kernel.Current.RootKernel is CompositeKernel composite)

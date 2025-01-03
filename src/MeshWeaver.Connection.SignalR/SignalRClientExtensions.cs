@@ -46,7 +46,6 @@ public static class SignalRClientExtensions
                     var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                         .CreateLogger(typeof(SignalRClientExtensions));
                     var address = hub.Address;
-                    var (addressType, id) = MessageHubExtensions.GetAddressTypeAndId(address);
 
                     try
                     {
@@ -82,11 +81,11 @@ public static class SignalRClientExtensions
                             Console.WriteLine("Reconnecting...");
                         };
 
-                        logger.LogInformation("Creating SignalR connection for {AddressType} {Id}", addressType, id);
+                        logger.LogInformation("Creating SignalR connection for {AddressType}", hub.Address);
                         await hubConnection.StartAsync(ct);
 
                         var connection =
-                            await hubConnection.InvokeAsync<MeshConnection>("Connect", addressType, id, ct);
+                            await hubConnection.InvokeAsync<MeshConnection>("Connect", hub.Address.ToString(), ct);
                         if (connection.Status != ConnectionStatus.Connected)
                             throw new MeshException("Couldn't connect.");
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
@@ -99,8 +98,8 @@ public static class SignalRClientExtensions
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError("Unable connecting SignalR connection for {AddressType} {Id}:\n{Exception}",
-                            addressType, id, ex);
+                        logger.LogError("Unable connecting SignalR connection for {AddressType}:\n{Exception}",
+                            hub.Address, ex);
                         throw;
                     }
                 })

@@ -3,7 +3,6 @@ using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Disposables;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
@@ -235,7 +234,7 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
     {
         WithTypeAndRelatedTypesFor(typeof(TMessage));
         return Register(
-            (d, c) => action((MessageDelivery<TMessage>)d, c),
+            (d, c) => action((IMessageDelivery<TMessage>)d, c),
             d => (d.Target == null || Address.Equals(d.Target)) && d is IMessageDelivery<TMessage> md && filter(md)
         );
     }
