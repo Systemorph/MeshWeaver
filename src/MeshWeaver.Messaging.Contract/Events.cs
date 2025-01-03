@@ -50,6 +50,6 @@ public enum ErrorType
 
 public record PersistenceAddress();
 
-public record HeartbeatEvent(SyncDelivery Route);
+public record HeartbeatEvent;
 
 public record DisposeRequest;

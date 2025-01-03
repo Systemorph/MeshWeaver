@@ -46,8 +46,16 @@ public class KernelContainer : IDisposable
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
         Hub.RegisterForDisposal(this);
+        var timer = new Timer(_ => Dispose(), this, DisconnectTimeout, DisconnectTimeout);
+        Hub.Register<object>(d =>
+        {
+            timer.Change(DisconnectTimeout, DisconnectTimeout);
+            return d;
+        });
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
     }
+
+    private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
 
     private async Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
     {
@@ -230,6 +238,7 @@ public class KernelContainer : IDisposable
     public void Dispose()
     {
         Kernel.Dispose();
+        Hub.Dispose();
     }
 
     private record KernelExecutionAddress;

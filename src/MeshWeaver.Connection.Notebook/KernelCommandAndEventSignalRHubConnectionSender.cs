@@ -6,18 +6,23 @@ using Microsoft.DotNet.Interactive.Events;
 
 namespace MeshWeaver.Connection.Notebook
 {
-    public class KernelCommandAndEventSignalRHubConnectionSender(HubConnection connection) : IKernelCommandAndEventSender
+    public class KernelCommandAndEventSignalRHubConnectionSender(HubConnection connection, string clientId) : IKernelCommandAndEventSender
     {
 
         public async Task SendAsync(KernelCommand kernelCommand, CancellationToken cancellationToken)
         {
-            await connection.SendAsync("kernelCommandFromProxy", KernelCommandEnvelope.Serialize(KernelCommandEnvelope.Create(kernelCommand)),
+            await connection.SendAsync(
+                "submitCommand", 
+                KernelCommandEnvelope.Serialize(KernelCommandEnvelope.Create(kernelCommand)),
                 cancellationToken: cancellationToken);
         }
 
         public async Task SendAsync(KernelEvent kernelEvent, CancellationToken cancellationToken)
         {
-            await connection.SendAsync("kernelEventFromProxy", KernelEventEnvelope.Serialize(KernelEventEnvelope.Create(kernelEvent)), cancellationToken: cancellationToken);
+            await connection.SendAsync(
+                "submitEvent", 
+                KernelEventEnvelope.Serialize(KernelEventEnvelope.Create(kernelEvent)),
+                cancellationToken: cancellationToken);
         }
 
         public Uri RemoteHostUri { get; } = KernelHost.CreateHostUri($"mesh/{connection.ConnectionId}");
