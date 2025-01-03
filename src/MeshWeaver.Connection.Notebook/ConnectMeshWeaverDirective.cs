@@ -13,7 +13,7 @@ namespace MeshWeaver.Connection.Notebook
         private static readonly Dictionary<string, LanguageDescriptor> LanguageDescriptors =
             new LanguageDescriptor[]
                 {
-                    new("csharp", "csharp", "C#", "12.0")
+                    new("csharp", "C# Script", "C#", "12.0")
                 }
                 .ToDictionary(x => x.Name);
         private KernelDirectiveParameter UrlParameter { get; } =
@@ -85,13 +85,10 @@ namespace MeshWeaver.Connection.Notebook
                 receiver,
                 new Uri($"kernel://mesh/csharp")
             );
-            connection.Closed += async (error) =>
-            {
-                connection.Reconnecting -= ConnectAsync;
-            };
             kernel.RegisterForDisposal(() =>
             {
-                connection.InvokeAsync<bool>("DisposeKernel").Wait();
+                connection.InvokeAsync<bool>("disposeKernel").Wait();
+                connection.Reconnecting -= ConnectAsync;
                 connection.StopAsync().Wait();
             });
 

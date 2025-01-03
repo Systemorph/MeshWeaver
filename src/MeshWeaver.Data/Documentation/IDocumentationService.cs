@@ -56,11 +56,18 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
 
     private IReadOnlyDictionary<string, Member> GetAssembly(Assembly assembly)
     {
-        var assemblyName = assembly.GetName().Name;
-        var source = GetSource(EmbeddedDocumentationSource.Embedded, assemblyName);
-        var stream = source.GetStream($"{assemblyName}.xml");
-        return Deserialize(stream)?.Members?.ToDictionary(m => m.Name) ?? 
-               (IReadOnlyDictionary<string, Member>)ImmutableDictionary<string, Member>.Empty;
+        try
+        {
+            var assemblyName = assembly.GetName().Name;
+            var source = GetSource(EmbeddedDocumentationSource.Embedded, assemblyName);
+            var stream = source.GetStream($"{assemblyName}.xml");
+            return Deserialize(stream)?.Members?.ToDictionary(m => m.Name) ??
+                   (IReadOnlyDictionary<string, Member>)ImmutableDictionary<string, Member>.Empty;
+        }
+        catch
+        {
+            return ImmutableDictionary<string,Member>.Empty;
+        }
     }
 
     private Doc Deserialize(Stream stream)
