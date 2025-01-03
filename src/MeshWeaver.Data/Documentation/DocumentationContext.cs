@@ -12,9 +12,16 @@ public record DocumentationContext(IMessageHub Hub)
         var key = (type, id);
         if (Sources.TryGetValue(key, out var source))
             return source;
-        var ret = TryCreateSource(type, id);
-        Sources = Sources.Add(key, ret);
-        return ret;
+        try
+        {
+            var ret = TryCreateSource(type, id);
+            Sources = Sources.Add(key, ret);
+            return ret;
+        }
+        catch(Exception)
+        {
+            return null;
+        }
     }
 
 
