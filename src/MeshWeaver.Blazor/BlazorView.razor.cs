@@ -24,7 +24,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     [Parameter]
     public string Area { get; set; }
 
-    [Parameter]
+    [CascadingParameter(Name = nameof(DataContext))]
     public string DataContext { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
@@ -137,8 +137,6 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
             DataBind(ViewModel.Id, x => x.Id);
             DataBind(ViewModel.Class, x => x.Class);
             DataBind(ViewModel.Style, x => x.Style);
-            if (ViewModel.DataContext != null)
-                DataContext = WorkspaceReference.Decode(ViewModel.DataContext).ToString();
         }
     }
     private readonly List<IDisposable> bindings = new();

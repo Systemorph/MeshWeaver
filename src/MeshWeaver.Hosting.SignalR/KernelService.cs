@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.SignalR
                 kernelAddress, _ => Task.FromResult(new KernelClient(hub, kernelAddress)),
                 new()
                 {
-                    SlidingExpiration = TimeSpan.FromMinutes(5),
+                    SlidingExpiration = TimeSpan.FromMinutes(15),
                     PostEvictionCallbacks =
                     {
                         new PostEvictionCallbackRegistration { EvictionCallback = DisposeKernel }
@@ -73,7 +73,6 @@ namespace MeshWeaver.Hosting.SignalR
         public void Dispose()
         {
             timer.Dispose();
-            PostToKernel(new DisposeRequest());
         }
 
 

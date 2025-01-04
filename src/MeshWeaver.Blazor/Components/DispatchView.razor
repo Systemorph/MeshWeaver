@@ -7,29 +7,34 @@
 
 @if(ViewDescriptor != null)
 {
-    @((RenderFragment)(builder =>
-    {
-        builder.OpenComponent(0, ViewDescriptor.Type);
-        var index = 0;
-
-        foreach (var parameter in ViewDescriptor.Parameters)
+    <CascadingValue Value=@ViewModelDataContext Name="DataContext">
+        @((RenderFragment)(builder =>
         {
-            builder.AddAttribute(++index, parameter.Key, parameter.Value);
-        }
-        builder.AddAttribute(++index, nameof(DataContext), DataContext);
+            builder.OpenComponent(0, ViewDescriptor.Type);
+            var index = 0;
 
-        builder.CloseComponent();
-    }))
+            foreach (var parameter in ViewDescriptor.Parameters)
+            {
+                builder.AddAttribute(++index, parameter.Key, parameter.Value);
+            }
+
+            builder.CloseComponent();
+        }))
+    </CascadingValue>
 }
 
 @code
 {
     private ViewDescriptor ViewDescriptor { get; set; }
+    private string ViewModelDataContext { get; set; }
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
         var client = Hub.ServiceProvider.GetRequiredService<ILayoutClient>();
         ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
+        ViewModelDataContext = ViewModel?.DataContext  != null 
+            ? WorkspaceReference.Decode(ViewModel.DataContext).ToString() 
+            : DataContext;
         Logger.LogDebug($"Rendering Area {Area} to View {ViewDescriptor?.Type.Name}");
     }
 }
