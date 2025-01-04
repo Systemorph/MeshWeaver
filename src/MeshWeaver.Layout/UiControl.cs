@@ -120,6 +120,28 @@ public abstract record UiControl : IUiControl
             disposable();
         }
     }
+    public UiControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) =>
+        this with
+        {
+            Style = styleBuilder(new StyleBuilder()).ToString()
+        };
+
+    public UiControl WithClickAction(Func<UiActionContext, Task> onClick)
+    {
+        return this with { ClickAction = onClick, };
+    }
+
+    public UiControl WithClickAction(Action<UiActionContext> onClick) =>
+        WithClickAction(c =>
+        {
+            onClick(c);
+            return Task.CompletedTask;
+        });
+
+
+
+
+    public UiControl WithClass(object @class) => this with { Class = @class };
 
 }
 
@@ -138,13 +160,13 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
         return This with { Buildup = Buildup.Add(buildup) };
     }
 
-    public TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) =>
+    public new TControl WithStyle(Func<StyleBuilder, StyleBuilder> styleBuilder) =>
         This with
         {
             Style = styleBuilder(new StyleBuilder()).ToString()
         };
 
-    public TControl WithClickAction(Func<UiActionContext, Task> onClick)
+    public new TControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
         return This with { ClickAction = onClick, };
     }
@@ -154,7 +176,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
         return This with { DisposeActions = DisposeActions.Add(action) };
     }
 
-    public TControl WithClickAction(Action<UiActionContext> onClick) =>
+    public new TControl WithClickAction(Action<UiActionContext> onClick) =>
         WithClickAction(c =>
         {
             onClick(c);
@@ -165,7 +187,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
 
-    public TControl WithClass(object @class) => This with { Class = @class };
+    public new TControl WithClass(object @class) => This with { Class = @class };
 
     protected override EntityStoreAndUpdates Render
         (LayoutAreaHost host, RenderingContext context, EntityStore store) =>
