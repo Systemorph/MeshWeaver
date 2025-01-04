@@ -121,12 +121,22 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("0");
 
+        // update once ==> will issue "add", as 0 was not there
         area.UpdatePointer(1, editor.DataContext, new("/x"));
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString())
-            //.Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl{Data: "0"});
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not MarkdownControl { Data: "0" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("1");
+
+        // update once ==> will issue "replace"
+        area.UpdatePointer(2, editor.DataContext, new("/x"));
+        control = await area
+            .GetControlStream(stack.Areas.Last().Area.ToString())
+            //.Timeout(10.Seconds())
+            .FirstAsync(x => x is not MarkdownControl { Data: "1" });
+
+        control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("2");
     }
 }
