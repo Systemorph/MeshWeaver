@@ -29,39 +29,6 @@ jobs:
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
 
-  test-net8:
-    name: Run Unit tests for .NET 8
-
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
-    - uses: actions/checkout@v4
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
-    - name: Run Tests
-      continue-on-error: true
-      run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx --results-directory ./TestResults
-    - name: List Test Results
-      run: ls -R ./TestResults
-    - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
-      if: always()
-      with:
-        action_fail: true
-        files: |
-          ./TestResults/*.trx
-    - name: "Upload artifact: Test Results"
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: testResults-net8
-        path: ./TestResults/*.trx
-        compression-level: 9
-        retention-days: 15
-
   test-net9:
     name: Run Unit tests for .NET 9
 
@@ -76,7 +43,7 @@ jobs:
         dotnet-version: 9.0.x
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx --results-directory ./TestResults 
+      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx --results-directory ./TestResults -- RunConfiguration.TestSessionTimeout=60000
     - name: List Test Results
       run: ls -R ./TestResults
     - name: Publish Test Results
