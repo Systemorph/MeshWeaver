@@ -221,6 +221,14 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Orleans",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Shared", "portal\MeshWeaver.Portal.Shared\MeshWeaver.Portal.Shared.csproj", "{796CD904-DAE6-4993-889C-85456BF487A9}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{00B74461-B787-4F76-B905-303C59F5E191}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{4D40CF48-7C4B-4651-9B26-D33E046272B9}"
+	ProjectSection(SolutionItems) = preProject
+		publish-github.yml = publish-github.yml
+		.github\workflows\release-packages.yml = .github\workflows\release-packages.yml
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -699,6 +707,7 @@ Global
 		{C6A22DF9-C892-4979-A224-6E79B712E576} = {4C68D283-B46D-4CC1-B02C-4B212D01B4A6}
 		{07388A75-7B6C-4371-9AA3-1606409553C7} = {4C68D283-B46D-4CC1-B02C-4B212D01B4A6}
 		{796CD904-DAE6-4993-889C-85456BF487A9} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
+		{4D40CF48-7C4B-4651-9B26-D33E046272B9} = {00B74461-B787-4F76-B905-303C59F5E191}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
