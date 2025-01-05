@@ -1,6 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<ItemGroup>
+		<PackageReference Include="Microsoft.DotNet.Interactive" />
+		<PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
 		<PackageReference Include="Newtonsoft.Json" />
 	</ItemGroup>
 
