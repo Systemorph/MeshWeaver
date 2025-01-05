@@ -1,0 +1,56 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    tags:
+      - 'github-*.*.*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-github:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '9.x'
+
+      - name: Extract version from tag
+        id: extract_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/github-}" >> $GITHUB_ENV
+
+      - name: Restore workloads
+        run: dotnet workload restore
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build solution
+        run: dotnet build --configuration Release --no-restore /p:Version=${{ env.VERSION }}
+
+      - name: Pack NuGet packages
+        run: dotnet pack --configuration Release --no-build --output ./nupkgs /p:PackageVersion=${{ env.VERSION }}
+
+      - name: Create nuget.config
+        run: |
+          echo "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <configuration>
+            <packageSources>
+              <add key=\"github\" value=\"https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json\" />
+            </packageSources>
+            <packageSourceCredentials>
+              <github>
+                <add key=\"Username\" value=\"${{ github.actor }}\" />
+                <add key=\"ClearTextPassword\" value=\"${{ secrets.GH_PAT }}\" />
+              </github>
+            </packageSourceCredentials>
+          </configuration>" > nuget.config
+
+      - name: Publish NuGet packages to GitHub Packages
+        run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_PAT }}
