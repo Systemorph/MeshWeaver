@@ -17,10 +17,10 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
 {
 
 
-     /// <summary>
+    /// <summary>
     /// Gets or initializes the display area of the layout area control.
     /// </summary>
-    public object DisplayArea { get; init; } = Reference.Area.Wordify();
+    public object DisplayArea { get; init; } 
     /// <summary>
     /// Gets or initializes the progress display state of the layout area control.
     /// </summary>
