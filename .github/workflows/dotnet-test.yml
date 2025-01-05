@@ -41,22 +41,28 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 8.0.x
+    - name: List Projects
+      run: dotnet sln list
+    - name: List Test Projects
+      run: find . -name '*.csproj' -exec sh -c 'grep -q "<Project Sdk=\"Microsoft.NET.Sdk\">" "$1" && echo "$1"' _ {} \;
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000
+      run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx --results-directory ./TestResults -- RunConfiguration.TestSessionTimeout=60000
+    - name: List Test Results
+      run: ls -R ./TestResults
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
       with:
         action_fail: true
         files: |
-          test/**/*.trx
+          ./TestResults/*.trx
     - name: "Upload artifact: Test Results"
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: testResults-net8
-        path: test/**/*.trx
+        path: ./TestResults/*.trx
         compression-level: 9
         retention-days: 15
 
@@ -72,21 +78,27 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
+    - name: List Projects
+      run: dotnet sln list
+    - name: List Test Projects
+      run: find . -name '*.csproj' -exec sh -c 'grep -q "<Project Sdk=\"Microsoft.NET.Sdk\">" "$1" && echo "$1"' _ {} \;
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000
+      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx --results-directory ./TestResults -- RunConfiguration.TestSessionTimeout=60000
+    - name: List Test Results
+      run: ls -R ./TestResults
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
       if: always()
       with:
         action_fail: true
         files: |
-          test/**/*.trx
+          ./TestResults/*.trx
     - name: "Upload artifact: Test Results"
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: testResults-net9
-        path: test/**/*.trx
+        path: ./TestResults/*.trx
         compression-level: 9
         retention-days: 15

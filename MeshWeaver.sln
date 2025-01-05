@@ -225,6 +225,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{00B7
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{4D40CF48-7C4B-4651-9B26-D33E046272B9}"
 	ProjectSection(SolutionItems) = preProject
+		.github\workflows\dotnet-test.yml = .github\workflows\dotnet-test.yml
 		publish-github.yml = publish-github.yml
 		.github\workflows\release-packages.yml = .github\workflows\release-packages.yml
 	EndProjectSection
