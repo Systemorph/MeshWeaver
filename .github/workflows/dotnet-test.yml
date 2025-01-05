@@ -41,13 +41,9 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 8.0.x
-    - name: List Projects
-      run: dotnet sln list
-    - name: List Test Projects
-      run: find . -name '*.csproj' -exec sh -c 'grep -q "<Project Sdk=\"Microsoft.NET.Sdk\">" "$1" && echo "$1"' _ {} \;
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx --results-directory ./TestResults -- RunConfiguration.TestSessionTimeout=60000
+      run: dotnet test --no-build --framework net8.0 --verbosity normal -l:trx --results-directory ./TestResults
     - name: List Test Results
       run: ls -R ./TestResults
     - name: Publish Test Results
@@ -78,13 +74,9 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
-    - name: List Projects
-      run: dotnet sln list
-    - name: List Test Projects
-      run: find . -name '*.csproj' -exec sh -c 'grep -q "<Project Sdk=\"Microsoft.NET.Sdk\">" "$1" && echo "$1"' _ {} \;
     - name: Run Tests
       continue-on-error: true
-      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx --results-directory ./TestResults -- RunConfiguration.TestSessionTimeout=60000
+      run: dotnet test --no-build --framework net9.0 --verbosity normal -l:trx --results-directory ./TestResults 
     - name: List Test Results
       run: ls -R ./TestResults
     - name: Publish Test Results
