@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -24,19 +25,21 @@ public class KernelContainer : IDisposable
     private readonly IMeshCatalog meshCatalog;
     private readonly IMessageHub executionHub;
     private readonly ILogger<KernelContainer> logger;
+
     public KernelContainer(IServiceProvider serviceProvider, string id)
     {
         meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
         Kernel = CreateKernel(id);
-        Hub = serviceProvider.CreateMessageHub(new KernelAddress(){Id = id}, config => config
+        Hub = serviceProvider.CreateMessageHub(new KernelAddress() { Id = id }, config => config
             .AddLayout(layout =>
                 layout.WithView(ctx =>
                         areas.ContainsKey(ctx.Area),
                     (_, ctx) => areas.GetValueOrDefault(ctx.Area)
                 )
             )
-            .WithRoutes(routes => routes.WithHandler((d,ct)=>RouteToSubHubs(routes.Hub, d, ct)))
-            .WithInitialization((_, _) => Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>().Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub)))))
+            .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
+            .WithInitialization((_, _) => Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>()
+                .Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub)))))
             .WithHandler<KernelCommandEnvelope>((_, request) => HandleKernelCommandEnvelope(request))
             .WithHandler<SubmitCodeRequest>((_, request) => HandleKernelCommand(request))
             .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
@@ -54,6 +57,7 @@ public class KernelContainer : IDisposable
         });
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
     }
+
 
     private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
 
@@ -162,23 +166,9 @@ public class KernelContainer : IDisposable
 
 
         Formatter.Register<UiControl>(
-            formatter:(control, context) =>
-            {
-                var viewId = Guid.NewGuid().AsString();
-                areas[viewId] = control;
-                if (control is null)
-                {
-                    var nullView = new PocketView("null");
-                    nullView.WriteTo(context);
-                    return true;
-                }
-
-
-                var view = $"<iframe src='{LayoutAreaUrl}{Hub.Address}/{viewId}' width='100%' style=\"{control.Style}\"></iframe>";
-                context.Writer.Write(view);
-                return true;
-                //PublishEventToContext(new DisplayedValueProduced(view, KernelInvocationContext.Current.Command));
-            }, HtmlFormatter.MimeType);
+            formatter: FormatControl, HtmlFormatter.MimeType);
+        Formatter.Register<IRenderableObject>(
+            formatter: (obj,ctx) => FormatControl(obj.ToControl(), ctx), HtmlFormatter.MimeType);
 
         var composite = new CompositeKernel("mesh");
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
@@ -186,6 +176,31 @@ public class KernelContainer : IDisposable
         return composite;
     }
 
+    private bool FormatControl(UiControl control, FormatContext context)
+    {
+        var viewId = Guid.NewGuid().AsString();
+        areas[viewId] = control;
+        if (control is null)
+        {
+            var nullView = new PocketView("null");
+            nullView.WriteTo(context);
+            return true;
+        }
+
+        var style = control.Style?.ToString() ?? string.Empty;
+        if (!style.Contains("display"))
+            style += "display: block; ";
+        if (!style.Contains("margin"))
+            style += "margin: 0 auto; ";
+        if (!style.Contains("width"))
+            style += "width: 100%; ";
+        if (!style.Contains("height"))
+            style += "height: 500px; ";
+
+        var view = $@"<iframe id='{viewId}' src='{LayoutAreaUrl}{Hub.Address}/{viewId}' style='{style}'></iframe>";
+        context.Writer.Write(view);
+        return true;
+    }
 
     private static string ReplaceLastSegmentWithArea(string url)
     {

@@ -2,9 +2,23 @@
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive;
+using Microsoft.DotNet.Interactive.CSharp;
 
 namespace MeshWeaver.Charting.Models;
 
+public class ChartKernelExtension : IKernelExtension
+{
+    public Task OnLoadAsync(Kernel kernel)
+    {
+        var csharp = kernel as CSharpKernel ??
+                     (kernel as CompositeKernel)?.ChildKernels.OfType<CSharpKernel>().FirstOrDefault();
+        if(csharp is not null && csharp.TryGetValue<IMessageHub>("Mesh", out var hub))
+            hub.GetTypeRegistry().GetOrAddType(typeof(ChartModel));
+        return Task.CompletedTask;
+    }
+}
 public record ChartModel : IRenderableObject
 {
     public ChartModel()
@@ -86,7 +100,7 @@ public record ChartModel : IRenderableObject
     public ChartModel WithDataLabels(Func<DataLabels, DataLabels> func = null) =>
         WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
 
-    public ChartModel WithDataSets(IEnumerable<DataSet> dataSets)
+    public ChartModel WithDataSets(params IEnumerable<DataSet> dataSets)
         => this with { Data = Data.WithDataSets(dataSets) };
 
     public UiControl ToControl()

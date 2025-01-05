@@ -2,7 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace MeshWeaver.Charting.Enums;
+namespace MeshWeaver.Charting;
 
 [JsonConverter(typeof(PaletteJsonConverter))]
 [SuppressMessage("ReSharper", "StringLiteralTypo")]

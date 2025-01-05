@@ -68,12 +68,10 @@ namespace MeshWeaver.Connection.Notebook
                     //logger.LogError("Unable connecting SignalR connection for {Address} :\n{Exception}", clientId, ex);
                     throw;
                 }
-                // Your callback logic here
-                Console.WriteLine("Reconnecting...");
 
             }
 
-            connection.Reconnecting += ConnectAsync;
+            connection.Reconnected += ConnectAsync;
 
             var subject = new Subject<string>();
             connection.On<string>("kernelEvents", e => subject.OnNext(e));
@@ -89,9 +87,9 @@ namespace MeshWeaver.Connection.Notebook
             {
                 connection.InvokeAsync<bool>("disposeKernel").Wait();
                 connection.Reconnecting -= ConnectAsync;
+                connection.Reconnected -= ConnectAsync;
                 connection.StopAsync().Wait();
             });
-
             var language = connectCommand.Language == null
                 ? LanguageDescriptors.Values.First()
                 : LanguageDescriptors.GetValueOrDefault(connectCommand.Language) ??
