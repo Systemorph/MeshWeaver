@@ -1,4 +1,8 @@
-﻿namespace MeshWeaver.TestDomain.Cubes
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace MeshWeaver.TestDomain.Cubes
 {
     public static class CashflowFactory
     {

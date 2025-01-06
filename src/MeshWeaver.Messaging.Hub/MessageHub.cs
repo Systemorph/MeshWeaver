@@ -175,7 +175,7 @@ public sealed class MessageHub
         );
         var task = response
             .ContinueWith(t =>
-                    InnerCallback(request, t.Result, selector, cancellationToken),
+                    InnerCallback(request, t.Result, selector),
                 cancellationToken
             );
         return task;
@@ -184,8 +184,7 @@ public sealed class MessageHub
     private TResult InnerCallback<TResponse, TResult>(
         IMessageDelivery request,
         IMessageDelivery response,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken)
+        Func<IMessageDelivery<TResponse>, TResult> selector)
     {
         try
         {
@@ -193,7 +192,7 @@ public sealed class MessageHub
                 return selector.Invoke(tResponse);
            throw new DeliveryFailureException($"Response for {request} was of unexpected type: {response}");
         }
-        catch(DeliveryFailureException ex)
+        catch(DeliveryFailureException)
         {
             throw;
         }

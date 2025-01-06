@@ -18,5 +18,12 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Roslynator.Analyzers"  />
+        <PackageReference Include="Roslynator.Formatting.Analyzers"  />
+        <PackageReference Include="Roslynator.CodeFixes"  />
+        <PackageReference Include="Roslynator.CodeAnalysis.Analyzers"  />
+        <PackageReference Include="Roslynator.Refactorings"  />
+    </ItemGroup>
 
 </Project>

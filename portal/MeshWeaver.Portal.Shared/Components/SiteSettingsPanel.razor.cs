@@ -1,5 +1,4 @@
-﻿#nullable enable
-using MeshWeaver.Portal.Infrastructure;
+﻿using MeshWeaver.Portal.Shared.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -14,14 +13,11 @@ public partial class SiteSettingsPanel
     private bool ltr = true;
     private FluentDesignTheme theme;
 
-    [Inject]
-    public required ILogger<SiteSettingsPanel> Logger { get; set; }
+    [Inject] public required ILogger<SiteSettingsPanel> Logger { get; set; }
 
-    [Inject]
-    public required CacheStorageAccessor CacheStorageAccessor { get; set; }
+    [Inject] public required CacheStorageAccessor CacheStorageAccessor { get; set; }
 
-    [Inject]
-    public required GlobalState GlobalState { get; set; }
+    [Inject] public required GlobalState GlobalState { get; set; }
 
     public DesignThemeModes Mode { get; set; }
 
@@ -31,11 +27,11 @@ public partial class SiteSettingsPanel
 
     private static IEnumerable<DesignThemeModes> AllModes => Enum.GetValues<DesignThemeModes>();
 
-    private static IEnumerable<OfficeColor?> AllOfficeColors
+    private static IEnumerable<OfficeColor> AllOfficeColors
     {
         get
         {
-            return Enum.GetValues<OfficeColor>().Select(i => (OfficeColor?)i);
+            return Enum.GetValues<OfficeColor>();
         }
     }
 
@@ -69,7 +65,7 @@ public partial class SiteSettingsPanel
         Mode = DesignThemeModes.System;
     }
 
-    private static string? GetCustomColor(OfficeColor? color)
+    private static string GetCustomColor(OfficeColor? color)
     {
         return color switch
         {

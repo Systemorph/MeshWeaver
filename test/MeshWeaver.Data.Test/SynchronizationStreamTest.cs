@@ -1,10 +1,13 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;
+using System;
 
 namespace MeshWeaver.Data.Test;
 
@@ -41,7 +44,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             .Subscribe(tracker.Add);
 
         var count = 0;
-        var array = Enumerable.Range(0, 10).AsParallel().Select(_ =>
+        Enumerable.Range(0, 10).AsParallel().Select(_ =>
         {
             stream.UpdateAsync(state =>
             {

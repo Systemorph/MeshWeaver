@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System.Threading.Tasks;
+using FluentAssertions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;

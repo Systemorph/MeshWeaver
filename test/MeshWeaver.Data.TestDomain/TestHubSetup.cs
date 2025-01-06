@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Activities;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;

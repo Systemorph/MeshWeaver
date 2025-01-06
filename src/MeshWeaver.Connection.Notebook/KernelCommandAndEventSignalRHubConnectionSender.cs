@@ -6,7 +6,7 @@ using Microsoft.DotNet.Interactive.Events;
 
 namespace MeshWeaver.Connection.Notebook
 {
-    public class KernelCommandAndEventSignalRHubConnectionSender(HubConnection connection, string clientId) : IKernelCommandAndEventSender
+    public class KernelCommandAndEventSignalRHubConnectionSender(HubConnection connection) : IKernelCommandAndEventSender
     {
 
         public async Task SendAsync(KernelCommand kernelCommand, CancellationToken cancellationToken)

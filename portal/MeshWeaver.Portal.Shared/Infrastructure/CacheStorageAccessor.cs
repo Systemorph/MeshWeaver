@@ -1,11 +1,12 @@
-﻿using Microsoft.FluentUI.AspNetCore.Components.Utilities;
+﻿using MeshWeaver.Portal.Infrastructure;
+using Microsoft.FluentUI.AspNetCore.Components.Utilities;
 using Microsoft.JSInterop;
 
-namespace MeshWeaver.Portal.Infrastructure;
+namespace MeshWeaver.Portal.Shared.Infrastructure;
 public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/FluentUI.Demo.Shared/js/CacheStorageAccessor.js")
 {
     private readonly IAppVersionService vs = vs;
-    private string? CurrentCacheVersion = default;
+    private string currentCacheVersion;
 
     public async ValueTask PutAsync(HttpRequestMessage requestMessage, HttpResponseMessage responseMessage)
     {
@@ -29,7 +30,7 @@ public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModu
 
     public async ValueTask<string> GetAsync(HttpRequestMessage requestMessage)
     {
-        if (CurrentCacheVersion is null)
+        if (currentCacheVersion is null)
         {
             await InitializeCacheAsync();
         }
@@ -90,6 +91,6 @@ public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModu
                 vs.Version);
         }
         //
-        CurrentCacheVersion = vs.Version;
+        currentCacheVersion = vs.Version;
     }
 }

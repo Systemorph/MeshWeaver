@@ -52,23 +52,13 @@ namespace MeshWeaver.Connection.Notebook
 
             async Task ConnectAsync(object exception = null)
             {
-                try
-                {
-                    var connected =
-                        await connection.InvokeAsync<bool>(
-                            "Connect",
-                            kernelId);
+                var connected =
+                    await connection.InvokeAsync<bool>(
+                        "Connect",
+                        kernelId);
 
-                    if (!connected)
-                        throw new MeshWeaverKernelException("Couldn't connect.");
-
-                }
-                catch (Exception ex)
-                {
-                    //logger.LogError("Unable connecting SignalR connection for {Address} :\n{Exception}", clientId, ex);
-                    throw;
-                }
-
+                if (!connected)
+                    throw new MeshWeaverKernelException("Couldn't connect.");
             }
 
             connection.Reconnected += ConnectAsync;
@@ -79,7 +69,7 @@ namespace MeshWeaver.Connection.Notebook
 
             var kernel = new ProxyKernel( 
                 connectCommand.ConnectedKernelName, 
-                new KernelCommandAndEventSignalRHubConnectionSender(connection, kernelId), 
+                new KernelCommandAndEventSignalRHubConnectionSender(connection), 
                 receiver,
                 new Uri($"kernel://mesh/csharp")
             );
