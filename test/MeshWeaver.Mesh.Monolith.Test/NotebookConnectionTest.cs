@@ -47,7 +47,7 @@ Console.WriteLine(""Hello World"");
 
         helloWorld.Events.OfType<CommandSucceeded>().Should().NotBeEmpty();
         var e = helloWorld.Events.OfType<StandardOutputValueProduced>().Single();
-        e.FormattedValues.Single().Value.Should().Be("Hello World\r\n");
+        e.FormattedValues.Single().Value.TrimEnd('\n', '\r').Should().Be("Hello World");
     }
     //client.Post(
         //    new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
@@ -75,11 +75,12 @@ Console.WriteLine(""Hello World"");
     [Fact]
     public async Task LayoutAreas()
     {
-        var kernel = await ConnectHubAsync();
+        var kernel = await ConnectToRemoteKernelAsync();
 
         // Send Ping and receive Pong
         var kernelResult = await kernel.SubmitCodeAsync(
-            @$"new {typeof(MarkdownControl).FullName}(""Hello World"")"
+            @$"#!mesh
+new {typeof(MarkdownControl).FullName}(""Hello World"")"
         );
 
         kernelResult.Events.Last().Should().BeOfType<CommandSucceeded>();
@@ -88,7 +89,7 @@ Console.WriteLine(""Hello World"");
 
         formattedValues.Value.Should().BeOfType<string>().Which.Should().Contain("iframe");
         var iframeSrc = formattedValues.Value;
-        var match = Regex.Match(iframeSrc, @"<iframe src='http://[^/]+/area/(?<addressType>[^/]+)/(?<addressId>[^/]+)/(?<area>[^/]+)'></iframe>");
+        var match = Regex.Match(iframeSrc, @"<iframe id='[^']+' src='https://[^/]+/area/(?<addressType>[^/]+)/(?<addressId>[^/]+)/(?<area>[^/]+)' style='[^']+'></iframe>");
 
         match.Success.Should().BeTrue();
         var addressType = match.Groups["addressType"].Value;
@@ -96,7 +97,7 @@ Console.WriteLine(""Hello World"");
         var area = match.Groups["area"].Value;
 
         // Assert the extracted values
-        addressType.Should().Be("nb");
+        addressType.Should().Be("kernel");
         addressId.Should().NotBeNullOrEmpty();
         area.Should().NotBeNullOrEmpty();
 
@@ -113,7 +114,10 @@ Console.WriteLine(""Hello World"");
             .FirstAsync(x => x != null);
 
 
-        control.Should().BeOfType<MarkdownControl>().Which.Data.Should().Be("Hello World");
+        var md = control.Should().BeOfType<MarkdownControl>()
+            .Subject;
+        md.Data.Should().NotBeNull();
+        md.Data.ToString()!.TrimEnd('\n','\r').Should().Be("Hello World");
     }
     protected async Task<CompositeKernel> ConnectToRemoteKernelAsync()
     {
@@ -131,8 +135,8 @@ Console.WriteLine(""Hello World"");
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.Notebook\"");
+        var connect = 
         loadModule.Events.Last().Should().BeOfType<CommandSucceeded>();
-
         return kernel;
     }
 
