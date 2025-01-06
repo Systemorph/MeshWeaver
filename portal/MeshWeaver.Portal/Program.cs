@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging.Console;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal;
-using MeshWeaver.Blazor.Notebooks;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
 using MeshWeaver.Kernel.Hub;
@@ -43,7 +42,6 @@ builder.UseMeshWeaver(
             x
                 .AddChartJs()
                 .AddAgGrid()
-                .AddNotebooks()
         )
         .AddSignalRHubs()
         .UseMonolithMesh()
