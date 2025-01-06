@@ -47,14 +47,11 @@ jobs:
           </packageSources>
           <packageSourceCredentials>
             <github>
-              <add key=\"Username\" value=\"${{ github.actor }}\" />
+              <add key=\"Username\" value=\"Systemorph\" />
               <add key=\"ClearTextPassword\" value=\"${{ secrets.GH_PAT }}\" />
             </github>
           </packageSourceCredentials>
         </configuration>" > nuget.config
-
-    - name: Publish NuGet packages to GitHub Packages
-      run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_PAT }}
 
     - name: publish to nuget.org
       run: dotnet nuget push ./nupkgs/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_PAT }}
