@@ -1,4 +1,5 @@
 ﻿using FluentAssertions;
+using MeshWeaver.Json.Assertions;
 using MeshWeaver.Messaging;
 using Xunit;
 

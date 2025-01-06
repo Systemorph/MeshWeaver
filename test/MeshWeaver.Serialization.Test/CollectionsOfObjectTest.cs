@@ -1,10 +1,12 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Generic;
+using System.Text.Json;
 using FluentAssertions;
 using FluentAssertions.Json;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;

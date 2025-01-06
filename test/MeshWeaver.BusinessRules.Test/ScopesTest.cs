@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using System;
+using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;

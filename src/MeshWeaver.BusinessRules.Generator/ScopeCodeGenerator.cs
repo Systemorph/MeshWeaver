@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Text;
+﻿using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -73,6 +72,7 @@ public class ScopeCodeGenerator : ISourceGenerator
 
         var identityType = interfaceType.TypeArguments[0];
         var stateType = interfaceType.TypeArguments[1];
+        builder.AppendLine($"using {typeof(Lazy<>).Namespace};");
         builder.AppendLine($"namespace {namespaceName};");
         builder.AppendLine($"public partial class {className} : MeshWeaver.BusinessRules.ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");
         builder.AppendLine("{");

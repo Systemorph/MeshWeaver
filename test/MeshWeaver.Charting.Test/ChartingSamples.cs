@@ -1,10 +1,13 @@
-﻿using System.Text.Json;
+﻿using System;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Json.Assertions;
+using Xunit;
 
 namespace MeshWeaver.Charting.Test;
 
