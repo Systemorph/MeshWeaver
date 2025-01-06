@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'github-*.*.*'
+      - 'github-*.*.*-preview*'
+      - 'github-*.*.*-rc*'
 
 permissions:
   contents: read
