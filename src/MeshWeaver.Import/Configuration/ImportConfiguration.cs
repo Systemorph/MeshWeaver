@@ -189,13 +189,12 @@ public record ImportConfiguration
                 ret = false;
                 continue;
             }
-            var value = propGetter(instance);
             //if (!string.IsNullOrEmpty(value))
             // TODO V10: Need to restore categories validation here (03.12.2024, Roland Bürgi)
-            if(false)
+            if (false)
             {
                 activity.LogError(
-                    string.Format(UnknownValueErrorMessage, propertyName, type.FullName, value)
+                    string.Format(UnknownValueErrorMessage, propertyName, type.FullName, propGetter(instance))
                 );
                 ret = false;
             }

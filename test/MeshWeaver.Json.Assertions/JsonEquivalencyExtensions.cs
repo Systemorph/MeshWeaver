@@ -1,4 +1,5 @@
-﻿using FluentAssertions.Equivalency;
+﻿using System;
+using FluentAssertions.Equivalency;
 
 namespace MeshWeaver.Json.Assertions;
 

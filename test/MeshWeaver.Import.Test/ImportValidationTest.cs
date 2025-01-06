@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using FluentAssertions;
-using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Activities;
@@ -11,6 +10,8 @@ using MeshWeaver.Import.Implementation;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace MeshWeaver.Import.Test;
 
@@ -96,7 +97,7 @@ SystemName,FoundationYear,ContractType
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
-            .Message.Log.Messages.OfType<LogMessage>()
+            .Message.Log.Messages
             .Where(x => x.LogLevel == LogLevel.Error)
             .Select(x => x.Message)
             .Should()
@@ -155,7 +156,7 @@ DoubleValue,Country
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
-            .Message.Log.Messages.OfType<LogMessage>()
+            .Message.Log.Messages
             .Where(x => x.LogLevel == LogLevel.Error)
             .Select(x => x.Message)
             .Should()
@@ -227,7 +228,7 @@ Blue,FR";
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
-            .Message.Log.Messages.OfType<LogMessage>()
+            .Message.Log.Messages
             .Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
@@ -236,7 +237,6 @@ Blue,FR";
         var workspace = client.GetWorkspace();
 
         var ret = await workspace.GetObservable<TestDomain.Country>().FirstAsync();
-        var ret2 = await workspace.GetObservable<TestDomain.Address>().FirstAsync();
 
         ret.Should().HaveCount(0);
     }

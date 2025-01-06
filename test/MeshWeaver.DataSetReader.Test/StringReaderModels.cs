@@ -1,4 +1,7 @@
-﻿namespace MeshWeaver.DataSetReader.Test;
+﻿using System;
+using System.Collections.Generic;
+
+namespace MeshWeaver.DataSetReader.Test;
 
 public record TestImportEntityWithOrder([property: MappingOrder(3)] DateTime DateTimeProperty,
                                         [property: MappingOrder(1)] decimal DecimalProperty,

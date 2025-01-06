@@ -1,5 +1,7 @@
-﻿using System.Reactive.Linq;
+﻿using System.Linq;
+using System.Reactive.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Connection.Notebook;
@@ -101,7 +103,7 @@ Console.WriteLine(""Hello World"");
         var uiClient = Server.Services
             .GetRequiredService<IMessageHub>()
             .ServiceProvider
-            .CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(c => c));
+            .CreateMessageHub(new UiAddress(), c => c.AddLayoutClient(x => x));
         var stream = uiClient.GetWorkspace()
             .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
@@ -115,7 +117,7 @@ Console.WriteLine(""Hello World"");
     }
     protected async Task<CompositeKernel> ConnectToRemoteKernelAsync()
     {
-        var kernel = await CreateCompositeKernelAsync();
+        var kernel = CreateCompositeKernel();
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync($"#!connect mesh --url http://localhost/{KernelEndPoint} --kernel-name mesh");
@@ -125,7 +127,7 @@ Console.WriteLine(""Hello World"");
 
     protected async Task<CompositeKernel> ConnectHubAsync()
     {
-        var kernel = await CreateCompositeKernelAsync();
+        var kernel = CreateCompositeKernel();
 
         // Prepend the #r "MeshWeaver.Notebook.Client" command to load the extension
         var loadModule = await kernel.SubmitCodeAsync("#r \"MeshWeaver.Connection.Notebook\"");
@@ -136,7 +138,7 @@ Console.WriteLine(""Hello World"");
 
 
 
-    protected async Task<CompositeKernel> CreateCompositeKernelAsync()
+    protected CompositeKernel CreateCompositeKernel()
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
 

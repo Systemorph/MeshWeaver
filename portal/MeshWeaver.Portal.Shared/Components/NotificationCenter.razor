@@ -24,7 +24,7 @@ else
 </FluentButton>
 
 @code {
-    private IDialogReference? _dialog;
+    private IDialogReference Dialog;
    
     protected override void OnInitialized()
     {
@@ -42,7 +42,7 @@ else
     private async Task OpenNotificationCenterAsync()
     {
 
-        _dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
+        Dialog = await DialogService.ShowPanelAsync<NotificationCenterPanel>(new DialogParameters<GlobalState>()
             {
                 Alignment = HorizontalAlignment.Right,
                 Title = $"Notifications",
@@ -50,7 +50,7 @@ else
                 SecondaryAction = null,
                 ShowDismiss = true
             });
-        DialogResult result = await _dialog.Result;
+        DialogResult result = await Dialog.Result;
         HandlePanel(result);
     }
 

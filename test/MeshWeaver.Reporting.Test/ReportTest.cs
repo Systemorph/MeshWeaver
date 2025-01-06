@@ -1,4 +1,8 @@
-﻿using System.Reactive.Linq;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Fixture;
@@ -7,6 +11,8 @@ using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.Builder;
 using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.Cubes;
+using VerifyXunit;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Reporting.Test
