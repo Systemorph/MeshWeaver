@@ -6,11 +6,9 @@ namespace MeshWeaver.Charting.Models.Line
         : LineDataSetBase<ScatterDataSet>(Data, Label)
     {
         public override ChartType? Type => ChartType.Scatter;
-        public ScatterDataSet(IEnumerable<double> x, IEnumerable<int> y, string label = null) : this(x, y.Select(v => (double)v), label){}
-        public ScatterDataSet(IEnumerable<int> x, IEnumerable<double> y, string label = null) : this(x.Select(v => (double)v), y, label){}
-        public ScatterDataSet(IEnumerable<int> x, IEnumerable<int> y, string label = null) : this(x.Select(v => (double)v), y.Select(v => (double)v), label){}
 
-        public ScatterDataSet(IEnumerable<double> x, IEnumerable<double> y, string label = null) : this(ConvertToData(x,y), label) { }
+
+        public ScatterDataSet(IEnumerable<double> x, IEnumerable<double> y, string label = null) : this(ConvertToData(x, y), label) { }
 
         private static IReadOnlyCollection<object> ConvertToData(IEnumerable<double> x, IEnumerable<double> y)
         {

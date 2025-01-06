@@ -235,7 +235,8 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="data">The data for the dataset.</param>
     /// <param name="label"></param>
     /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    public static ScatterDataSet Scatter<T1,T2>(IEnumerable<(T1 X, T2 Y)> data, string label = null) => new(data.Cast<object>().ToArray(), label);
+    public static ScatterDataSet Scatter<T1,T2>(IEnumerable<(T1 X, T2 Y)> data, string label = null) => 
+        new(data.Select(x => new PointData(Convert.ToDouble(x.X),Convert.ToDouble(x.Y))).Cast<object>().ToArray(), label);
 
     /// <summary>
     /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
@@ -246,23 +247,8 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
     public static ScatterDataSet Scatter<T1,T2>(IEnumerable<T1> x, IEnumerable<T2> y, string label = null) => new(x.Cast<double>(), y.Cast<double>(), label);
 
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<double> y, string label = null) => new(x, y, label);
-
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
-    /// </summary>
-    /// <param name="x">The x values.</param>
-    /// <param name="y">The y values.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<int> x, IEnumerable<int> y, string label = null) => new(x, y, label);
+    public static ScatterDataSet Scatter(IEnumerable<PointData> points, string label = null)
+        => new(points.Cast<object>().ToArray(), label);
 
     /// <summary>
     /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
@@ -272,38 +258,6 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
     public static ScatterDataSet Scatter(IEnumerable<double> x, IEnumerable<double> y, string label = null) => new(x, y, label);
-
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
-    /// </summary>
-    /// <param name="points">The tuples representing the data points.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<(int x, int y)> points, string label = null) => new(points, label);
-
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
-    /// </summary>
-    /// <param name="points">The tuples representing the data points.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<(int x, double y)> points, string label = null) => new(points, label);
-
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
-    /// </summary>
-    /// <param name="points">The tuples representing the data points.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<(double x, int y)> points, string label = null) => new(points, label);
-
-    /// <summary>
-    /// Creates a new instance of <see cref="ScatterDataSet"/> from tuples.
-    /// </summary>
-    /// <param name="points">The tuples representing the data points.</param>
-    /// <param name="label">The label of the data set.</param>
-    /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    //public static ScatterDataSet Scatter(IEnumerable<(double x, double y)> points, string label = null) => new(points, label);
 
     /// <summary>
     /// Creates a timeline chart model.

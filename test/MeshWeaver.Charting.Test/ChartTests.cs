@@ -30,8 +30,8 @@ public class ChartTests
     [Fact]
     public async Task Bar_Chart_Basic()
     {
-        double[] data = { 1, 2, 3, 4 };
-        string[] labels = { "One", "Two", "Three", "Four" };
+        double[] data = [1, 2, 3, 4];
+        string[] labels = ["One", "Two", "Three", "Four"];
 
         var chart3 = Chart
             .Bar(data)
@@ -417,11 +417,11 @@ public class ChartTests
     [Fact]
     public async Task QuickDraw()
     {
-        double[] data1 = { -1.0, 4.0, 3.0, 2.0 };
-        double[] data2 = { 4.0, 5.0, 6.0, 3.0 };
-        double[] x1 = { 1.0, 4.0, 3.0, 2.0 };
+        double[] data1 = [-1.0, 4.0, 3.0, 2.0];
+        double[] data2 = [4.0, 5.0, 6.0, 3.0];
+        double[] x1 = [1.0, 4.0, 3.0, 2.0];
 
-        var actual = Chart.Bar(new[] { data1, data2, x1 });
+        var actual = Chart.Create(DataSet.Bar(data1) , DataSet.Bar(data2), DataSet.Bar(x1));
 
         await actual.JsonShouldMatch(Options, "QuickDraw.json");
     }
