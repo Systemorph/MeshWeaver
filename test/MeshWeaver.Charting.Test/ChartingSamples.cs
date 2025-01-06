@@ -3,8 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Models;
-using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;
 using MeshWeaver.Json.Assertions;
 using Xunit;
@@ -181,7 +179,7 @@ public class ChartingSamples
     [Fact]
     public async Task QuickDraw()
     {
-        var actual = Chart.Bar(data1, data2, x1);
+        var actual = Chart.Create(DataSet.Bar(data1), DataSet.Bar(data2), DataSet.Bar(x1));
 
         await actual.JsonShouldMatch(Options, "Sample_QuickDraw.json");
     }
