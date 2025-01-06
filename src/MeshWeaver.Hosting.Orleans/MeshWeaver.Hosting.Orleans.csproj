@@ -11,7 +11,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

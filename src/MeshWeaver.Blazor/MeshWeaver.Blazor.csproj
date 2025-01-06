@@ -24,7 +24,6 @@
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Application.Contract\MeshWeaver.Application.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     </ItemGroup>
 
