@@ -5,7 +5,6 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
@@ -41,9 +40,9 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator());
+        host.Hub.Edit<Calculator>(new Calculator());
     private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator(), (_,_,c) => Controls.Markdown($"{c.X + c.Y}"));
+        host.Hub.Edit(new Calculator(),c => Controls.Markdown($"{c.X + c.Y}"));
 
 
     [Fact]
