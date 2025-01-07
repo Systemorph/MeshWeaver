@@ -13,6 +13,7 @@ using Microsoft.DotNet.Interactive.Events;
 using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
+using Microsoft.DotNet.Interactive.PackageManagement;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -158,7 +159,9 @@ public class KernelContainer : IDisposable
 
         var ret = new CSharpKernel()
             .UseKernelHelpers()
-            .UseValueSharing();
+            .UseValueSharing()
+            .UseNugetDirective(OnResolve)
+            ;
 
         ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
 
@@ -170,10 +173,20 @@ public class KernelContainer : IDisposable
         Formatter.Register<IRenderableObject>(
             formatter: (obj,ctx) => FormatControl(obj.ToControl(), ctx), HtmlFormatter.MimeType);
 
-        var composite = new CompositeKernel("mesh");
+        var composite = new CompositeKernel("mesh").UseNugetDirective(OnResolve);
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
         return composite;
+    }
+
+    private Task OnResolve(CompositeKernel arg1, IReadOnlyList<ResolvedPackageReference> arg2)
+    {
+        return Task.CompletedTask;
+    }
+
+    private Task OnResolve(CSharpKernel kernel, IReadOnlyList<ResolvedPackageReference> packages)
+    {
+        return Task.CompletedTask;
     }
 
     private bool FormatControl(UiControl control, FormatContext context)

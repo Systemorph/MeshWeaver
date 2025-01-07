@@ -11,8 +11,8 @@ namespace MeshWeaver.Charting.Test;
 
 public class ChartingSamples
 {
-    private readonly double[] data1 = { -1.0, 4.0, 3.0, 2.0 };
-    private readonly double[] data2 = { 4.0, 5.0, 6.0, 3.0 };
+    private readonly double[] data1 = [ -1.0, 4.0, 3.0, 2.0 ];
+    private readonly double[] data2 = [ 4.0, 5.0, 6.0, 3.0 ];
 
     private JsonSerializerOptions Options =>
         new()
@@ -31,11 +31,11 @@ public class ChartingSamples
         new(2020, 4, 1, 9, 0, 0)
     };
 
-    private readonly double[] x1 = { 1.0, 4.0, 3.0, 2.0 };
-    private readonly double[] x2 = { 10.0, 2.0, 7.0, 1.0 };
-    private readonly double[] y = { 4.0, 1.0, 2.0, 3.0 };
-
-    private readonly string[] labels = { "One", "two", "three", "four" };
+    private readonly double[] x1 = [ 1.0, 4.0, 3.0, 2.0 ];
+    private readonly double[] x2 = [ 10.0, 2.0, 7.0, 1.0];
+    private readonly double[] y =  [ 4.0, 1.0, 2.0, 3.0 ];
+    
+    private readonly string[] labels = ["One", "two", "three", "four"];
 
     [Fact]
     public async Task BarChart()

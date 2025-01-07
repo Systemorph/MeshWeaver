@@ -4,6 +4,7 @@
     <PackageReference Include="Microsoft.DotNet.Interactive" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
     <PackageReference Include="Microsoft.DotNet.Interactive.Formatting" />
+    <PackageReference Include="Microsoft.DotNet.Interactive.PackageManagement" />
   </ItemGroup>
 
   <ItemGroup>
