@@ -40,18 +40,6 @@ jobs:
 
     - name: Create nuget.config
       run: |
-        echo "<?xml version=\"1.0\" encoding=\"utf-8\"?>
-        <configuration>
-          <packageSources>
-            <add key=\"github\" value=\"https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json\" />
-          </packageSources>
-          <packageSourceCredentials>
-            <github>
-              <add key=\"Username\" value=\"Systemorph\" />
-              <add key=\"ClearTextPassword\" value=\"${{ secrets.GH_PAT }}\" />
-            </github>
-          </packageSourceCredentials>
-        </configuration>" > nuget.config
 
     - name: publish to nuget.org
       run: dotnet nuget push ./nupkgs/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_PAT }}
