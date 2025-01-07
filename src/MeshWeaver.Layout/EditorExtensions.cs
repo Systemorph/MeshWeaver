@@ -17,20 +17,43 @@ namespace MeshWeaver.Layout;
 public static class EditorExtensions
 {
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
-        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        Func<T, object> result)
+        => hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
+        Func<T, object> result)
+        => hub.ServiceProvider.Edit(observable, (i, _, _) => result(i));
+    public static UiControl Edit<T>(this IMessageHub hub, T instance,
+        Func<T,LayoutAreaHost, RenderingContext, object> result)
         => hub.ServiceProvider.Edit(Observable.Return(instance), result);
     public static UiControl Edit<T>(this IServiceProvider serviceProvider, T instance,
-        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        Func<T,LayoutAreaHost, RenderingContext, object> result)
         => serviceProvider.Edit(Observable.Return(instance), result);
 
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        Func<T,LayoutAreaHost, RenderingContext, object> result)
     => hub.ServiceProvider.Edit(observable, result);
+
+    public static UiControl Edit<T>(
+        this IServiceProvider serviceProvider, T instance)
+        => serviceProvider.Edit(Observable.Return(instance), default(Func<T, LayoutAreaHost, RenderingContext, object>));
+    public static UiControl Edit<T>(
+        this IMessageHub hub, T instance)
+        => hub.ServiceProvider.Edit(Observable.Return(instance), default(Func<T, LayoutAreaHost, RenderingContext, object>));
+
+    public static UiControl Edit<T>(
+        this IMessageHub hub,
+        IObservable<T> observable)
+        => hub.ServiceProvider.Edit(observable, default(Func<T, LayoutAreaHost, RenderingContext, object>));
+    public static UiControl Edit<T>(
+        this IServiceProvider serviceProvider,
+        IObservable<T> observable)
+        => serviceProvider.Edit(observable, default(Func<T, LayoutAreaHost, RenderingContext, object>));
+
 
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
             IObservable<T> observable,
-        Func<LayoutAreaHost, RenderingContext, T, object> result = null)
+        Func<T,LayoutAreaHost, RenderingContext, object> result)
     {
         var id = Guid.NewGuid().AsString();
         var editor = observable.Bind(_ =>
@@ -45,7 +68,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
             host.Stream.GetDataStream<T>(id)
-                .Select(x => result.Invoke(host, ctx, x)));
+                .Select(x => result.Invoke(x,host, ctx)));
     }
 
 
