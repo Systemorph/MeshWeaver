@@ -121,7 +121,7 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
                 ? dataSet 
                 : row.SmoothingCoefficient != null 
                     ?
-                    smoothed.Smoothed((double)row.SmoothingCoefficient) :
+                    smoothed.WithTension((double)row.SmoothingCoefficient) :
                 dataSet;
             Chart = Chart.WithDataSet(dataSet);
         }

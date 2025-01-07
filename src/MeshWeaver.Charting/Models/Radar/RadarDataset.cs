@@ -164,7 +164,7 @@ public record RadarDataSet(IReadOnlyCollection<object> Data, string Label = null
     /// </summary>
     /// <param name="tension">The Bezier curve tension of the line.</param>
     /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified tension.</returns>
-    public RadarDataSet Smoothed(double? tension) =>
+    public RadarDataSet WithTension(double? tension) =>
         this with { Tension = tension };
 
     /// <summary>
