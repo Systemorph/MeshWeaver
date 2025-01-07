@@ -128,11 +128,12 @@ namespace MeshWeaver.Charting.Models.Line
             => This with { Fill = fill };
 
         /// <summary>
-        /// Bezier curve tension of the line. Set to 0 to draw straightlines. This option is ignored if monotone cubic interpolation is used. Note This was renamed from 'tension' but the old name still works.
+        /// Bezier curve tension of the line. Set to 0 to draw straightlines.
+        /// This option is ignored if monotone cubic interpolation is used.
         /// </summary>
         public double? Tension { get; init; }
 
-        public TDataSet Smoothed(double? tension)
+        public TDataSet WithTension(double? tension)
             => This with { Tension = tension };
 
         /// <summary>
@@ -196,7 +197,20 @@ namespace MeshWeaver.Charting.Models.Line
         /// 'middle': Step-middle Interpolation
         /// If the stepped value is set to anything other than false, tension will be ignored.
         /// </summary>
-        public object SteppedLine { get; init; }
+        public object Stepped { get; init; }
+
+        // https://www.chartjs.org/docs/latest/charts/line.html#stepped
+        /// <summary>
+        /// The following values are supported for stepped.
+        /// false: No Step Interpolation (default)
+        /// true: Step-before Interpolation(eq. 'before')
+        /// 'before': Step-before Interpolation
+        /// 'after': Step-after Interpolation
+        /// 'middle': Step-middle Interpolation
+        /// If the stepped value is set to anything other than false, tension will be ignored.
+        /// </summary>
+        public TDataSet WithStepped(object stepped)
+            => This with { Stepped = stepped };
         #endregion Stepped
 
 
