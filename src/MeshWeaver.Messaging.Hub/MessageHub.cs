@@ -358,9 +358,14 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
 
     public void Dispose()
     {
-        if(IsDisposing)
-            return;
-        Post(new DisposeRequest());
+        lock (locker)
+        {
+            if (IsDisposing)
+                return;
+            logger.LogDebug("Starting disposing of hub {address}", Address);
+            Disposed = disposingTaskCompletionSource.Task;
+        }
+        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
     private async Task<IMessageDelivery> HandleShutdownAsync(
@@ -470,20 +475,9 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
     {
         while (disposeActions.TryTake(out var configurationDisposeAction))
             await configurationDisposeAction.Invoke(this, ct);
-        DisposeImpl();
+        Dispose();
         return request.Processed();
     }
 
-    private void DisposeImpl()
-    {
-        lock (locker)
-        {
-            if (IsDisposing)
-                return;
-            logger.LogDebug("Starting disposing of hub {address}", Address);
-            Disposed = disposingTaskCompletionSource.Task;
-        }
-        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
-    }
 
 }
