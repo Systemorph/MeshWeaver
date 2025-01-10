@@ -28,7 +28,10 @@ namespace MeshWeaver.Hosting.Monolith.Test
         public override async Task InitializeAsync()
         {
             await base.InitializeAsync();
-            var builder = (MeshHostBuilder)ConfigureMesh(new MeshHostBuilder(new HostBuilder(), new MeshAddress()));
+            var builder = (MeshHostBuilder)ConfigureMesh(
+                new MeshHostBuilder(new HostBuilder(), 
+                    new MeshAddress())
+                );
             Host = await builder.Host
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
@@ -44,7 +47,6 @@ namespace MeshWeaver.Hosting.Monolith.Test
                                 PayloadSerializerOptions = sp.GetRequiredService<IMessageHub>().JsonSerializerOptions
                             })));
                         services.AddSignalRHubs();
-
                     });
                     webBuilder.Configure(app =>
                     {

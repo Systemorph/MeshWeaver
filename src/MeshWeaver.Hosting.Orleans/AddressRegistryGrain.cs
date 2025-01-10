@@ -29,14 +29,6 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         return State;
     }
 
-    public async Task Register(StreamInfo streamInfo)
-    {
-        if (Equals(State, streamInfo))
-            return;
-        logger.LogInformation("Registering {Stream} for address {Id}", streamInfo, this.GetPrimaryKeyString());
-        State = streamInfo;
-        await WriteStateAsync();
-    }
 
     private async Task InitializeState()
     {
@@ -61,8 +53,8 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
             else logger.LogInformation("Mapping {Id} to {Node}", id, Node);
         }
         State = Node != null
-            ? new(addressId, Node.StreamProvider, Node.Namespace, addressType)
-            : new StreamInfo(addressId, StreamProviders.Memory, IRoutingService.MessageIn, addressType); 
+            ? new(addressType, addressId, Node.StreamProvider, Node.Namespace)
+            : new StreamInfo(addressType, addressId, StreamProviders.Memory, IRoutingService.MessageIn); 
         
         logger.LogInformation("Mapping address {AddressId} of Type {AddressType} to {State}", addressId, addressType,  State);
        await WriteStateAsync();
@@ -77,6 +69,16 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         await ClearStateAsync();
         DeactivateOnIdle();
     }
+
+    public async Task RegisterStream(StreamInfo streamInfo)
+    {
+        if (Equals(State, streamInfo))
+            return;
+        logger.LogInformation("Registering {Stream} for address {Id}", streamInfo, this.GetPrimaryKeyString());
+        State = streamInfo;
+        await WriteStateAsync();
+    }
+
 }
 
 

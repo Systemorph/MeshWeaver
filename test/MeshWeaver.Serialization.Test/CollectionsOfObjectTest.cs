@@ -13,7 +13,7 @@ namespace MeshWeaver.Serialization.Test;
 
 public class CollectionsOfObjectTest : TestBase
 {
-    record ClientAddress;
+    record ClientAddress() : Address("client", "1");
 
     [Inject]
     private IMessageHub Client { get; set; }

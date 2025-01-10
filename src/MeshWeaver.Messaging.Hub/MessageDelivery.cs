@@ -5,7 +5,7 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Messaging;
 
-public abstract record MessageDelivery(object Sender, object Target) : IMessageDelivery
+public abstract record MessageDelivery(Address Sender, Address Target) : IMessageDelivery
 {
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
@@ -32,7 +32,7 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
         return this with { Properties = PropertiesImpl.SetItem(name, value) };
     }
 
-    public IMessageDelivery ForwardTo(object target)
+    public IMessageDelivery ForwardTo(Address target)
         => this with { Target = target, State = MessageDeliveryState.Submitted };
 
     public IMessageDelivery WithProperty(string name, object value)
@@ -40,18 +40,19 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
     public IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties)
     => this with { Properties = PropertiesImpl.AddRange(properties) };
+
+
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
 
-    IReadOnlyCollection<object> IMessageDelivery.ToBeForwarded(IEnumerable<object> addresses) => addresses.Where(a => !ForwardedTo.Contains(a)).ToArray();
-    IMessageDelivery IMessageDelivery.Forwarded(IEnumerable<object> addresses) => this with { ForwardedTo = ForwardedTo.Union(addresses), State = MessageDeliveryState.Forwarded };
+    IMessageDelivery IMessageDelivery.Forwarded(IEnumerable<Address> addresses) => this with { ForwardedTo = ForwardedTo.Union(addresses), State = MessageDeliveryState.Forwarded };
 
 
 
-    IMessageDelivery IMessageDelivery.WithSender(object address)
+    IMessageDelivery IMessageDelivery.WithSender(Address address)
     {
         return this with { Sender = address };
     }
-    IMessageDelivery IMessageDelivery.WithTarget(object address)
+    IMessageDelivery IMessageDelivery.WithTarget(Address address)
     {
         return this with { Target = address };
     }
@@ -94,7 +95,7 @@ public abstract record MessageDelivery(object Sender, object Target) : IMessageD
 
 }
 
-public record MessageDelivery<TMessage>(object Sender, object Target, TMessage Message) : MessageDelivery(Sender, Target), IMessageDelivery<TMessage>
+public record MessageDelivery<TMessage>(Address Sender, Address Target, TMessage Message) : MessageDelivery(Sender, Target), IMessageDelivery<TMessage>
 {
     public MessageDelivery()
         : this(default, default, default)

@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Data.Persistence
+﻿using MeshWeaver.Messaging;
+
+namespace MeshWeaver.Data.Persistence
 {
     public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
         : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
@@ -24,7 +26,7 @@
 
         protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
         {
-            var partition = identity.Partition;
+            var partition = (Address)identity.Partition;
             var reference = GetReference();
             var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
                 partition,

@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -32,7 +28,7 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureClient(configuration);
     }
 
-    public record NewAddress;
+    public record NewAddress() : Address("new", "1");
     [Fact]
     public async Task HostedPingPong()
     {

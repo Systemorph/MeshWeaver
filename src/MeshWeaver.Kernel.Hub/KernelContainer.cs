@@ -22,7 +22,7 @@ namespace MeshWeaver.Kernel.Hub;
 public class KernelContainer : IDisposable
 {
 
-    private readonly HashSet<object> subscriptions = new();
+    private readonly HashSet<Address> subscriptions = new();
     private readonly IMeshCatalog meshCatalog;
     private readonly IMessageHub executionHub;
     private readonly ILogger<KernelContainer> logger;
@@ -269,5 +269,5 @@ public class KernelContainer : IDisposable
         Hub.Dispose();
     }
 
-    private record KernelExecutionAddress;
+    private record KernelExecutionAddress() : Address("ke", Guid.NewGuid().AsString());
 }

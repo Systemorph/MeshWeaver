@@ -24,7 +24,7 @@ namespace MeshWeaver.Mesh
         }
 
 
-        public static object MapAddress(string addressType, string id)
+        public static Address MapAddress(string addressType, string id)
             => addressType switch
             {
                 ApplicationAddress.TypeName => new ApplicationAddress(id),

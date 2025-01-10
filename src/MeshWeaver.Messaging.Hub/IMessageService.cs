@@ -4,7 +4,7 @@ namespace MeshWeaver.Messaging;
 
 public interface IMessageService : IAsyncDisposable
 {
-    object Address { get; }
+    Address Address { get; }
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
     IMessageDelivery IncomingMessage(IMessageDelivery message);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);

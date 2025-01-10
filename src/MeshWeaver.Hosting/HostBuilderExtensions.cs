@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting
@@ -8,7 +9,7 @@ namespace MeshWeaver.Hosting
         public static void UseMeshWeaver
         (
             this IHostApplicationBuilder hostBuilder,
-            object address,
+            Address address,
             Func<MeshHostApplicationBuilder, MeshBuilder> configuration = null)
         {
             var builder = new MeshHostApplicationBuilder(hostBuilder, address);

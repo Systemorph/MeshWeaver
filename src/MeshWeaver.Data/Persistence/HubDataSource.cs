@@ -1,9 +1,10 @@
 ﻿using System.Text.Json;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.Persistence;
 
 
-public record UnpartitionedHubDataSource(object Id, IWorkspace Workspace) : UnpartitionedDataSource<UnpartitionedHubDataSource,ITypeSource>(Id, Workspace)
+public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) : UnpartitionedDataSource<UnpartitionedHubDataSource,ITypeSource>(Address, Workspace)
 {
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
     public override UnpartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource> typeSource) =>
@@ -14,5 +15,5 @@ public record UnpartitionedHubDataSource(object Id, IWorkspace Workspace) : Unpa
     ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity) => 
-        Workspace.GetRemoteStream(Id, GetReference());
+        Workspace.GetRemoteStream(Address, GetReference());
 }

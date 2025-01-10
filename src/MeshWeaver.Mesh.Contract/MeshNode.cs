@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
-
+public delegate IMessageHub MessageHubFactory(IServiceProvider  serviceProvider, string addressType, string id);
 public record MeshNode(
     string AddressType,
     string AddressId, 
@@ -23,7 +23,7 @@ public record MeshNode(
 
     public string AssemblyLocation { get; init; }
 
-    public Func<IServiceProvider, string, IMessageHub> HubFactory { get; init; }
+    public MessageHubFactory HubFactory { get; init; }
 
     public string StartupScript { get; init; }
 

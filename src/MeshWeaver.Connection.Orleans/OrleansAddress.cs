@@ -1,12 +1,6 @@
-﻿using MeshWeaver.ShortGuid;
+﻿using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Connection.Orleans
-{
-    public record OrleansAddress
-    {
-        public string Id { get; set; } = Guid.NewGuid().AsString();
+namespace MeshWeaver.Connection.Orleans;
 
-        public override string ToString()
-            => $"o_{Id}";
-    }
-}
+public record OrleansAddress() : Address("orleans", Guid.NewGuid().AsString());

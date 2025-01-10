@@ -1,8 +1,6 @@
 ﻿using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Layout.Composition;
 
-public record LayoutExecutionAddress() 
-{
-    public Guid Id { get; init; } = Guid.NewGuid();
-}
+public record LayoutExecutionAddress() : Address("le", Guid.NewGuid().AsString());

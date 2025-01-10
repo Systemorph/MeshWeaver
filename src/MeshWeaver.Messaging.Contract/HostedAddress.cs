@@ -1,5 +1,5 @@
 ﻿namespace MeshWeaver.Messaging;
 
 
-public record HostedAddress(object Address, object Host);
+public record HostedAddress(Address Address, Address Host): Address(Host.Type, Host.Id);
 

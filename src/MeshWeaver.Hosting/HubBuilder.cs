@@ -9,7 +9,7 @@ namespace MeshWeaver.Hosting
     public class HubBuilder<TBuilder>
         where TBuilder:HubBuilder<TBuilder>
     {
-        public object Address { get; }
+        public Address Address { get; }
         public TBuilder This => (TBuilder)this;
         public readonly ServiceCollection Services = new();
         private List<Action<IServiceProvider>> Initializations { get; init; } = [];
@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting
             return This;
         }
 
-        public HubBuilder(object address)
+        public HubBuilder(Address address)
         {
             Address = address;
             Services.AddLogging(logging => logging.AddConsole());

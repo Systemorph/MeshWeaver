@@ -12,10 +12,6 @@ public abstract record ActivityBase: IDisposable
 
     protected readonly ILogger Logger;
 
-    private record ActivityAddress 
-    {
-        public Guid Id { get; } = Guid.NewGuid();
-    }
     protected ActivityBase(string category, IMessageHub hub)
     {
         this.Hub = hub;

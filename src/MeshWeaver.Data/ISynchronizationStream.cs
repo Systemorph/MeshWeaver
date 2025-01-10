@@ -5,7 +5,7 @@ namespace MeshWeaver.Data;
 
 public interface ISynchronizationStream : IDisposable
 {
-    object Owner { get; }
+    Address Owner { get; }
     object Reference { get; }
     string StreamId { get; }
     string ClientId { get; }

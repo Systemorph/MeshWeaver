@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Kernel.Hub;
 
@@ -14,7 +13,7 @@ public static class KernelExtensions
                     ? new(addressType, addressId, "Kernel", typeof(KernelExtensions).FullName)
                     {
                         AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
-                        HubFactory = (serviceProvider, id) => serviceProvider.CreateKernelHub(id)
+                        HubFactory = (serviceProvider, _, id) => serviceProvider.CreateKernelHub(id)
                     }
                     : null
             )

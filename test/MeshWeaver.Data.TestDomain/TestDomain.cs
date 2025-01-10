@@ -4,12 +4,17 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data.TestDomain;
 
 public static class TestDomain
 {
-    public record ImportAddress();
+    public record ImportAddress() : Address(TypeName, Guid.NewGuid().AsString())
+    {
+        public const string TypeName = "import";
+    }
 
     public static readonly Dictionary<Type, IEnumerable<object>> TestRecordsDomain =
         new()
@@ -32,11 +37,11 @@ public static class TestDomain
         {
             { typeof(Contract), new Contract[] { } },
             { typeof(Country), new Country[] { } },
-            { typeof(Address), new Address[] { } },
+            { typeof(StreetAddress), new StreetAddress[] { } },
             { typeof(Discount), new Discount[] { } },
         };
 
-    public record Address
+    public record StreetAddress() 
     {
         [Required]
         public string Street { get; set; }

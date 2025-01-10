@@ -6,7 +6,7 @@ namespace MeshWeaver.Hosting;
 
 public record MeshHostApplicationBuilder : MeshBuilder
 {
-    public MeshHostApplicationBuilder(IHostApplicationBuilder Host, object address) : base(x => x.Invoke(Host.Services), address)
+    public MeshHostApplicationBuilder(IHostApplicationBuilder Host, Address address) : base(x => x.Invoke(Host.Services), address)
     {
         this.Host = Host;
         Host.ConfigureContainer(new MessageHubServiceProviderFactory(BuildHub));
@@ -16,7 +16,7 @@ public record MeshHostApplicationBuilder : MeshBuilder
 }
 public record MeshHostBuilder : MeshBuilder
 {
-    public MeshHostBuilder(IHostBuilder Host, object address) : base(c => Host.ConfigureServices((_,services) => c(services)), address)
+    public MeshHostBuilder(IHostBuilder Host, Address address) : base(c => Host.ConfigureServices((_,services) => c(services)), address)
     {
         this.Host = Host;
         Host.UseServiceProviderFactory(new MessageHubServiceProviderFactory(BuildHub));

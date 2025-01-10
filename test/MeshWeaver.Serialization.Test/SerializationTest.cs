@@ -1,10 +1,7 @@
 ﻿using System.Collections.Generic;
-using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Newtonsoft.Json.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
@@ -13,14 +10,8 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;
 
-public class SerializationTest : TestBase
+public class SerializationTest : HubTestBase
 {
-    record RouterAddress; // TODO V10: can we use implicitly some internal address and not specify it outside? (23.01.2024, Alexander Yolokhov)
-
-    record HostAddress;
-
-    record ClientAddress;
-
     [Inject]
     private IMessageHub Router { get; set; }
 

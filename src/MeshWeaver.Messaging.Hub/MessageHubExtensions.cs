@@ -8,7 +8,7 @@ namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
-    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, object address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
             .WithTypes(address.GetType());
@@ -39,7 +39,7 @@ public static class MessageHubExtensions
             return (jObj[EntitySerializationExtensions.TypeProperty]?.ToString(), jObj[EntitySerializationExtensions.TypeProperty]?.ToString());
 
         var s = instance.ToString();
-        var split = s.Split('/');
+        var split = s!.Split('/');
         if (split.Length < 2)
             throw new InvalidOperationException($"Address {s} is not in the correct format. Expected format is AddressType/AddressId");
 

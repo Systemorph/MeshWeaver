@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Messaging;
 
-public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDisposable
+public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
 #if DEBUG
     
@@ -15,7 +15,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
     long Version { get; }
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
-    object Address { get; }
+    Address Address { get; }
     IServiceProvider ServiceProvider { get; }
 
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
@@ -59,13 +59,15 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
 
     void Set<T>(T obj, string context = "");
     T Get<T>(string context = "");
-    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false);
-    IMessageHub GetHostedHub<TAddress1>(TAddress1 address, bool cachedOnly = false)
+    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false) 
+        where TAddress : Address;
+    IMessageHub GetHostedHub<TAddress>(TAddress address, bool cachedOnly = false)
+        where TAddress : Address
         => GetHostedHub(address, x => x, cachedOnly);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
-    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal(_ => disposable.DisposeAsync().AsTask());
-    IMessageHub RegisterForDisposal(Func<IMessageHub, Task> disposeAction);
+    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_,_) => disposable.DisposeAsync().AsTask());
+    IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     Task HasStarted { get; }
     bool IsDisposing { get; }
@@ -77,6 +79,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IAsyncDisposable, IDispo
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
+    Task Disposed { get; }
 }
 
 
