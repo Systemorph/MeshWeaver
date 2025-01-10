@@ -1,6 +1,5 @@
 ﻿using System.Reflection;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
 
@@ -20,7 +19,7 @@ public class MessageService : IMessageService
     private readonly DeferralContainer deferralContainer;
 
 
-    public MessageService(object address, ILogger<MessageService> logger)
+    public MessageService(Address address, ILogger<MessageService> logger)
     {
         Address = address;
         this.logger = logger;
@@ -58,7 +57,7 @@ public class MessageService : IMessageService
     }
 
 
-    public object Address { get; }
+    public Address Address { get; }
 
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
@@ -73,10 +72,6 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery)
     {
-
-        if (delivery.Target is JsonNode node)
-            delivery = delivery.WithTarget(node.Deserialize<object>(hub.JsonSerializerOptions));
-
         var targetAddress = delivery.Target is HostedAddress hosted ? hosted.Address : delivery.Target;
         if (Address.Equals(targetAddress))
             delivery = UnpackIfNecessary(delivery).WithTarget(targetAddress);

@@ -63,7 +63,7 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
                                                 {
                                                     var ret = true;
                                                     if (
-                                                        instance is TestDomain.Address address
+                                                        instance is TestDomain.StreetAddress address
                                                         && address.Street == "Red"
                                                     )
                                                     {

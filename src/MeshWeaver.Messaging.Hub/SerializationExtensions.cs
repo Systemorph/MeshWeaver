@@ -54,7 +54,6 @@ public static class SerializationExtensions
         serializationOptions.Converters.Add(new JsonNodeConverter());
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
-        serializationOptions.Converters.Add(new MessageDeliveryConverter());
         serializationOptions.Converters.Add(new RawJsonConverter());
         //deserializationOptions.Converters.Add(new MessageDeliveryConverter());
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());

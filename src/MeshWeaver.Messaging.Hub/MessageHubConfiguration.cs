@@ -10,9 +10,9 @@ namespace MeshWeaver.Messaging;
 
 public record MessageHubConfiguration
 {
-    public object Address { get; }
+    public Address Address { get; }
     protected readonly IServiceProvider ParentServiceProvider;
-    public MessageHubConfiguration(IServiceProvider parentServiceProvider, object address)
+    public MessageHubConfiguration(IServiceProvider parentServiceProvider, Address address)
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
@@ -23,8 +23,7 @@ public record MessageHubConfiguration
 
     public IServiceProvider ServiceProvider { get; set; }
 
-    internal ImmutableList<Func<IMessageHub, Task>> DisposeActions { get; init; } = ImmutableList<Func<IMessageHub, Task>>.Empty;
-
+    internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> DisposeActions { get; init; } = [];
 
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
@@ -34,12 +33,12 @@ public record MessageHubConfiguration
     internal IMessageHub HubInstance { get; set; }
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
-        => RegisterForDisposal(m =>
+        => RegisterForDisposal((m,_) =>
         {
             disposeAction.Invoke(m);
             return Task.CompletedTask;
         });
-    public MessageHubConfiguration RegisterForDisposal(Func<IMessageHub, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
+    public MessageHubConfiguration RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction) => this with { DisposeActions = DisposeActions.Add(disposeAction) };
 
 
 
@@ -50,11 +49,11 @@ public record MessageHubConfiguration
         return this with { Services = x => configuration(Services(x)) };
     }
 
-    public MessageHubConfiguration WithHostedHub(object address,
+    public MessageHubConfiguration WithHostedHub(Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
             this.WithTypes(address.GetType())
-                .WithRoutes(f => f.RouteAddress<object>((a, d) =>
+                .WithRoutes(f => f.RouteAddress<Address>((a, d) =>
         {
             if (!address.Equals(a))
                 return d;
@@ -92,7 +91,7 @@ public record MessageHubConfiguration
                     m is IMessageDelivery<TMessage> mdTyped &&
                         (filter ?? DefaultFilter).Invoke(h, m) ?
                         delivery.Invoke(h,mdTyped,c)
-                : Task.FromResult<IMessageDelivery>(m)))
+                : Task.FromResult(m)))
         };
 
     private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery) => delivery.Target == null || delivery.Target.Equals(hub.Address);

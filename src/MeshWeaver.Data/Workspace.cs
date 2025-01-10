@@ -37,7 +37,7 @@ public class Workspace : IWorkspace
     }
 
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
-        object id,
+        Address id,
         WorkspaceReference<TReduced> reference
     ) =>
         (ISynchronizationStream<TReduced>)
@@ -53,7 +53,7 @@ public class Workspace : IWorkspace
 
 
     public ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
-        object owner,
+        Address owner,
         TReference reference
     )
         where TReference : WorkspaceReference =>
@@ -66,7 +66,7 @@ public class Workspace : IWorkspace
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
         TReference
-    >(object address, TReference reference)
+    >(Address address, TReference reference)
         where TReference : WorkspaceReference =>
         (ISynchronizationStream<TReduced>)this.CreateExternalClient<TReduced, TReference>(address, reference);
 

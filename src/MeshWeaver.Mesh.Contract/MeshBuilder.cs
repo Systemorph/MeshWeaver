@@ -8,7 +8,7 @@ namespace MeshWeaver.Mesh;
 
 public record MeshBuilder
 {
-    public MeshBuilder(Action<Func<IServiceCollection,IServiceCollection>> ServiceConfig, object Address)
+    public MeshBuilder(Action<Func<IServiceCollection,IServiceCollection>> ServiceConfig, Address Address)
     {
         this.ServiceConfig = ServiceConfig;
         this.Address = Address;
@@ -34,7 +34,7 @@ public record MeshBuilder
         return this;
     }
     private Action<Func<IServiceCollection, IServiceCollection>> ServiceConfig { get; init; }
-    public object Address { get; init; }
+    public Address Address { get; init; }
 
 
     public MeshBuilder ConfigureMesh(Func<MeshConfiguration, MeshConfiguration> configuration)
@@ -67,12 +67,7 @@ public record MeshBuilder
     private static MessageHubConfiguration AddMesh(MessageHubConfiguration configuration)
     {
         return configuration
-            .AddMeshTypes()
-            .WithHandler<PingRequest>((hub, request) =>
-        {
-            hub.Post(new PingResponse(), o => o.ResponseFor(request));
-            return request.Processed();
-        });
+            .AddMeshTypes();
     }
 
 

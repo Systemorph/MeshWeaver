@@ -6,6 +6,6 @@ public interface IAddressRegistryGrain : IGrainWithStringKey
 {
     Task<StreamInfo> GetStreamInfo();
     Task<NodeStorageInfo> GetStorageInfo();
-    Task Register(StreamInfo streamInfo);
     Task Unregister();
+    Task RegisterStream(StreamInfo streamInfo);
 }

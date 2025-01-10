@@ -145,7 +145,7 @@ public static class NorthwindDataConfiguration
         return dataSource.WithType<Category>().WithType<Region>().WithType<Territory>();
     }
 
-    public static IMessageHub GetCustomerHub(this IServiceProvider serviceProvider, object address)
+    public static IMessageHub GetCustomerHub(this IServiceProvider serviceProvider, Address address)
     {
         return serviceProvider.CreateMessageHub(address, config => config.AddData(data => data));
     }

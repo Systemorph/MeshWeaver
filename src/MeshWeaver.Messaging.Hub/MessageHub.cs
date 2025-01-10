@@ -19,11 +19,9 @@ public enum MessageHubRunLevel
 
 public record ExecutionRequest(Func<CancellationToken, Task> Action);
 
-public sealed class MessageHub
-    : MessageHubBase,
-        IMessageHub
+public sealed class MessageHub : MessageHubBase, IMessageHub
 {
-    public override object Address => MessageService.Address;
+    public override Address Address => MessageService.Address;
 
     public void InvokeAsync(Func<CancellationToken, Task> action) =>
         Post(new ExecutionRequest(action));
@@ -61,8 +59,9 @@ public sealed class MessageHub
 
         Register(HandleCallbacks);
         Register(ExecuteRequest);
-        Register<DisposeRequest>(HandleDispose);
+        Register<DisposeRequest>(HandleDisposeAsync);
         Register<ShutdownRequest>(HandleShutdownAsync);
+        Register<PingRequest>(HandlePingRequest);
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(
                 messageHandler.MessageType,
@@ -71,6 +70,12 @@ public sealed class MessageHub
 
         MessageService.Start(this);
 
+    }
+
+    private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
+    { 
+        Post(new PingResponse(), o => o.ResponseFor(request));
+        return request.Processed();
     }
 
 
@@ -296,7 +301,7 @@ public sealed class MessageHub
         return delivery;
     }
 
-    object IMessageHub.Address => Address;
+    Address IMessageHub.Address => Address;
 
 
     public IMessageDelivery<TMessage> Post<TMessage>(
@@ -322,19 +327,20 @@ public sealed class MessageHub
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         bool cachedOnly = false
     )
+        where TAddress1 : Address
     {
         var messageHub = hostedHubs.GetHub(address, config, cachedOnly);
         return messageHub;
     }
 
     public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction) =>
-        RegisterForDisposal(hub =>
+        RegisterForDisposal((hub,_) =>
         {
             disposeAction.Invoke(hub);
             return Task.CompletedTask;
         });
 
-    public IMessageHub RegisterForDisposal(Func<IMessageHub, Task> disposeAction)
+    public IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction)
     {
         disposeActions.Add(disposeAction);
         return this;
@@ -342,24 +348,19 @@ public sealed class MessageHub
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
-    public bool IsDisposing => disposingTaskCompletionSource != null;
+    public bool IsDisposing => Disposed != null;
 
-    private TaskCompletionSource disposingTaskCompletionSource;
+    public Task Disposed { get; private set; }
+    private readonly TaskCompletionSource disposingTaskCompletionSource = new();
 
     private readonly object locker = new();
 
-    private static readonly TimeSpan ShutDownTimeout = TimeSpan.FromSeconds(10);
 
     public void Dispose()
     {
-        lock (locker)
-        {
-            if (IsDisposing)
-                return;
-            logger.LogDebug("Starting disposing of hub {address}", Address);
-            disposingTaskCompletionSource = new(new CancellationTokenSource(ShutDownTimeout).Token);
-        }
-        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+        if(IsDisposing)
+            return;
+        Post(new DisposeRequest());
     }
 
     private async Task<IMessageDelivery> HandleShutdownAsync(
@@ -367,9 +368,6 @@ public sealed class MessageHub
         CancellationToken ct
     )
     {
-        while (disposeActions.TryTake(out var configurationDisposeAction))
-            await configurationDisposeAction.Invoke(this);
-
 
         if (request.Message.Version != Version - 1)
         {
@@ -393,10 +391,10 @@ public sealed class MessageHub
                         if (RunLevel == MessageHubRunLevel.DisposeHostedHubs)
                             return;
 
-                        logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
                         RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                     }
-                    await hostedHubs.DisposeAsync();
+                    logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
+                    hostedHubs.Dispose();
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
                     logger.LogDebug("Finish disposing hosted hubs of hub {address}", Address);
                 }
@@ -442,22 +440,14 @@ public sealed class MessageHub
         }
     }
 
-    public override Task DisposeAsync()
-    {
-        if (!IsDisposing)
-            Dispose();
-        return disposingTaskCompletionSource.Task;
-    }
 
     private async Task ShutdownAsync()
     {
-        await hostedHubs.DisposeAsync();
-
+        hostedHubs.Dispose();
         await MessageService.DisposeAsync();
-        await base.DisposeAsync();
     }
 
-    private readonly ConcurrentBag<Func<IMessageHub, Task>> disposeActions = new();
+    private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> disposeActions = new();
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         MessageService.Defer(deferredFilter);
@@ -476,9 +466,24 @@ public sealed class MessageHub
     }
 
 
-    private IMessageDelivery HandleDispose(IMessageDelivery<DisposeRequest> request)
+    private async Task<IMessageDelivery> HandleDisposeAsync(IMessageDelivery<DisposeRequest> request, CancellationToken ct)
     {
-        Dispose();
+        while (disposeActions.TryTake(out var configurationDisposeAction))
+            await configurationDisposeAction.Invoke(this, ct);
+        DisposeImpl();
         return request.Processed();
     }
+
+    private void DisposeImpl()
+    {
+        lock (locker)
+        {
+            if (IsDisposing)
+                return;
+            logger.LogDebug("Starting disposing of hub {address}", Address);
+            Disposed = disposingTaskCompletionSource.Task;
+        }
+        Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+    }
+
 }
