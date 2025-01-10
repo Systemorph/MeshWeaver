@@ -1,9 +1,11 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using MeshWeaver.ShortGuid;
+
+namespace MeshWeaver.Messaging;
 
 public class DeliveryFailureException : Exception
 {
     internal DeliveryFailureException()
-        : base() { }
+    { }
 
     public DeliveryFailureException(DeliveryFailure failure)
         : base(failure.Message)
@@ -48,8 +50,11 @@ public enum ErrorType
     StartupScriptFailed
 }
 
-public record PersistenceAddress();
+public record PersistenceAddress() : Address("persistence", Guid.NewGuid().AsString());
 
 public record HeartbeatEvent;
 
 public record DisposeRequest;
+public record PingRequest : IRequest<PingResponse>;
+
+public record PingResponse;

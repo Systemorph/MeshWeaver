@@ -1,21 +1,18 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
 
 public record RouteConfiguration(IMessageHub Hub)
 {
-    private readonly ILogger logger = Hub.ServiceProvider.GetRequiredService<ILogger<RouteConfiguration>>();
-
     internal ImmutableList<AsyncDelivery> Handlers { get; init; } = ImmutableList<AsyncDelivery>.Empty;
 
-    internal readonly Dictionary<object, HashSet<object>> RoutedMessageAddresses = new();
+    internal readonly Dictionary<Address, HashSet<Address>> RoutedMessageAddresses = new();
 
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
-    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory) =>
+    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory)
+        where TAddress:Address=>
         RouteAddress<TAddress>((routedAddress, d) =>
         {
             var hub = hubFactory(routedAddress);
@@ -25,10 +22,12 @@ public record RouteConfiguration(IMessageHub Hub)
             return d.Forwarded();
         });
 
-    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) =>
+    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) 
+        where TAddress:Address=>
         RouteAddress<TAddress>((routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
 
     public RouteConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
+    where TAddress:Address
         => this with
         {
             Handlers = Handlers.Add(async (delivery, cancellationToken) =>
@@ -51,16 +50,8 @@ public record RouteConfiguration(IMessageHub Hub)
 
 
     public RouteConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
+        where TAddress : Address
         => RouteAddressToHub<TAddress>(a => Hub.GetHostedHub(a, configuration));
-
-    private IEnumerable<object> FlattenAddressHierarchy(object address)
-    {
-        while (address != null)
-        {
-            yield return address;
-            address = (address as HostedAddress)?.Address;
-        }
-    }
 
 }
 

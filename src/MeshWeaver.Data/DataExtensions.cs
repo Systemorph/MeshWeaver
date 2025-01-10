@@ -96,7 +96,7 @@ public static class DataExtensions
 
     public static DataContext FromHub(
         this DataContext dataContext,
-        object address,
+        Address address,
         Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
     ) =>
         dataContext.WithDataSourceBuilder(

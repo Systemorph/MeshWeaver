@@ -130,7 +130,7 @@ public static class LayoutExtensions
 
     public static IObservable<object> GetControlStream(
         this IMessageHub hub,
-        object address,
+        Address address,
         string area,
         string id = null
     ) => hub.GetWorkspace()

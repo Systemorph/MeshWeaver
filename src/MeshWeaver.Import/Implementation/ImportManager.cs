@@ -5,13 +5,14 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
 
 public class ImportManager
 {
-    private record ImportAddress;
+    private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
     private readonly IMessageHub importHub; 

@@ -1,7 +1,5 @@
-﻿using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.Monolith;
@@ -17,7 +15,9 @@ public static class MonolithRegistryExtensions
         return builder.ConfigureHub(conf => 
             conf
                 .AddMeshTypes()
-                .WithInitialization((hub,ct) => hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(ct)));
+                .WithInitialization((hub,ct) =>
+                    hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(ct)));
     }
+
 
 }

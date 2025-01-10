@@ -69,7 +69,7 @@ public record DataChangedEvent(
 
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
 {
-    public object Subscriber { get; init; }
+    public Address Subscriber { get; init; }
 }
 
 /// <summary>

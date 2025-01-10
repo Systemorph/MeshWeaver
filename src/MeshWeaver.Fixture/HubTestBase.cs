@@ -9,20 +9,11 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress
-    {
-        public override string ToString() => "router/1";
-    }
+    protected record RouterAddress() : Address("router", "1");
 
-    protected record HostAddress
-    {
-        public override string ToString() => "host/1";
-    };
+    protected record HostAddress() : Address("host", "1");
 
-    protected record ClientAddress
-    {
-        public override string ToString() => "client/1";
-    }
+    protected record ClientAddress() : Address("client", "1");
 
     [Inject]
     protected IMessageHub Router;
@@ -69,7 +60,8 @@ public class HubTestBase : TestBase
     public override async Task DisposeAsync()
     {
         Logger.LogInformation("Starting disposal of router");   
-        await Router.DisposeAsync();
+        Router.Dispose();
+        await Router.Disposed;
         Logger.LogInformation("Finished disposal of router");
     }
 }

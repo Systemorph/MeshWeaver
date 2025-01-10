@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Messaging.Hub")]
@@ -12,8 +11,8 @@ public interface IMessageDelivery
     private const string Error = nameof(Error);
     IReadOnlyDictionary<string, object> Properties { get; }
     string Id { get; }
-    object Sender { get; }
-    object Target { get; }
+    Address Sender { get; }
+    Address Target { get; }
     string State { get; }
     object Message { get; }
 
@@ -24,7 +23,7 @@ public interface IMessageDelivery
     internal IMessageDelivery ChangeState(string state);
     IMessageDelivery SetProperty(string name, object value);
     IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties);
-    IMessageDelivery ForwardTo(object target);
+    IMessageDelivery ForwardTo(Address target);
     IMessageDelivery Failed(string message) => ChangeState(MessageDeliveryState.Failed).WithProperty(nameof(Error), message);
     IMessageDelivery WithProperty(string name, object value);
     IMessageDelivery Forwarded() => ChangeState(MessageDeliveryState.Forwarded);
@@ -35,10 +34,9 @@ public interface IMessageDelivery
     IMessageDelivery Ignored() => ChangeState(MessageDeliveryState.Ignored);
 
     IMessageDelivery WithMessage(object message);
-    internal IMessageDelivery WithSender(object address);
-    internal IMessageDelivery WithTarget(object address);
-    IReadOnlyCollection<object> ToBeForwarded(IEnumerable<object> addresses);
-    IMessageDelivery Forwarded(IEnumerable<object> addresses);
+    internal IMessageDelivery WithSender(Address address);
+    internal IMessageDelivery WithTarget(Address address);
+    IMessageDelivery Forwarded(params IEnumerable<Address> addresses);
 }
 
 public interface IMessageDelivery<out TMessage> : IMessageDelivery

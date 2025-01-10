@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
-public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
+public abstract class MessageHubBase : IMessageHandlerRegistry
 {
     protected ITypeRegistry TypeRegistry { get; }
     public virtual object Address => Hub.Address;
@@ -280,12 +280,6 @@ public abstract class MessageHubBase : IMessageHandlerRegistry, IAsyncDisposable
             filter
         );
 
-    async ValueTask IAsyncDisposable.DisposeAsync() => await DisposeAsync();
-
-    public virtual Task DisposeAsync()
-    {
-        return Task.CompletedTask;
-    }
 
     public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {

@@ -8,6 +8,11 @@ using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Data;
 
+public record DataSourceAddress(string Id) : Address(TypeName, Id)
+{
+    public const string TypeName = "ds";
+}
+
 public interface IDataSource : IDisposable
 {
     ITypeSource GetTypeSource(Type type);
@@ -125,10 +130,9 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
         return stream.Reduce(reference);
     }
 
-
     public ISynchronizationStream<EntityStore> GetStreamForPartition(object partition)
     {
-        var identity = new StreamIdentity(Id, partition);
+        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString()), partition);
         return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
     }
 

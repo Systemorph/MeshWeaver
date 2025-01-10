@@ -1,43 +1,57 @@
 ﻿using System.Collections.Concurrent;
-using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithRoutingService(IMessageHub meshHub) : RoutingServiceBase(meshHub)
+public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
 {
-    private readonly ConcurrentDictionary<(string Type, string Id), AsyncDelivery> handlers = new();
+    private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
-    protected override async Task<IMessageDelivery> RouteMessage(
-        IMessageDelivery delivery,
-        string addressType,
-        string addressId,
-        MeshNode node,
+
+    public override Task Unregister(Address address)
+    {
+        streams.TryRemove(address, out _);
+        return Task.FromResult<Address>(null);
+    }
+
+
+    public override Task RegisterStream(Address address, AsyncDelivery callback)
+    {
+        streams[address] = callback;
+        return Task.CompletedTask;
+    }
+
+
+    private readonly ConcurrentDictionary<object, IMessageHub> hubs = new();
+    protected override Task<IMessageDelivery> RouteImpl(
+        IMessageDelivery delivery, 
+        MeshNode node, 
+        Address address,
         CancellationToken cancellationToken)
     {
-        var key = (addressType, addressId);
-        if (handlers.TryGetValue(key, out var handler))
-            return await handler.Invoke(delivery, cancellationToken);
+        if (streams.TryGetValue(address, out var stream))
+            return stream.Invoke(delivery, cancellationToken);
 
-        if (node == null)
-            throw new MeshException($"No Mesh node was found for {addressType}/{addressId}");
-
-        var hub = Mesh.CreateHub(node, addressId);
-        if (hub == null)
-            return delivery;
-
-        handlers[key] = handler = (d, _) =>
+        if ((hubs.TryGetValue(delivery.Target, out var hub) 
+                ? hub 
+                : (hub = hubs[delivery.Target] = CreateHub(node, address.Type, address.Id))) is not null)
         {
-            hub.DeliverMessage(d);
-            return Task.FromResult(d.Forwarded());
-        };
-        return await handler.Invoke(delivery, cancellationToken);
+            hub.DeliverMessage(delivery);
+            return Task.FromResult(delivery.Forwarded());
+        }
+
+        return Task.FromResult(delivery);
     }
-    public override Task<IDisposable> RegisterRouteAsync(string addressType, string id, AsyncDelivery delivery)
+
+    private IMessageHub CreateHub(MeshNode node, string addressType, string id)
     {
-        var key = (addressType, id);
-        handlers[key] = delivery;
-        return Task.FromResult<IDisposable>(new AnonymousDisposable(() => handlers.TryRemove(key, out _)));
+        if (node.HubFactory is not null)
+        {
+            var hub = node.HubFactory.Invoke(Mesh.ServiceProvider, addressType, id);
+            hub.RegisterForDisposal((_, _) => Unregister(hub.Address));
+
+        }
+        return null;
     }
 }

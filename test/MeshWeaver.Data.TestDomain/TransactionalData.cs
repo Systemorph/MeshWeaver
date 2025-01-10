@@ -20,7 +20,7 @@ public record ComputedData([property: Key] string Id, int Year, string LoB, stri
 public record LineOfBusiness([property: Key] string SystemName, string DisplayName);
 public record BusinessUnit([property: Key] string SystemName, string DisplayName);
 
-public record ImportAddress(int Year);
-public record ReferenceDataAddress();
-public record ComputedDataAddress(int Year, string BusinessUnit);
-public record TransactionalDataAddress(int Year, string BusinessUnit) ;
+public record ImportAddress(int Year) : Address(nameof(ImportAddress), Year.ToString());
+public record ReferenceDataAddress() : Address(nameof(ReferenceDataAddress), "1");
+public record ComputedDataAddress(int Year, string BusinessUnit) : Address(nameof(ComputedDataAddress), $"{Year}/{BusinessUnit}");
+public record TransactionalDataAddress(int Year, string BusinessUnit) : Address(nameof(ComputedDataAddress), $"{Year}/{BusinessUnit}");
