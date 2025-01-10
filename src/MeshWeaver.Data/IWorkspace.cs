@@ -22,7 +22,7 @@ public interface IWorkspace : IAsyncDisposable
     ReduceManager<EntityStore> ReduceManager { get; }
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
-        object owner,
+        Address owner,
         WorkspaceReference<TReduced> reference
     );
     ISynchronizationStream<TReduced> GetStream<TReduced>(
@@ -32,7 +32,7 @@ public interface IWorkspace : IAsyncDisposable
     IObservable<IReadOnlyCollection<T>> GetStream<T>();
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
-        object address,
+        Address address,
         TReference reference
     )
         where TReference : WorkspaceReference;

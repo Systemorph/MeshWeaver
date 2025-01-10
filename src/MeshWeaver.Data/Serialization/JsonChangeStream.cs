@@ -15,7 +15,7 @@ public static class JsonSynchronizationStream
 {
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
-        object owner,
+        Address owner,
         TReference reference
     )
     where TReference : WorkspaceReference
@@ -27,8 +27,6 @@ public static class JsonSynchronizationStream
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(JsonSynchronizationStream));
         // link to deserialized world. Will also potentially link to workspace.
-        if (owner is JsonObject obj)
-            owner = obj.Deserialize<object>(hub.JsonSerializerOptions);
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
         TaskCompletionSource<TReduced> tcs2 = null;

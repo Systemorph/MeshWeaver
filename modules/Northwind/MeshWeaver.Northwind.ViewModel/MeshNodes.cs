@@ -51,7 +51,7 @@ public static class NorthwindApplicationExtensions
     /// <param name="meshHub"></param>
     /// <param name="address"></param>
     /// <returns></returns>
-    public static IMessageHub CreateNorthwind(this IMessageHub meshHub, object address)
+    public static IMessageHub CreateNorthwind(this IMessageHub meshHub, Address address)
         => meshHub.ServiceProvider.CreateMessageHub(
             address,
             application =>

@@ -11,7 +11,7 @@ using Orleans.Streams;
 namespace MeshWeaver.Hosting.Orleans;
 
 [StorageProvider(ProviderName = StorageProviders.Activity)]
-public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
+public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub, IRoutingService routingService)
     : Grain<StreamActivity>, IMessageHubGrain
 {
 
@@ -33,8 +33,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
 
         var node = await meshCatalog.GetNodeAsync(startupInfo.AddressType, startupInfo.Id);
+        if (node.HubFactory is null)
+            throw new MeshException(
+                $"Cannot instantiate Node {node.Name}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubFactory)}  are specified.");
 
-        Hub = meshHub.CreateHub(node, startupInfo.Id);
+        Hub = node.HubFactory(meshHub.ServiceProvider, node.AddressType, startupInfo.Id);
+        Hub.RegisterForDisposal((_, _) => routingService.Unregister(Hub.Address));
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();
@@ -69,8 +73,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+
         if (Hub != null)
-            await Hub.DisposeAsync();
+        {
+            Hub.Dispose();
+            await Hub.Disposed;
+        }
         Hub = null;
         if (loadContext != null)
             loadContext.Unload();

@@ -1,58 +1,33 @@
-﻿using MeshWeaver.ShortGuid;
+﻿using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Mesh;
 
-public record MeshAddress
+public record MeshAddress() : Address(MeshAddress.TypeName, null)
 {
     public const string TypeName = "mesh";
 }
 
-public record ApplicationAddress(string Name)
+public record ApplicationAddress(string Id) : Address(TypeName, Id)
 {
-    public override string ToString()
-        => $"{TypeName}/{Name}";
-
     public const string TypeName = "app";
 }
-public record UiAddress
+public record UiAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
-
-    public override string ToString()
-        => $"{TypeName}/{Id}";
 
     public const string TypeName = "ui";
 
 }
 
-public record SignalRClientAddress
+public record SignalRClientAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
-
-    public override string ToString()
-        => $"{TypeName}/{Id}";
-
     public const string TypeName = "signalr";
-
 }
-public record KernelAddress
+public record KernelAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
-
-    public override string ToString()
-        => $"{TypeName}/{Id}";
-
     public const string TypeName = "kernel";
-
 }
-public record NotebookAddress(string Id)
+public record NotebookAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
 {
-
-    public override string ToString()
-        => $"{TypeName}/{Id}";
-
     public const string TypeName = "nb";
-
 }
-
-

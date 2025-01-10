@@ -9,11 +9,12 @@ namespace MeshWeaver.Hosting.Monolith.Test
 {
     public abstract class MonolithMeshTestBase : TestBase
     {
-        protected record ClientAddress;
+        protected record ClientAddress() : Address("client", "1");
         protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
             => builder
                 .UseMonolithMesh()
                 ;
+
 
         protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
         {

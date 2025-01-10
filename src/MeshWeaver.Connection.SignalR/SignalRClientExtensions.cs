@@ -45,7 +45,7 @@ public static class SignalRClientExtensions
                 {
                     var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                         .CreateLogger(typeof(SignalRClientExtensions));
-                    var address = hub.Address;
+                    var address = MessageHubExtensions.GetAddressTypeAndId(hub.Address);
 
                     try
                     {
@@ -56,21 +56,13 @@ public static class SignalRClientExtensions
                             await hubConnection.DisposeAsync();
                         });
 
-                        hubConnection.Reconnecting += async (exception) =>
+                        async Task Connect()
                         {
-                            if (exception is not null)
-                                logger.LogWarning("Disconnected from SignalR connection for {Address}:\n{Exception}", hub.Address, exception);
-
                             try
                             {
-                                var connected =
-                                    await hubConnection.InvokeAsync<MeshConnection>(
-                                        "Connect",
-                                        hub.Address.ToString(), cancellationToken: ct);
-
-                                if (connected.Status != ConnectionStatus.Connected)
-                                    throw new MeshException("Couldn't connect.");
-
+                                await hubConnection.InvokeAsync(
+                                    "Connect",
+                                    hub.Address.ToString(), cancellationToken: ct);
                             }
                             catch (Exception ex)
                             {
@@ -78,16 +70,20 @@ public static class SignalRClientExtensions
                                 throw;
                             }
                             // Your callback logic here
-                            Console.WriteLine("Reconnecting...");
+                            logger.LogInformation("Reconnecting...");
+                        }
+
+                        hubConnection.Reconnecting += (exception) =>
+                        {
+                            if (exception is not null)
+                                logger.LogWarning("Disconnected from SignalR connection for {Address}:\n{Exception}", hub.Address, exception);
+                            return Connect();
                         };
 
                         logger.LogInformation("Creating SignalR connection for {AddressType}", hub.Address);
                         await hubConnection.StartAsync(ct);
 
-                        var connection =
-                            await hubConnection.InvokeAsync<MeshConnection>("Connect", hub.Address.ToString(), ct);
-                        if (connection.Status != ConnectionStatus.Connected)
-                            throw new MeshException("Couldn't connect.");
+                        await Connect();
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
                         {
                             // Handle the received message
@@ -112,14 +108,14 @@ public static class SignalRClientExtensions
         var logger = routes.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(SignalRClientExtensions));
 
-        var address = routes.Hub.Address;
+        //var address = routes.Hub.Address;
         var hubConnection = routes.Hub.ServiceProvider.GetRequiredService<Lazy<HubConnection>>();
         return routes.WithHandler(async (delivery, cancellationToken) =>
         {
             if(AnyInHierarchyEquals(routes.Hub.Address, delivery.Target))
                 return delivery;
 
-            logger.LogDebug($"Sending message from address {address}: {delivery}");
+            logger.LogDebug("Sending message from address {Address}", delivery.Sender);
             await hubConnection.Value.InvokeAsync("DeliverMessage", delivery.Package(routes.Hub.JsonSerializerOptions), cancellationToken);
             return delivery.Forwarded();
         });

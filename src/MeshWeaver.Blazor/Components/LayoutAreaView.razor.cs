@@ -51,7 +51,7 @@ public partial class LayoutAreaView
         Address = MeshExtensions.MapAddress(AddressType, AddressId);
     }
 
-    private object Address { get; set; }
+    private Address Address { get; set; }
     private bool ShowProgress { get; set; }
     private string AddressType { get; set; }
     private string AddressId { get; set; }

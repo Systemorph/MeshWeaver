@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
-public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisposable
+public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposable
 {
     public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>(); 
@@ -12,6 +12,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
 
     public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false)
+        where TAddress : Address
     {
         lock (locker)
         {
@@ -27,6 +28,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
         => messageHubs[hub.Address] = hub;
 
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+    where TAddress:Address
     {
         if (isDisposing)
             return null; 
@@ -36,7 +38,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
     private bool isDisposing;
     private readonly object locker = new();
 
-    public async ValueTask DisposeAsync()
+    public void Dispose()
     {
         lock (locker)
         {
@@ -54,7 +56,6 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // Set timeout duration
                     try
                     {
-                        await Task.WhenAny(hub.DisposeAsync().AsTask(), Task.Delay(Timeout.Infinite, cts.Token));
                         if (cts.Token.IsCancellationRequested)
                         {
                             logger.LogError("Disposal of hub {address} timed out", address);
@@ -71,5 +72,6 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IAsyncDisp
                     logger.LogDebug("Finished disposal of hub {address}", address);
 
                 }
+
     }
 }

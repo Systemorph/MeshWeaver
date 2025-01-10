@@ -20,7 +20,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <summary>
     /// The owner of the stream. Changes are to be made as update request to the owner.
     /// </summary>
-    public object Owner => StreamIdentity.Owner;
+    public Address Owner => StreamIdentity.Owner;
 
     /// <summary>
     /// The projected reference of the stream, e.g. a collection (CollectionReference),
@@ -199,7 +199,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
 
-    private record SynchronizationStreamAddress(string Id);
+    private record SynchronizationStreamAddress(string Id) : Address("persistence", Id);
 
 
     public void Revert<TReduced>(ChangeItem<TReduced> change)

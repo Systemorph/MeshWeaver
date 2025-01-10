@@ -1,6 +1,4 @@
-﻿using System.Text.Json;
-using System.Text.Json.Nodes;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
@@ -43,10 +41,6 @@ internal class HostedHubRouting
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
 
-        if(delivery.Sender is JsonObject obj)
-            delivery = delivery.WithSender(obj.Deserialize<object>(hub.JsonSerializerOptions));
-        if(delivery.Target is JsonObject obj2)
-            delivery = delivery.WithTarget(obj2.Deserialize<object>(hub.JsonSerializerOptions));
 
         // TODO V10: This should probably also react upon disconnect. (02.02.2024, Roland Bürgi)
         if (configuration.RoutedMessageAddresses.TryGetValue(delivery.Sender, out var originalSenders))
