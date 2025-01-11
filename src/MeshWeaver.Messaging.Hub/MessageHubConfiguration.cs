@@ -2,7 +2,6 @@
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
 
@@ -53,11 +52,11 @@ public record MessageHubConfiguration
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
             this.WithTypes(address.GetType())
-                .WithRoutes(f => f.RouteAddress<Address>((a, d) =>
+                .WithRoutes(f => f.RouteAddress<Address>(async (a, d,ct) =>
         {
             if (!address.Equals(a))
                 return d;
-            f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
+            await f.Hub.GetHostedHub(a, configuration).DeliverMessageAsync(d, ct);
             return d.Forwarded();
         }));
 
@@ -69,7 +68,6 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
-        services.Replace(ServiceDescriptor.Singleton<IMessageService>(sp => new MessageService(Address,sp.GetRequiredService<ILogger<MessageService>>())));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         Services.Invoke(services);
         return services;

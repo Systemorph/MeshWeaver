@@ -11,15 +11,18 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
 
-    public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false)
+    public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address
     {
         lock (locker)
         {
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
-            if (cachedOnly)
-                return null;
+            return create switch
+            {
+                HostedHubCreation.Always => CreateHub(address, config ?? (x => x)),
+                _ => null
+            };
             return messageHubs[address] = CreateHub(address, config);
         }
     }

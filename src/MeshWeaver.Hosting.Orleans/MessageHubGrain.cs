@@ -65,7 +65,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             EventCounter =
             State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
         };
-        var ret = Hub.DeliverMessage(delivery);
+
+        // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
+        var ret = await Hub.DeliverMessageAsync(delivery, default);
         await this.WriteStateAsync();
         return ret;
     }

@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using MeshWeaver.ServiceProvider;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -12,8 +11,6 @@ namespace MeshWeaver.Serialization.Test;
 
 public class SerializationTest : HubTestBase
 {
-    [Inject]
-    private IMessageHub Router { get; set; }
 
     public SerializationTest(ITestOutputHelper output)
         : base(output)
@@ -23,20 +20,20 @@ public class SerializationTest : HubTestBase
             hubConf =>
                 hubConf.WithRoutes(f =>
                     f.RouteAddress<HostAddress>(
-                            (routedAddress, d) =>
+                            async (routedAddress, d, ct) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
                                 var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                hostedHub.DeliverMessage(packagedDelivery);
+                                await hostedHub.DeliverMessageAsync(packagedDelivery, ct);
                                 return d.Forwarded();
                             }
                         )
                         .RouteAddress<ClientAddress>(
-                            (routedAddress, d) =>
+                            async (routedAddress, d, ct) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
                                 var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                hostedHub.DeliverMessage(packagedDelivery);
+                                await hostedHub.DeliverMessageAsync(packagedDelivery, ct);
                                 return d.Forwarded();
                             }
                         )

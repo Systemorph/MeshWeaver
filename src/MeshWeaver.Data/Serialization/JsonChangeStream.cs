@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Activities;
@@ -62,7 +61,7 @@ public static class JsonSynchronizationStream
         var first = true;
         reduced.AddDisposable(
             reduced.Hub.Register<DataChangedEvent>(
-                delivery =>
+                async (delivery,ct) =>
                 {
                     if (first)
                     {
@@ -72,7 +71,7 @@ public static class JsonSynchronizationStream
                         tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
                         return request.Processed();
                     }
-                    reduced.DeliverMessage(delivery);
+                    await reduced.DeliverMessageAsync(delivery, ct);
                     return delivery.Forwarded();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -80,9 +79,9 @@ public static class JsonSynchronizationStream
         );
         reduced.AddDisposable(
             reduced.Hub.Register<UnsubscribeDataRequest>(
-                delivery =>
+                async (delivery,ct) =>
                 {
-                    reduced.DeliverMessage(delivery);
+                    await reduced.DeliverMessageAsync(delivery, ct);
                     return delivery.Forwarded();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -127,9 +126,9 @@ public static class JsonSynchronizationStream
         // forwarding unsubscribe
         reduced.AddDisposable(
             reduced.Hub.Register<UnsubscribeDataRequest>(
-                delivery =>
+                async (delivery, ct) =>
                 {
-                    reduced.DeliverMessage(delivery);
+                    await reduced.DeliverMessageAsync(delivery, ct);
                     return delivery.Forwarded();
                 },
                 x => reduced.ClientId.Equals(x.Message.StreamId)
@@ -139,9 +138,9 @@ public static class JsonSynchronizationStream
         // Incoming data changed register and dispatch to synchronization stream
         reduced.AddDisposable(
             reduced.Hub.Register<DataChangedEvent>(
-                delivery =>
+                async (delivery, ct) =>
                 {
-                    reduced.DeliverMessage(delivery);
+                    await reduced.DeliverMessageAsync(delivery, ct);
                     return delivery.Forwarded();
                 },
                 x => reduced.ClientId.Equals(x.Message.StreamId)
@@ -167,7 +166,7 @@ public static class JsonSynchronizationStream
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
                     var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
                     reduced.Hub.GetWorkspace().RequestChange(e, activity);
-                    activity.Complete(log =>
+                    activity.Complete(_ =>
                     {
                         /*TODO: Where to save?*/
                     });

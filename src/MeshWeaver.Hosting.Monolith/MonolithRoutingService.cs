@@ -24,24 +24,24 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
 
 
     private readonly ConcurrentDictionary<object, IMessageHub> hubs = new();
-    protected override Task<IMessageDelivery> RouteImpl(
+    protected override async Task<IMessageDelivery> RouteImpl(
         IMessageDelivery delivery, 
         MeshNode node, 
         Address address,
         CancellationToken cancellationToken)
     {
         if (streams.TryGetValue(address, out var stream))
-            return stream.Invoke(delivery, cancellationToken);
+            return await stream.Invoke(delivery, cancellationToken);
 
         if ((hubs.TryGetValue(delivery.Target, out var hub) 
                 ? hub 
                 : (hub = hubs[delivery.Target] = CreateHub(node, address.Type, address.Id))) is not null)
         {
-            hub.DeliverMessage(delivery);
-            return Task.FromResult(delivery.Forwarded());
+            await hub.DeliverMessageAsync(delivery, cancellationToken);
+            return delivery.Forwarded(hub.Address);
         }
 
-        return Task.FromResult(delivery);
+        return delivery;
     }
 
     private IMessageHub CreateHub(MeshNode node, string addressType, string id)

@@ -69,10 +69,10 @@ public class KernelContainer : IDisposable
             if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
                 return request;
 
-            var hub = kernelHub.GetHostedHub(hosted.Address, true);
+            var hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
             if (hub is not null)
             {
-                hub.DeliverMessage(request);
+                await hub.DeliverMessageAsync(request, cancellationToken);
                 return request.Processed();
             }
 
@@ -97,10 +97,10 @@ public class KernelContainer : IDisposable
             }
 
 
-            hub = kernelHub.GetHostedHub(hosted.Address, true);
+            hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
             if (hub is not null)
             {
-                hub.DeliverMessage(request.ForwardTo(hosted.Address));
+                await hub.DeliverMessageAsync(request.ForwardTo(hosted.Address), cancellationToken);
                 return request.Processed();
             }
 
