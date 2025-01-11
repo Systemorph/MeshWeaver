@@ -50,9 +50,9 @@ public static class SignalRClientExtensions
                     try
                     {
                         var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
-                        hub.RegisterForDisposal(async _ =>
+                        hub.RegisterForDisposal(async (_,ct2) =>
                         {
-                            await hubConnection.StopAsync(ct);
+                            await hubConnection.StopAsync(ct2);
                             await hubConnection.DisposeAsync();
                         });
 
@@ -84,11 +84,11 @@ public static class SignalRClientExtensions
                         await hubConnection.StartAsync(ct);
 
                         await Connect();
-                        hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
+                        hubConnection.On<IMessageDelivery>("ReceiveMessage", async message =>
                         {
                             // Handle the received message
                             logger.LogDebug($"Received message for address {address}: {message}");
-                            hub.DeliverMessage(message);
+                            await hub.DeliverMessageAsync(message, ct);
                         });
 
                     }

@@ -45,8 +45,8 @@ namespace MeshWeaver.Hosting
 
             if (delivery.Target is MeshAddress)
             {
-                Mesh.DeliverMessage(delivery);
-                return delivery.Forwarded();
+                await Mesh.DeliverMessageAsync(delivery, cancellationToken);
+                return delivery.Forwarded(Mesh.Address);
             }
             if (delivery.Target is HostedAddress { Host: MeshAddress } hosted)
                 delivery = delivery.WithTarget(hosted.Address);
@@ -54,9 +54,12 @@ namespace MeshWeaver.Hosting
             var address = GetHostAddress(delivery.Target);
 
             // if we have created the hub ==> route through us.
-            var hostedHub = Mesh.GetHostedHub(address, true);
+            var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
             if (hostedHub is not null)
-                return hostedHub.DeliverMessage(delivery);
+            {
+                await hostedHub.DeliverMessageAsync(delivery, cancellationToken);
+                return delivery.Forwarded(hostedHub.Address);
+            }
 
 
             var hostAddress = GetHostAddress(address);

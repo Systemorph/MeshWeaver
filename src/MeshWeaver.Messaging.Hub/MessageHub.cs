@@ -1,27 +1,19 @@
 ﻿using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Text.Json;
+using MeshWeaver.Disposables;
+using MeshWeaver.Domain;
+using MeshWeaver.Reflection;
+using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
-public record ShutdownRequest(MessageHubRunLevel RunLevel, long Version);
-
-public enum MessageHubRunLevel
+public sealed class MessageHub : IMessageHub
 {
-    Starting,
-    Started,
-    DisposeHostedHubs,
-    HostedHubsDisposed,
-    ShutDown,
-    Dead
-}
-
-public record ExecutionRequest(Func<CancellationToken, Task> Action);
-
-public sealed class MessageHub : MessageHubBase, IMessageHub
-{
-    public override Address Address => MessageService.Address;
+    public Address Address => Configuration.Address;
 
     public void InvokeAsync(Func<CancellationToken, Task> action) =>
         Post(new ExecutionRequest(action));
@@ -35,6 +27,11 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
     private readonly IDisposable deferral;
     public long Version { get; private set; }
     public MessageHubRunLevel RunLevel { get; private set; }
+    private readonly IMessageService messageService;
+    public ITypeRegistry TypeRegistry { get; }
+    private readonly LinkedList<AsyncDelivery> Rules = new();
+    private readonly HashSet<Type> registeredTypes = new();
+    private ILogger Logger { get; }
 
     public MessageHub(
         IServiceProvider serviceProvider,
@@ -42,25 +39,31 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         MessageHubConfiguration configuration,
         IMessageHub parentHub
     )
-        : base(serviceProvider)
     {
-        deferral = MessageService.Defer(d => d.Message is not ExecutionRequest);
+
+        serviceProvider.Buildup(this);
+        Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
+        TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
+        InitializeTypes(this);
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
         Configuration = configuration;
-        HostedHubRouting.Setup(parentHub, this);
+
+        messageService = new MessageService(configuration.Address,
+            serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
+        deferral = messageService.Defer(d => d.Message is not ExecutionRequest);
+
+
 
         foreach (var disposeAction in configuration.DisposeActions) 
             disposeActions.Add(disposeAction);
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions();
 
-        Register(HandleCallbacks);
-        Register(ExecuteRequest);
         Register<DisposeRequest>(HandleDisposeAsync);
-        Register<ShutdownRequest>(HandleShutdownAsync);
+        Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
         foreach (var messageHandler in configuration.MessageHandlers)
             Register(
@@ -68,7 +71,10 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
             );
 
-        MessageService.Start(this);
+        Register(HandleCallbacks);
+        Register(ExecuteRequest);
+
+        messageService.Start();
 
     }
 
@@ -78,8 +84,142 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         return request.Processed();
     }
 
+    #region Message Types
+    private void InitializeTypes(object instance)
+    {
+        foreach (
+            var registry in instance
+                .GetType()
+                .GetAllInterfaces()
+                .Select(i => GetTypeAndHandler(i, instance))
+                .Where(x => x != null)
+        )
+        {
+            if (registry.Action != null)
+                Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
-    async Task<IMessageDelivery> IMessageHub.DeliverMessageAsync(
+            registeredTypes.Add(registry.Type);
+            WithTypeAndRelatedTypesFor(registry.Type);
+        }
+    }
+
+    private void WithTypeAndRelatedTypesFor(Type typeToRegister)
+    {
+        TypeRegistry.WithType(typeToRegister);
+
+        var types = typeToRegister
+            .GetAllInterfaces()
+            .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
+            .SelectMany(x => x.GetGenericArguments());
+
+        foreach (var type in types)
+        {
+            TypeRegistry.WithType(type);
+        }
+
+        if (typeToRegister.IsGenericType)
+        {
+            foreach (var genericType in typeToRegister.GetGenericArguments())
+                TypeRegistry.WithType(genericType);
+        }
+    }
+
+    private TypeAndHandler GetTypeAndHandler(Type type, object instance)
+    {
+        if (
+            !type.IsGenericType
+            || !MessageHubPluginExtensions.HandlerTypes.Contains(type.GetGenericTypeDefinition())
+        )
+            return null;
+        var genericArgs = type.GetGenericArguments();
+
+        var cancellationToken = new CancellationTokenSource().Token; // todo: think how to handle this
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
+            return new(
+                genericArgs.First(),
+                CreateDelivery(genericArgs.First(), type, instance, null)
+            );
+        if (type.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>))
+            return new(
+                genericArgs.First(),
+                CreateDelivery(
+                    genericArgs.First(),
+                    type,
+                    instance,
+                    Expression.Constant(cancellationToken)
+                )
+            );
+
+        return null;
+    }
+    private AsyncDelivery CreateDelivery(
+        Type messageType,
+        Type interfaceType,
+        object instance,
+        Expression cancellationToken
+    )
+    {
+        var prm = Expression.Parameter(typeof(IMessageDelivery));
+        var cancellationTokenPrm = Expression.Parameter(typeof(CancellationToken));
+
+        var expressions = new List<Expression>
+        {
+            Expression.Convert(prm, typeof(IMessageDelivery<>).MakeGenericType(messageType))
+        };
+        if (cancellationToken != null)
+            expressions.Add(cancellationToken);
+        var handlerCall = Expression.Call(
+            Expression.Constant(instance, interfaceType),
+            interfaceType.GetMethods(BindingFlags.Instance | BindingFlags.Public).First(),
+            expressions
+        );
+
+        if (interfaceType.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
+            handlerCall = Expression.Call(
+                null,
+                MessageHubPluginExtensions.TaskFromResultMethod,
+                handlerCall
+            );
+
+        var lambda = Expression
+            .Lambda<Func<IMessageDelivery, CancellationToken, Task<IMessageDelivery>>>(
+                handlerCall,
+                prm,
+                cancellationTokenPrm
+            )
+            .Compile();
+        return (d, c) => lambda(d, c);
+    }
+
+    private record TypeAndHandler(Type Type, AsyncDelivery Action);
+
+
+
+    public bool IsDeferred(IMessageDelivery delivery)
+    {
+        return (Address.Equals(delivery.Target) || delivery.Target == null)
+               && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
+    }
+
+    #endregion
+
+
+
+    public async Task<IMessageDelivery> HandleMessageAsync(
+        IMessageDelivery delivery,
+        LinkedListNode<AsyncDelivery> node,
+        CancellationToken cancellationToken
+    )
+    {
+        delivery = await node.Value.Invoke(delivery, cancellationToken);
+
+        if (node.Next == null)
+            return delivery;
+
+        return await HandleMessageAsync(delivery, node.Next, cancellationToken);
+    }
+
+    async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
@@ -87,7 +227,7 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         ++Version; 
         
         Logger.LogDebug("Starting processing of {Delivery} in {Address}", delivery, Address);
-        delivery = await base.DeliverMessageAsync(delivery, cancellationToken);
+        delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
         Logger.LogDebug("Finished processing of {Delivery} in {Address}", delivery, Address);
 
         return FinishDelivery(delivery);
@@ -104,7 +244,6 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
 
     async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        Hub = this;
         logger.LogInformation("Message hub {address} initialized", Address);
 
 
@@ -118,7 +257,6 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         hasStarted.SetResult();
     }
 
-    public override bool Filter(IMessageDelivery d) => true;
 
     public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
         IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
@@ -313,23 +451,23 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         if (configure != null)
             options = configure(options);
 
-        return (IMessageDelivery<TMessage>)MessageService.Post(message, options);
+        return (IMessageDelivery<TMessage>)messageService.Post(message, options);
     }
 
-    public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
+    public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
-        return MessageService.IncomingMessage(ret);
+        return messageService.RouteMessageAsync(ret, cancellationToken);
     }
 
     public IMessageHub GetHostedHub<TAddress1>(
         TAddress1 address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
-        bool cachedOnly = false
+        HostedHubCreation create
     )
         where TAddress1 : Address
     {
-        var messageHub = hostedHubs.GetHub(address, config, cachedOnly);
+        var messageHub = hostedHubs.GetHub(address, config, create);
         return messageHub;
     }
 
@@ -368,9 +506,8 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
-    private async Task<IMessageDelivery> HandleShutdownAsync(
-        IMessageDelivery<ShutdownRequest> request,
-        CancellationToken ct
+    private IMessageDelivery HandleShutdown(
+        IMessageDelivery<ShutdownRequest> request
     )
     {
 
@@ -380,12 +517,6 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
             return request.Ignored();
         }
 
-        HandleShutdown(request);
-        return request.Forwarded();
-    }
-
-    private async void HandleShutdown(IMessageDelivery<ShutdownRequest> request)
-    {
         switch (request.Message.RunLevel)
         {
             case MessageHubRunLevel.DisposeHostedHubs:
@@ -394,7 +525,7 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
                     lock (locker)
                     {
                         if (RunLevel == MessageHubRunLevel.DisposeHostedHubs)
-                            return;
+                            return request.Ignored();
 
                         RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                     }
@@ -419,14 +550,13 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
                     lock (locker)
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
-                            return;
+                            return request.Ignored();
 
                         logger.LogDebug("Starting shutdown of hub {address}", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
-
-                    await ShutdownAsync();
-
+                    hostedHubs.Dispose();
+                    messageService.DisposeAsync().AsTask().ContinueWith(_ => disposingTaskCompletionSource.SetResult());
                 }
                 catch (Exception e)
                 {
@@ -438,24 +568,20 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
                     logger.LogDebug("Finished shutdown of hub {address}", Address);
 
-                    disposingTaskCompletionSource.SetResult();
                 }
 
                 break;
         }
+
+        return request.Processed();
     }
 
 
-    private async Task ShutdownAsync()
-    {
-        hostedHubs.Dispose();
-        await MessageService.DisposeAsync();
-    }
 
     private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> disposeActions = new();
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
-        MessageService.Defer(deferredFilter);
+        messageService.Defer(deferredFilter);
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object> properties = new();
 
@@ -480,4 +606,113 @@ public sealed class MessageHub : MessageHubBase, IMessageHub
     }
 
 
+    #region Registry
+    public IDisposable Register<TMessage>(SyncDelivery<TMessage> action) =>
+        Register(action, _ => true);
+
+    public IDisposable Register<TMessage>(AsyncDelivery<TMessage> action) =>
+        Register(action, _ => true);
+
+    public IDisposable Register<TMessage>(
+        SyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter
+    )
+    {
+        return Register((d, _) => Task.FromResult(action(d)), filter);
+    }
+
+    public IDisposable RegisterInherited<TMessage>(
+        AsyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter = null
+    )
+    {
+        var node = new LinkedListNode<AsyncDelivery>(
+            (d, c) =>
+                d is IMessageDelivery<TMessage> md && (filter?.Invoke(md) ?? true)
+                    ? action(md, c)
+                    : Task.FromResult(d)
+        );
+        Rules.AddLast(node);
+        return new AnonymousDisposable(() => Rules.Remove(node));
+    }
+
+    public IDisposable Register(SyncDelivery delivery) =>
+        Register((d, _) => Task.FromResult(delivery(d)));
+
+    public IDisposable Register(AsyncDelivery delivery)
+    {
+        var node = new LinkedListNode<AsyncDelivery>(delivery);
+        Rules.AddLast(node);
+        return new AnonymousDisposable(() => Rules.Remove(node));
+    }
+
+    public IDisposable RegisterInherited<TMessage>(
+        SyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter = null
+    ) => RegisterInherited((d, _) => Task.FromResult(action(d)), filter);
+
+    public IDisposable Register<TMessage>(
+        AsyncDelivery<TMessage> action,
+        DeliveryFilter<TMessage> filter
+    )
+    {
+        WithTypeAndRelatedTypesFor(typeof(TMessage));
+        return Register(
+            (d, c) => action((IMessageDelivery<TMessage>)d, c),
+            d => (d.Target == null || Address.Equals(d.Target)) && d is IMessageDelivery<TMessage> md && filter(md)
+        );
+    }
+
+    public IDisposable Register(Type tMessage, AsyncDelivery action)
+    {
+        registeredTypes.Add(tMessage);
+        WithTypeAndRelatedTypesFor(tMessage);
+        return Register(action, d => tMessage.IsInstanceOfType(d.Message));
+    }
+
+    public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
+    {
+        AsyncDelivery rule = (delivery, cancellationToken) =>
+            WrapFilter(delivery, action, filter, cancellationToken);
+        Rules.AddFirst(rule);
+        return new AnonymousDisposable(() => Rules.Remove(rule));
+    }
+
+    private Task<IMessageDelivery> WrapFilter(
+        IMessageDelivery delivery,
+        AsyncDelivery action,
+        DeliveryFilter filter,
+        CancellationToken cancellationToken
+    )
+    {
+        if (filter(delivery))
+            return action(delivery, cancellationToken);
+        return Task.FromResult(delivery);
+    }
+
+    public IDisposable Register(Type tMessage, SyncDelivery action) =>
+        Register(tMessage, action, _ => true);
+
+    public IDisposable Register(Type tMessage, SyncDelivery action, DeliveryFilter filter) =>
+        Register(
+            tMessage,
+            (d, _) =>
+            {
+                d = action(d);
+                return Task.FromResult(d);
+            },
+            filter
+        );
+
+
+    public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
+    {
+        registeredTypes.Add(tMessage);
+        WithTypeAndRelatedTypesFor(tMessage);
+        return Register(
+            (d, c) => action(d, c),
+            d => tMessage.IsInstanceOfType(d.Message) && filter(d)
+        );
+    }
+    #endregion
 }
