@@ -11,7 +11,7 @@ namespace MeshWeaver.Data.TestDomain;
 
 public static class TestDomain
 {
-    public record ImportAddress() : Address(TypeName, Guid.NewGuid().AsString())
+    public record ImportAddress() : Address(TypeName, "1")
     {
         public const string TypeName = "import";
     }
