@@ -27,7 +27,7 @@ public class SignalRConnectionHub(IMessageHub hub, IRoutingService routingServic
 
     public Task DeliverMessage(IMessageDelivery delivery)
     {
-        hub.DeliverMessage(delivery);
+        hub.DeliverMessageAsync(delivery, Context.ConnectionAborted);
         return Task.CompletedTask;
     }
 

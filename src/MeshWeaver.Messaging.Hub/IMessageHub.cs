@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging;
 
@@ -14,7 +15,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
     IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
-    IMessageDelivery DeliverMessage(IMessageDelivery delivery);
+    Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken);
     Address Address { get; }
     IServiceProvider ServiceProvider { get; }
 
@@ -55,34 +56,26 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         return Task.CompletedTask;
     });
 
-
-
-    void Set<T>(T obj, string context = "");
-    T Get<T>(string context = "");
-    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, bool cachedOnly = false) 
+    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default) 
         where TAddress : Address;
-    IMessageHub GetHostedHub<TAddress>(TAddress address, bool cachedOnly = false)
+
+    IMessageHub GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
         where TAddress : Address
-        => GetHostedHub(address, x => x, cachedOnly);
+        => GetHostedHub(address, null, create);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
     IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_,_) => disposable.DisposeAsync().AsTask());
     IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
-    Task HasStarted { get; }
     bool IsDisposing { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
     internal Task StartAsync(CancellationToken cancellationToken);
 
-    internal Task<IMessageDelivery> DeliverMessageAsync(
+    internal Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
     Task Disposed { get; }
+    ITypeRegistry TypeRegistry { get; }
 }
-
-
-
-
-

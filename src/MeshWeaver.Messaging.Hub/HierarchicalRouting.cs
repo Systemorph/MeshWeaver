@@ -3,30 +3,25 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Messaging;
 
-internal class HostedHubRouting
+internal class HierarchicalRouting
 {
     private readonly IMessageHub parentHub;
 
-    private readonly ILogger<HostedHubRouting> logger;
+    private readonly ILogger<HierarchicalRouting> logger;
     private readonly RouteConfiguration configuration;
     private readonly IMessageHub hub;
 
-    private HostedHubRouting(IMessageHub parentHub, IMessageHub hub)
+    internal HierarchicalRouting(IMessageHub hub, IMessageHub parentHub)
     {
         this.parentHub = parentHub;
         this.hub = hub;
-        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<HostedHubRouting>>();
+        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<HierarchicalRouting>>();
         this.configuration = hub
             .Configuration
             .GetListOfRouteLambdas()
             .Aggregate(new RouteConfiguration(hub), (c, f) => f.Invoke(c));
     }
 
-    public static void Setup(IMessageHub parentHub, IMessageHub hub)
-    {
-        var instance = new HostedHubRouting(parentHub, hub);
-        hub.Register(instance.RouteMessageAsync);
-    }
 
 
     /// <summary>
@@ -35,7 +30,7 @@ internal class HostedHubRouting
     /// <param name="delivery"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    private async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery,
+    public async Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery,
         CancellationToken cancellationToken)
     {
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -56,20 +51,17 @@ internal class HostedHubRouting
 
         }
 
-
         foreach (var handler in configuration.Handlers)
             delivery = await handler(delivery, cancellationToken);
 
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
 
-        if (delivery.Target == null || hub.Address.Equals(delivery.Target))
-            return delivery.NotFound();
 
-        return RouteAlongHostingHierarchy(delivery);
+        return await RouteAlongHostingHierarchyAsync(delivery, cancellationToken);
     }
 
-    private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery)
+    private async Task<IMessageDelivery> RouteAlongHostingHierarchyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
 
         if (delivery.Target is HostedAddress hosted)
@@ -84,7 +76,7 @@ internal class HostedHubRouting
                 var hostedHub = hub.GetHostedHub(nextLevelAddress);
                 if (hostedHub is not null)
                 {
-                    hostedHub.DeliverMessage(delivery.WithTarget(hosted.Address));
+                    await hostedHub.DeliverMessageAsync(delivery.WithTarget(hosted.Address), cancellationToken);
                     return delivery.Forwarded();
                 }
                 logger.LogDebug("No route found for {Address}. Last tried in {Hub}", hosted.Address, hub.Address);
@@ -100,10 +92,10 @@ internal class HostedHubRouting
         }
         else
         {
-            var hostedHub = hub.GetHostedHub(delivery.Target, cachedOnly: true);
+            var hostedHub = hub.GetHostedHub(delivery.Target, HostedHubCreation.Never);
             if (hostedHub is not null)
             {
-                hostedHub.DeliverMessage(delivery);
+                await hostedHub.DeliverMessageAsync(delivery, cancellationToken);
                 return delivery.Forwarded();
             }
         }
@@ -124,7 +116,7 @@ internal class HostedHubRouting
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        parentHub.DeliverMessage(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)));
+        await parentHub.DeliverMessageAsync(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)), cancellationToken);
         return delivery.Forwarded();
     }
 }

@@ -2,11 +2,11 @@
 
 namespace MeshWeaver.Messaging;
 
-public interface IMessageService : IAsyncDisposable
+internal interface IMessageService : IAsyncDisposable
 {
     Address Address { get; }
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
-    IMessageDelivery IncomingMessage(IMessageDelivery message);
+    Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery message, CancellationToken cancellationToken);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);
-    internal void Start(IMessageHub hub);
+    internal void Start();
 }
