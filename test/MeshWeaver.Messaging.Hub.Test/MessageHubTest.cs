@@ -1,4 +1,4 @@
-﻿using System.Reactive.Linq;
+﻿using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -32,6 +32,7 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await host.AwaitResponse(
             new SayHelloRequest(),
             o => o.WithTarget(new HostAddress())
+            , new CancellationTokenSource(10.Seconds()).Token
         );
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }

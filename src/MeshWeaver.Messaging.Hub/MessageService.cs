@@ -8,21 +8,32 @@ namespace MeshWeaver.Messaging;
 public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
+    private readonly IMessageHub hub;
     private bool isDisposing;
     private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken Token)> buffer = new();
     private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken Token)> deliveryAction;
-    private readonly BufferBlock<Func<CancellationToken,Task>> executionBuffer = new();
-    private readonly ActionBlock<Func<CancellationToken,Task>> executionBlock = new(f => f.Invoke(default));
+    private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
+    private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
+    private readonly BufferBlock<IMessageDelivery> routingBuffer = new();
+    private readonly ActionBlock<IMessageDelivery> routingAction;
+    private readonly HierarchicalRouting hierarchicalRouting;
 
 
 
     private readonly DeferralContainer deferralContainer;
 
 
-    public MessageService(Address address, ILogger<MessageService> logger)
+    public MessageService(
+        Address address, 
+        ILogger<MessageService> logger, 
+        IMessageHub hub, 
+        IMessageHub parentHub
+        )
     {
         Address = address;
+        ParentHub = parentHub;
         this.logger = logger;
+        this.hub = hub;
 
         deferralContainer = new DeferralContainer((d, c) =>
         {
@@ -34,13 +45,13 @@ public class MessageService : IMessageService
                 deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
 
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
-
+        routingAction = new ActionBlock<IMessageDelivery>(delivery => RouteMessageAsync(delivery, default));
+        routingBuffer.LinkTo(routingAction, new DataflowLinkOptions { PropagateCompletion = true });
+        hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
     }
 
-    private IMessageHub hub;
-    void IMessageService.Start(IMessageHub hub1)
+    void IMessageService.Start()
     {
-        this.hub = hub1;
         executionBuffer.Post(async ct =>
         {
             await hub.StartAsync(ct);
@@ -58,6 +69,7 @@ public class MessageService : IMessageService
 
 
     public Address Address { get; }
+    public IMessageHub ParentHub { get; }
 
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
@@ -65,17 +77,24 @@ public class MessageService : IMessageService
         return deferralContainer.Defer(deferredFilter);
     }
 
-    IMessageDelivery IMessageService.IncomingMessage(IMessageDelivery delivery)
+    Task<IMessageDelivery> IMessageService.RouteMessageAsync(IMessageDelivery delivery,
+        CancellationToken cancellationToken)
+        => RouteMessageAsync(delivery, cancellationToken);
+    Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        return ScheduleNotify(delivery);
+        if (delivery.Target == null || delivery.Target.Equals(Address))
+            return Task.FromResult(ScheduleNotify(delivery));
+
+        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
+            return Task.FromResult(ScheduleNotify(delivery.WithTarget(hub.Address)));
+
+
+        return hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
     }
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery)
     {
-        var targetAddress = delivery.Target is HostedAddress hosted ? hosted.Address : delivery.Target;
-        if (Address.Equals(targetAddress))
-            delivery = UnpackIfNecessary(delivery).WithTarget(targetAddress);
-
+        delivery = UnpackIfNecessary(delivery);
 
         // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
         var cancellationToken = CancellationToken.None;
@@ -124,7 +143,7 @@ public class MessageService : IMessageService
                 Address);
             try
             {
-                delivery = await hub.DeliverMessageAsync(delivery, cancellationToken);
+                delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
             }
             catch (Exception e)
             {
@@ -159,12 +178,13 @@ public class MessageService : IMessageService
             return (IMessageDelivery<TMessage>)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new object[] { message, opt });
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
-        ScheduleNotify(delivery);
+        routingBuffer.Post(delivery);
         return delivery;
     }
 
-
+    
     private readonly object locker = new();
+
     public async ValueTask DisposeAsync()
     {
         lock (locker)
@@ -182,5 +202,7 @@ public class MessageService : IMessageService
         await deferralContainer.DisposeAsync();
         logger.LogDebug("Finished disposing message service in {Address}", Address);
 
+        routingBuffer.Complete();
+        await routingAction.Completion;
     }
 }

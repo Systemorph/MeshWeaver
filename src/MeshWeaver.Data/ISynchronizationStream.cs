@@ -11,7 +11,7 @@ public interface ISynchronizationStream : IDisposable
     string ClientId { get; }
 
     StreamIdentity StreamIdentity { get; }
-    internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
+    internal Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken ct);
     void AddDisposable(IDisposable disposable);
 
     ISynchronizationStream Reduce(
