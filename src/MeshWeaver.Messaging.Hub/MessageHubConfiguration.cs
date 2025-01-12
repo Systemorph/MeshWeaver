@@ -120,8 +120,7 @@ public record MessageHubConfiguration
         var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
-        if(parentHubs != null)
-            parentHubs.Add(HubInstance);
+        parentHubs?.Add(HubInstance);
         return HubInstance;
     }
 

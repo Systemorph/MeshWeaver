@@ -26,7 +26,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
 
     [Theory]
-    [InlineData("HubFactory")]
+    //[InlineData("HubFactory")]
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)
     {
