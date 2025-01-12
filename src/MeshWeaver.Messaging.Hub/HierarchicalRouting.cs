@@ -58,10 +58,10 @@ internal class HierarchicalRouting
             return delivery;
 
 
-        return await RouteAlongHostingHierarchyAsync(delivery, cancellationToken);
+        return RouteAlongHostingHierarchy(delivery);
     }
 
-    private async Task<IMessageDelivery> RouteAlongHostingHierarchyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery)
     {
 
         if (delivery.Target is HostedAddress hosted)
@@ -76,7 +76,7 @@ internal class HierarchicalRouting
                 var hostedHub = hub.GetHostedHub(nextLevelAddress);
                 if (hostedHub is not null)
                 {
-                    await hostedHub.DeliverMessageAsync(delivery.WithTarget(hosted.Address), cancellationToken);
+                    hostedHub.DeliverMessage(delivery.WithTarget(hosted.Address));
                     return delivery.Forwarded();
                 }
                 logger.LogDebug("No route found for {Address}. Last tried in {Hub}", hosted.Address, hub.Address);
@@ -95,7 +95,7 @@ internal class HierarchicalRouting
             var hostedHub = hub.GetHostedHub(delivery.Target, HostedHubCreation.Never);
             if (hostedHub is not null)
             {
-                await hostedHub.DeliverMessageAsync(delivery, cancellationToken);
+                hostedHub.DeliverMessage(delivery);
                 return delivery.Forwarded();
             }
         }
@@ -116,7 +116,7 @@ internal class HierarchicalRouting
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        await parentHub.DeliverMessageAsync(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)), cancellationToken);
+        parentHub.DeliverMessage(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)));
         return delivery.Forwarded();
     }
 }

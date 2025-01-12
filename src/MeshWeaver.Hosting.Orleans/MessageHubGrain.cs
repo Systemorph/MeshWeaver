@@ -69,7 +69,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         Hub.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
-        var ret = await Hub.DeliverMessageAsync(delivery, default);
+        var ret = Hub.DeliverMessage(delivery);
         await this.WriteStateAsync();
         return ret;
     }

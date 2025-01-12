@@ -27,15 +27,15 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     [Theory]
     [InlineData("HubFactory")]
-    //[InlineData("Kernel")]
-    public async Task DisposeTest(string id)
+    [InlineData("Kernel")]
+    public async Task HubWorksAfterDisposal(string id)
     {
         var client = CreateClient();
         var address = new ApplicationAddress(id);
 
         var response = await client
             .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
-                , new CancellationTokenSource(10.Seconds()).Token
+ //               , new CancellationTokenSource(10.Seconds()).Token
             );
         response.Should().NotBeNull();
 
@@ -43,7 +43,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         await Task.Delay(100);
         response = await client
             .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
- //               , new CancellationTokenSource(10.Seconds()).Token
+                , new CancellationTokenSource(10.Seconds()).Token
             );
         response.Should().NotBeNull();
     }
