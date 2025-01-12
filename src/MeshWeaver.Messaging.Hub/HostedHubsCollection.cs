@@ -27,17 +27,16 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     }
 
     public void Add(IMessageHub hub)
-        => messageHubs[hub.Address] = hub;
+    {
+        messageHubs[hub.Address] = hub;
+        hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
+    }
 
     private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-    where TAddress:Address
-    {
-        if (isDisposing)
-            return null; 
-        var ret = serviceProvider.CreateMessageHub(address, config);
-        ret.RegisterForDisposal(_ => messageHubs.TryRemove(address, out _));
-        return ret;
-    }
+    where TAddress:Address =>
+        isDisposing
+            ? null
+            : serviceProvider.CreateMessageHub(address, config);
 
     private bool isDisposing;
     private readonly object locker = new();
