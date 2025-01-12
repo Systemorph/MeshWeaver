@@ -29,10 +29,10 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
         return State;
     }
 
-
+    private string addressType;
+    private string addressId;
     private async Task InitializeState()
     {
-        string addressType, addressId;
         var parts = this.GetPrimaryKeyString().Split('/');
         if (parts.Length == 2)
         {
@@ -61,8 +61,13 @@ public class AddressRegistryGrain(ILogger<AddressRegistryGrain> logger, IMeshCat
     }
 
 
-    public Task<NodeStorageInfo> GetStorageInfo() =>
-        Task.FromResult(Node == null ? null : new NodeStorageInfo(Node.AddressId, Node.PackageName, Node.AssemblyLocation, State.AddressType));
+    public Task<StorageInfo> GetStorageInfo() =>
+        Task.FromResult(Node == null ? null : new StorageInfo(Node.AddressId, Node.PackageName, Node.AssemblyLocation, State.AddressType));
+
+    public Task<StartupInfo> GetStartupInfo()
+    {
+        return Task.FromResult(new StartupInfo(Node.CreateAddress(addressType, addressId), Node.PackageName, Node.AssemblyLocation));
+    }
 
     public async Task Unregister()
     {
