@@ -9,14 +9,14 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    public override Task Unregister(Address address)
+    public override Task Async(Address address)
     {
         streams.TryRemove(address, out _);
         return Task.FromResult<Address>(null);
     }
 
 
-    public override Task RegisterStream(Address address, AsyncDelivery callback)
+    public override Task RegisterStreamAsync(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
         return Task.CompletedTask;
@@ -47,8 +47,8 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         if (node.HubConfiguration is not null)
         {
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
-            hub.RegisterForDisposal((_, _) => Unregister(hub.Address));
-
+            hub.RegisterForDisposal((_, _) => Async(hub.Address));
+            return hub;
         }
         return null;
     }
