@@ -23,7 +23,7 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     }
 
 
-    protected override async Task<IMessageDelivery> RouteImpl(
+    protected override async Task<IMessageDelivery> RouteImplAsync(
         IMessageDelivery delivery, 
         MeshNode node, 
         Address address,
@@ -31,6 +31,9 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     {
         if (streams.TryGetValue(address, out var stream))
             return await stream.Invoke(delivery, cancellationToken);
+
+        if (node == null)
+            throw new MeshException($"No Mesh node was found for {address}");
 
         var hub = CreateHub(node, address);
         if (hub is not null)

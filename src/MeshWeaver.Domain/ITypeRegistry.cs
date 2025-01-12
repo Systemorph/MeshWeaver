@@ -21,5 +21,7 @@ public interface ITypeRegistry
     ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key);
     ITypeDefinition GetTypeDefinition(Type type, bool create = true);
     ITypeDefinition GetTypeDefinition(string collection);
+    
+    IEnumerable<KeyValuePair<string, ITypeDefinition>> Types { get; }
 }
 public record KeyFunction(Func<object, object> Function, Type KeyType);
