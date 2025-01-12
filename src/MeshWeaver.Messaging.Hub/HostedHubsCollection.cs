@@ -20,10 +20,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
                 return hub;
             return create switch
             {
-                HostedHubCreation.Always => CreateHub(address, config ?? (x => x)),
+                HostedHubCreation.Always => messageHubs[address] = CreateHub(address, config ?? (x => x)),
                 _ => null
             };
-            return messageHubs[address] = CreateHub(address, config);
         }
     }
 
@@ -35,7 +34,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     {
         if (isDisposing)
             return null; 
-        return serviceProvider.CreateMessageHub(address, config);
+        var ret = serviceProvider.CreateMessageHub(address, config);
+        ret.RegisterForDisposal(_ => messageHubs.TryRemove(address, out _));
+        return ret;
     }
 
     private bool isDisposing;
