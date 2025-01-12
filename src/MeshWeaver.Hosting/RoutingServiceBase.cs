@@ -64,7 +64,7 @@ namespace MeshWeaver.Hosting
 
             var hostAddress = GetHostAddress(address);
 
-            return await RouteMessage(delivery, hostAddress, cancellationToken);
+            return await RouteMessageAsync(delivery, hostAddress, cancellationToken);
         }
 
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
@@ -85,7 +85,7 @@ namespace MeshWeaver.Hosting
             };
         }
 
-        private async Task<IMessageDelivery> RouteMessage(
+        private async Task<IMessageDelivery> RouteMessageAsync(
             IMessageDelivery delivery,
             Address address,
             CancellationToken cancellationToken
@@ -93,18 +93,16 @@ namespace MeshWeaver.Hosting
         {
             var node = await meshCatalog.GetNodeAsync(address.Type, address.Id);
 
-            if (node == null)
-                throw new MeshException($"No Mesh node was found for {address}");
 
-            if (!string.IsNullOrWhiteSpace(node.StartupScript))
+            if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, address,cancellationToken);
 
 
 
-            return await RouteImpl(delivery, node, address, cancellationToken);
+            return await RouteImplAsync(delivery, node, address, cancellationToken);
         }
 
-        protected abstract Task<IMessageDelivery> RouteImpl(IMessageDelivery delivery,
+        protected abstract Task<IMessageDelivery> RouteImplAsync(IMessageDelivery delivery,
             MeshNode node,
             Address address,
             CancellationToken cancellationToken);

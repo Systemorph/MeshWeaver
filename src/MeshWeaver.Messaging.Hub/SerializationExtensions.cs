@@ -55,10 +55,15 @@ public static class SerializationExtensions
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
         serializationOptions.Converters.Add(new RawJsonConverter());
-        //deserializationOptions.Converters.Add(new MessageDeliveryConverter());
+
         deserializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
         deserializationOptions.Converters.Add(new RawJsonConverter());
+
+        var addressTypes = hub.TypeRegistry.Types.Where(x => x.Value.Type.IsAssignableTo(typeof(Address))).Select(x => new KeyValuePair<string, Type>(x.Key, x.Value.Type)).ToDictionary();
+        var addressConverter = new AddressConverter(addressTypes);
+        serializationOptions.Converters.Add(addressConverter);
+        deserializationOptions.Converters.Add(addressConverter);
 
         var ret = new JsonSerializerOptions();
         ret.Converters.Add(

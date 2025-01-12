@@ -20,14 +20,15 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
         var services = CreateServiceCollection();
         var serviceProvider = services.CreateMeshWeaverServiceProvider();
         var client = serviceProvider.CreateMessageHub(
-            new SignalRClientAddress(),
+            new SignalRAddress(),
                 config => config
             .UseSignalRClient(SignalRUrl)
             );
 
         var response = await client.AwaitResponse(new PingRequest(),
-            o => o.WithTarget(new MeshAddress()),
-            new CancellationTokenSource(10.Seconds()).Token);
+            o => o.WithTarget(new MeshAddress())
+            //, new CancellationTokenSource(10.Seconds()).Token
+            );
         response.Message.Should().BeOfType<PingResponse>();
     }
 }
