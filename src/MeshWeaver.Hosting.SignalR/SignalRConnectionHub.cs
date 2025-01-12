@@ -13,7 +13,7 @@ public class SignalRConnectionHub(IMessageHub hub, IRoutingService routingServic
 
     public void Connect(Address address)
     {
-        routingService.RegisterStream(address, (d,ct) => SendMessageToClient(d, Context.ConnectionId, ct));
+        routingService.RegisterStreamAsync(address, (d,ct) => SendMessageToClient(d, Context.ConnectionId, ct));
 
         connections[address] = Context.ConnectionId;
     }
