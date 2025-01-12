@@ -35,7 +35,7 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         var hub = CreateHub(node, address);
         if (hub is not null)
         {
-            await hub.DeliverMessageAsync(delivery, cancellationToken);
+            hub.DeliverMessage(delivery);
             return delivery.Forwarded(hub.Address);
         }
 

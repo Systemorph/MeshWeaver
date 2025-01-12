@@ -454,10 +454,10 @@ public sealed class MessageHub : IMessageHub
         return (IMessageDelivery<TMessage>)messageService.Post(message, options);
     }
 
-    public Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
-        return messageService.RouteMessageAsync(ret, cancellationToken);
+        return messageService.RouteMessageAsync(ret, default);
     }
 
     public IMessageHub GetHostedHub<TAddress1>(

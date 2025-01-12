@@ -60,8 +60,7 @@ public static class JsonSynchronizationStream
         reduced.BindToTask(task);
         var first = true;
         reduced.AddDisposable(
-            reduced.Hub.Register<DataChangedEvent>(
-                async (delivery,ct) =>
+            reduced.Hub.Register<DataChangedEvent>(delivery =>
                 {
                     if (first)
                     {
@@ -71,7 +70,7 @@ public static class JsonSynchronizationStream
                         tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
                         return request.Processed();
                     }
-                    await reduced.DeliverMessageAsync(delivery, ct);
+                    reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -79,9 +78,9 @@ public static class JsonSynchronizationStream
         );
         reduced.AddDisposable(
             reduced.Hub.Register<UnsubscribeDataRequest>(
-                async (delivery,ct) =>
+                delivery =>
                 {
-                    await reduced.DeliverMessageAsync(delivery, ct);
+                    reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
                 d => reduced.StreamId.Equals(d.Message.StreamId)
@@ -126,9 +125,9 @@ public static class JsonSynchronizationStream
         // forwarding unsubscribe
         reduced.AddDisposable(
             reduced.Hub.Register<UnsubscribeDataRequest>(
-                async (delivery, ct) =>
+                delivery =>
                 {
-                    await reduced.DeliverMessageAsync(delivery, ct);
+                    reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
                 x => reduced.ClientId.Equals(x.Message.StreamId)
@@ -138,9 +137,9 @@ public static class JsonSynchronizationStream
         // Incoming data changed register and dispatch to synchronization stream
         reduced.AddDisposable(
             reduced.Hub.Register<DataChangedEvent>(
-                async (delivery, ct) =>
+                delivery =>
                 {
-                    await reduced.DeliverMessageAsync(delivery, ct);
+                    reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
                 },
                 x => reduced.ClientId.Equals(x.Message.StreamId)

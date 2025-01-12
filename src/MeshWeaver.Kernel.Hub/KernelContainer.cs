@@ -82,7 +82,7 @@ public class KernelContainer : IDisposable
             var hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
             if (hub is not null)
             {
-                await hub.DeliverMessageAsync(request, cancellationToken);
+                hub.DeliverMessage(request);
                 return request.Processed();
             }
 
@@ -110,7 +110,7 @@ public class KernelContainer : IDisposable
             hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
             if (hub is not null)
             {
-                await hub.DeliverMessageAsync(request.ForwardTo(hosted.Address), cancellationToken);
+                hub.DeliverMessage(request.ForwardTo(hosted.Address));
                 return request.Processed();
             }
 

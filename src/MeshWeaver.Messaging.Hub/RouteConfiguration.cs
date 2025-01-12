@@ -13,12 +13,12 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory)
         where TAddress:Address=>
-        RouteAddress<TAddress>(async (routedAddress, d, ct) =>
+        RouteAddress<TAddress>((routedAddress, d) =>
         {
             var hub = hubFactory(routedAddress);
             if (hub == null)
                 return d.NotFound();
-            await hub.DeliverMessageAsync(d, ct);
+            hub.DeliverMessage(d);
             return d.Forwarded();
         });
 

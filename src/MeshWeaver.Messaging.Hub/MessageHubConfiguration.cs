@@ -52,11 +52,11 @@ public record MessageHubConfiguration
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
             this.WithTypes(address.GetType())
-                .WithRoutes(f => f.RouteAddress<Address>(async (a, d,ct) =>
+                .WithRoutes(f => f.RouteAddress<Address>((a, d) =>
         {
             if (!address.Equals(a))
                 return d;
-            await f.Hub.GetHostedHub(a, configuration).DeliverMessageAsync(d, ct);
+            f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
             return d.Forwarded();
         }));
 
