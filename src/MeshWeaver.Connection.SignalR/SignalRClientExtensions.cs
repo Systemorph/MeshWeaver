@@ -84,11 +84,11 @@ public static class SignalRClientExtensions
                         await hubConnection.StartAsync(ct);
 
                         await Connect();
-                        hubConnection.On<IMessageDelivery>("ReceiveMessage", async message =>
+                        hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
                         {
                             // Handle the received message
                             logger.LogDebug($"Received message for address {address}: {message}");
-                            await hub.DeliverMessageAsync(message, ct);
+                            hub.DeliverMessage(message);
                         });
 
                     }

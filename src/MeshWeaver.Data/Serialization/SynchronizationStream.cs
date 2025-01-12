@@ -136,11 +136,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void AddDisposable(IDisposable disposable) => Hub.RegisterForDisposal(_ => disposable.Dispose());
 
-    public Task<IMessageDelivery> DeliverMessageAsync(
-        IMessageDelivery delivery,
-        CancellationToken ct
-    ) =>
-        synchronizationHub.DeliverMessageAsync(delivery.ForwardTo(synchronizationHub.Address), ct);
+    public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
+        synchronizationHub.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));
 
 
     public void OnNext(ChangeItem<TStream> value)
