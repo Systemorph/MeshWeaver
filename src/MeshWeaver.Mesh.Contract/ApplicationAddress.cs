@@ -19,7 +19,7 @@ public record UiAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid
 
 }
 
-public record SignalRClientAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
+public record SignalRAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
 {
     public const string TypeName = "signalr";
 }
