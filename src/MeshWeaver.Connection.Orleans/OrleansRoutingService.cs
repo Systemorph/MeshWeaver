@@ -63,7 +63,7 @@ namespace MeshWeaver.Connection.Orleans
         }
 
 
-        protected override async Task<IMessageDelivery> RouteImpl(IMessageDelivery delivery, MeshNode node,
+        protected override async Task<IMessageDelivery> RouteImplAsync(IMessageDelivery delivery, MeshNode node,
             Address address,
             CancellationToken cancellationToken)
         {

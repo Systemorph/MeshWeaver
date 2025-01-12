@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -35,6 +36,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeof(DisposeRequest)
     ];
 
+    public IEnumerable<KeyValuePair<string, ITypeDefinition>> Types => typeByName.Select(x => new KeyValuePair<string, ITypeDefinition>(x.Key, x.Value));
     private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
         new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t,t.Name, null))));
     private readonly ConcurrentDictionary<Type, string> nameByType =
