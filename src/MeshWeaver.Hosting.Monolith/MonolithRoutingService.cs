@@ -23,7 +23,6 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     }
 
 
-    private readonly ConcurrentDictionary<object, IMessageHub> hubs = new();
     protected override async Task<IMessageDelivery> RouteImpl(
         IMessageDelivery delivery, 
         MeshNode node, 
@@ -33,9 +32,8 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         if (streams.TryGetValue(address, out var stream))
             return await stream.Invoke(delivery, cancellationToken);
 
-        if ((hubs.TryGetValue(delivery.Target, out var hub) 
-                ? hub 
-                : (hub = hubs[delivery.Target] = CreateHub(node, address.Type, address.Id))) is not null)
+        var hub = CreateHub(node, address);
+        if (hub is not null)
         {
             await hub.DeliverMessageAsync(delivery, cancellationToken);
             return delivery.Forwarded(hub.Address);
@@ -44,11 +42,11 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         return delivery;
     }
 
-    private IMessageHub CreateHub(MeshNode node, string addressType, string id)
+    private IMessageHub CreateHub(MeshNode node, Address address)
     {
-        if (node.HubFactory is not null)
+        if (node.HubConfiguration is not null)
         {
-            var hub = node.HubFactory.Invoke(Mesh.ServiceProvider, addressType, id);
+            var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
             hub.RegisterForDisposal((_, _) => Unregister(hub.Address));
 
         }

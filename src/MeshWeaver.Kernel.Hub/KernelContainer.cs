@@ -23,32 +23,20 @@ public class KernelContainer : IDisposable
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private readonly IMeshCatalog meshCatalog;
-    private readonly IMessageHub executionHub;
-    private readonly ILogger<KernelContainer> logger;
+    private IMeshCatalog meshCatalog;
+    private IMessageHub executionHub;
+    private ILogger<KernelContainer> logger;
 
-    public KernelContainer(IServiceProvider serviceProvider, string id)
+    private void Initialize(IMessageHub hub)
     {
-        meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
-        Kernel = CreateKernel(id);
-        Hub = serviceProvider.CreateMessageHub(new KernelAddress() { Id = id }, config => config
-            .AddLayout(layout =>
-                layout.WithView(ctx =>
-                        areas.ContainsKey(ctx.Area),
-                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
-                )
-            )
-            .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
-            .WithInitialization((_, _) => Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>()
-                .Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub)))))
-            .WithHandler<KernelCommandEnvelope>((_, request) => HandleKernelCommandEnvelope(request))
-            .WithHandler<SubmitCodeRequest>((_, request) => HandleKernelCommand(request))
-            .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
-            .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
-            .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request))
-        );
-        executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
+        this.meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
+
+        Hub = hub;
+        Kernel = CreateKernel();
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
+
+        executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Hub.RegisterForDisposal(this);
         var timer = new Timer(_ => Dispose(), this, DisconnectTimeout, DisconnectTimeout);
         Hub.Register<object>(d =>
@@ -56,7 +44,29 @@ public class KernelContainer : IDisposable
             timer.Change(DisconnectTimeout, DisconnectTimeout);
             return d;
         });
-        logger = Hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
+    }
+
+    public MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)
+    {
+        return config
+            .AddLayout(layout =>
+                layout.WithView(ctx =>
+                        areas.ContainsKey(ctx.Area),
+                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
+                )
+            )
+            .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
+            .WithInitialization((hub, _) =>
+            {
+                Initialize(hub);
+                return Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>()
+                    .Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub))));
+            })
+            .WithHandler<KernelCommandEnvelope>((_, request) => HandleKernelCommandEnvelope(request))
+            .WithHandler<SubmitCodeRequest>((_, request) => HandleKernelCommand(request))
+            .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
+            .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
+            .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request));
     }
 
 
@@ -149,11 +159,11 @@ public class KernelContainer : IDisposable
     }
 
     private readonly ConcurrentDictionary<string, UiControl> areas = new();
-    public IMessageHub Hub { get; }
-    public CompositeKernel Kernel { get; }
+    private IMessageHub Hub { get; set; }
+    public CompositeKernel Kernel { get; set; }
     private string LayoutAreaUrl { get; set; } = "https://localhost:65260/area/";
 
-    protected CompositeKernel CreateKernel(string id)
+    protected CompositeKernel CreateKernel()
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
 
