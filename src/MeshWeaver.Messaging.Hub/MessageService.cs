@@ -14,8 +14,6 @@ public class MessageService : IMessageService
     private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken Token)> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
-    private readonly BufferBlock<IMessageDelivery> routingBuffer = new();
-    private readonly ActionBlock<IMessageDelivery> routingAction;
     private readonly HierarchicalRouting hierarchicalRouting;
 
 
@@ -35,18 +33,15 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deferralContainer = new DeferralContainer((d, c) =>
+        deferralContainer = new DeferralContainer(async (d, c) =>
         {
-            NotifyAsync(d, c);
-            return Task.FromResult(d.Submitted());
+            return await NotifyAsync(d, c);
         }, ReportFailure);
         deliveryAction = 
             new(x => 
                 deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
 
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
-        routingAction = new ActionBlock<IMessageDelivery>(delivery => RouteMessageAsync(delivery, default));
-        routingBuffer.LinkTo(routingAction, new DataflowLinkOptions { PropagateCompletion = true });
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
     }
 
@@ -72,32 +67,16 @@ public class MessageService : IMessageService
     public IMessageHub ParentHub { get; }
 
 
-    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
-    {
-        return deferralContainer.Defer(deferredFilter);
-    }
+    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) => 
+        deferralContainer.Defer(deferredFilter);
 
-    Task<IMessageDelivery> IMessageService.RouteMessageAsync(IMessageDelivery delivery,
-        CancellationToken cancellationToken)
-        => RouteMessageAsync(delivery, cancellationToken);
-    Task<IMessageDelivery> RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
-    {
-        if (delivery.Target == null || delivery.Target.Equals(Address))
-            return Task.FromResult(ScheduleNotify(delivery));
+    IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
+        ScheduleNotify(delivery, cancellationToken);
 
-        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
-            return Task.FromResult(ScheduleNotify(delivery.WithTarget(hub.Address)));
-
-
-        return hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-    }
-
-    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery)
+    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         delivery = UnpackIfNecessary(delivery);
 
-        // TODO V10: Here we need to inject the correct cancellation token. (19.02.2024, Roland Bürgi)
-        var cancellationToken = CancellationToken.None;
         logger.LogDebug("Buffering message {message} from sender {sender} in message service {address}", delivery.Message, delivery.Sender, delivery.Target);
 
         lock (locker)
@@ -135,7 +114,19 @@ public class MessageService : IMessageService
     }
 
 
-    private void NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        if(delivery.Target is null || delivery.Target.Equals(hub.Address))
+            return ScheduleExecution(delivery, cancellationToken);
+
+        if(delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
+            return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
+
+        return await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+
+    }
+
+    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         executionBuffer.Post(async _ =>
         {
@@ -154,7 +145,7 @@ public class MessageService : IMessageService
                 delivery.Sender, Address); 
 
         });
-
+        return delivery.Forwarded(hub.Address);
     }
 
     public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
@@ -178,7 +169,9 @@ public class MessageService : IMessageService
             return (IMessageDelivery<TMessage>)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new object[] { message, opt });
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
-        routingBuffer.Post(delivery);
+
+        // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
+        ScheduleNotify(delivery, default);
         return delivery;
     }
 
@@ -202,7 +195,5 @@ public class MessageService : IMessageService
         await deferralContainer.DisposeAsync();
         logger.LogDebug("Finished disposing message service in {Address}", Address);
 
-        routingBuffer.Complete();
-        await routingAction.Completion;
     }
 }

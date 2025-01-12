@@ -20,20 +20,20 @@ public class SerializationTest : HubTestBase
             hubConf =>
                 hubConf.WithRoutes(f =>
                     f.RouteAddress<HostAddress>(
-                            async (routedAddress, d, ct) =>
+                            (routedAddress, d) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
                                 var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                await hostedHub.DeliverMessageAsync(packagedDelivery, ct);
+                                hostedHub.DeliverMessage(packagedDelivery);
                                 return d.Forwarded();
                             }
                         )
                         .RouteAddress<ClientAddress>(
-                            async (routedAddress, d, ct) =>
+                            (routedAddress, d) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
                                 var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                await hostedHub.DeliverMessageAsync(packagedDelivery, ct);
+                                hostedHub.DeliverMessage(packagedDelivery);
                                 return d.Forwarded();
                             }
                         )
