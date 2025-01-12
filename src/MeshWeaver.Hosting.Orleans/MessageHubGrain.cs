@@ -24,7 +24,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     {
 
         var streamId = this.GetPrimaryKeyString();
-        var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStorageInfo();
+        var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStartupInfo();
         if (startupInfo == null || startupInfo is { AssemblyLocation: null })
         {
             logger.LogError("Cannot find info for {address}", this.GetPrimaryKeyString());
@@ -32,12 +32,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
 
 
-        var node = await meshCatalog.GetNodeAsync(startupInfo.AddressType, startupInfo.Id);
-        if (node.HubFactory is null)
+        var node = await meshCatalog.GetNodeAsync(startupInfo.Address.Type, startupInfo.Address.Id);
+        if (node.HubConfiguration is null)
             throw new MeshException(
-                $"Cannot instantiate Node {node.Name}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubFactory)}  are specified.");
+                $"Cannot instantiate Node {node.Name}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
 
-        Hub = node.HubFactory(meshHub.ServiceProvider, node.AddressType, startupInfo.Id);
+        Hub = meshHub.GetHostedHub(startupInfo.Address, node.HubConfiguration);
         Hub.RegisterForDisposal((_, _) => routingService.Unregister(Hub.Address));
         State = State with { IsDeactivated = false };
 
@@ -65,6 +65,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             EventCounter =
             State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
         };
+
+        Hub.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
         var ret = await Hub.DeliverMessageAsync(delivery, default);
