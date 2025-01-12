@@ -54,7 +54,7 @@ public record MeshBuilder
                 routes.WithHandler((delivery, ct) =>
                     delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address)
                         ? Task.FromResult(delivery)
-                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessage(delivery.Package(routes.Hub.JsonSerializerOptions), ct)))
+                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(routes.Hub.JsonSerializerOptions), ct)))
             .Set(meshConfig)
         );
 

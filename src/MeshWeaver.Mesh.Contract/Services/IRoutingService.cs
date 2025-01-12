@@ -13,7 +13,7 @@ public interface IRoutingService
     /// <param name="delivery"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken = default);
+    Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default);
 
 
     /// <summary>
@@ -22,7 +22,7 @@ public interface IRoutingService
     /// <param name="address">Address to be registered for streaming</param>
     /// <param name="callback">Callback to deliver messages from the stream.</param>
     /// <returns>The reactive stream which can be subscribed to.</returns>
-    Task RegisterStream(Address address, AsyncDelivery callback);
+    Task RegisterStreamAsync(Address address, AsyncDelivery callback);
 
     /// <summary>
     /// <summary>
@@ -31,7 +31,7 @@ public interface IRoutingService
     /// </summary>
     /// <param name="address">Address to be unregistered</param>
     /// <returns>Routed address if it was registered. This can be used, e.g. for cascading disposal.</returns>
-    Task Unregister(Address address);
+    Task Async(Address address);
     /// <summary>
     /// Stream Namespace for incoming messages
     /// </summary>

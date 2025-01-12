@@ -20,7 +20,7 @@ namespace MeshWeaver.Connection.Orleans
 
 
 
-        public override async Task Unregister(Address address)
+        public override async Task Async(Address address)
         {
             if (streams.TryRemove(address, out var unsubscribe))
                 await unsubscribe();
@@ -38,7 +38,7 @@ namespace MeshWeaver.Connection.Orleans
         }
 
 
-        public override async Task RegisterStream(Address address, AsyncDelivery callback)
+        public override async Task RegisterStreamAsync(Address address, AsyncDelivery callback)
         {
             var info = new StreamInfo(address.Type, address.Id, StreamProviders.Memory, IRoutingService.MessageIn);
             await GetAddressRegistryGrain(address)

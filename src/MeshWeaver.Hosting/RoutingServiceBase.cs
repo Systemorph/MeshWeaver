@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting
         private readonly ITypeRegistry typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
         private readonly IMeshCatalog meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
+        public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
             try
             {
@@ -29,9 +29,9 @@ namespace MeshWeaver.Hosting
         }
 
 
-        public abstract Task RegisterStream(Address address, AsyncDelivery callback);
+        public abstract Task RegisterStreamAsync(Address address, AsyncDelivery callback);
 
-        public abstract Task Unregister(Address address);
+        public abstract Task Async(Address address);
 
 
 
@@ -67,20 +67,20 @@ namespace MeshWeaver.Hosting
             return await RouteMessage(delivery, hostAddress, cancellationToken);
         }
 
-        protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, string addressId, CancellationToken ct)
+        protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
         {
-            var kernelId = GetKernelId(delivery, node, addressId);
+            var kernelId = GetKernelId(delivery, node, address);
             delivery = delivery.WithTarget(new HostedAddress(delivery.Target, new KernelAddress(){Id = kernelId}));
             return RouteInMesh(delivery, ct);
         }
 
-        protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, string addressId)
+        protected virtual string GetKernelId(IMessageDelivery delivery, MeshNode node, Address address)
         {
             return node.RoutingType switch
             {
-                RoutingType.Shared => $"{node.AddressType}/{addressId}",
+                RoutingType.Shared => $"{address}",
                 RoutingType.Individual =>
-                    $"{node.AddressType}/{addressId}/{typeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}",
+                    $"{address}/{typeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}",
                 _ => throw new NotSupportedException($"The routing type {node.RoutingType} is currently not supported.")
             };
         }
@@ -97,7 +97,7 @@ namespace MeshWeaver.Hosting
                 throw new MeshException($"No Mesh node was found for {address}");
 
             if (!string.IsNullOrWhiteSpace(node.StartupScript))
-                return await RouteToKernel(delivery, node, address.ToString(), cancellationToken);
+                return await RouteToKernel(delivery, node, address,cancellationToken);
 
 
 
