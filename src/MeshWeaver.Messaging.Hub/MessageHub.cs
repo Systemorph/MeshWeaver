@@ -62,7 +62,7 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions();
 
-        Register<DisposeRequest>(HandleDisposeAsync);
+        Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
         foreach (var messageHandler in configuration.MessageHandlers)
@@ -506,10 +506,13 @@ public sealed class MessageHub : IMessageHub
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
 
-    private IMessageDelivery HandleShutdown(
-        IMessageDelivery<ShutdownRequest> request
+    private async Task<IMessageDelivery> HandleShutdown(
+        IMessageDelivery<ShutdownRequest> request,
+        CancellationToken ct
     )
     {
+        while (disposeActions.TryTake(out var configurationDisposeAction))
+            await configurationDisposeAction.Invoke(this, ct);
 
         if (request.Message.Version != Version - 1)
         {
@@ -597,10 +600,8 @@ public sealed class MessageHub : IMessageHub
     }
 
 
-    private async Task<IMessageDelivery> HandleDisposeAsync(IMessageDelivery<DisposeRequest> request, CancellationToken ct)
+    private IMessageDelivery HandleDispose(IMessageDelivery<DisposeRequest> request)
     {
-        while (disposeActions.TryTake(out var configurationDisposeAction))
-            await configurationDisposeAction.Invoke(this, ct);
         Dispose();
         return request.Processed();
     }

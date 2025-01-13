@@ -7,7 +7,7 @@ public record Address(string Type, string Id)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
-        return Type == other.Type && Id == other.Id;
+        return Type == other.Type && (Id ?? string.Empty) == (other.Id ?? string.Empty);
     }
 
     public override int GetHashCode() => HashCode.Combine(Type, Id);

@@ -52,11 +52,12 @@ public static class SignalRClientExtensions
                         var hubConnection = hub.ServiceProvider.GetRequiredService<HubConnection>();
                         hub.RegisterForDisposal(async (_,ct2) =>
                         {
+                            hubConnection.Reconnecting -= Connect;
                             await hubConnection.StopAsync(ct2);
                             await hubConnection.DisposeAsync();
                         });
 
-                        async Task Connect()
+                        async Task Connect(Exception e)
                         {
                             try
                             {
@@ -73,17 +74,11 @@ public static class SignalRClientExtensions
                             logger.LogInformation("Reconnecting...");
                         }
 
-                        hubConnection.Reconnecting += (exception) =>
-                        {
-                            if (exception is not null)
-                                logger.LogWarning("Disconnected from SignalR connection for {Address}:\n{Exception}", hub.Address, exception);
-                            return Connect();
-                        };
+                        hubConnection.Reconnecting += Connect;
 
                         logger.LogInformation("Creating SignalR connection for {AddressType}", hub.Address);
                         await hubConnection.StartAsync(ct);
-
-                        await Connect();
+                        await Connect(null);
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
                         {
                             // Handle the received message
