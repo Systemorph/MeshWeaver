@@ -28,10 +28,14 @@ namespace MeshWeaver.Northwind.Test;
 public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 {
     protected override MessageHubConfiguration ConfigureRouter(
-        MessageHubConfiguration configuration
-    )
+        MessageHubConfiguration configuration, Dictionary<string, Type> types)
     {
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureRouter(configuration, new Dictionary<string, Type>()
+            {
+                { new ClientAddress().Type, typeof(ClientAddress) },
+                { new HostAddress().Type, typeof(HostAddress) },
+                { new RouterAddress().Type, typeof(RouterAddress) }
+            })
             .WithRoutes(forward =>
                 forward
                     .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
