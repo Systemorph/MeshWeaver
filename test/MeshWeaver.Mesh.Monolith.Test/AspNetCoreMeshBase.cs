@@ -70,10 +70,10 @@ namespace MeshWeaver.Hosting.Monolith.Test
         {
             while (Disposables.TryTake(out var d))
                 d.Dispose();
+            await base.DisposeAsync();
             await Host.StopAsync();
             Server.Dispose();
             Host.Dispose();
-            await base.DisposeAsync();
         }
 
     }

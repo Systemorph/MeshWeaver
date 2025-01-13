@@ -33,10 +33,7 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deferralContainer = new DeferralContainer(async (d, c) =>
-        {
-            return await NotifyAsync(d, c);
-        }, ReportFailure);
+        deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
         deliveryAction = 
             new(x => 
                 deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
