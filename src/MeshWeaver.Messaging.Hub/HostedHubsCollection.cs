@@ -79,4 +79,5 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         }
 
     }
+
 }
