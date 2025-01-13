@@ -19,7 +19,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
     {
         var services = CreateServiceCollection();
         var serviceProvider = services.CreateMeshWeaverServiceProvider();
-        var client = serviceProvider.CreateMessageHub(
+        using var client = serviceProvider.CreateMessageHub(
             new SignalRAddress(),
                 config => config
             .UseSignalRClient(SignalRUrl)
