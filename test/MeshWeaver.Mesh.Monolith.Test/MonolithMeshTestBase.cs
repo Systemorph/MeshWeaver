@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -37,5 +38,11 @@ namespace MeshWeaver.Hosting.Monolith.Test
         protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
             configuration;
 
+        public override async Task DisposeAsync()
+        {
+            Mesh.Dispose();
+            await Mesh.Disposed;
+            await base.DisposeAsync();
+        }
     }
 }
