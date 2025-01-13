@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,14 +28,9 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             );
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf, Dictionary<string, Type> types)
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
     {
-        return base.ConfigureRouter(conf, new Dictionary<string, Type>()
-            {
-                { new ClientAddress().Type, typeof(ClientAddress) },
-                { new HostAddress().Type, typeof(HostAddress) },
-                { new RouterAddress().Type, typeof(RouterAddress) }
-            })
+        return base.ConfigureRouter(conf)
             .WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>

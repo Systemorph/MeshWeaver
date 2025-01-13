@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -33,14 +31,9 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
             );
     }
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf, Dictionary<string, Type> types)
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
     {
-        return base.ConfigureRouter(conf, new Dictionary<string, Type>()
-        {
-            { new ClientAddress().Type, typeof(ClientAddress) },
-            { new HostAddress().Type, typeof(HostAddress) },
-            { new RouterAddress().Type, typeof(RouterAddress) }
-        }).WithHostedHub(
+        return base.ConfigureRouter(conf).WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>
                     config
