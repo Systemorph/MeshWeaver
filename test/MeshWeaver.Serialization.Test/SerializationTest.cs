@@ -41,9 +41,9 @@ public class SerializationTest : HubTestBase
         );
     }
 
-    private static MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
-        return c.WithHandler<Boomerang>(
+        return base.ConfigureHost(c).WithHandler<Boomerang>(
             (hub, request) =>
             {
                 hub.Post(
@@ -58,10 +58,6 @@ public class SerializationTest : HubTestBase
         );
     }
 
-    private static MessageHubConfiguration ConfigureClient(MessageHubConfiguration c)
-    {
-        return c;
-    }
 
     /// <summary>
     /// This tests the serialization of a message with a nested object,
@@ -73,7 +69,6 @@ public class SerializationTest : HubTestBase
     [Fact]
     public async Task BoomerangTest()
     {
-        var host = Router.GetHostedHub(new HostAddress(), ConfigureHost);
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
 
         var response = await client.AwaitResponse(
@@ -82,7 +77,7 @@ public class SerializationTest : HubTestBase
         );
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
-        response.Message.Type.Should().Be(typeof(MyEvent).Name);
+        response.Message.Type.Should().Be(nameof(MyEvent));
     }
 
     [Fact]
@@ -125,6 +120,5 @@ public record Boomerang(object Object) : IRequest<BoomerangResponse>;
 
 public record BoomerangResponse(object Object, string Type);
 
-public record HostAddress();
 
 public record MyEvent(string Text);

@@ -18,14 +18,16 @@ public static class SerializationExtensions
         return hubConf.Set(conf.Add(configure));
     }
 
-    public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, IEnumerable<Type> types)
+    public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, params IEnumerable<Type> types)
     {
         configuration.TypeRegistry.WithTypes(types);
         return configuration;
     }
-
-    public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, params Type[] types)
-        => configuration.WithTypes((IEnumerable<Type>)types);
+    public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, IEnumerable<KeyValuePair<string, Type>> types)
+    {
+        configuration.TypeRegistry.WithTypes(types);
+        return configuration;
+    }
 
     public static string GetTypeName(this ITypeRegistry typeRegistry, object instance)
     => instance is JsonObject obj && obj.TryGetPropertyValue(EntitySerializationExtensions.TypeProperty, out var type)
