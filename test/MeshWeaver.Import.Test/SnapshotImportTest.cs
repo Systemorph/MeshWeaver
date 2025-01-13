@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -28,14 +26,9 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             );
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration, Dictionary<string, Type> types)
+    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration, new Dictionary<string, Type>()
-            {
-                { new ClientAddress().Type, typeof(ClientAddress) },
-                { new HostAddress().Type, typeof(HostAddress) },
-                { new RouterAddress().Type, typeof(RouterAddress) }
-            })
+        return base.ConfigureRouter(configuration)
             .WithHostedHub(
                 new TestDomain.ImportAddress(),
                 config =>

@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -23,14 +21,9 @@ namespace MeshWeaver.Import.Test;
 public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
     protected override MessageHubConfiguration ConfigureRouter(
-        MessageHubConfiguration configuration, Dictionary<string, Type> types)
+        MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration, new Dictionary<string, Type>()
-            {
-                { new ClientAddress().Type, typeof(ClientAddress) },
-                { new HostAddress().Type, typeof(HostAddress) },
-                { new RouterAddress().Type, typeof(RouterAddress) }
-            })
+        return base.ConfigureRouter(configuration)
             .WithRoutes(forward =>
                 forward
                     .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
