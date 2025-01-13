@@ -1,7 +1,9 @@
-﻿using System.ComponentModel;
+﻿using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -31,6 +33,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureHost(configuration).AddLayout(layout => layout
             .WithView(nameof(EditorWithoutResult), EditorWithoutResult)
             .WithView(nameof(EditorWithResult), EditorWithResult)
+            .WithView(nameof(EditorWithDelayedResult), EditorWithDelayedResult)
         );
     }
 
@@ -42,7 +45,13 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit<Calculator>(new Calculator());
     private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator(),c => Controls.Markdown($"{c.X + c.Y}"));
+        host.Hub.Edit(new Calculator(), c => Controls.Markdown($"{c.X + c.Y}"));
+    private UiControl EditorWithDelayedResult(LayoutAreaHost host, RenderingContext ctx) =>
+        host.Hub.Edit(new Calculator(), c =>
+        {
+            Thread.Sleep(100);
+            return Controls.Markdown($"{c.X + c.Y} @ {DateTime.UtcNow.Second}:{DateTime.UtcNow.Millisecond}");
+        });
 
 
     [Fact]
@@ -80,10 +89,10 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task TestEditorWithResult()
     {
         var client = GetClient();
-        
+
         var workspace = client.GetWorkspace();
-        var area = workspace.GetRemoteStream<JsonElement,LayoutAreaReference>(
-            new HostAddress(), 
+        var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
             new LayoutAreaReference(nameof(EditorWithResult)));
         var control = await area
             .GetControlStream(nameof(EditorWithResult))
@@ -139,5 +148,43 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x is not MarkdownControl { Data: "1" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("2");
+    }
+    [Fact]
+    public async Task TestEditorWithDelayed()
+    {
+        var client = GetClient();
+
+        var workspace = client.GetWorkspace();
+        var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            new LayoutAreaReference(nameof(EditorWithDelayedResult)));
+        var control = await area
+            .GetControlStream(nameof(EditorWithDelayedResult))
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        control = await area
+            .GetControlStream(stack.Areas.First().Area.ToString())
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
+
+        var editor = control.Should().BeOfType<EditorControl>().Subject;
+
+        
+        var controlStream = area
+            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .TakeUntil(x => x is MarkdownControl { Data: var data } && data.ToString()!.StartsWith("5"));
+
+
+        // update once ==> will issue "replace"
+        for (var i = 1; i <= 5; i++)
+        {
+            area.UpdatePointer(i, editor.DataContext, new("/x"));
+        }
+
+        var controls = await controlStream.ToArray();
+        controls.Should().HaveCountLessThanOrEqualTo(3);
+        controls.Last().Should().BeOfType<MarkdownControl>().Which.Data.ToString().Should().StartWith("5");
     }
 }
