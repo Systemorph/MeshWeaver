@@ -13,6 +13,7 @@ public class HubTestBase : TestBase
 
     protected record HostAddress() : Address("host", "1");
 
+
     protected record ClientAddress() : Address("client", "1");
 
     [Inject]
@@ -29,23 +30,28 @@ public class HubTestBase : TestBase
             )
         );
     }
-
+    private static readonly Dictionary<string, Type> AddressTypes = new ()
+    {
+        { new ClientAddress().Type, typeof(ClientAddress) },
+        { new HostAddress().Type, typeof(HostAddress) },
+        { new RouterAddress().Type, typeof(RouterAddress) }
+    };
     protected virtual MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
     {
         return conf.WithRoutes(forward =>
             forward
                 .RouteAddressToHostedHub<HostAddress>(ConfigureHost)
                 .RouteAddressToHostedHub<ClientAddress>(ConfigureClient)
-        );
+        ).WithTypes(AddressTypes);
     }
 
     protected virtual MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
-    ) => configuration.WithTypes(typeof(HostAddress), typeof(ClientAddress));
+    ) => configuration.WithTypes(AddressTypes);
 
     protected virtual MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
-    ) => configuration.WithTypes(typeof(HostAddress), typeof(ClientAddress));
+    ) => configuration.WithTypes(AddressTypes);
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {

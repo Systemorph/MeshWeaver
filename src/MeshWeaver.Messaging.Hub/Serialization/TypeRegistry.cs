@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -134,6 +133,9 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
         return parent?.TryGetCollectionName(type, out typeName) ?? false;
     }
+
+    public ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string, Type>> types)
+        => types.Aggregate((ITypeRegistry)this, (i, kvp) => i.WithType(kvp.Value, kvp.Key));
 
     public string GetOrAddType(Type type)
     {
