@@ -49,28 +49,6 @@ Console.WriteLine(""Hello World"");
         var e = helloWorld.Events.OfType<StandardOutputValueProduced>().Single();
         e.FormattedValues.Single().Value.TrimEnd('\n', '\r').Should().Be("Hello World");
     }
-    //client.Post(
-        //    new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
-        //    o => o.WithTarget(new KernelAddress()));
-        //var kernelEvents = await kernelEventsStream
-        //    .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
-        //    .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
-        //    //.TakeUntil(e => e is StandardOutputValueProduced)
-        //    .ToArray()
-        //    .FirstAsync();
-
-        //kernelEvents.OfType<CommandSucceeded>().Should().NotBeEmpty();
-
-        //await Task.Delay(1000).ConfigureAwait(false);
-        //kernelEventsStream.OnCompleted();
-        //var kernelEvents2 = await kernelEventsStream
-        //    .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Event).Event)
-        //    .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
-        //    .ToArray()
-        //    .FirstAsync();
-        //var standardOutput = kernelEvents.OfType<ReturnValueProduced>().Single();
-        //var value = standardOutput.FormattedValues.Single();
-        //value.Value.Should().Contain("iframe");
 
     [Fact]
     public async Task LayoutAreas()

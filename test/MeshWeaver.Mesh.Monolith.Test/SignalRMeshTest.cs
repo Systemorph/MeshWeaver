@@ -27,7 +27,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
 
         var response = await client.AwaitResponse(new PingRequest(),
             o => o.WithTarget(new MeshAddress())
-            //, new CancellationTokenSource(10.Seconds()).Token
+            , new CancellationTokenSource(10.Seconds()).Token
             );
         response.Message.Should().BeOfType<PingResponse>();
     }
