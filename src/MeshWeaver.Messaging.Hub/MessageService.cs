@@ -72,8 +72,6 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        delivery = UnpackIfNecessary(delivery);
-
         logger.LogDebug("Buffering message {message} from sender {sender} in message service {address}", delivery.Message, delivery.Sender, delivery.Target);
 
         lock (locker)
@@ -85,30 +83,6 @@ public class MessageService : IMessageService
         return delivery.Forwarded();
     }
 
-    // TODO V10: This is needed only when coming from outside physical boundries (2023/07/16, Roland Buergi)
-    private IMessageDelivery UnpackIfNecessary(IMessageDelivery delivery)
-    {
-        try
-        {
-            delivery = DeserializeDelivery(delivery);
-        }
-        catch
-        {
-            logger.LogWarning("Failed to deserialize delivery {PackedDelivery}", delivery);
-            // failed unpack delivery, returning original delivery with message type RawJson
-        }
-
-        return delivery;
-    }
-
-    public IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
-    {
-        if (delivery.Message is not RawJson rawJson)
-            return delivery;
-        logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
-        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
-        return delivery.WithMessage(deserializedMessage);
-    }
 
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
@@ -125,6 +99,7 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        delivery = UnpackIfNecessary(delivery);
         executionBuffer.Post(async _ =>
         {
             logger.LogDebug("Start processing {message} from {sender} in {address}", delivery.Message, delivery.Sender,
@@ -152,6 +127,29 @@ public class MessageService : IMessageService
                 return null;
         logger.LogDebug("Posting message {Message} from {Sender} to {Target}", message, Address, opt.Target);
         return PostImpl(message, opt);
+    }
+    private IMessageDelivery UnpackIfNecessary(IMessageDelivery delivery)
+    {
+        try
+        {
+            delivery = DeserializeDelivery(delivery);
+        }
+        catch
+        {
+            logger.LogWarning("Failed to deserialize delivery {PackedDelivery}", delivery);
+            // failed unpack delivery, returning original delivery with message type RawJson
+        }
+
+        return delivery;
+    }
+
+    public IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
+    {
+        if (delivery.Message is not RawJson rawJson)
+            return delivery;
+        logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
+        var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
+        return delivery.WithMessage(deserializedMessage);
     }
 
     private IMessageDelivery PostImpl(object message, PostOptions opt)
