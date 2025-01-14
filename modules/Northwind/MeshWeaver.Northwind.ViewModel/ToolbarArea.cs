@@ -1,5 +1,8 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.ViewModel
 {
@@ -17,13 +20,14 @@ namespace MeshWeaver.Northwind.ViewModel
         /// <summary>
         /// Creates a toolbar within a specified layout area and binds it with an observable collection of year options.
         /// </summary>
-        /// <param name="years">An observable collection of year options to bind to the toolbar.</param>
         /// <returns>A dynamically created toolbar control bound with the provided year options.</returns>
         /// <remarks>
         /// This method utilizes reactive extensions to dynamically bind the provided year options to a toolbar control. It ensures that the toolbar updates in response to changes in the observable collection, displaying the maximum year available.
         /// </remarks>
-        public static object Toolbar(IObservable<Option[]> years)
+        public static object Toolbar(this LayoutAreaHost layoutArea)
         {
+            var years = GetAllYearsOfOrders(layoutArea);
+
             return Controls.Toolbar
                 .WithView(
                     (_, _) =>
@@ -34,5 +38,28 @@ namespace MeshWeaver.Northwind.ViewModel
                         )
                 );
         }
+        /// <summary>
+        /// Gets all the years for which there area orders.
+        /// </summary>
+        /// <param name="layoutArea"></param>
+        /// <returns></returns>
+        public static IObservable<Option[]> GetAllYearsOfOrders(this LayoutAreaHost layoutArea)
+        {
+            var years = layoutArea
+                .Workspace
+                .GetObservable<Order>()
+                .DistinctUntilChanged()
+                .Select(x =>
+                    x.Select(y => y.OrderDate.Year)
+                        .Distinct()
+                        .OrderByDescending(year => year)
+                        .Select(year => new Option<int>(year, year.ToString()))
+                        .Prepend(new Option<int>(0, "All Time"))
+                        .ToArray()
+                )
+                .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
+            return years;
+        }
+
     }
 }

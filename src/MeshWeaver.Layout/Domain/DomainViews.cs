@@ -86,13 +86,13 @@ public static class DomainViews
                             .WithSkin(skin => skin.Expand()),
                         (ng, t) => ng.WithLink(t.TypeDefinition.DisplayName,
                             new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
-                                .ToAppHref(host.Hub.Address))
+                                .ToHref(host.Hub.Address))
                     )
                 )
             );
 
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
-        GetDetailsReference(hub, type, id)?.ToAppHref(hub.Address);
+        GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
     public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, Type type, object id)
     {

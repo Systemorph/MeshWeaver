@@ -105,7 +105,7 @@ public record LayoutAreaHost : IDisposable
                      .Where(x => x.Collection == LayoutAreaReference.Areas)
                      .Select(x => (x.Id.ToString(), Control: x.Value as UiControl))
                      .Where(x => x.Control != null))
-            AddDisposable(a, c);
+            RegisterForDisposal(a, c);
 
         return ret;
     }
@@ -130,6 +130,8 @@ public record LayoutAreaHost : IDisposable
         });
     }
 
+    public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
+        => RegisterForDisposal(id, stream.Subscribe(x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x))));
 
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
@@ -141,7 +143,7 @@ public record LayoutAreaHost : IDisposable
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
-    public void AddDisposable(string area, IDisposable disposable)
+    public void RegisterForDisposal(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
     }
@@ -210,7 +212,7 @@ public record LayoutAreaHost : IDisposable
 
     public void Dispose()
     {
-        foreach (var disposable in disposablesByArea)
+        foreach (var disposable in disposablesByArea.ToArray())
             disposable.Value.ForEach(d => d.Dispose());
         disposablesByArea.Clear();
     }
@@ -258,7 +260,7 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
-        AddDisposable(context.Parent?.Area ?? context.Area,
+        RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
                 .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
         );
@@ -286,7 +288,7 @@ public record LayoutAreaHost : IDisposable
         IObservable<ViewDefinition> generator,
         EntityStore store)
     {
-        AddDisposable(context.Area, generator.Subscribe(vd =>
+        RegisterForDisposal(context.Area, generator.Subscribe(vd =>
                 InvokeAsync(async ct =>
                 {
                     var view = await vd.Invoke(this, context, ct);
@@ -303,7 +305,7 @@ public record LayoutAreaHost : IDisposable
     {
         var ret = DisposeExistingAreas(store, context);
 
-        AddDisposable(
+        RegisterForDisposal(
             context.Area,
             generator.Subscribe(view =>
                 InvokeAsync(() => UpdateArea(context, view))

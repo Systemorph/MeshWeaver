@@ -63,7 +63,7 @@ public static class Template
                     current = val;
                     host.Stream.SetData(id, val, host.Stream.StreamId);
                 });
-                host.AddDisposable(context.Area, forwardSubscription);
+                host.RegisterForDisposal(context.Area, forwardSubscription);
                 return new(store, [], null);
             });
 
@@ -89,7 +89,7 @@ public static class Template
                     current = val;
                     host.Stream.SetData(id, val, host.Stream.StreamId);
                 });
-                host.AddDisposable(context.Area, forwardSubscription);
+                host.RegisterForDisposal(context.Area, forwardSubscription);
                 return new(store, [], null);
             });
     }

@@ -1,12 +1,17 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
 using MeshWeaver.Reporting.Models;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -15,9 +20,6 @@ namespace MeshWeaver.Northwind.ViewModel;
 /// </summary>
 public static class SupplierSummaryArea
 {
-
-
-
     /// <summary>
     /// Registers the Supplier Summary view to the specified layout definition.
     /// </summary>
@@ -28,10 +30,21 @@ public static class SupplierSummaryArea
     /// </remarks>
     public static LayoutDefinition AddSupplierSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(SupplierSummary), SupplierSummary)
-            //    .WithMenu(Controls.NavLink(nameof(SupplierSummary).Wordify(), FluentIcons.Search,
-            //        layout.ToHref(new(nameof(SupplierSummary)))))
-            //)
-        ;
+            .WithNavMenu("Supplier Summary",
+                new LayoutAreaReference(nameof(SupplierSummary)).ToHref(layout.Hub.Address), FluentIcons.Document);
+
+
+    /// <summary>
+    /// Class to support the toolbar
+    /// </summary>
+    private record SupplierSummaryToolbar
+    {
+        internal const string Years = "years";
+        [Dimension<int>(OptionStream = Years)]
+        public int? Year { get; init; }
+
+        public bool Chart { get; init; }
+    }
 
     /// <summary>
     /// Generates the supplier summary view.
@@ -39,30 +52,56 @@ public static class SupplierSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A layout stack control representing the supplier summary.</returns>
-    public static IObservable<object> SupplierSummary(
+    public static object SupplierSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext context
     )
-        => SupplierSummaryGrid(layoutArea, context);
+    {
+        layoutArea.SubscribeToDataStream(SupplierSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new SupplierSummaryToolbar(),
+            (toolbar, area, ctx) => toolbar.Chart
+                ? area.SupplierSummaryGrid(toolbar)
+                : area.SupplierSummaryChart(toolbar)
+        );
+    }
 
 
     /// <summary>
     /// Generates the grid view for the supplier summary.
     /// </summary>
     /// <param name="area">The layout area host.</param>
-    /// <param name="ctx">The rendering context.</param>
+    /// <param name="toolbar">The toolbar .</param>
     /// <returns>An observable object representing the supplier summary grid.</returns>
-    public static IObservable<object> SupplierSummaryGrid(
+    private static IObservable<object> SupplierSummaryGrid(
         this LayoutAreaHost area,
-        RenderingContext ctx
+        SupplierSummaryToolbar toolbar
     )
     {
         return area.GetDataCube()
             .SelectMany(cube =>
                 area.Workspace
-                    .Pivot(cube)
+                    .Pivot(cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year)))
                     .SliceRowsBy(nameof(Supplier))
                     .ToGrid()
+            );
+    }
+    /// <summary>
+    /// Generates the grid view for the supplier summary.
+    /// </summary>
+    /// <param name="area">The layout area host.</param>
+    /// <param name="ctx">The rendering context.</param>
+    /// <returns>An observable object representing the supplier summary grid.</returns>
+    private static IObservable<object> SupplierSummaryChart(
+        this LayoutAreaHost area,
+        SupplierSummaryToolbar toolbar
+    )
+    {
+        return area.GetDataCube()
+            .SelectMany(cube =>
+                area.Workspace
+                    .Pivot(cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year)))
+                    .SliceRowsBy(nameof(Supplier))
+                    .ToBarChart()
             );
     }
 

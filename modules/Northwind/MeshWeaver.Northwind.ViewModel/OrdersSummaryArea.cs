@@ -29,7 +29,7 @@ public static class OrdersSummaryArea
             .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
             .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
             .WithNavMenu((menu,_, _) =>menu.WithNavLink(nameof(OrderSummary).Wordify(),
-                new LayoutAreaReference(nameof(OrderSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Box)
+                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
         );
 
     /// <summary>
@@ -46,23 +46,10 @@ public static class OrdersSummaryArea
         RenderingContext ctx
     )
     {
-        var years = layoutArea
-            .Workspace
-            .GetObservable<Order>()
-            .DistinctUntilChanged()
-            .Select(x =>
-                x.Select(y => y.OrderDate.Year)
-                    .Distinct()
-                    .OrderByDescending(year => year)
-                    .Select(year => new Option<int>(year, year.ToString()))
-                    .Prepend(new Option<int>(0, "All Time"))
-                    .ToArray()
-            )
-            .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
 
         return Controls.Stack
             .WithClass("order-summary")
-            .WithView(ToolbarArea.Toolbar(years))
+            .WithView((area, _) => area.Toolbar(nameof(Toolbar)))
             .WithView(
                 (area, _) =>
                     area.Workspace.GetStream(typeof(Order), typeof(Customer), typeof(OrderDetails))
@@ -96,8 +83,6 @@ public static class OrdersSummaryArea
                             )
                         )
             );
-
-
     }
 
 }
