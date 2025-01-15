@@ -5,7 +5,7 @@
 /// </summary>
 /// <param name="Data">The data associated with the number field control.</param>
 /// <param name="Type">The type of the number field control.</param>
-public record NumberFieldControl(object Data, string Type)
+public record NumberFieldControl(object Data, object Type)
     : FormComponentBase<NumberFieldControl>(Data), IFormComponent
 {
     /// <summary>

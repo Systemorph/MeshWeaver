@@ -75,25 +75,28 @@ public static class Controls
     /// Creates a new instance of <see cref="SelectControl"/> with the specified item.
     /// </summary>
     /// <param name="item">The item to select.</param>
+    /// <param name="options">Options to select from.</param>
     /// <returns>A new instance of <see cref="SelectControl"/>.</returns>
-    public static SelectControl Select(object item) => new(item);
+    public static SelectControl Select(object item, object options) => new(item, options);
 
     /// <summary>
     /// Creates a new instance of <see cref="ListboxControl"/> with the specified item.
     /// </summary>
     /// <param name="item">The item to list.</param>
+    /// <param name="options">Options to select from.</param>
     /// <returns>A new instance of <see cref="ListboxControl"/>.</returns>
-    public static ListboxControl Listbox(object item) => new(item);
+    public static ListboxControl Listbox(object item, object options) => new(item, options);
 
     /// <summary>
     /// Creates a new instance of <see cref="ComboboxControl"/> with the specified item.
     /// </summary>
     /// <param name="item">The item to combobox.</param>
+    /// <param name="options">Options to select from.</param>
     /// <returns>A new instance of <see cref="ComboboxControl"/>.</returns>
-    public static ComboboxControl Combobox(object item) => new(item);
+    public static ComboboxControl Combobox(object item, object options) => new(item, options);
     public static TextFieldControl Text(object data) => new(data);
 
-    public static NumberFieldControl Number(object data, string type) => new(data, type);
+    public static NumberFieldControl Number(object data, object type) => new(data, type);
 
     public static DateControl Date(object data) => new(data);
 
@@ -179,4 +182,6 @@ public static class Controls
         => new(addressType, addressId, reference);
 
 
+    public static RadioGroupControl RadioGroup(object data, object options)
+        => new(data, options);
 }

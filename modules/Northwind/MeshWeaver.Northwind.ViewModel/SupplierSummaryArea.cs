@@ -11,7 +11,6 @@ using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
 using MeshWeaver.Reporting.Models;
-using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -40,9 +39,10 @@ public static class SupplierSummaryArea
     private record SupplierSummaryToolbar
     {
         internal const string Years = "years";
-        [Dimension<int>(OptionStream = Years)]
-        public int? Year { get; init; }
+        [Dimension<int>(Options = Years)] public int? Year { get; init; }
 
+
+        [UiControl<RadioGroupControl>(Options = new[]{ "Table", "Chart" })]
         public bool Chart { get; init; }
     }
 
@@ -60,8 +60,8 @@ public static class SupplierSummaryArea
         layoutArea.SubscribeToDataStream(SupplierSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new SupplierSummaryToolbar(),
             (toolbar, area, ctx) => toolbar.Chart
-                ? area.SupplierSummaryGrid(toolbar)
-                : area.SupplierSummaryChart(toolbar)
+                ? area.SupplierSummaryChart(toolbar)
+                : area.SupplierSummaryGrid(toolbar)
         );
     }
 
@@ -89,7 +89,7 @@ public static class SupplierSummaryArea
     /// Generates the grid view for the supplier summary.
     /// </summary>
     /// <param name="area">The layout area host.</param>
-    /// <param name="ctx">The rendering context.</param>
+    /// <param name="toolbar">The toolbar for this area.</param>
     /// <returns>An observable object representing the supplier summary grid.</returns>
     private static IObservable<object> SupplierSummaryChart(
         this LayoutAreaHost area,

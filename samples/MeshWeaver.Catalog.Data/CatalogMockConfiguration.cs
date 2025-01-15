@@ -10,16 +10,13 @@ public static class CatalogMockConfiguration
         this MessageHubConfiguration configuration
     ) => configuration.AddData(
         data =>
-            data.FromConfigurableDataSource(
-                "catalog-mock",
-                dataSource =>
-                    dataSource
-                        .WithType<MeshDocument>(type => type
-                            .WithKey(instance => instance.Id)
-                            .WithInitialData(MeshDocuments))
-                        .WithType<MeshNode>(type => type.WithKey(x => x.Id).WithInitialData(MeshNodes))
-                        .WithType<User>(type => type.WithKey(x => x.Id).WithInitialData(Users))
-            )
+            data.AddSource(dataSource =>
+                dataSource
+                    .WithType<MeshDocument>(type => type
+                        .WithKey(instance => instance.Id)
+                        .WithInitialData(MeshDocuments))
+                    .WithType<MeshNode>(type => type.WithKey(x => x.Id).WithInitialData(MeshNodes))
+                    .WithType<User>(type => type.WithKey(x => x.Id).WithInitialData(Users)))
     );
 
     public static IEnumerable<MeshDocument> MeshDocuments =>

@@ -4,7 +4,7 @@
 /// Represents a select control with customizable properties.
 /// </summary>
 /// <param name="Data">The data associated with the select control.</param>
-public record SelectControl(object Data) : ListControlBase<SelectControl>(Data), IListControl
+public record SelectControl(object Data, object Options) : ListControlBase<SelectControl>(Data, Options), IListControl
 {
     /// <summary>
     /// Gets or initializes the position of the select control.

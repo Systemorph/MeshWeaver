@@ -22,8 +22,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     ) =>
         base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    nameof(GenericUnpartitionedDataSource),
+                data.AddSource(
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             );
@@ -36,7 +35,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                 config =>
                     config
                         .AddData(data =>
-                            data.FromHub(
+                            data.AddHubSource(
                                 new HostAddress(),
                                 source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )
@@ -45,13 +44,13 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                             import
                                 .WithFormat(
                                     "Test",
-                                    format => format.WithImportFunction(customImportFunction)
+                                    format => format.WithImportFunction(customImportFunctionAsync)
                                 )
                                 .WithFormat(
                                     "Test2",
                                     format =>
                                         format
-                                            .WithImportFunction(customImportFunction)
+                                            .WithImportFunction(customImportFunctionAsync)
                                             .WithAutoMappings()
                                 )
                         )
@@ -59,7 +58,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
             ;
     }
 
-    private ImportFormat.ImportFunction customImportFunction = null;
+    private ImportFormat.ImportFunctionAsync customImportFunctionAsync = null;
 
     private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
@@ -142,7 +141,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task SingleTableMappingTest()
     {
-        customImportFunction = (_, set, ws, store) =>
+        customImportFunctionAsync = (_, set, ws, store) =>
         {
             var instances = set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()
@@ -182,7 +181,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunction = (_, set, ws,store) =>
+        customImportFunctionAsync = (_, set, ws,store) =>
         {
             var instances = set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()

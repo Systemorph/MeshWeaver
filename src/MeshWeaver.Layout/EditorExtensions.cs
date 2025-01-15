@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using System.Collections;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -186,7 +187,6 @@ public static class EditorExtensions
         where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
-        var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
 
@@ -200,32 +200,45 @@ public static class EditorExtensions
                                   .GetDocumentation(propertyInfo)?.Summary?.Text,
                 Label = label
             };
+
+
+        var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
+        if(uiControlAttribute != null)
+            return editor.WithView(RenderControl(uiControlAttribute.ControlType, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
+
+
+        var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         if (dimensionAttribute != null)
         {
-            return editor.WithView((host, _) => GetStream(host, dimensionAttribute)
-                        .Select(options =>
-                            Controls.Select(jsonPointerReference)
-                                .WithOptions(options)),
-                    skinConfiguration)
-                ;
+            if(dimensionAttribute.Options is not null)
+                return editor.WithView(RenderListControl(Controls.Select, jsonPointerReference, dimensionAttribute.Options));
+            return editor.WithView((host, ctx) =>
+            {
+                var id = Guid.NewGuid().AsString();
+                host.RegisterForDisposal(ctx.Area,
+                    GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
+                return RenderListControl(Controls.Select, jsonPointerReference, id);
+            });
         }
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderNumber(jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_,_)=>RenderText(jsonPointerReference), skinConfiguration);
+            return editor.WithView((_,_)=> RenderControl(typeof(TextFieldControl), jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => RenderDateTime(jsonPointerReference), skinConfiguration);
+            return editor.WithView((_, _) => RenderControl(typeof(DateTimeConverter), jsonPointerReference), skinConfiguration);
+        if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
+            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), jsonPointerReference), skinConfiguration);
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
     }
 
+
     private static IObservable<IReadOnlyCollection<Option>> GetStream(LayoutAreaHost host, DimensionAttribute dimensionAttribute)
     {
-        if (dimensionAttribute.OptionStream == null)
-            return host.Workspace
+        return host.Workspace
             .GetStream(
                 new CollectionReference(
                     host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)))
@@ -233,31 +246,76 @@ public static class EditorExtensions
                 ConvertToOptions(
                     x.Value, 
                     host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)));
-        return host.GetDataStream<IReadOnlyCollection<Option>>(dimensionAttribute.OptionStream);
+    }
+
+
+    private static IReadOnlyCollection<Option> ConvertToOptions(ICollection collection)
+    {
+        var elementType = 
+            collection is Array array 
+                ? array.GetType().GetElementType()
+                : collection.GetType().GetInterfaces().Select(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>) ? i.GenericTypeArguments.First() : null).FirstOrDefault();
+        if (elementType == null)
+        {
+            throw new ArgumentException("Collection does not have a generic type argument.");
+        }
+
+        var optionType = typeof(Option<>).MakeGenericType(elementType);
+        return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString().Wordify())).ToArray();
     }
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
     {
         return new JsonPointerReference($"/{propertyInfo.Name.ToCamelCase()}");
     }
-    private static DateTimeControl RenderDateTime(JsonPointerReference jsonPointerReference)
+
+    private static UiControl RenderControl(Type controlType,
+        JsonPointerReference reference, object parameter = null)
     {
-        return Controls.DateTime(jsonPointerReference);
+        if (BasicControls.TryGetValue(controlType, out var factory))
+            return factory.Invoke(reference, parameter);
+        if (ListControls.TryGetValue(controlType, out factory))
+            return factory.Invoke(reference, parameter);
+
+        throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
+    }
+    private static readonly Dictionary<Type, Func<JsonPointerReference, object, UiControl>>
+        ListControls = new()
+        {
+            {typeof(SelectControl), (reference,options)=> RenderListControl(Controls.Select, reference, options)},
+            {typeof(RadioGroupControl), (reference,options)=> RenderListControl(Controls.RadioGroup, reference, options)},
+            {typeof(ComboboxControl), (reference,options)=> RenderListControl(Controls.Combobox, reference, options)},
+            {typeof(ListboxControl), (reference,options)=> RenderListControl(Controls.Listbox, reference, options)},
+        };
+
+
+    private static TControl RenderListControl<TControl>(Func<object,object,TControl> controlFactory, object data, object options)
+    where TControl: ListControlBase<TControl>
+    {
+        if (options is string id)
+            return controlFactory.Invoke(data,  new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)));
+        if (options is JsonPointerReference)
+            return controlFactory.Invoke(data, options);
+
+        if (options is ICollection collection)
+        {
+            id = Guid.NewGuid().AsString();
+            return controlFactory.Invoke(data, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+                .WithBuildup((_,_,es) => es.UpdateData(id, ConvertToOptions(collection)));
+        }
+
+        throw new ArgumentException(
+            $"No implementation to parse dimension options of type {options.GetType().FullName}.");
     }
 
-    private static TextFieldControl RenderText(JsonPointerReference jsonPointerReference)
+    private static readonly Dictionary<Type, Func<JsonPointerReference, object, UiControl>> 
+        BasicControls = new()
     {
-        // TODO V10: Add validations. (17.09.2024, Roland Bürgi)
-        return Controls.Text(jsonPointerReference);
-    }
-
-    private static NumberFieldControl RenderNumber(
-        JsonPointerReference jsonPointerReference, 
-        string type)
-    {
-        // TODO V10: Add range validation, etc. (17.09.2024, Roland Bürgi)
-        return Controls.Number(jsonPointerReference, type);
-    }
+        {typeof(DateTimeControl), (reference,_) => Controls.DateTime(reference)},
+        {typeof(TextFieldControl), (reference,_)=> Controls.Text(reference)},
+        {typeof(NumberFieldControl), Controls.Number},
+        {typeof(CheckBoxControl), (reference,_) => Controls.CheckBox(reference)},
+    };
 
 
     private static IReadOnlyCollection<Option> ConvertToOptions(InstanceCollection instances, ITypeDefinition dimensionType)

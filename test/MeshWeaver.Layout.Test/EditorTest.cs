@@ -1,13 +1,17 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
@@ -18,23 +22,36 @@ using Xunit.Abstractions;
 namespace MeshWeaver.Layout.Test;
 
 
-public record Calculator
-{
-    [Description("This is the X value")] 
-    public double X { get; init; }
-    [Description("This is the Y value")]
-    public double Y { get; init; }
-
-}
 public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    #region Domain
+    public record Calculator
+    {
+        [Description("This is the X value")]
+        public double X { get; init; }
+        [Description("This is the Y value")]
+        public double Y { get; init; }
+
+    }
+
+    private record ListForms
+    {
+        [Dimension<MyDimension>()]
+        public string Dimension { get; init; }
+    }
+
+    private record MyDimension([property:Key]int Code, string DisplayName): INamed;
+    #endregion
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration).AddLayout(layout => layout
             .WithView(nameof(EditorWithoutResult), EditorWithoutResult)
             .WithView(nameof(EditorWithResult), EditorWithResult)
             .WithView(nameof(EditorWithDelayedResult), EditorWithDelayedResult)
-        );
+            .WithView(nameof(EditorWithListFormProperties), EditorWithListFormProperties)
+        ).AddData(data => data
+            .AddSource(source => 
+                source.WithType<MyDimension>(type => type.WithInitialData(Dimensions))));
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -52,6 +69,9 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             Thread.Sleep(100);
             return Controls.Markdown($"{c.X + c.Y} @ {DateTime.UtcNow.Second}:{DateTime.UtcNow.Millisecond}");
         });
+    private UiControl EditorWithListFormProperties
+    (LayoutAreaHost host, RenderingContext ctx) =>
+        host.Hub.Edit(new ListForms());
 
 
     [Fact]
@@ -187,4 +207,71 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         controls.Should().HaveCountLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Data.ToString().Should().StartWith("5");
     }
+
+    [Fact]
+    public async Task TestEditorWithListFormProperties()
+    {
+        var client = GetClient();
+
+        var workspace = client.GetWorkspace();
+        var stream = workspace
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new HostAddress(),
+            new LayoutAreaReference(nameof(EditorWithListFormProperties)));
+        var control = await stream
+            .GetControlStream(nameof(EditorWithListFormProperties))
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
+
+        var editor = control.Should().BeOfType<EditorControl>().Subject;
+
+        var controls = await editor.Areas.ToAsyncEnumerable()
+            .SelectAwait(async a =>
+                await stream.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null))
+            .ToArrayAsync();
+
+        controls.Should().HaveCount(ListPropertyBenchmarks.Length);
+        foreach (var (c, b) in controls.Zip(ListPropertyBenchmarks))
+            await ValidateListBenchmark(stream, (dynamic)c, (dynamic)b); 
+
+
+    }
+
+    private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
+    where TControl:ListControlBase<TControl>
+    {
+        control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
+            
+        var options = control.Options as IReadOnlyCollection<Option>;
+
+
+        if (control.Options is JsonPointerReference pointer)
+        {
+            if (benchmark.OptionPointer != null)
+                pointer.Pointer.Should().Be(benchmark.OptionPointer);
+            else
+                pointer.Pointer.Should().StartWith("/data/");
+            options = await stream.Reduce(pointer)
+                .Where(x => x.Value is not null)
+                .Select(p =>
+                    JsonNode.Parse(p.Value.ToString())
+                        .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
+                .Where(x => x is not null)
+                .Timeout(10.Seconds())
+                .FirstAsync();
+        }
+
+        options.Should().NotBeNull();
+        options.Should().BeEquivalentTo(benchmark.Options);
+
+    }
+    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
+
+    private static readonly object[] ListPropertyBenchmarks = 
+        [
+            new ListPropertyBenchmark<SelectControl>("/dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray())
+        ];
+
+    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
+
 }

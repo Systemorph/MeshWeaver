@@ -171,6 +171,7 @@ public record GenericUnpartitionedDataSource<TDataSource>(object Id, IWorkspace 
     : TypeSourceBasedUnpartitionedDataSource<TDataSource, ITypeSource>(Id, Workspace)
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
+
     public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
         WithType<T>(x => (TypeSourceWithType<T>)(config ??(y => y))(x));
 

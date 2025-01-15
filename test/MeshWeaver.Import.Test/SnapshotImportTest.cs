@@ -20,8 +20,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
     ) =>
         base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    nameof(GenericUnpartitionedDataSource),
+                data.AddSource(
                     source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                 )
             );
@@ -34,7 +33,7 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                 config =>
                     config
                         .AddData(data =>
-                            data.FromHub(
+                            data.AddHubSource(
                                 new HostAddress(),
                                 source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )

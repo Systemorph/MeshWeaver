@@ -15,13 +15,18 @@ public record ImportFormat(
 {
     public const string Default = nameof(Default);
 
-    private ImmutableList<ImportFunction> ImportFunctions { get; init; } =
-        ImmutableList<ImportFunction>.Empty;
+    private ImmutableList<ImportFunctionAsync> ImportFunctions { get; init; } =
+        ImmutableList<ImportFunctionAsync>.Empty;
 
+    public ImportFormat WithImportFunction(ImportFunctionAsync importFunctionAsync) =>
+        this with
+        {
+            ImportFunctions = ImportFunctions.Add(importFunctionAsync)
+        };
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with
         {
-            ImportFunctions = ImportFunctions.Add(importFunction)
+            ImportFunctions = ImportFunctions.Add((req,ds,ws,esu)=>Task.FromResult(importFunction.Invoke(req,ds,ws,esu)))
         };
 
 
@@ -68,7 +73,13 @@ public record ImportFormat(
 
     }
 
-    public delegate Task<EntityStore> ImportFunction(
+    public delegate Task<EntityStore> ImportFunctionAsync(
+        ImportRequest importRequest,
+        IDataSet dataSet,
+        IWorkspace workspace,
+        EntityStore storeAndUpdates
+    );
+    public delegate EntityStore ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
         IWorkspace workspace,

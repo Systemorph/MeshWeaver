@@ -140,6 +140,9 @@ public record LayoutAreaHost : IDisposable
         );
     }
 
+    public void UpdateData(string id, object data)
+        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
+
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
@@ -158,6 +161,11 @@ public record LayoutAreaHost : IDisposable
         where T : class
     {
         var reference = new EntityReference(collection, id);
+        return GetStream<T>(reference);
+    }
+
+    private IObservable<T> GetStream<T>(EntityReference reference) where T : class
+    {
         return Stream
             .Select(ci => Convert<T>(ci, reference))
             .Where(x => x != null)
