@@ -67,11 +67,14 @@ public abstract record ListControlBase<TControl>(object Data, object Options)
 public abstract record Option(string Text)
 {
     public abstract object GetItem();
+    public abstract Type GetItemType();
 }
 
 public record Option<TItem>(TItem Item, string Text) : Option(Text)
 {
     public override object GetItem() => Item;
+    public override Type GetItemType()
+        => typeof(TItem);
 }
 
 public enum SelectPosition

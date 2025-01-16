@@ -16,7 +16,7 @@ using MeshWeaver.Mesh;
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
 
-public static class BlazorClientRegistry
+public static class BlazorViewRegistry
 {
 
     internal static MessageHubConfiguration AddBlazor(
@@ -61,7 +61,7 @@ public static class BlazorClientRegistry
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
-            SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
+            SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),

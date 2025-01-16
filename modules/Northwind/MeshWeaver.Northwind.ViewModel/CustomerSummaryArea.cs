@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
+﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -38,15 +37,9 @@ public static class CustomerSummaryArea
     /// <returns>A layout stack control representing the customer summary.</returns>
     /// <remarks>This method constructs a stack control that includes a pane header titled "Customer Summary". Additional views can be added to the stack to complete the summary display.
     /// </remarks>
-    public static StackControl CustomerSummary(
+    public static object CustomerSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     ) =>
-        Controls.Stack
-            .WithView(Controls.PaneHeader("Customer Summary"))
-            .WithView(
-                (a, _) =>
-                    a.GetDataStream<Toolbar>(nameof(Toolbar))
-                        .Select(tb => $"Year selected: {tb.Year}")
-            );
+        Controls.Markdown("TODO");
 }
