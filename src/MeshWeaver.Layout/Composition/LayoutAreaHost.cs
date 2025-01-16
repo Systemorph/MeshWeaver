@@ -118,7 +118,7 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.UpdateAsync(store =>
         {
-            var changes = RemoveViews(store, context.Area);
+            var changes = DisposeExistingAreas(store, context);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(

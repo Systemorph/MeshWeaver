@@ -171,7 +171,7 @@ public static class LayoutExtensions
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))
         .Select(x => (T)x.Value)
-        .Distinct()
+        .DistinctUntilChanged()
     ;
 
 
