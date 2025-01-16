@@ -49,7 +49,7 @@ public static class OrdersSummaryArea
 
         return Controls.Stack
             .WithClass("order-summary")
-            .WithView((area, _) => area.Toolbar(nameof(Toolbar)))
+            .WithView(layoutArea.Toolbar())
             .WithView(
                 (area, _) =>
                     area.Workspace.GetStream(typeof(Order), typeof(Customer), typeof(OrderDetails))

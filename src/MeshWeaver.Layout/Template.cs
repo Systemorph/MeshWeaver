@@ -29,7 +29,7 @@ public static class Template
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("/", out var _);
+        var view = dataTemplate.Build("", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
@@ -79,6 +79,8 @@ public static class Template
         where TView : UiControl
     {
         object current = null;
+        if (id is null)
+            throw new ArgumentNullException(nameof(id));
         return (TView)GetTemplateControl(id, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
@@ -151,8 +153,8 @@ public static class Template
     private static TView GetTemplateControl<T, TView>(string id, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl
     {
-        var topLevel = LayoutAreaReference.GetDataPointer(id);
-        var view = dataTemplate.Build(topLevel, out var _);
+        var dataContext = LayoutAreaReference.GetDataPointer(id);
+        var view = dataTemplate.Build(dataContext, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         return view;
@@ -184,7 +186,7 @@ public static class Template
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("/", out var _);
+        var view = dataTemplate.Build("", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 

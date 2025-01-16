@@ -11,7 +11,7 @@ public record ListboxControl(object Data, object Options) : ListControlBase<List
 /// <summary>
 /// Represents a list control interface with options.
 /// </summary>
-public interface IListControl : IFormComponent
+public interface IListControl : IFormControl
 {
     /// <summary>
     /// Gets or initializes the options for the list control.
@@ -42,6 +42,9 @@ public abstract record ListControlBase<TControl>(object Data, object Options)
     /// <returns></returns>
     public TControl WithLabel(object label)
         => This with { Label = label };
+
+    IFormControl IFormControl.WithLabel(object label)
+    => WithLabel(label);
 
     /// <summary>
     /// Sets the options for the list control.

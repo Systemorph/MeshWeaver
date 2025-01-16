@@ -34,7 +34,8 @@ namespace MeshWeaver.Northwind.ViewModel
                         years.Select(y =>
                             Template.Bind(
                                 new Toolbar(y.Max(x => (int)x.GetItem())),
-                                tb => Controls.Select(tb.Year,y), nameof(ViewModel.Toolbar))
+                                tb => Controls.Select(tb.Year,y), 
+                                nameof(ViewModel.Toolbar))
                         )
                 );
         }

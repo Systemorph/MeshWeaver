@@ -21,7 +21,7 @@ public partial class DataGridView
         ItemsPerPage = 10
     };
 
-    private IQueryable<JsonObject> QueryableData { get; set; }
+    private IQueryable<JsonObject> QueryableData;
 
     protected override void BindData()
     {
@@ -48,14 +48,14 @@ public partial class DataGridView
         var index = 0;
         builder.AddComponentParameter(++index, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
-        builder.AddAttribute(++index, "Title", Stream.GetDataBoundValue<string>(column.Title));
+        builder.AddAttribute(++index, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext));
         if (column.Format is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format));
+            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
         if (column.Sortable is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable));
+            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
         if (column.Tooltip is not null)
             builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText),
-                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip)));
+                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext)));
 
         builder.CloseComponent();
 
@@ -67,8 +67,6 @@ public partial class DataGridView
     }
 
     private const string Details = nameof(Details);
-    private const string Edit = nameof(Edit);
-    private const string Delete = nameof(Delete);
     private void NavigateToUrl(JsonObject obj, string area)
     {
         var reference = new LayoutAreaReference(area) { Id = $"{obj[EntitySerializationExtensions.TypeProperty]}/{obj[EntitySerializationExtensions.IdProperty]}" };

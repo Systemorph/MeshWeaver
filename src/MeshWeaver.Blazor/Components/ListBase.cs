@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using System.Collections;
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -18,7 +19,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             ViewModel.Options,
             x => x.Options,
             o =>
-                ((IEnumerable<Layout.Option>)o).Select(option =>
+                (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
                     new Option(option.GetItem(), option.Text, MapToString(option.GetItem())))
                 .ToArray()
         );
@@ -28,7 +29,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         value =>
         {
             var mapToString = MapToString(value);
-            return Options.FirstOrDefault(x =>
+            return Options?.FirstOrDefault(x =>
                 x.ItemString == mapToString);
         };
 

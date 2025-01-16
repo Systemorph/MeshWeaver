@@ -6,7 +6,7 @@
 /// <param name="Data">The data associated with the number field control.</param>
 /// <param name="Type">The type of the number field control.</param>
 public record NumberFieldControl(object Data, object Type)
-    : FormComponentBase<NumberFieldControl>(Data), IFormComponent
+    : FormControlBase<NumberFieldControl>(Data), IFormControl
 {
     /// <summary>
     /// Gets or initializes the state to hide the step value for the number field control.

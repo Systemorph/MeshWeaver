@@ -39,11 +39,14 @@ public static class SupplierSummaryArea
     private record SupplierSummaryToolbar
     {
         internal const string Years = "years";
-        [Dimension<int>(Options = Years)] public int? Year { get; init; }
+        [Dimension<int>(Options = Years)] public int Year { get; init; }
 
 
-        [UiControl<RadioGroupControl>(Options = new[]{ "Table", "Chart" })]
-        public bool Chart { get; init; }
+        public const string Table = nameof(Table);
+        public const string Chart = nameof(Chart);
+
+        [UiControl<RadioGroupControl>(Options = new[] { "Table", "Chart" })]
+        public string Display { get; init; } = Table;
     }
 
     /// <summary>
@@ -59,10 +62,13 @@ public static class SupplierSummaryArea
     {
         layoutArea.SubscribeToDataStream(SupplierSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new SupplierSummaryToolbar(),
-            (toolbar, area, ctx) => toolbar.Chart
-                ? area.SupplierSummaryChart(toolbar)
-                : area.SupplierSummaryGrid(toolbar)
-        );
+            (toolbar, area, _) => toolbar.Display
+                    switch
+                    {
+                        SupplierSummaryToolbar.Chart => area.SupplierSummaryChart(toolbar),
+                        _ => area.SupplierSummaryGrid(toolbar)
+                    }
+            );
     }
 
 
@@ -80,7 +86,11 @@ public static class SupplierSummaryArea
         return area.GetDataCube()
             .SelectMany(cube =>
                 area.Workspace
-                    .Pivot(cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year)))
+                    .Pivot(
+                        toolbar.Year == 0 
+                        ? cube 
+                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
+                        )
                     .SliceRowsBy(nameof(Supplier))
                     .ToGrid()
             );

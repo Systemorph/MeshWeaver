@@ -24,35 +24,6 @@ namespace MeshWeaver.Layout.Test;
 
 public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    #region Domain
-    public record Calculator
-    {
-        [Description("This is the X value")]
-        public double X { get; init; }
-        [Description("This is the Y value")]
-        public double Y { get; init; }
-
-    }
-
-    private record ListForms
-    {
-        [Dimension<MyDimension>()]
-        public string Dimension { get; init; }
-    }
-
-    private record MyDimension([property:Key]int Code, string DisplayName): INamed;
-    #endregion
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureHost(configuration).AddLayout(layout => layout
-            .WithView(nameof(EditorWithoutResult), EditorWithoutResult)
-            .WithView(nameof(EditorWithResult), EditorWithResult)
-            .WithView(nameof(EditorWithDelayedResult), EditorWithDelayedResult)
-            .WithView(nameof(EditorWithListFormProperties), EditorWithListFormProperties)
-        ).AddData(data => data
-            .AddSource(source => 
-                source.WithType<MyDimension>(type => type.WithInitialData(Dimensions))));
-    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
@@ -60,7 +31,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit<Calculator>(new Calculator());
+        host.Hub.Edit(new Calculator());
     private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new Calculator(), c => Controls.Markdown($"{c.X + c.Y}"));
     private UiControl EditorWithDelayedResult(LayoutAreaHost host, RenderingContext ctx) =>
@@ -237,11 +208,56 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
     }
 
+
+    #region Domain
+    public record Calculator
+    {
+        [Description("This is the X value")]
+        public double X { get; init; }
+        [Description("This is the Y value")]
+        public double Y { get; init; }
+
+    }
+
+
+    private record MyDimension([property: Key] int Code, string DisplayName) : INamed;
+    #endregion
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration).AddLayout(layout => layout
+            .WithView(nameof(EditorWithoutResult), EditorWithoutResult)
+            .WithView(nameof(EditorWithResult), EditorWithResult)
+            .WithView(nameof(EditorWithDelayedResult), EditorWithDelayedResult)
+            .WithView(nameof(EditorWithListFormProperties), EditorWithListFormProperties)
+        ).AddData(data => data
+            .AddSource(source =>
+                source.WithType<MyDimension>(type => type.WithInitialData(Dimensions))));
+    }
+
+    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
+
+    private static readonly object[] ListPropertyBenchmarks = 
+        [
+            new ListPropertyBenchmark<SelectControl>("dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray()),
+            new ListPropertyBenchmark<SelectControl>("dimensionWithStream", null, LayoutAreaReference.GetDataPointer("stream")),
+            new ListPropertyBenchmark<RadioGroupControl>("display", [new Option<string>("chart", "chart"), new Option<string>("table", "table")])
+        ];
+    private record ListForms
+    {
+        [Dimension<MyDimension>()]
+        public string Dimension { get; init; }
+        [Dimension<MyDimension>(Options = "stream")]
+        public string DimensionWithStream { get; init; }
+        [UiControl<RadioGroupControl>(Options = new[]{ "chart", "table" })]
+        public string Display { get; init; }
+    }
+
+    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
     private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
-    where TControl:ListControlBase<TControl>
+        where TControl : ListControlBase<TControl>
     {
         control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
-            
+
         var options = control.Options as IReadOnlyCollection<Option>;
 
 
@@ -251,27 +267,21 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 pointer.Pointer.Should().Be(benchmark.OptionPointer);
             else
                 pointer.Pointer.Should().StartWith("/data/");
-            options = await stream.Reduce(pointer)
-                .Where(x => x.Value is not null)
-                .Select(p =>
-                    JsonNode.Parse(p.Value.ToString())
-                        .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
-                .Where(x => x is not null)
-                .Timeout(10.Seconds())
-                .FirstAsync();
+            if(benchmark.Options is not null)
+                options = await stream.Reduce(pointer)
+                    .Where(x => x.Value is not null)
+                    .Select(p =>
+                        JsonNode.Parse(p.Value.ToString())
+                            .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
+                    .Where(x => x is not null)
+                    .Timeout(10.Seconds())
+                    .FirstAsync();
         }
 
-        options.Should().NotBeNull();
-        options.Should().BeEquivalentTo(benchmark.Options);
-
+        if (benchmark.Options is null)
+            options.Should().BeNull();
+        else 
+            options.Should().BeEquivalentTo(benchmark.Options);
     }
-    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
-
-    private static readonly object[] ListPropertyBenchmarks = 
-        [
-            new ListPropertyBenchmark<SelectControl>("/dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray())
-        ];
-
-    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
 
 }

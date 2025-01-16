@@ -60,12 +60,12 @@ public static class EditorExtensions
     public static EditorControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable
-        , string id = null)
+        , string id)
         => observable.Bind(_ =>
                 typeof(T).GetProperties()
                     .Aggregate(new EditorControl(),
                         serviceProvider.MapToControl<EditorControl, EditorSkin>),
-            id ?? Guid.NewGuid().AsString());
+            id);
 
 
 
@@ -135,7 +135,7 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host, 
         T instance,
-        string id = null)
+        string id)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), id);
 
     public static UiControl Toolbar<T>(
@@ -143,14 +143,14 @@ public static class EditorExtensions
         IObservable<T> observable,
         string id = null)
         => host.Hub.ServiceProvider.Toolbar(observable, id);
-    public static UiControl Toolbar<T>(
+    public static ToolbarControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable, 
-        string id = null)
+        string id)
         => observable.Bind(_ =>
                 typeof(T).GetProperties()
-                    .Aggregate(new EditorControl(),
-                        serviceProvider.MapToControl<EditorControl, EditorSkin>),
+                    .Aggregate(new ToolbarControl(),
+                        serviceProvider.MapToControl),
             id);
 
 
@@ -180,6 +180,52 @@ public static class EditorExtensions
 
     #endregion
 
+    public static T MapToControl<T>(
+        this IServiceProvider serviceProvider,
+        T editor,
+        PropertyInfo propertyInfo)
+    where T: ContainerControl<T>
+    {
+        var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+
+        var jsonPointerReference = GetJsonPointerReference(propertyInfo);
+
+
+
+        var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
+        if (uiControlAttribute != null)
+            return editor.WithView(RenderControl(uiControlAttribute.ControlType, label, jsonPointerReference, uiControlAttribute.Options));
+
+
+        var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
+        if (dimensionAttribute != null)
+        {
+            if (dimensionAttribute.Options is not null)
+                return editor.WithView(RenderListControl(Controls.Select, jsonPointerReference, dimensionAttribute.Options));
+            return editor.WithView((host, ctx) =>
+            {
+                var id = Guid.NewGuid().AsString();
+                host.RegisterForDisposal(ctx.Area,
+                    GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
+                return RenderListControl(Controls.Select, jsonPointerReference, id);
+            });
+        }
+
+
+        if (propertyInfo.PropertyType.IsNumber())
+            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
+        if (propertyInfo.PropertyType == typeof(string))
+            return editor.WithView((_, _) => RenderControl(typeof(TextFieldControl), label, jsonPointerReference));
+        if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
+            return editor.WithView((_, _) => (typeof(DateTimeControl), label, jsonPointerReference));
+        if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
+            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), label, jsonPointerReference));
+
+        // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
+        return editor;
+
+    }
+
     public static T MapToControl<T, TSkin>(
         this IServiceProvider serviceProvider,
         T editor, 
@@ -187,7 +233,6 @@ public static class EditorExtensions
         where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
-        var jsonPointerReference = GetJsonPointerReference(propertyInfo);
         var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
@@ -200,11 +245,13 @@ public static class EditorExtensions
                                   .GetDocumentation(propertyInfo)?.Summary?.Text,
                 Label = label
             };
+        var jsonPointerReference = GetJsonPointerReference(propertyInfo);
+
 
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         if(uiControlAttribute != null)
-            return editor.WithView(RenderControl(uiControlAttribute.ControlType, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
+            return editor.WithView(RenderControl(uiControlAttribute.ControlType, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
@@ -223,13 +270,13 @@ public static class EditorExtensions
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl),label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_,_)=> RenderControl(typeof(TextFieldControl), jsonPointerReference), skinConfiguration);
+            return editor.WithView((_,_) => RenderControl(typeof(TextFieldControl),label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => RenderControl(typeof(DateTimeConverter), jsonPointerReference), skinConfiguration);
+            return editor.WithView((_, _) => (typeof(DateTimeControl), label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), jsonPointerReference), skinConfiguration);
+            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl),label, jsonPointerReference), skinConfiguration);
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
@@ -266,16 +313,17 @@ public static class EditorExtensions
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
     {
-        return new JsonPointerReference($"/{propertyInfo.Name.ToCamelCase()}");
+        return new JsonPointerReference($"{propertyInfo.Name.ToCamelCase()}");
     }
 
-    private static UiControl RenderControl(Type controlType,
+
+    private static IUiControl RenderControl(Type controlType, string label,
         JsonPointerReference reference, object parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return factory.Invoke(reference, parameter);
+            return ((IFormControl)factory.Invoke(reference, parameter)).WithLabel(label);
         if (ListControls.TryGetValue(controlType, out factory))
-            return factory.Invoke(reference, parameter);
+            return ((IListControl)factory.Invoke(reference, parameter)).WithLabel(label);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }

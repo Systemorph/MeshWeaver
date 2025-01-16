@@ -180,16 +180,21 @@ public static class LayoutExtensions
         string id,
         object value,
         string changedBy
-    ) => stream.UpdateAsync(s =>
-        stream.ApplyChanges(
-            s.MergeWithUpdates(
-                s.Update(LayoutAreaReference.Data,
-                    c => c.SetItem(id, value)
-                ),
-                changedBy
+    )
+    {
+        if (id is null)
+            throw new ArgumentNullException(nameof(id));
+        stream.UpdateAsync(s =>
+            stream.ApplyChanges(
+                s.MergeWithUpdates(
+                    s.Update(LayoutAreaReference.Data,
+                        c => c.SetItem(id, value)
+                    ),
+                    changedBy
+                )
             )
-        )
-    );
+        );
+    }
 
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
         where TControl : UiControl =>

@@ -1,21 +1,22 @@
 @inherits ListBase<RadioGroupControl, RadioGroupView>
 
-<FluentRadioGroup Name="@name" @bind-Value=Value Label="@label">
-    @foreach (var option in Options)
+<FluentRadioGroup Name="@Name" @bind-Value=Value Label="@Label">
+    @if (Options is not null)
     {
-        <FluentRadio Value="@option.Item">@option.Text</FluentRadio>
+        @foreach (var option in Options)
+        {
+            <FluentRadio Value="@option.Item">@option.Text</FluentRadio>
+        }
     }
 </FluentRadioGroup>
 
 @code
 {
-    private string name;
-    private string label;
+    private string Name;
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Name, x => x.name);
-        DataBind(ViewModel.Label, x => x.label);
+        DataBind(ViewModel.Name, x => x.Name);
     }
 
 }

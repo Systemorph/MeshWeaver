@@ -12,7 +12,7 @@ namespace MeshWeaver.Layout;
     /// </remarks>
     /// <param name="Data">The data associated with the combobox control.</param>
     /// <param name="Options">The options to choose from.</param>
-public record ComboboxControl(object Data, object Options) : ListControlBase<ComboboxControl>(Data, Options), IListControl
+public record ComboboxControl(object Data, object Options) : ListControlBase<ComboboxControl>(Data, Options)
 {
     /// <summary>
         /// Gets or initializes the autofocus state of the combobox.

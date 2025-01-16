@@ -114,11 +114,15 @@ public static class StandardWorkspaceReferenceImplementations
                 {
                     case OperationType.Add:
                         var addedCollection = stream.DeserializeCollection(updatedJson, change.Path);
+                        if (addedCollection is null || !addedCollection.Instances.Any())
+                            throw new ArgumentException("An invalid patch was supplied.");
                         updates.AddRange(addedCollection.Instances.Select(x => new EntityUpdate(collection, x.Key, x.Value)));
                         currentStore.WithCollection(collection, addedCollection);
                         break;
                     case OperationType.Remove:
                         var elements = currentStore.GetCollection(collection);
+                        if (elements is null || !elements.Instances.Any())
+                            throw new ArgumentException("An invalid patch was supplied.");
                         updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, null) { OldValue = x.Value }));
                         currentStore = currentStore.Remove(collection);
                         break;
