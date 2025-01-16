@@ -1,6 +1,8 @@
-@inherits ListBase<RadioGroupControl, RadioGroupView>
+@inherits FormComponentBase<RadioGroupControl, RadioGroupView<TValue>, TValue>
+@using System.Collections
 
-<FluentRadioGroup Name="@Name" @bind-Value=Value Label="@Label">
+@typeparam TValue
+<FluentRadioGroup Name="@Name" @bind-Value="@Value" Label="@Label" >
     @if (Options is not null)
     {
         @foreach (var option in Options)
@@ -11,12 +13,23 @@
 </FluentRadioGroup>
 
 @code
-{
+{    
+   protected IReadOnlyCollection<Option> Options { get; set; } = [];
+
+
     private string Name;
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Name, x => x.Name);
+        DataBind(
+            ViewModel.Options,
+            x => x.Options,
+            o =>
+                (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
+                    new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
+                .ToArray()
+        );
     }
 
 }

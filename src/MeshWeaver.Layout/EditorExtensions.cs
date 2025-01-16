@@ -194,7 +194,7 @@ public static class EditorExtensions
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         if (uiControlAttribute != null)
-            return editor.WithView(RenderControl(uiControlAttribute.ControlType, label, jsonPointerReference, uiControlAttribute.Options));
+            return editor.WithView(RenderControl(uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options));
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
@@ -207,19 +207,19 @@ public static class EditorExtensions
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
-                return RenderListControl(Controls.Select, jsonPointerReference, id);
+                return RenderListControl(Controls.Select,  jsonPointerReference, id);
             });
         }
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
+            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_, _) => RenderControl(typeof(TextFieldControl), label, jsonPointerReference));
+            return editor.WithView((_, _) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => (typeof(DateTimeControl), label, jsonPointerReference));
+            return editor.WithView((_, _) => (typeof(DateTimeControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), label, jsonPointerReference));
+            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference));
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
@@ -251,7 +251,7 @@ public static class EditorExtensions
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         if(uiControlAttribute != null)
-            return editor.WithView(RenderControl(uiControlAttribute.ControlType, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
+            return editor.WithView(RenderControl(uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
@@ -270,13 +270,13 @@ public static class EditorExtensions
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl),label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_,_) => RenderControl(typeof(TextFieldControl),label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((_,_) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
             return editor.WithView((_, _) => (typeof(DateTimeControl), label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl),label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
@@ -317,27 +317,33 @@ public static class EditorExtensions
     }
 
 
-    private static IUiControl RenderControl(Type controlType, string label,
-        JsonPointerReference reference, object parameter = null)
+    private static IUiControl RenderControl(Type controlType,
+        PropertyInfo propertyInfo,
+        string label,
+        JsonPointerReference reference,
+        object parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
             return ((IFormControl)factory.Invoke(reference, parameter)).WithLabel(label);
-        if (ListControls.TryGetValue(controlType, out factory))
-            return ((IListControl)factory.Invoke(reference, parameter)).WithLabel(label);
+        if (ListControls.TryGetValue(controlType, out var factory2))
+            return ((IListControl)factory2.Invoke(propertyInfo, reference, parameter)).WithLabel(label);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }
-    private static readonly Dictionary<Type, Func<JsonPointerReference, object, UiControl>>
+    private static readonly Dictionary<Type, Func<PropertyInfo, JsonPointerReference, object, UiControl>>
         ListControls = new()
         {
-            {typeof(SelectControl), (reference,options)=> RenderListControl(Controls.Select, reference, options)},
-            {typeof(RadioGroupControl), (reference,options)=> RenderListControl(Controls.RadioGroup, reference, options)},
-            {typeof(ComboboxControl), (reference,options)=> RenderListControl(Controls.Combobox, reference, options)},
-            {typeof(ListboxControl), (reference,options)=> RenderListControl(Controls.Listbox, reference, options)},
+            {typeof(SelectControl), (_, reference,options)=> RenderListControl(Controls.Select,  reference, options)},
+            {typeof(RadioGroupControl), (propertyInfo, reference,options)=> RenderListControl((d,o)=>Controls.RadioGroup(d,o, propertyInfo.PropertyType.Name), reference, options)},
+            {typeof(ComboboxControl), (_, reference,options)=> RenderListControl(Controls.Combobox, reference, options)},
+            {typeof(ListboxControl), (_, reference,options)=> RenderListControl(Controls.Listbox, reference, options)},
         };
 
 
-    private static TControl RenderListControl<TControl>(Func<object,object,TControl> controlFactory, object data, object options)
+    private static TControl RenderListControl<TControl>(
+        Func<object, object, TControl> controlFactory,
+       object data, 
+        object options)
     where TControl: ListControlBase<TControl>
     {
         if (options is string id)

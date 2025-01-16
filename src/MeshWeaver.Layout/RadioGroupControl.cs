@@ -6,15 +6,21 @@
 /// </summary>
 public record RadioGroupControl : ListControlBase<RadioGroupControl>
 {
+
     /// <summary>
     /// Represents a Group of radio buttons.
     /// For more information, see <see href="https://www.fluentui-blazor.net/RadioGroup"/>.
     /// </summary>
-    public RadioGroupControl(object Data, object Options) : base(Data, Options)
+    public RadioGroupControl(object Data, object Options, object Type) : base(Data, Options)
     {
+        this.Type = Type;
         this.Options = Options;
     }
 
+    /// <summary>
+    /// Type of the property of the radio control group.
+    /// </summary>
+    public object Type { get; init; }
 
     /// <summary>
     /// Gets or initializes the name of the radio group.
@@ -30,7 +36,7 @@ public record RadioGroupControl : ListControlBase<RadioGroupControl>
     /// <summary>
     /// Gets or sets the orientation of the toolbar.
     /// </summary>
-    public object Orientation { get; set; } = Layout.Orientation.Horizontal;
+    public object Orientation { get; init; } = Layout.Orientation.Horizontal;
 
     /// <summary>
     /// Sets the orientation of the toolbar.

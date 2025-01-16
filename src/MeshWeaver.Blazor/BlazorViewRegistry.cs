@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Mesh;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
@@ -57,7 +58,7 @@ public static class BlazorViewRegistry
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
-            RadioGroupControl radioGroup => StandardView<RadioGroupControl, RadioGroupView>(radioGroup, stream, area),
+            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),

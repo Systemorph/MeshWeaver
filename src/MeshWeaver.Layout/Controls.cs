@@ -182,6 +182,6 @@ public static class Controls
         => new(addressType, addressId, reference);
 
 
-    public static RadioGroupControl RadioGroup(object data, object options)
-        => new(data, options);
+    public static RadioGroupControl RadioGroup(object data, object options, object type)
+        => new(data, options, type);
 }
