@@ -46,7 +46,7 @@ public static class SupplierSummaryArea
         public const string Chart = nameof(Chart);
 
         [UiControl<RadioGroupControl>(Options = new[] { "Table", "Chart" })]
-        public string Display { get; init; } = Table;
+        public string Display { get; init; } = Chart;
     }
 
     /// <summary>
@@ -81,20 +81,10 @@ public static class SupplierSummaryArea
     private static IObservable<object> SupplierSummaryGrid(
         this LayoutAreaHost area,
         SupplierSummaryToolbar toolbar
-    )
-    {
-        return area.GetDataCube()
-            .SelectMany(cube =>
-                area.Workspace
-                    .Pivot(
-                        toolbar.Year == 0 
-                        ? cube 
-                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
-                        )
-                    .SliceRowsBy(nameof(Supplier))
-                    .ToGrid()
-            );
-    }
+    ) =>
+        area.GetPivotBuilder(toolbar)
+            .SelectMany(builder => builder.ToGrid());
+
     /// <summary>
     /// Generates the grid view for the supplier summary.
     /// </summary>
@@ -104,21 +94,29 @@ public static class SupplierSummaryArea
     private static IObservable<object> SupplierSummaryChart(
         this LayoutAreaHost area,
         SupplierSummaryToolbar toolbar
-    )
+    ) => 
+        area.GetPivotBuilder(toolbar)
+            .SelectMany(builder => builder.ToBarChart());
+
+    private static IObservable<DataCubePivotBuilder<IDataCube<NorthwindDataCube>, NorthwindDataCube, NorthwindDataCube, NorthwindDataCube>> 
+        GetPivotBuilder(this LayoutAreaHost host, SupplierSummaryToolbar toolbar)
     {
-        return area.GetDataCube()
-            .SelectMany(cube =>
-                area.Workspace
-                    .Pivot(cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year)))
-                    .SliceRowsBy(nameof(Supplier))
-                    .ToBarChart()
-            );
+        return host.GetDataCube()
+            .Select(cube => 
+                host.Workspace.Pivot(
+                toolbar.Year == 0
+                    ? cube
+                    : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
+            )
+            .SliceRowsBy(nameof(NorthwindDataCube.Supplier))
+            .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth)));
     }
 
+
     private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
-        this LayoutAreaHost area
-    ) => area.GetOrAddVariable("dataCube",
-        () => area
+        this LayoutAreaHost host
+    ) => host.GetOrAddVariable("dataCube",
+        () => host
             .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>

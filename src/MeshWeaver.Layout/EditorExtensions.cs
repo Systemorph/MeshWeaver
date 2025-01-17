@@ -311,10 +311,8 @@ public static class EditorExtensions
         return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString().Wordify())).ToArray();
     }
 
-    private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo)
-    {
-        return new JsonPointerReference($"{propertyInfo.Name.ToCamelCase()}");
-    }
+    private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) => 
+        new(propertyInfo.Name.ToCamelCase());
 
 
     private static IUiControl RenderControl(Type controlType,
