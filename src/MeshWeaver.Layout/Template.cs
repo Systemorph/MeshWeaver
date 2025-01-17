@@ -79,8 +79,7 @@ public static class Template
         where TView : UiControl
     {
         object current = null;
-        if (id is null)
-            throw new ArgumentNullException(nameof(id));
+        id ??= Guid.NewGuid().AsString();
         return (TView)GetTemplateControl(id, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
