@@ -1,11 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-	<ItemGroup>
-		<PackageReference Include="Microsoft.DotNet.Interactive" />
-		<PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
-	</ItemGroup>
-
-	<ItemGroup>
+    <ItemGroup>
 		<Folder Include="Models\Options\Plugins\" />
 	</ItemGroup>
 
@@ -13,5 +8,8 @@
 	  <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
 	  <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
 	</ItemGroup>
+    <ItemGroup>
+        <None Include="extension.dib" Pack="true" PackagePath="interactive-extensions/dotnet" />
+    </ItemGroup>
 
 </Project>
