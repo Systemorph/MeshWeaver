@@ -3,7 +3,6 @@
 	<ItemGroup>
 		<PackageReference Include="Microsoft.DotNet.Interactive" />
 		<PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />
-		<PackageReference Include="Newtonsoft.Json" />
 	</ItemGroup>
 
 	<ItemGroup>
