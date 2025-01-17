@@ -7,7 +7,11 @@ namespace MeshWeaver.Charting.Models.Options
         public override bool CanConvert(Type objectType) => true;
 
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
-            => writer.WriteValue(value.ToString());
+        {
+            if(value is not null)
+                writer.WriteValue(value.ToString());
+            else writer.WriteNull();
+        }
 
         public override bool CanRead => false;
 
