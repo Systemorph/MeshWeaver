@@ -217,7 +217,7 @@ public static class EditorExtensions
         if (propertyInfo.PropertyType == typeof(string))
             return editor.WithView((_, _) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => (typeof(DateTimeControl), propertyInfo, label, jsonPointerReference));
+            return editor.WithView((_, _) => RenderControl(typeof(DateTimeControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
             return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference));
 
@@ -233,7 +233,8 @@ public static class EditorExtensions
         where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
-        var label = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+        var propertySkinLabel = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+        string label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
@@ -243,7 +244,7 @@ public static class EditorExtensions
                               ?? serviceProvider
                                   .GetRequiredService<IDocumentationService>()
                                   .GetDocumentation(propertyInfo)?.Summary?.Text,
-                Label = label
+                Label = propertySkinLabel
             };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
 
@@ -274,7 +275,7 @@ public static class EditorExtensions
         if (propertyInfo.PropertyType == typeof(string))
             return editor.WithView((_,_) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => (typeof(DateTimeControl), label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((_, _) => RenderControl(typeof(DateTimeControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
             return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
 

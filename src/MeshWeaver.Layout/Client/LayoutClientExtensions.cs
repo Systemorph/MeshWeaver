@@ -20,7 +20,7 @@ public static class LayoutClientExtensions
         {
             if (model != null)
             {
-                var patch = stream.GetPatch(value, reference, dataContext, model.Element);
+                var patch = stream.GetPatch(value, reference, string.Empty, model.Element);
                 if (patch != null)
                     model.Update(patch);
             }
