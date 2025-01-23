@@ -29,7 +29,7 @@ public static class Template
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("/", out var _);
+        var view = dataTemplate.Build("", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
@@ -63,7 +63,7 @@ public static class Template
                     current = val;
                     host.Stream.SetData(id, val, host.Stream.StreamId);
                 });
-                host.AddDisposable(context.Area, forwardSubscription);
+                host.RegisterForDisposal(context.Area, forwardSubscription);
                 return new(store, [], null);
             });
 
@@ -79,6 +79,7 @@ public static class Template
         where TView : UiControl
     {
         object current = null;
+        id ??= Guid.NewGuid().AsString();
         return (TView)GetTemplateControl(id, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
@@ -89,7 +90,7 @@ public static class Template
                     current = val;
                     host.Stream.SetData(id, val, host.Stream.StreamId);
                 });
-                host.AddDisposable(context.Area, forwardSubscription);
+                host.RegisterForDisposal(context.Area, forwardSubscription);
                 return new(store, [], null);
             });
     }
@@ -151,8 +152,8 @@ public static class Template
     private static TView GetTemplateControl<T, TView>(string id, Expression<Func<T, TView>> dataTemplate)
         where TView : UiControl
     {
-        var topLevel = LayoutAreaReference.GetDataPointer(id);
-        var view = dataTemplate.Build(topLevel, out var _);
+        var dataContext = LayoutAreaReference.GetDataPointer(id);
+        var view = dataTemplate.Build(dataContext, out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
         return view;
@@ -184,7 +185,7 @@ public static class Template
     )
         where TView : UiControl
     {
-        var view = dataTemplate.Build("/", out var _);
+        var view = dataTemplate.Build("", out var _);
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 

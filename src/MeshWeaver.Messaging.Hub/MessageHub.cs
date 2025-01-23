@@ -486,9 +486,9 @@ public sealed class MessageHub : IMessageHub
 
     public JsonSerializerOptions JsonSerializerOptions { get; }
 
-    public bool IsDisposing => Disposed != null;
+    public bool IsDisposing => Disposal != null;
 
-    public Task Disposed { get; private set; }
+    public Task Disposal { get; private set; }
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
 
     private readonly object locker = new();
@@ -501,7 +501,7 @@ public sealed class MessageHub : IMessageHub
             if (IsDisposing)
                 return;
             logger.LogDebug("Starting disposing of hub {address}", Address);
-            Disposed = disposingTaskCompletionSource.Task;
+            Disposal = disposingTaskCompletionSource.Task;
         }
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
@@ -534,6 +534,7 @@ public sealed class MessageHub : IMessageHub
                     }
                     logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
                     hostedHubs.Dispose();
+                    await hostedHubs.Disposal;
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
                     logger.LogDebug("Finish disposing hosted hubs of hub {address}", Address);
                 }
@@ -558,8 +559,8 @@ public sealed class MessageHub : IMessageHub
                         logger.LogDebug("Starting shutdown of hub {address}", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
-                    hostedHubs.Dispose();
-                    messageService.DisposeAsync().AsTask().ContinueWith(_ => disposingTaskCompletionSource.SetResult());
+                    await messageService.DisposeAsync();
+                    disposingTaskCompletionSource.SetResult();
                 }
                 catch (Exception e)
                 {

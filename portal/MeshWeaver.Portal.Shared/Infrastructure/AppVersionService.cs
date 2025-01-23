@@ -3,8 +3,9 @@
 // ------------------------------------------------------------------------
 
 using System.Reflection;
+using MeshWeaver.Portal.Infrastructure;
 
-namespace MeshWeaver.Portal.Infrastructure;
+namespace MeshWeaver.Portal.Shared.Infrastructure;
 internal class AppVersionService : IAppVersionService
 {
     public string Version
@@ -12,9 +13,9 @@ internal class AppVersionService : IAppVersionService
         get => GetVersionFromAssembly();
     }
 
-    static public string GetVersionFromAssembly()
+    public static string GetVersionFromAssembly()
     {
-        string strVersion = default!;
+        var strVersion = string.Empty;
         var versionAttribute = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>();
         if (versionAttribute != null)
         {

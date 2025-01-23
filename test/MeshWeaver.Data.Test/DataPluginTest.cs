@@ -31,8 +31,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "ad hoc",
+                data.AddSource(
                     dataSource =>
                         dataSource.WithType<MyData>(type =>
                             type.WithKey(instance => instance.Id)
@@ -48,7 +47,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     ) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.FromHub(new HostAddress(), dataSource => dataSource.WithType<MyData>())
+                data.AddHubSource(new HostAddress(), dataSource => dataSource.WithType<MyData>())
             );
 
     [Fact]

@@ -1,8 +1,8 @@
 ﻿namespace MeshWeaver.Layout;
 
-public abstract record FormComponentBase <TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IFormComponent
-    where TControl : FormComponentBase<TControl>, IFormComponent
+public abstract record FormControlBase <TControl>(object Data)
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IFormControl
+    where TControl : FormControlBase<TControl>, IFormControl
 {    
     /// <summary>
     /// The label bound to this control
@@ -18,7 +18,8 @@ public abstract record FormComponentBase <TControl>(object Data)
     public TControl WithLabel(object label)
         => This with { Label = label };
 
-
+    IFormControl IFormControl.WithLabel(object label)
+        => WithLabel(label);
 
 
 }

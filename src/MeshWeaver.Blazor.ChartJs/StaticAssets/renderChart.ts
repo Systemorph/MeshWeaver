@@ -20,11 +20,19 @@ Chart.defaults.plugins.datalabels.formatter = (value, context) =>
     typeof (value) == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
 
 export const renderChart = (element: HTMLCanvasElement, config: ChartConfiguration) => {
-    Chart.getChart(element)?.destroy();
-    const ctx = element.getContext("2d");
+    const existingChart = Chart.getChart(element);
     const chartConfig = deserialize(config);
-    new Chart(ctx, chartConfig);
+
+    if (existingChart) {
+        existingChart.config.data = chartConfig.data;
+        existingChart.config.options = chartConfig.options;
+        existingChart.update();
+    } else {
+        const ctx = element.getContext("2d");
+        new Chart(ctx, chartConfig);
+    }
 }
+
 
 function deserialize(data: unknown) {
     return cloneDeepWith(data, value => {

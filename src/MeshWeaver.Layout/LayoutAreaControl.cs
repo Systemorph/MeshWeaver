@@ -52,7 +52,7 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
     /// <returns>A string that represents the current <see cref="LayoutAreaControl"/>.</returns>
     public override string ToString()
     {
-        return Reference.ToAppHref(AddressType, AddressId);
+        return Reference.ToHref((object)AddressType, AddressId);
     }
  /// <summary>
     /// Serves as the default hash function.

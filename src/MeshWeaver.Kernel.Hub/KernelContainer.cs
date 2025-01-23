@@ -220,7 +220,7 @@ public class KernelContainer : IDisposable
         if (!style.Contains("height"))
             style += "height: 500px; ";
 
-        var view = $@"<iframe id='{viewId}' src='{LayoutAreaUrl}{Hub.Address}/{viewId}' style='{style}'></iframe>";
+        var view = $@"<iframe id='{viewId}' src='{LayoutAreaUrl}/{Hub.Address}/{viewId}' style='{style}'></iframe>";
         context.Writer.Write(view);
         return true;
     }
@@ -243,6 +243,8 @@ public class KernelContainer : IDisposable
     public IMessageDelivery HandleKernelCommandEnvelope(IMessageDelivery<KernelCommandEnvelope> request)
     {
         subscriptions.Add(request.Sender);
+        if(request.Message.LayoutAreaUrl is not null)
+            LayoutAreaUrl = request.Message.LayoutAreaUrl;
         var envelope = Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Deserialize(request.Message.Command);
         var command = envelope.Command;
         executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command)); 
@@ -250,6 +252,7 @@ public class KernelContainer : IDisposable
     }
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
     {
+        LayoutAreaUrl = request.Message.LayoutAreaUrl;
         subscriptions.Add(request.Sender);
         var command = new SubmitCode(request.Message.Code);
         executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command));

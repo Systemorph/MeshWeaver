@@ -1,6 +1,4 @@
 ﻿using System.Linq;
-using System.Reactive.Linq;
-using System.Threading.Tasks;
 using MeshWeaver.Activities;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;
@@ -14,8 +12,7 @@ public static class TestHubSetup
         this MessageHubConfiguration configuration
     ) =>
         configuration.AddData(data =>
-            data.FromConfigurableDataSource(
-                "reference",
+            data.AddSource(
                 dataSource =>
                     dataSource
                         .WithType<LineOfBusiness>(t =>
@@ -32,8 +29,7 @@ public static class TestHubSetup
         TransactionalDataAddress address
     ) =>
         configuration.AddData(data =>
-            data.FromConfigurableDataSource(
-                "transactional",
+            data.AddSource(
                 dataSource =>
                     dataSource.WithType<TransactionalData>(t =>
                         t.WithInitialData(
@@ -50,8 +46,7 @@ public static class TestHubSetup
         ComputedDataAddress address
     ) =>
         configuration.AddData(data =>
-            data.FromConfigurableDataSource(
-                "computed",
+            data.AddSource(
                 dataSource => dataSource.WithType<ComputedData>(t => t)
             )
         );
@@ -64,22 +59,19 @@ public static class TestHubSetup
     ) =>
         config
             .AddData(data =>
-                data.FromPartitionedHubs<TransactionalDataAddress>(
-                        nameof(TransactionalData),
+                data.AddPartitionedHubSource<TransactionalDataAddress>(
                         c =>
                             c.WithType<TransactionalData>(td => new TransactionalDataAddress(td.Year, td.BusinessUnit))
                     )
-                    .FromPartitionedHubs<ComputedDataAddress>(
-                        nameof(ComputedData),
+                    .AddPartitionedHubSource<ComputedDataAddress>(
                         c => c.WithType<ComputedData>(cd => new(cd.Year, cd.BusinessUnit))
                     )
-                    .FromHub(
+                    .AddHubSource(
                         new ReferenceDataAddress(),
                         dataSource =>
                             dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
                     )
-                    .FromConfigurableDataSource(
-                        nameof(ActivityLog),
+                    .AddSource(
                         dataSource => dataSource.WithType<ActivityLog>(t => t)
                     )
             )
@@ -91,16 +83,13 @@ public static class TestHubSetup
             );
         
 
-    private static async Task<EntityStore> ImportFunction(
+    private static EntityStore ImportFunction(
         ImportRequest request,
         IDataSet dataSet,
         IWorkspace workspace,
         EntityStore store
     )
     {
-        var businessUnits = await workspace.GetStream<BusinessUnit>().FirstAsync();
-        var partitions = businessUnits.Select(bu => new TransactionalDataAddress(2024, bu.SystemName)).ToArray();
-
         var transactionalData = store.GetData<TransactionalData>();
 
         var instances = transactionalData.Select(t => new ComputedData(

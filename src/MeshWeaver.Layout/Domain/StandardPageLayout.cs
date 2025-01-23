@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout.Composition;
+﻿using MeshWeaver.Domain;
+using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Domain;
 
@@ -12,13 +13,16 @@ public static class StandardPageLayout
         Func<NavMenuControl, LayoutAreaHost, RenderingContext, NavMenuControl> config)
         => layout.WithRenderer(a => a.Area == NavMenu,
             (h, c, store) =>
-               h.ConfigBasedRenderer(
+                h.ConfigBasedRenderer(
                     c,
                     store,
                     NavMenu,
                     () => new(),
                     config)
-            );
+        );
+    public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
+        object title, string href, Icon icon = null)
+        => layout.WithNavMenu((menu, _, _) => menu.WithNavLink(title, href, icon));
 
 
 

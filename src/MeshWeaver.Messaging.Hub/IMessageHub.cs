@@ -76,6 +76,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
-    Task Disposed { get; }
+    Task Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 }

@@ -40,7 +40,7 @@ public record CodeSampleControl(object Data)
     : UiControl<CodeSampleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 
 public record CheckBoxControl(object Data)
-    : FormComponentBase<CheckBoxControl>(Data);
+    : FormControlBase<CheckBoxControl>(Data);
 
 /// <summary>
 /// Control representing a progress bar.

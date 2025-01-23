@@ -36,8 +36,7 @@ namespace MeshWeaver.Reporting.Test
         {
             return base.ConfigureHost(configuration)
                 .AddData(data =>
-                    data.FromConfigurableDataSource(
-                        "TestData",
+                    data.AddSource(
                         dataSource =>
                             dataSource
                                 .WithType<LineOfBusiness>(type =>

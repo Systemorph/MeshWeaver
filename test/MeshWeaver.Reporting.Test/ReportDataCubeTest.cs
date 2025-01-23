@@ -24,8 +24,7 @@ public class ReportDataCubeTest : HubTestBase
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "TestData",
+                data.AddSource(
                     dataSource =>
                         dataSource
                             .WithType<TestHierarchicalDimensionA>(type =>

@@ -7,6 +7,7 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -84,35 +85,26 @@ public static class DataExtensions
         return ret;
     }
 
-    public static DataContext FromPartitionedHubs<TPartition>(
-        this DataContext dataContext,
-        object id,
-        Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration
-    ) =>
-        dataContext.WithDataSourceBuilder(
-            id,
-            _ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id, dataContext.Workspace))
-        );
+    public static DataContext AddPartitionedHubSource<TPartition>(this DataContext dataContext,
+        Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
+        object id = null) =>
+        dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)), id);
 
-    public static DataContext FromHub(
+    public static DataContext AddHubSource(
         this DataContext dataContext,
         Address address,
         Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
     ) =>
-        dataContext.WithDataSourceBuilder(
-            address,
-            _ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace))
-        );
+        dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)), address);
 
-    public static DataContext FromConfigurableDataSource(
-        this DataContext dataContext,
-        object address,
-        Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration
-    ) =>
-        dataContext.WithDataSourceBuilder(
-            address,
-            _ => configuration.Invoke(new GenericUnpartitionedDataSource(address, dataContext.Workspace))
-        );
+    public static DataContext AddSource(this DataContext dataContext,
+           Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
+           object id = null
+        ) =>
+        dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)), id);
+
+    public static object DefaultId => Guid.NewGuid().AsString();
+
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
             .WithHandler<DataChangeRequest>((hub, request) =>

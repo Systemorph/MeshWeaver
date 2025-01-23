@@ -67,7 +67,7 @@ public class HubTestBase : TestBase
     {
         Logger.LogInformation("Starting disposal of router");   
         Router.Dispose();
-        await Router.Disposed;
+        await Router.Disposal;
         Logger.LogInformation("Finished disposal of router");
     }
 }

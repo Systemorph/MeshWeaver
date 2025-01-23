@@ -4,6 +4,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -40,8 +41,8 @@ public sealed record DataContext : IDisposable
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
     public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; }
 
-    public DataContext WithDataSourceBuilder(object id, DataSourceBuilder dataSourceBuilder) =>
-        this with { DataSourceBuilders = DataSourceBuilders.Add(id, dataSourceBuilder), };
+    public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder, object id = null) =>
+        this with { DataSourceBuilders = DataSourceBuilders.Add(dataSourceBuilder), };
 
     public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; }
 
@@ -52,8 +53,8 @@ public sealed record DataContext : IDisposable
         TypeSourcesByType.GetValueOrDefault(type);
 
 
-    public ImmutableDictionary<object, DataSourceBuilder> DataSourceBuilders { get; set; } =
-        ImmutableDictionary<object, DataSourceBuilder>.Empty;
+    public ImmutableList<DataSourceBuilder> DataSourceBuilders { get; set; } =
+        ImmutableList<DataSourceBuilder>.Empty;
 
     internal ReduceManager<EntityStore> ReduceManager { get; init; }
     internal TimeSpan InitializationTimeout { get; set; } = TimeSpan.FromHours(60);
@@ -71,10 +72,7 @@ public sealed record DataContext : IDisposable
 
     public void Initialize()
     {
-        DataSourcesById = DataSourceBuilders.ToImmutableDictionary(
-            kvp => kvp.Key,
-            kvp => kvp.Value.Invoke(Hub)
-        );
+        DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
 
 
         foreach (var dataSource in DataSourcesById.Values)

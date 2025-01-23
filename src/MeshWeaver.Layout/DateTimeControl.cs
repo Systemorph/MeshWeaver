@@ -4,7 +4,7 @@
 /// Represents a date-time control with customizable properties.
 /// </summary>
 /// <param name="Data">The data associated with the date-time control.</param>
-public record DateTimeControl(object Data) : FormComponentBase<DateTimeControl>(Data), IFormComponent
+public record DateTimeControl(object Data) : FormControlBase<DateTimeControl>(Data), IFormControl
 {
     /// <summary>
     /// Gets or initializes the minimum value for the date-time control.

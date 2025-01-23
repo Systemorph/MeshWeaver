@@ -20,7 +20,7 @@ public static class LayoutClientExtensions
         {
             if (model != null)
             {
-                var patch = stream.GetPatch(value, reference, dataContext, model.Element);
+                var patch = stream.GetPatch(value, reference, string.Empty, model.Element);
                 if (patch != null)
                     model.Update(patch);
             }
@@ -43,7 +43,7 @@ public static class LayoutClientExtensions
         string dataContext,
         JsonElement current)
     {
-        var pointer = JsonPointer.Parse($"{dataContext}{reference.Pointer}");
+        var pointer = JsonPointer.Parse(GetPointer(reference.Pointer, dataContext));
 
         var existing = pointer.Evaluate(current);
         if (value == null)
@@ -63,20 +63,22 @@ public static class LayoutClientExtensions
         JsonPointerReference reference, 
         string dataContext = null, 
         Func<object, T> conversion = null) =>
-        stream.GetStream<object>(JsonPointer.Parse($"{dataContext}{reference.Pointer.TrimEnd('/')}"))
+        stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
             .Select(conversion ?? (x => stream.ConvertSingle<T>(x, null)));
 
 
     public static JsonElement? GetValueFromModel(this ModelParameter model, JsonPointerReference reference)
     {
-        var pointer = JsonPointer.Parse(reference.Pointer);
+        var pointer = JsonPointer.Parse($"/{reference.Pointer}");
         return pointer.Evaluate(model.Element);
     }
 
-    public static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value)
+    public static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value, string dataContext)
     {
         if (value is JsonPointerReference reference)
-            return stream.GetDataBoundValue<T>(reference);
+            return reference.Pointer.StartsWith('/')
+                ? stream.GetDataBoundValue<T>(reference.Pointer)
+                : stream.GetDataBoundValue<T>($"{dataContext}/{reference.Pointer}");
 
         if (value is string stringValue && typeof(T).IsEnum)
             return (T)Enum.Parse(typeof(T), stringValue);
@@ -84,9 +86,9 @@ public static class LayoutClientExtensions
         // Use Convert.ChangeType for flexible conversion
         return (T)Convert.ChangeType(value, typeof(T));
     }
-    private static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, JsonPointerReference reference)
+    private static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string dataContext = null)
     {
-        var jsonPointer = JsonPointer.Parse(reference.Pointer);
+        var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext));
 
         if (stream.Current == null)
             return default;
@@ -99,12 +101,18 @@ public static class LayoutClientExtensions
     public static IObservable<T> GetDataBoundObservable<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, string dataContext = null)
     {
-        var jsonPointer = JsonPointer.Parse($"{dataContext}{reference.Pointer}");
+        var pointer = GetPointer(reference.Pointer, dataContext);
+        var jsonPointer = JsonPointer.Parse(pointer);
         return stream.Select(s =>
         {
             var ret = jsonPointer.Evaluate(s.Value);
             return ret is null ? default(T) : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
         });
+    }
+
+    private static string GetPointer(string pointer, string dataContext)
+    {
+        return pointer.StartsWith('/')? pointer.TrimEnd('/') : $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
     public static T ConvertSingle<T>(this ISynchronizationStream<JsonElement> stream, object value, Func<object, T> conversion)
@@ -115,7 +123,7 @@ public static class LayoutClientExtensions
         {
             null => default,
             JsonElement element => stream.ConvertJson(element, conversion),
-            JsonObject obj => stream.ConvertJson<T>(obj, conversion),
+            JsonObject obj => stream.ConvertJson(obj, conversion),
             T t => t,
             string s => ConvertString<T>(s),
             _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")

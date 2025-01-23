@@ -16,12 +16,12 @@
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Roslynator.Analyzers"  />
-    <PackageReference Include="Roslynator.Formatting.Analyzers"  />
-    <PackageReference Include="Roslynator.CodeFixes"  />
-    <PackageReference Include="Roslynator.CodeAnalysis.Analyzers"  />
-    <PackageReference Include="Roslynator.Refactorings"  />
-  </ItemGroup>
+    <PackageReference Include="Roslynator.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.Formatting.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.CodeFixes" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.CodeAnalysis.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="Roslynator.Refactorings" PrivateAssets="all" />
+    </ItemGroup>
   
   <Target Name="CopyOutputToNuget" AfterTargets="Build" Condition="$(HasMeshNodes) == 'true'">
     <ItemGroup>

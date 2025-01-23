@@ -21,7 +21,7 @@ public static class TemplateBuilder
         where TView : UiControl
     {
         var rootParameter = layout.Parameters.First();
-        var visitor = new TemplateBuilderVisitor(rootParameter, "/");
+        var visitor = new TemplateBuilderVisitor(rootParameter, "");
         var body = visitor.Visit(layout.Body);
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
@@ -83,14 +83,14 @@ public static class TemplateBuilder
         {
             var obj = Visit(node.Object);
             var args = node.Arguments.Select(Visit).ToArray();
-
             if (
                 node.Method.Name == "get_Item"
                 && obj != null
                 && bindings.TryGetValue(obj, out var path)
             )
             {
-                return GetBinding($"{path}/{args.First()}", node.Method.ReturnType);
+                var slashIfNotEmpty = string.IsNullOrEmpty(path) ? string.Empty : "/";
+                return GetBinding($"{path}{slashIfNotEmpty}{args.First()}", node.Method.ReturnType);
             }
 
             var replaceMethodAttribute =
@@ -151,9 +151,9 @@ public static class TemplateBuilder
 
             if (expr != null && bindings.TryGetValue(expr, out var parentPath))
             {
-                var separator = parentPath.EndsWith("/") ? string.Empty : "/";
+                var separator = string.IsNullOrEmpty(parentPath) ? "" : "/";
 
-                string path = $"{parentPath}{separator}{node.Member.Name.ToCamelCase()}";
+                var path = $"{parentPath}{separator}{node.Member.Name.ToCamelCase()}";
                 var ret = GetBinding(path, node.Type);
                 return ret;
             }

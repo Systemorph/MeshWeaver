@@ -7,7 +7,7 @@
 /// <a href="https://www.fluentui-blazor.net/input">Fluent UI Blazor Input documentation</a>.
 /// </remarks>
 
-public interface IInputControl : IFormComponent
+public interface IInputControl : IFormControl
 {
     /// <summary>
     /// Gets or initializes the data associated with the input control.
@@ -27,7 +27,7 @@ public interface IInputControl : IFormComponent
 }
 
 public abstract record InputBaseControl<TControl>(object Data)
-    : FormComponentBase<TControl>(Data)
+    : FormControlBase<TControl>(Data)
     where TControl : InputBaseControl<TControl>, IInputControl
 {
     public object AutoFocus { get; init; }

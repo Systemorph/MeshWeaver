@@ -41,40 +41,43 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     private bool isDisposing;
     private readonly object locker = new();
 
+    public Task Disposal { get; private set; }
+    
+
     public void Dispose()
     {
         lock (locker)
         {
-            if (isDisposing) return;
-            isDisposing = true;
+            if (Disposal is not null) return;
+            Disposal = DisposeHubs();
         }
 
 
 
-        while (Hubs.Any())
-            foreach (var address in messageHubs.Keys.ToArray())
-                if (messageHubs.TryRemove(address, out var hub) && hub != null)
-                {
-                    logger.LogDebug("Awaiting disposal of hub {address}", address);
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // Set timeout duration
-                    try
-                    {
-                        if (cts.Token.IsCancellationRequested)
-                        {
-                            logger.LogError("Disposal of hub {address} timed out", address);
-                        }
-                        else
-                        {
-                            logger.LogDebug("Finished disposal of hub {address}", address);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error during disposal of hub {address}", address);
-                    }
-                    logger.LogDebug("Finished disposal of hub {address}", address);
-
-                }
 
     }
+
+    private Task DisposeHubs()
+    {
+        return Task.WhenAll(messageHubs.Values.ToArray().Select(DisposeHub));
+
+    }
+
+    private Task DisposeHub(IMessageHub hub)
+    {
+        var address = hub.Address;
+        logger.LogDebug("Disposing hub {address}", address);
+        try
+        {
+            hub.Dispose();
+            return hub.Disposal;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error during disposal of hub {address}", address);
+            return Task.CompletedTask;
+        }
+
+    }
+
 }

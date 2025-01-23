@@ -5,7 +5,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data.TestDomain;
 

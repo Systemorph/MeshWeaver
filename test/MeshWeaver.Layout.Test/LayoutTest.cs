@@ -34,8 +34,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
             )
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "Local",
+                data.AddSource(
                     ds =>
                         ds.WithType<DataRecord>(t =>
                             t.WithInitialData(DataRecord.InitialData)

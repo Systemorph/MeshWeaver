@@ -26,7 +26,7 @@ public static class DiscountVsRevenueArea
             .WithNavMenu((menu, _, _) =>
                 menu.WithNavLink(
                     nameof(DiscountVsRevenue),
-                    new LayoutAreaReference(nameof(DiscountVsRevenue)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+                    new LayoutAreaReference(nameof(DiscountVsRevenue)).ToHref(layout.Hub.Address), FluentIcons.Document)
             )
         ;
 

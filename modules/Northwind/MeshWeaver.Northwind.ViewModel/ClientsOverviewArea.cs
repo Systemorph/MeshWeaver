@@ -27,7 +27,7 @@ public static class ClientsOverviewArea
             .WithNavMenu((menu, _, _) =>
                 menu.WithNavLink(
                     nameof(TopClients),
-                    new LayoutAreaReference(nameof(TopClients)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+                    new LayoutAreaReference(nameof(TopClients)).ToHref(layout.Hub.Address), FluentIcons.Document)
             )
         ;
 

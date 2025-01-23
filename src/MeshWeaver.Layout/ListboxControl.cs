@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Layout.Domain;
+﻿using MeshWeaver.Data;
 
 namespace MeshWeaver.Layout;
 
@@ -6,33 +6,29 @@ namespace MeshWeaver.Layout;
 /// Represents a listbox control with customizable properties.
 /// </summary>
 /// <param name="Data">The data associated with the listbox control.</param>
-public record ListboxControl(object Data) : ListControlBase<ListboxControl>(Data), IListControl;
+public record ListboxControl(object Data, object Options) : ListControlBase<ListboxControl>(Data, Options);
 
 /// <summary>
 /// Represents a list control interface with options.
 /// </summary>
-public interface IListControl : IFormComponent
+public interface IListControl : IFormControl
 {
     /// <summary>
     /// Gets or initializes the options for the list control.
     /// </summary>
-    IReadOnlyCollection<Option> Options { get; init; }
+    object Options { get; init; }
 }
 
 /// <summary>
 /// Represents the base class for list controls with customizable properties.
 /// </summary>
 /// <typeparam name="TControl">The type of the list control.</typeparam>
-/// <param name="Data">The data associated with the list control.</param>
-public abstract record ListControlBase<TControl>(object Data)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
-    where TControl : ListControlBase<TControl>, IListControl
+/// <param name="Data">The data property associated with the list control, normally in form of .</param>
+/// <param name="Options">The options to be chosen from <see cref="JsonPointerReference"/>.</param>
+public abstract record ListControlBase<TControl>(object Data, object Options)
+    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IListControl
+    where TControl : ListControlBase<TControl>
 {
-    /// <summary>
-    /// Gets or initializes the options for the list control.
-    /// </summary>
-    public IReadOnlyCollection<Option> Options { get; init; }
-
     /// <summary>
     /// The label bound to this control
     /// </summary>
@@ -47,12 +43,15 @@ public abstract record ListControlBase<TControl>(object Data)
     public TControl WithLabel(object label)
         => This with { Label = label };
 
+    IFormControl IFormControl.WithLabel(object label)
+    => WithLabel(label);
+
     /// <summary>
     /// Sets the options for the list control.
     /// </summary>
     /// <param name="options">The options to set.</param>
     /// <returns>A new instance of the list control with the specified options.</returns>
-    public TControl WithOptions(IReadOnlyCollection<Option> options) => (TControl)this with { Options = options };
+    public TControl WithOptions(object options) => (TControl)this with { Options = options };
 
     /// <summary>
     /// Sets the options for the list control from an enumerable collection.
@@ -61,39 +60,21 @@ public abstract record ListControlBase<TControl>(object Data)
     /// <param name="options">The options to set.</param>
     /// <returns>A new instance of the list control with the specified options.</returns>
     public TControl WithOptions<T>(IEnumerable<T> options) => 
-        WithOptions(options.Select(o => (Option)new Option<T>(o, o.ToString())).ToArray());
+        WithOptions((object)options.Select(o => (Option)new Option<T>(o, o.ToString())).ToArray());
 
-    /// <summary>
-    /// Determines whether the specified list control is equal to the current list control.
-    /// </summary>
-    /// <param name="other">The list control to compare with the current list control.</param>
-    /// <returns><c>true</c> if the specified list control is equal to the current list control; otherwise, <c>false</c>.</returns>
-    public virtual bool Equals(ListControlBase<TControl> other)
-    {
-        if (ReferenceEquals(null, other)) return false;
-        if (ReferenceEquals(this, other)) return true;
-        return base.Equals(other) 
-               && Options.SequenceEqual(other.Options) 
-               && LayoutHelperExtensions.DataEquality(Data, other.Data);
-    }
-
-    public override int GetHashCode()
-    {
-        return HashCode.Combine(
-            base.GetHashCode(), 
-            Options.Aggregate(17, (x, y) => x ^y.GetHashCode()),
-            LayoutHelperExtensions.DataHashCode(Data));
-    }
 }
 
 public abstract record Option(string Text)
 {
     public abstract object GetItem();
+    public abstract Type GetItemType();
 }
 
 public record Option<TItem>(TItem Item, string Text) : Option(Text)
 {
     public override object GetItem() => Item;
+    public override Type GetItemType()
+        => typeof(TItem);
 }
 
 public enum SelectPosition

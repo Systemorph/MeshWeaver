@@ -1,0 +1,14 @@
+#!csharp
+
+using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive;
+using Microsoft.DotNet.Interactive.CSharp;
+using MeshWeaver.Charting.Models;
+
+var kernel = Kernel.Current.RootKernel;
+var csharp = kernel as CSharpKernel ??
+                (kernel as CompositeKernel)?.ChildKernels.OfType<CSharpKernel>().FirstOrDefault();
+if (csharp is not null && csharp.TryGetValue<IMessageHub>("Mesh", out var hub))
+    hub.TypeRegistry.GetOrAddType(typeof(ChartModel));
+
+Console.WriteLine("Charting installed successfully.");

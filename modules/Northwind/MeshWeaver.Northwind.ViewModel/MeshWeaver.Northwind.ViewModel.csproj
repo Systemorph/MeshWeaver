@@ -41,7 +41,6 @@
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
-
     <ItemGroup>
         <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
             <LogicalName>$(AssemblyName).xml</LogicalName>

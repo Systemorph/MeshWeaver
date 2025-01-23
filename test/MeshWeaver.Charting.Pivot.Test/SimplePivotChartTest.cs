@@ -67,8 +67,7 @@ public class SimplePivotChartTest(ITestOutputHelper toh) : HubTestBase(toh)
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "Records",
+                data.AddSource(
                     dataSource =>
                         dataSource
                             .WithType<RecordWithValues>()

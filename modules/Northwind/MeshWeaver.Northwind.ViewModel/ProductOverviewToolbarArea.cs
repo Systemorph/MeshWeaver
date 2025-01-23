@@ -30,13 +30,14 @@ public static class ProductOverviewToolbarArea
                 .Select(categories =>
                     Template.Bind(new ProductOverviewToolbar(0),
                         tb =>
-                            Controls.Select(tb.Category)
-                                .WithOptions(
-                                    Enumerable.Select<Category, Option<int>>(categories, c => new Option<int>(c.CategoryId, c.CategoryName))
-                                        .Prepend(new Option<int>(0, "All Categories"))
-                                        .Cast<Option>()
-                                        .ToArray()
-                                ), nameof(ProductOverviewToolbar))
+                            Controls.Select(
+                                tb.Category, 
+                                Enumerable.Select<Category, Option<int>>(categories, c => new Option<int>(c.CategoryId, c.CategoryName))
+                                    .Prepend(new Option<int>(0, "All Categories"))
+                                    .Cast<Option>()
+                                    .ToArray()
+                                ),
+                        nameof(ProductOverviewToolbar))
                 )
         )
     ;
