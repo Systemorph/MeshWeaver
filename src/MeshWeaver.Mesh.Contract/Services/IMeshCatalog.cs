@@ -5,13 +5,11 @@ namespace MeshWeaver.Mesh.Services;
 
 public interface IMeshCatalog
 {
+    MeshConfiguration Configuration { get; }
     Task<MeshNode> GetNodeAsync(string addressType, string id);
     Task UpdateAsync(MeshNode node);
     Task InitializeAsync(CancellationToken cancellationToken);
 
-    Task<MeshArticle> GetArticleAsync(string addressType, string nodeId, string id, bool includeContent = false);
-
-    Task UpdateArticleAsync(MeshArticle meshArticle);
 
 }
 

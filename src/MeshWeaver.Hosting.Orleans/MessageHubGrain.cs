@@ -38,7 +38,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Cannot instantiate Node {node.Name}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
 
         Hub = meshHub.GetHostedHub(startupInfo.Address, node.HubConfiguration);
-        Hub.RegisterForDisposal((_, _) => routingService.Async(Hub.Address));
+        var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
+        Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();

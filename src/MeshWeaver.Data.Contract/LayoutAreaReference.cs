@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using Json.Pointer;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -64,12 +65,11 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <summary>
     /// Converts the layout area reference to an application href.
     /// </summary>
-    /// <param name="addressType">The type of address for the href.</param>
-    /// <param name="addressId">The id of address for the href.</param>
+    /// <param name="address">The address for the href.</param>
     /// <returns>A string representing the application href.</returns>
-    public string ToHref(object addressType, object addressId)
+    public string ToHref(Address address)
     {
-        var ret = $"{addressType}/{addressId}/{WorkspaceReference.Encode(Area)}";
+        var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
         return ret;

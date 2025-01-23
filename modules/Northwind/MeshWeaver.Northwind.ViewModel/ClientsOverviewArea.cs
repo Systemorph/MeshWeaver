@@ -6,7 +6,6 @@ using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 

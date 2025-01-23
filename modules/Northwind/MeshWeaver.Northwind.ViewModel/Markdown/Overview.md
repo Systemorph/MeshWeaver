@@ -1,6 +1,6 @@
 ---
-Name: "Northwind Overview"
-Description: "This is a sample description of the article."
+Title: "Northwind Overview"
+Abstract: "This is a sample description of the article."
 Thumbnail: "images/thumbnail.jpg"
 Published: "2024-09-24"
 Authors:

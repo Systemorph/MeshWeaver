@@ -29,10 +29,11 @@ namespace MeshWeaver.Hosting.Monolith.Test
         }
 
 
+
         protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
 
 
-        protected IMessageHub CreateClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null) =>
+        protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null) =>
             Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
 
         protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>

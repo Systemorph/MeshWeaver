@@ -9,7 +9,6 @@ public static  class MarkdownExtensions
             .UseAdvancedExtensions()
             .UseEmojiAndSmiley()
             .UseYamlFrontMatter()
-            .Use(new LayoutAreaMarkdownExtension())
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, address)))
             .Build();
 

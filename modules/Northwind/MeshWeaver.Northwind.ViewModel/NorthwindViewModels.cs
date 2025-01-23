@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Articles;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
@@ -32,9 +33,10 @@ namespace MeshWeaver.Northwind.ViewModel
                         .AddOrdersSummary()
                         .AddCustomerSummary()
                         .AddSupplierSummary()
-                        .WithNavMenu((menu, host, _) => host
-                            .AddTypesCatalogs(menu)
-                        )
+                        .WithNavMenu((menu, host, _) => 
+                            menu.WithViews(host.AddTypesCatalogs())
+                                .ArticlesNavMenu("Northwind")
+                            )
 
                 )
                 ;

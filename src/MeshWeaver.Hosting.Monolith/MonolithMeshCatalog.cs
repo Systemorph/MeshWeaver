@@ -10,7 +10,6 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 {
     private readonly ILogger<MonolithMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<MonolithMeshCatalog>>();
     private readonly ConcurrentDictionary<(string AddressType, string Id), MeshNode> meshNodes = new();
-    private readonly ConcurrentDictionary<(string AddressType, string Id), IReadOnlyDictionary<string, MeshArticle>> articles = new();
     protected override Task<MeshNode> LoadMeshNode(string addressType, string id) => 
         Task.FromResult(meshNodes.GetValueOrDefault((addressType, id)));
 
@@ -25,17 +24,6 @@ public class MonolithMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
     {
         meshNodes[(node.AddressType, node.AddressId)] = node;
         return Task.CompletedTask;
-    }
-
-    public override async Task<MeshArticle> GetArticleAsync(string addressType, string nodeId, string id, bool includeContent)
-    {
-        var key = (addressType, nodeId);
-        if (articles.TryGetValue(key, out var inner))
-            return await IncludeContent(inner.GetValueOrDefault(id), includeContent);
-        var node = await GetNodeAsync(addressType, nodeId);
-        var articlesByApplication = await InitializeArticlesForNodeAsync(node).ToDictionaryAsync(x => x.Name);
-        articles[key] = articlesByApplication;
-        return await IncludeContent(articlesByApplication.GetValueOrDefault(id), includeContent);
     }
 
 }

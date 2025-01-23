@@ -167,19 +167,10 @@ public static class Controls
 
     public static IconControl Icon(object data) => new(data);
 
-    public static LayoutAreaControl LayoutArea(object address, LayoutAreaReference reference)
-    {
-        var (addressType, addressId) = MessageHubExtensions.GetAddressTypeAndId(address);
-        return LayoutArea(addressType, addressId, reference);
-    }
-
     public static LayoutAreaControl LayoutArea(object address, string area, object id = null)
-        => LayoutArea(address, new(area) { Id = id });
-
-    public static LayoutAreaControl LayoutArea(string addressType, string addressId, string area, object id = null)
-        => LayoutArea(addressType, addressId, new(area) { Id = id });
-    public static LayoutAreaControl LayoutArea(string addressType, string addressId, LayoutAreaReference reference)
-        => new(addressType, addressId, reference);
+        => LayoutArea(address, new LayoutAreaReference(area) { Id = id });
+    public static LayoutAreaControl LayoutArea(object address, LayoutAreaReference reference)
+        => new(address, reference);
 
 
     public static RadioGroupControl RadioGroup(object data, object options, object type)
