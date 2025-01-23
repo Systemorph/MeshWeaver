@@ -7,14 +7,14 @@ namespace MeshWeaver.Articles;
 public abstract class ArticleCollection(string collection)
 {
     public string Collection { get; } = collection;
-    public abstract IObservable<MeshArticle> GetArticle(string path, ArticleOptions options = null);
+    public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
 
     public abstract Task InitializeAsync(CancellationToken ct);
 }
 
 public class FileSystemCollection(string collection, string basePath) : ArticleCollection(collection)
 {
-    private readonly ConcurrentDictionary<string, ReplaySubject<MeshArticle>> articleSubjects = new();
+    private readonly ConcurrentDictionary<string, ReplaySubject<Article>> articleSubjects = new();
     public string BasePath { get; } = basePath;
 
 
@@ -32,7 +32,7 @@ public class FileSystemCollection(string collection, string basePath) : ArticleC
         MonitorFileSystem();
     }
 
-    public override IObservable<MeshArticle> GetArticle(string path, ArticleOptions options)
+    public override IObservable<Article> GetArticle(string path, ArticleOptions options)
     {
         var ret = articleSubjects.GetValueOrDefault(path);
         if (ret is null)
@@ -62,13 +62,13 @@ public class FileSystemCollection(string collection, string basePath) : ArticleC
         LoadAndSet(e.FullPath, s);
     }
 
-    private async void LoadAndSet(string fullPath, ReplaySubject<MeshArticle> s)
+    private async void LoadAndSet(string fullPath, ReplaySubject<Article> s)
     {
         s.OnNext(await LoadArticle(fullPath));
 
     }
 
-    private async Task<MeshArticle> LoadArticle(string fullPath)
+    private async Task<Article> LoadArticle(string fullPath)
     {
         if(!File.Exists(fullPath))
            return null;

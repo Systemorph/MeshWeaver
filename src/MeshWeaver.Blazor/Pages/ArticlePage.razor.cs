@@ -8,7 +8,7 @@ namespace MeshWeaver.Blazor.Pages;
 public partial class ArticlePage(IArticleService meshCatalog, IMessageHub hub)
 {
     private string Prerendered => Article?.PrerenderedHtml;
-    private MeshArticle Article { get; set; }
+    private Article Article { get; set; }
     private UiControl ArticleControl { get; set; }
 
     protected override async Task OnInitializedAsync()
@@ -18,7 +18,7 @@ public partial class ArticlePage(IArticleService meshCatalog, IMessageHub hub)
         //Stream = hub.GetWorkspace().GetRemoteStream<LayoutAreaReference,JsonPointerReference>(new KernelAddress(), new LayoutAreaReference("Article"))
     }
 
-    private UiControl GetArticleControl(MeshArticle article)
+    private UiControl GetArticleControl(Article article)
     {
         if(article is null)
             return new MarkdownControl($":x: **Article not found**");

@@ -6,7 +6,7 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Articles;
 
 
-public record MeshArticle
+public record Article
 {
     public string Extension { get; init; }
     public string Name { get; init; }
@@ -27,7 +27,7 @@ public record MeshArticle
     public ArticleStatus Status { get; init; }
     public (ArticleStatus Status, DateTime Timestamp)[] StatusHistory { get; init; } = [];
 
-    public MeshArticle SetStatus(ArticleStatus status)
+    public Article SetStatus(ArticleStatus status)
         => this with { Status = status, StatusHistory = StatusHistory.Append((status, DateTime.UtcNow)).ToArray() };
 
     public DateTime Created { get; init; } = DateTime.UtcNow;
@@ -39,6 +39,7 @@ public record MeshArticle
     public List<string> Authors { get; set; }
     public List<string> Tags { get; set; }
     public float[] VectorRepresentation { get; set; }
+    public string AuthorAvatar { get; set; }
 
 
     public IDictionary<string, string> ToMetadata(string path, string type) =>

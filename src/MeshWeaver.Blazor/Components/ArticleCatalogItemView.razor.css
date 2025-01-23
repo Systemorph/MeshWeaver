@@ -1,0 +1,66 @@
+﻿article {
+    display: flex;
+    gap: 1rem;
+    min-width: 700px;
+    max-width: 700px;
+    align-items: center;
+}
+
+    article:not(:first-child) {
+        padding-top: 24px;
+        border-top: 1px solid #eee;
+    }
+
+.details {
+    flex-grow: 1;
+}
+
+.title {
+    line-height: 1;
+}
+
+    .title a {
+        text-decoration: none;
+    }
+
+.summary {
+    display: flex;
+}
+
+.footer {
+    display: flex;
+}
+
+    .footer .mesh-node {
+        flex-grow: 1;
+    }
+
+        .footer .mesh-node ::deep .fluent-persona .name {
+            margin-inline-start: 8px;
+            font-weight: 500;
+        }
+
+    .footer .stats {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+        .footer .stats .label {
+            display: flex;
+            font-size: 0.9em;
+            align-items: center;
+        }
+
+.tags {
+    margin-top: 1rem;
+    display: flex;
+    gap: 0.25rem;
+}
+
+    .tags ::deep fluent-badge span {
+        padding: 0 0.2rem;
+    }
+
+.thumbnail {
+}

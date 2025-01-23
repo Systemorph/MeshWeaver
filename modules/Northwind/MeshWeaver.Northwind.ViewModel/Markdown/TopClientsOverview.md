@@ -1,10 +1,10 @@
 ---
 Title: "Top 5 Clients by Amount per Month"
 Abstract: "The report analyzes the top 5 clients based on their total purchase amounts, highlighting key clients such as QUICK-Stop and Ernst Handel. It suggests targeted reward strategies to enhance customer satisfaction and retention, including discounts, exclusive access, and personalized services. Additionally, the report provides general recommendations for creating effective reward programs to foster overall customer loyalty."
-Thumbnail: "images/thumbnail.jpg"
+Thumbnail: "images/TopClients.jpg"
 Published: "2024-09-24"
 Authors:
-  - "Roland B�rgi"
+  - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
   - "Top Clients"

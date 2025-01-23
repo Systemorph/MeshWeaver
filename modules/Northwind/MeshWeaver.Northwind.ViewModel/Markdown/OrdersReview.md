@@ -1,10 +1,10 @@
 ---
 Title: "Financial Analytical Report on the Number of Orders per Month in 2023"
 Abstract: "This report provides a detailed analysis of the monthly order volumes for the year 2023. The report is essential for understanding the business’s performance trends and identifying areas for improvement."
-Thumbnail: "images/thumbnail.jpg"
+Thumbnail: "images/OrdersOverview.jpg"
 Published: "2024-09-24"
 Authors:
-  - "Roland B�rgi"
+  - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
   - "2023 Orders Analysis"

@@ -1,10 +1,10 @@
 ---
 Title: "Top Employees of the Month Based on Amounts Earned"
 Abstract: "The attached report highlights the top-performing employees of the month based on their earnings. It recognizes and rewards employees like Nancy Davolio and Margaret Peacock for their exceptional contributions, with Nancy earning the highest amount. The report underscores the importance of acknowledging hard work to boost morale and foster a culture of excellence within the company."
-Thumbnail: "images/thumbnail.jpg"
+Thumbnail: "images/SalesReps.jpg"
 Published: "2024-09-24"
 Authors:
-  - "Roland B�rgi"
+  - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
   - "Top Employees"

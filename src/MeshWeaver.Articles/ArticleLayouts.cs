@@ -15,13 +15,13 @@ public static class ArticleLayouts
 
     private static HtmlControl RenderArticle(this LayoutDefinition host, object obj)
     {
-        if (obj is not MeshArticle article)
+        if (obj is not Article article)
             return null;
 
         return new HtmlControl(article.PrerenderedHtml).AddSkin(article.MapToSkin());
     }
 
-    private static ArticleSkin MapToSkin(this MeshArticle article)
+    private static ArticleSkin MapToSkin(this Article article)
     {
         return new ArticleSkin
         {
