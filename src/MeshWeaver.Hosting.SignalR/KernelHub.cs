@@ -3,7 +3,9 @@ using System.Collections.Immutable;
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.SignalR;
 
@@ -14,13 +16,25 @@ public class KernelHub : Hub
     private readonly ConcurrentDictionary<KernelAddress, ImmutableList<string>> connectionsByKernel = new();
     private readonly ConcurrentDictionary<string, KernelAddress> kernelByConnection = new();
     private readonly IKernelService kernelService;
+    private readonly IHttpContextAccessor httpContextAccessor;
 
 
     public Task SubmitCommand(string kernelCommandEnvelope)
     {
+
         if (!kernelByConnection.TryGetValue(Context.ConnectionId, out var kernelAddress))
             throw new HubException("Kernel is not connected.");
-        return kernelService.SubmitCommandAsync(kernelAddress, kernelCommandEnvelope);
+        return kernelService.SubmitCommandAsync(kernelAddress, kernelCommandEnvelope, GetLayoutAreaAddress());
+    }
+
+    public string GetLayoutAreaAddress()
+    {
+        var request = httpContextAccessor.HttpContext?.Request;
+        if (request is null)
+            return null;
+
+        var baseUrl = $"{request?.Scheme}://{request?.Host}{request?.PathBase}/area";
+        return baseUrl;
     }
 
 
@@ -63,9 +77,10 @@ public class KernelHub : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    public KernelHub(IMessageHub hub, IKernelService kernelService)
+    public KernelHub(IMessageHub hub, IKernelService kernelService, IHttpContextAccessor httpContextAccessor)
     {
         this.kernelService = kernelService;
+        this.httpContextAccessor = httpContextAccessor;
         hub.Register<KernelEventEnvelope>(async (d, ct) =>
         {
             var kernelAddress = MessageHubExtensions.GetAddressOfType<KernelAddress>(d.Sender);

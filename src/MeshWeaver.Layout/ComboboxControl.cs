@@ -11,8 +11,8 @@ namespace MeshWeaver.Layout;
     /// <a href="https://www.fluentui-blazor.net/combobox">Fluent UI Blazor Combobox documentation</a>.
     /// </remarks>
     /// <param name="Data">The data associated with the combobox control.</param>
-
-public record ComboboxControl(object Data) : ListControlBase<ComboboxControl>(Data), IListControl
+    /// <param name="Options">The options to choose from.</param>
+public record ComboboxControl(object Data, object Options) : ListControlBase<ComboboxControl>(Data, Options)
 {
     /// <summary>
         /// Gets or initializes the autofocus state of the combobox.

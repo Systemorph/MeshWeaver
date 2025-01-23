@@ -41,7 +41,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         public override async Task DisposeAsync()
         {
             Mesh.Dispose();
-            await Mesh.Disposed;
+            await Mesh.Disposal;
             await base.DisposeAsync();
         }
     }

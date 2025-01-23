@@ -67,8 +67,7 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
 
         formattedValues.Value.Should().BeOfType<string>().Which.Should().Contain("iframe");
         var iframeSrc = formattedValues.Value;
-        var match = Regex.Match(iframeSrc, @"<iframe id='[^']+' src='https://[^/]+/area/(?<addressType>[^/]+)/(?<addressId>[^/]+)/(?<area>[^/]+)' style='[^']+'></iframe>");
-
+        var match = Regex.Match(iframeSrc, @"<iframe id='[^']+' src='http://localhost/area/(?<addressType>[^/]+)/(?<addressId>[^/]+)/(?<area>[^/]+)' style='[^']+'></iframe>");
         match.Success.Should().BeTrue();
         var addressType = match.Groups["addressType"].Value;
         var addressId = match.Groups["addressId"].Value;

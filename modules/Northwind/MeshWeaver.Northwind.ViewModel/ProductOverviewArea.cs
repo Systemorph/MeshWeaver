@@ -26,7 +26,7 @@ public static class ProductOverviewArea
                 .WithNavMenu((menu, _, _) =>
                     menu.WithNavLink(
                         nameof(ProductOverview),
-                        new LayoutAreaReference(nameof(ProductOverview)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+                        new LayoutAreaReference(nameof(ProductOverview)).ToHref(layout.Hub.Address), FluentIcons.Document)
                 )
     ;
 

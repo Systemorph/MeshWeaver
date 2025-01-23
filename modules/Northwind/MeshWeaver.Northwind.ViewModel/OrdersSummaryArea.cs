@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -29,7 +30,7 @@ public static class OrdersSummaryArea
             .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
             .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
             .WithNavMenu((menu,_, _) =>menu.WithNavLink(nameof(OrderSummary).Wordify(),
-                new LayoutAreaReference(nameof(OrderSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Box)
+                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
         );
 
     /// <summary>
@@ -41,62 +42,53 @@ public static class OrdersSummaryArea
     /// <remarks>
     /// This method constructs the Orders Summary view, incorporating a data grid to display aggregated order data. The specific contents and layout of the view are determined at runtime based on the rendering context.
     /// </remarks>
-    public static StackControl OrderSummary(
+    public static UiControl OrderSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     )
     {
-        var years = layoutArea
-            .Workspace
-            .GetObservable<Order>()
-            .DistinctUntilChanged()
-            .Select(x =>
-                x.Select(y => y.OrderDate.Year)
-                    .Distinct()
-                    .OrderByDescending(year => year)
-                    .Select(year => new Option<int>(year, year.ToString()))
-                    .Prepend(new Option<int>(0, "All Time"))
-                    .ToArray()
-            )
-            .DistinctUntilChanged(x => string.Join(',', x.Select(y => y.Item)));
-
-        return Controls.Stack
-            .WithClass("order-summary")
-            .WithView(ToolbarArea.Toolbar(years))
-            .WithView(
-                (area, _) =>
-                    area.Workspace.GetStream(typeof(Order), typeof(Customer), typeof(OrderDetails))
-                        .CombineLatest(
-                            area.GetDataStream<Toolbar>(nameof(Toolbar)),
-                            (changeItem, tb) => (changeItem, tb))
-                        .DistinctUntilChanged()
-                        .Select(tuple =>
-                            area.ToDataGrid(
-                                tuple.changeItem.Value.GetData<Order>()
-                                    .Where(x => tuple.tb.Year == 0 || x.OrderDate.Year == tuple.tb.Year)
-                                    .Select(order => new OrderSummaryItem(
-                                        tuple.changeItem.Value.GetData<Customer>(
-                                            order.CustomerId
-                                        )?.CompanyName,
-                                        tuple.changeItem.Value.GetData<OrderDetails>()
-                                            .Where(d => d.OrderId == order.OrderId)
-                                            .Sum(d => d.UnitPrice * d.Quantity),
-                                        order.OrderDate
-                                    ))
-                                    .OrderByDescending(y => y.Amount)
-                                    .Take(5)
-                                    .ToArray(),
-                                config =>
-                                    config.WithColumn(o => o.Customer)
-                                        .WithColumn(o => o.Amount, column => column.WithFormat("N0"))
-                                        .WithColumn(
-                                            o => o.Purchased,
-                                            column => column.WithFormat("yyyy-MM-dd")
-                                        )
-                            )
+        layoutArea.SubscribeToDataStream(OrderSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new OrderSummaryToolbar(), (tb, area, _) =>
+                area.Workspace.GetStream(typeof(Order), typeof(Customer), typeof(OrderDetails))
+                    .DistinctUntilChanged()
+                    .Select(tuple =>
+                        area.ToDataGrid(
+                            tuple.Value.GetData<Order>()
+                                .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year)
+                                .Select(order => new OrderSummaryItem(
+                                    tuple.Value.GetData<Customer>(
+                                        order.CustomerId
+                                    )?.CompanyName,
+                                    tuple.Value.GetData<OrderDetails>()
+                                        .Where(d => d.OrderId == order.OrderId)
+                                        .Sum(d => d.UnitPrice * d.Quantity),
+                                    order.OrderDate
+                                ))
+                                .OrderByDescending(y => y.Amount)
+                                .Take(5)
+                                .ToArray(),
+                            config =>
+                                config.WithColumn(o => o.Customer)
+                                    .WithColumn(o => o.Amount, column => column.WithFormat("N0"))
+                                    .WithColumn(
+                                        o => o.Purchased,
+                                        column => column.WithFormat("yyyy-MM-dd")
+                                    )
                         )
-            );
-
+                    )
+            )
+            ;
+    }
+    /// <summary>
+    /// Represents a simple toolbar entry that captures a specific year.
+    /// </summary>
+    public record OrderSummaryToolbar
+    {
+        internal const string Years = "years";
+        /// <summary>
+        /// The year selected in the toolbar.
+        /// </summary>
+        [Dimension<int>(Options = Years)] public int Year { get; init; }
 
     }
 

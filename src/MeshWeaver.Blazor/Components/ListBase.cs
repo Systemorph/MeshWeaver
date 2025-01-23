@@ -1,12 +1,13 @@
-﻿using MeshWeaver.Layout;
-
+﻿using System.Collections;
+using MeshWeaver.Layout;
+using LayoutOption=MeshWeaver.Layout.Option;
+using Option=MeshWeaver.Blazor.Components.OptionsExtension.Option;
 namespace MeshWeaver.Blazor.Components;
 
-public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel, TView, ListBase<TViewModel, TView>.Option>
+public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel, TView, Option>
     where TViewModel : UiControl, IListControl
     where TView : ListBase<TViewModel, TView>
 {
-    public record Option(object Item, string Text, string ItemString);
 
     protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
@@ -18,8 +19,8 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             ViewModel.Options,
             x => x.Options,
             o =>
-                ((IEnumerable<Layout.Option>)o).Select(option =>
-                    new Option(option.GetItem(), option.Text, MapToString(option.GetItem())))
+                (o as IEnumerable)?.Cast<LayoutOption>().Select(option =>
+                    new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
                 .ToArray()
         );
     }
@@ -27,17 +28,19 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     protected override Func<object, Option> ConversionToValue =>
         value =>
         {
-            var mapToString = MapToString(value);
+            if (Options is null)
+                return null;
+            var itemType = Options.FirstOrDefault()?.ItemType;
+            if (itemType == null)
+                return null;
+
+            var mapToString = OptionsExtension.MapToString(value, itemType);
             return Options.FirstOrDefault(x =>
-                x.ItemString == mapToString);
+                    x.ItemString == mapToString);
+
         };
 
 
-    private static string MapToString(object instance) =>
-        instance == null || IsDefault((dynamic)instance)
-            ? null
-            : instance.ToString();
-    private static bool IsDefault<T>(T instance) => instance.Equals(default(T));
 
     protected override object ConvertToData(Option value) => value?.Item;
     protected override bool NeedsUpdate(Option value)
