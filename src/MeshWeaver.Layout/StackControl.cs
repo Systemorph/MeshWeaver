@@ -22,13 +22,13 @@ public record StackControl()
 /// </remarks>
 
 public record LayoutStackSkin : Skin<LayoutStackSkin>
-/// <summary>
+{
+    /// <summary>
     /// Gets or initializes the horizontal alignment of the layout stack.
     /// </summary>
-{
     public object HorizontalAlignment { get; init; }
 
-/// <summary>
+    /// <summary>
     /// Gets or initializes the vertical alignment of the layout stack.
     /// </summary>
     public object VerticalAlignment { get; init; }

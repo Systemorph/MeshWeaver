@@ -71,6 +71,7 @@ public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(M
         WithView(navGroup);
     public NavMenuControl WithNavGroup(object title, object icon = null, object href = null) =>
         WithView(new NavGroupControl(title, icon, href));
+
 }
 
 public interface IMenuItem : IUiControl

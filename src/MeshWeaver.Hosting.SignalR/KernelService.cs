@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.SignalR
         }
 
         public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope, string layoutAreaUrl) => 
-            PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope, layoutAreaUrl), kernelAddress);
+            PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope){IFrameUrl = layoutAreaUrl}, kernelAddress);
 
         public Task SubmitEventAsync(KernelAddress kernelAddress, string commandEnvelope) => 
             PostToKernel(new KernelEventEnvelope(commandEnvelope), kernelAddress);

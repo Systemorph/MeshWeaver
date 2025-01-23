@@ -6,12 +6,11 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using MeshWeaver.Layout.Domain;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
-public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(output)
+public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(output)
 {
     public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
@@ -43,7 +42,7 @@ public class StandardPageLayoutTest(ITestOutputHelper output) : HubTestBase(outp
         [HubFact]
         public async Task BasicArea()
         {
-            var reference = new LayoutAreaReference(StandardPageLayout.NavMenu);
+            var reference = new LayoutAreaReference(NavMenuExtensions.NavMenu);
 
             var workspace = GetClient().GetWorkspace();
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

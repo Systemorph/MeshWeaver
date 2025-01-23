@@ -1,2 +1,30 @@
-@page "/Article/{Application}/{Id}"
+@page "/article/{Collection}/{**Path}"
+@using System.Text.Json
+@using MeshWeaver.Mesh
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
+
+@if (ArticleControl == null)
+{
+    <FluentStack 
+        HorizontalAlignment="HorizontalAlignment.Center" 
+        VerticalAlignment="VerticalAlignment.Center" 
+        Orientation="Orientation.Vertical">
+        <h3>@($"{Path}")</h3>
+        <FluentProgressRing style="width: 100%; height: 100%;" />
+    </FluentStack>
+}
+else
+{
+    <DispatchView ViewModel="@ArticleControl" Stream="@Stream" Area="@Area" />
+}
+
+@code
+{
+    [Parameter] public string Collection { get; set; }
+    [Parameter] public string Path { get; set; }
+    private ISynchronizationStream<JsonElement> Stream;
+    private const string Area = "root";
+}
 

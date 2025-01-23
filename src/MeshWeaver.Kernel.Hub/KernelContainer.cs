@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -152,16 +151,24 @@ public class KernelContainer : IDisposable
 
     private void PublishEventToContext(KernelEvent @event)
     {
+        if (@event is ReturnValueProduced retProduced 
+            && @event.Command is SubmitCode submit
+            && submit.Parameters.TryGetValue(ViewId, out var viewId)
+            )
+        {
+            areas[viewId] = retProduced.Value;
+            if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
+                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
+        }
         var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
         var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
         foreach (var a in subscriptions)
             Hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
     }
 
-    private readonly ConcurrentDictionary<string, UiControl> areas = new();
+    private readonly ConcurrentDictionary<string, object> areas = new();
     private IMessageHub Hub { get; set; }
     public CompositeKernel Kernel { get; set; }
-    private string LayoutAreaUrl { get; set; } = "https://localhost:65260/area/";
 
     protected CompositeKernel CreateKernel()
     {
@@ -178,10 +185,6 @@ public class KernelContainer : IDisposable
         ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
 
 
-        Formatter.Register<UiControl>(
-            formatter: FormatControl, HtmlFormatter.MimeType);
-        Formatter.Register<IRenderableObject>(
-            formatter: (obj,ctx) => FormatControl(obj.ToControl(), ctx), HtmlFormatter.MimeType);
 
         var composite = new CompositeKernel("mesh").UseNugetDirective(OnResolve);
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
@@ -199,18 +202,10 @@ public class KernelContainer : IDisposable
         return Task.CompletedTask;
     }
 
-    private bool FormatControl(UiControl control, FormatContext context)
+    private string FormatControl(UiControl control, string iframeUrl, string viewId)
     {
-        var viewId = Guid.NewGuid().AsString();
-        areas[viewId] = control;
-        if (control is null)
-        {
-            var nullView = new PocketView("null");
-            nullView.WriteTo(context);
-            return true;
-        }
 
-        var style = control.Style?.ToString() ?? string.Empty;
+        var style = control?.Style?.ToString() ?? string.Empty;
         if (!style.Contains("display"))
             style += "display: block; ";
         if (!style.Contains("margin"))
@@ -220,9 +215,8 @@ public class KernelContainer : IDisposable
         if (!style.Contains("height"))
             style += "height: 500px; ";
 
-        var view = $@"<iframe id='{viewId}' src='{LayoutAreaUrl}/{Hub.Address}/{viewId}' style='{style}'></iframe>";
-        context.Writer.Write(view);
-        return true;
+        var view = $@"<iframe id='{viewId}' src='{iframeUrl}/{Hub.Address}/{viewId}' style='{style}'></iframe>";
+        return view;
     }
 
     private static string ReplaceLastSegmentWithArea(string url)
@@ -240,21 +234,29 @@ public class KernelContainer : IDisposable
         return @event.Processed();
     }
 
+    private const string ViewId = "viewId";
+    private const string IframeUrl = "iframeUrl";
     public IMessageDelivery HandleKernelCommandEnvelope(IMessageDelivery<KernelCommandEnvelope> request)
     {
         subscriptions.Add(request.Sender);
-        if(request.Message.LayoutAreaUrl is not null)
-            LayoutAreaUrl = request.Message.LayoutAreaUrl;
         var envelope = Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Deserialize(request.Message.Command);
         var command = envelope.Command;
+        if (command is SubmitCode submit)
+        {
+            submit.Parameters[ViewId] = request.Message.ViewId;
+            if(!string.IsNullOrEmpty(request.Message.IFrameUrl))
+                submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
+        }
         executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command)); 
         return request.Processed();
     }
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
     {
-        LayoutAreaUrl = request.Message.LayoutAreaUrl;
         subscriptions.Add(request.Sender);
         var command = new SubmitCode(request.Message.Code);
+        command.Parameters[ViewId] = request.Message.Id;
+        if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
+            command.Parameters[IframeUrl] = request.Message.IFrameUrl;
         executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command));
         return request.Processed();
     }

@@ -6,6 +6,7 @@ using Json.Pointer;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
@@ -64,7 +65,7 @@ public static class LayoutClientExtensions
         string dataContext = null, 
         Func<object, T> conversion = null) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
-            .Select(conversion ?? (x => stream.ConvertSingle<T>(x, null)));
+            .Select(conversion ?? (x => stream.Hub.ConvertSingle<T>(x, null)));
 
 
     public static JsonElement? GetValueFromModel(this ModelParameter model, JsonPointerReference reference)
@@ -115,15 +116,17 @@ public static class LayoutClientExtensions
         return pointer.StartsWith('/')? pointer.TrimEnd('/') : $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
-    public static T ConvertSingle<T>(this ISynchronizationStream<JsonElement> stream, object value, Func<object, T> conversion)
+    public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T> conversion)
     {
         if (conversion != null)
             return conversion.Invoke(value);
         return value switch
         {
             null => default,
-            JsonElement element => stream.ConvertJson(element, conversion),
-            JsonObject obj => stream.ConvertJson(obj, conversion),
+            // ReSharper disable ExpressionIsAlwaysNull
+            JsonElement element => hub.ConvertJson(element, conversion),
+            JsonObject obj => hub.ConvertJson(obj, conversion),
+            // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
             string s => ConvertString<T>(s),
             _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")
@@ -150,21 +153,21 @@ public static class LayoutClientExtensions
 
     }
 
-    private static T ConvertJson<T>(this ISynchronizationStream<JsonElement> stream, JsonElement? value, Func<object, T> conversion)
+    private static T ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object, T> conversion)
     {
         if (value == null)
             return default;
         if (conversion != null)
-            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), stream.Hub.JsonSerializerOptions));
-        return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), stream.Hub.JsonSerializerOptions);
+            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions));
+        return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
     }
-    private static T ConvertJson<T>(this ISynchronizationStream<JsonElement> stream, JsonObject value, Func<object, T> conversion)
+    private static T ConvertJson<T>(this IMessageHub hub, JsonObject value, Func<object, T> conversion)
     {
         if (value == null)
             return default;
         if (conversion != null)
-            return conversion(value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
-        return value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
+            return conversion(value.Deserialize<object>(hub.JsonSerializerOptions));
+        return value.Deserialize<T>(hub.JsonSerializerOptions);
     }
     public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter data)
     {
@@ -191,6 +194,5 @@ public static class LayoutClientExtensions
         }
 
     }
-
-
 }
+

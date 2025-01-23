@@ -20,7 +20,6 @@ public record MeshConfiguration
         => this with { MeshNodeFactories = MeshNodeFactories.Add(meshNodeFactory) };
 
     internal ImmutableDictionary<(string AddressType, string AddressId), MeshNode> Nodes { get; init; } = ImmutableDictionary<(string AddressType, string AddressId), MeshNode>.Empty;
-
     public MeshConfiguration AddMeshNodes(params IEnumerable<MeshNode> nodes)
         => this with
         {
@@ -30,4 +29,9 @@ public record MeshConfiguration
                 )
             )
         };
+    internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
+    public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
+    public MeshConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
+
+
 }

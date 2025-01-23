@@ -21,17 +21,18 @@ public interface IRoutingService
     /// </summary>
     /// <param name="address">Address to be registered for streaming</param>
     /// <param name="callback">Callback to deliver messages from the stream.</param>
-    /// <returns>The reactive stream which can be subscribed to.</returns>
-    Task RegisterStreamAsync(Address address, AsyncDelivery callback);
+    /// <returns>An async disposable which will unsubscribe when called.</returns>
+    Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
 
     /// <summary>
-    /// <summary>
-    /// Unregisters the corresponding address from the routing service. This method must be called by submitting an <see cref="UnregisterAddressRequest"/> to MeshAddress.
+    /// Registers addressType and id and gets a stream
     /// </summary>
-    /// </summary>
-    /// <param name="address">Address to be unregistered</param>
-    /// <returns>Routed address if it was registered. This can be used, e.g. for cascading disposal.</returns>
-    Task Async(Address address);
+    /// <param name="address">Address to be registered for streaming</param>
+    /// <param name="callback">Callback to deliver messages from the stream.</param>
+    /// <returns>An async disposable which will unsubscribe when called.</returns>
+    Task<IAsyncDisposable> RegisterStreamAsync(Address address, SyncDelivery callback)
+        => RegisterStreamAsync(address, (d, _) => Task.FromResult(callback(d)));
+
     /// <summary>
     /// Stream Namespace for incoming messages
     /// </summary>

@@ -1,6 +1,5 @@
 ﻿using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -68,7 +67,7 @@ public static class DomainViews
 
     }
 
-    public static NavMenuControl AddTypesCatalogs(this LayoutAreaHost host, NavMenuControl menu)
+    public static IEnumerable<UiControl> AddTypesCatalogs(this LayoutAreaHost host)
         => host
             .Workspace
             .DataContext
@@ -77,19 +76,17 @@ public static class DomainViews
 
             .OrderBy(x => x.TypeDefinition.Order ?? int.MaxValue)
             .GroupBy(x => x.TypeDefinition.GroupName)
+            .Select(types => (types.Key, types))
+            .SelectMany(m => m.Key is null ? m.types.Select(t => 
+                (UiControl)new NavLinkControl(t.TypeDefinition.DisplayName, t.TypeDefinition.Icon,
+                new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
+                    .ToHref(host.Hub.Address)) )
+                : [ m.types.Select(t =>
+                    new NavLinkControl(t.TypeDefinition.DisplayName, t.TypeDefinition.Icon,
+                    new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
+                        .ToHref(host.Hub.Address)) ).Aggregate(new NavGroupControl(m.Key, null, null), (g,l) => g.WithView(l))]
+                );
 
-            .Aggregate(
-                menu,
-                (m, types) => m.WithNavGroup(
-                    types.Aggregate(
-                        Controls.NavGroup(types.Key ?? "Types")
-                            .WithSkin(skin => skin.Expand()),
-                        (ng, t) => ng.WithLink(t.TypeDefinition.DisplayName,
-                            new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
-                                .ToHref(host.Hub.Address))
-                    )
-                )
-            );
 
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
         GetDetailsReference(hub, type, id)?.ToHref(hub.Address);

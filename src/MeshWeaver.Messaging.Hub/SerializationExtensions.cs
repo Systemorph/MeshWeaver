@@ -53,6 +53,11 @@ public static class SerializationExtensions
             .Aggregate(CreateSerializationConfiguration(hub), (c, f) => f.Invoke(c));
         var serializationOptions = serializationConfig.Options;
         var deserializationOptions = new JsonSerializerOptions(serializationOptions);
+        var addressTypes = hub.TypeRegistry.Types.Where(x => x.Value.Type.IsAssignableTo(typeof(Address))).Select(x => new KeyValuePair<string, Type>(x.Key, x.Value.Type)).ToDictionary();
+        var addressConverter = new AddressConverter(addressTypes);
+        serializationOptions.Converters.Add(addressConverter);
+        deserializationOptions.Converters.Add(addressConverter);
+
         serializationOptions.Converters.Add(new JsonNodeConverter());
         serializationOptions.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         serializationOptions.Converters.Add(new TypedObjectSerializeConverter(typeRegistry, null));
@@ -62,10 +67,6 @@ public static class SerializationExtensions
         deserializationOptions.Converters.Add(new TypedObjectDeserializeConverter(typeRegistry, serializationConfig));
         deserializationOptions.Converters.Add(new RawJsonConverter());
 
-        var addressTypes = hub.TypeRegistry.Types.Where(x => x.Value.Type.IsAssignableTo(typeof(Address))).Select(x => new KeyValuePair<string, Type>(x.Key, x.Value.Type)).ToDictionary();
-        var addressConverter = new AddressConverter(addressTypes);
-        serializationOptions.Converters.Add(addressConverter);
-        deserializationOptions.Converters.Add(addressConverter);
 
         var ret = new JsonSerializerOptions();
         ret.Converters.Add(

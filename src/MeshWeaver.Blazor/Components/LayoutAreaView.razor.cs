@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 
@@ -44,17 +43,20 @@ public partial class LayoutAreaView
         DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
-        DataBind(ViewModel.AddressType, x => x.AddressType);
-        DataBind(ViewModel.AddressId, x => x.AddressId);
+        DataBind(ViewModel.Address, x => x.Address, ConvertAddress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
 
-        Address = MeshExtensions.MapAddress(AddressType, AddressId);
     }
 
-    private Address Address { get; set; }
+    private Address ConvertAddress(object address)
+    {
+        if (address is string s)
+            return Hub.GetAddress(s);
+        return (Address)address;
+    }
+
     private bool ShowProgress { get; set; }
-    private string AddressType { get; set; }
-    private string AddressId { get; set; }
+    private Address Address { get; set; }
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {

@@ -6,8 +6,14 @@
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
     </ItemGroup>
+    <ItemGroup>
+        <Content Include="Markdown\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\..\src\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Connection.Notebook\MeshWeaver.Connection.Notebook.csproj">
           <Private>True</Private>
         </ProjectReference>
@@ -19,11 +25,11 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="Roslynator.Analyzers"  />
-        <PackageReference Include="Roslynator.Formatting.Analyzers"  />
-        <PackageReference Include="Roslynator.CodeFixes"  />
-        <PackageReference Include="Roslynator.CodeAnalysis.Analyzers"  />
-        <PackageReference Include="Roslynator.Refactorings"  />
+        <PackageReference Include="Roslynator.Analyzers" />
+        <PackageReference Include="Roslynator.Formatting.Analyzers" />
+        <PackageReference Include="Roslynator.CodeFixes" />
+        <PackageReference Include="Roslynator.CodeAnalysis.Analyzers" />
+        <PackageReference Include="Roslynator.Refactorings" />
     </ItemGroup>
 
 </Project>

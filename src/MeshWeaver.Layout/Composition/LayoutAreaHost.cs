@@ -332,12 +332,12 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(() => 
-                    LayoutDefinition
-                        .Render(this, context, new EntityStore()
+            Stream.Initialize(async ct => 
+                    (await LayoutDefinition
+                        .RenderAsync(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
-                        )
+                        ))
                         .Store);
             logger.LogDebug("End re-rendering");
         });

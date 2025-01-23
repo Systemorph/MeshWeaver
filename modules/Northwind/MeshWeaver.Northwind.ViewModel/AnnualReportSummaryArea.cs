@@ -3,7 +3,6 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
 
 namespace MeshWeaver.Northwind.ViewModel;
