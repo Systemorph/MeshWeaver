@@ -12,11 +12,12 @@ using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Mesh;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
 
-public static class BlazorClientRegistry
+public static class BlazorViewRegistry
 {
 
     internal static MessageHubConfiguration AddBlazor(
@@ -55,12 +56,13 @@ public static class BlazorClientRegistry
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type)), stream, area),
+            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
+            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
-            SelectControl select => StandardView<SelectControl, Select>(select, stream, area),
+            SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),

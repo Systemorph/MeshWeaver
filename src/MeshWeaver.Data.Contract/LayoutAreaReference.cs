@@ -54,7 +54,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// </summary>
     /// <param name="address">The address for the href.</param>
     /// <returns>A string representing the application href.</returns>
-    public string ToAppHref(object address)
+    public string ToHref(object address)
     {
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
@@ -67,7 +67,7 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <param name="addressType">The type of address for the href.</param>
     /// <param name="addressId">The id of address for the href.</param>
     /// <returns>A string representing the application href.</returns>
-    public string ToAppHref(object addressType, object addressId)
+    public string ToHref(object addressType, object addressId)
     {
         var ret = $"{addressType}/{addressId}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)

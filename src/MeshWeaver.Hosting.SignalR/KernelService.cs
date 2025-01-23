@@ -7,8 +7,6 @@ namespace MeshWeaver.Hosting.SignalR
 {
     public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelService
     {
-
-
         private async Task<KernelClient> GetKernelClientAsync(KernelAddress kernelAddress)
         {
             var client = await memoryCache.GetOrCreateAsync(
@@ -29,8 +27,8 @@ namespace MeshWeaver.Hosting.SignalR
             ((KernelClient)value).Dispose();
         }
 
-        public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope) => 
-            PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope), kernelAddress);
+        public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope, string layoutAreaUrl) => 
+            PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope, layoutAreaUrl), kernelAddress);
 
         public Task SubmitEventAsync(KernelAddress kernelAddress, string commandEnvelope) => 
             PostToKernel(new KernelEventEnvelope(commandEnvelope), kernelAddress);

@@ -25,7 +25,7 @@ public static class AnnualReportSummaryArea
                 .WithNavMenu((menu, _, _) =>
                     menu.WithNavLink(
                         nameof(AnnualReportSummary),
-                        new LayoutAreaReference(nameof(AnnualReportSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+                        new LayoutAreaReference(nameof(AnnualReportSummary)).ToHref(layout.Hub.Address), FluentIcons.Document)
                 )
 
     ;

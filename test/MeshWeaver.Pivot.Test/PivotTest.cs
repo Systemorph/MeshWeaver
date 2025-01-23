@@ -29,8 +29,7 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "TestData",
+                data.AddSource(
                     dataSource =>
                         dataSource
                             .WithType<TestHierarchicalDimensionA>(type =>

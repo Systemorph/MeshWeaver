@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.SignalR;
@@ -24,6 +25,7 @@ public static class SignalRHostingExtensions
     {
         services.AddSignalR();
         services.AddSingleton<KernelHub>();
+        services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
         services.AddSingleton<IKernelService, KernelService>();
         return services;
     }

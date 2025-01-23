@@ -16,8 +16,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "ReferenceData",
+                data.AddSource(
                     dataSource =>
                         dataSource
                             .WithType<LineOfBusiness>(t =>
@@ -34,7 +33,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureClient(configuration)
             .AddData(data =>
-                data.FromHub(
+                data.AddHubSource(
                     new HostAddress(),
                     dataSource => dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
                 )

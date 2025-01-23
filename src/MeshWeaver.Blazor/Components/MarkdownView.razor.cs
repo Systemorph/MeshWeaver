@@ -5,7 +5,6 @@ using Microsoft.JSInterop;
 using Markdig.Syntax;
 using MeshWeaver.Markdown;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
-using System.ComponentModel;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -50,16 +49,10 @@ public partial class MarkdownView
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            htmlUtils = await JsRuntime.Import("htmlUtils.js");
-            highlight = await JsRuntime.Import("highlight.js");
-        }
-
         if (firstRender || markdownChanged)
         {
-            markdownChanged = false;
-
+            htmlUtils ??= await JsRuntime.Import("htmlUtils.js");
+            highlight ??= await JsRuntime.Import("highlight.js");
             foreach (var component in LayoutAreaComponents)
             {
                 await htmlUtils.InvokeVoidAsync("moveElementContents", ComponentContainerId(component.Id.ToString()), component.Id.ToString());
@@ -67,6 +60,16 @@ public partial class MarkdownView
 
             await highlight.InvokeVoidAsync("highlightCode", element);
         }
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (htmlUtils is not null)
+            await htmlUtils.DisposeAsync();
+        if (highlight is not null)
+            await highlight.DisposeAsync();
+        htmlUtils = null;
+        highlight = null;
     }
 
     private string ComponentContainerId(string id) => $"component-container-{id}";

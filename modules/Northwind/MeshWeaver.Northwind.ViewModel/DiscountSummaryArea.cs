@@ -27,7 +27,7 @@ public static class DiscountSummaryArea
             .WithNavMenu((menu, _, _) =>
                 menu.WithNavLink(
                     nameof(DiscountSummary),
-                    new LayoutAreaReference(nameof(DiscountSummary)).ToAppHref(layout.Hub.Address), FluentIcons.Document)
+                    new LayoutAreaReference(nameof(DiscountSummary)).ToHref(layout.Hub.Address), FluentIcons.Document)
             )
         ;
 

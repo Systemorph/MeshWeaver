@@ -40,7 +40,7 @@ public static class DomainViews
             var typeDefinition = typeSource.TypeDefinition;
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
-            var id = JsonSerializer.Deserialize(idString, keyType);
+            var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType);
             return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
         }
         catch (Exception e)
@@ -86,13 +86,13 @@ public static class DomainViews
                             .WithSkin(skin => skin.Expand()),
                         (ng, t) => ng.WithLink(t.TypeDefinition.DisplayName,
                             new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
-                                .ToAppHref(host.Hub.Address))
+                                .ToHref(host.Hub.Address))
                     )
                 )
             );
 
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
-        GetDetailsReference(hub, type, id)?.ToAppHref(hub.Address);
+        GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
     public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, Type type, object id)
     {

@@ -32,7 +32,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = CreateClient();
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
-            new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command))),
+            new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command)), null),
             o => o.WithTarget(new KernelAddress()));
         var kernelEvent = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
@@ -59,9 +59,10 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task HubViaKernel()
     {
+        const string url = "http://localhost/area";
         var client = CreateClient();
         client.Post(
-            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand),
+            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand, url),
             o => o.WithTarget(new KernelAddress()));
         var kernelEvents = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
@@ -81,7 +82,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync();
         var standardOutput = kernelEvents.OfType<ReturnValueProduced>().Single();
         var value = standardOutput.FormattedValues.Single();
-        value.Value.Should().Contain("iframe");
+        value.Value.Should().Contain("iframe").And.Subject.Should().Contain(url);
     }
 
     private readonly ReplaySubject<KernelEventEnvelope> kernelEventsStream = new();

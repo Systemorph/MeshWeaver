@@ -4,7 +4,7 @@ using MeshWeaver.Layout;
 namespace MeshWeaver.Blazor.Components;
 
 public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<TViewModel, TView>
-    where TViewModel : UiControl, IFormComponent
+    where TViewModel : UiControl, IFormControl
     where TView : FormComponentBase<TViewModel, TView, TValue>
 {
     private TValue value;

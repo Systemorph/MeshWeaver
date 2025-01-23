@@ -19,8 +19,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "ad hoc",
+                data.AddSource(
                     dataSource =>
                         dataSource.WithType<MyData>(type =>
                             type.WithKey(instance => instance.Id)
