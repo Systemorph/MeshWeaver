@@ -54,7 +54,7 @@ public static class ArticleExtensions
         => configuration.Get<ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>>>() ?? [];
 
 
-    public static MeshArticle ParseArticle(string collection, string path, string content)
+    public static Article ParseArticle(string collection, string path, string content)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -67,11 +67,11 @@ public static class ArticleExtensions
 
         var yaml = yamlBlock.Lines.ToString();
         var deserializer = new YamlDotNet.Serialization.DeserializerBuilder().Build();
-        var ret = deserializer.Deserialize<MeshArticle>(yaml);
+        var ret = deserializer.Deserialize<Article>(yaml);
         return SetStandardProperties(ret, collection, path, document, pipeline);
     }
 
-    private static MeshArticle SetStandardProperties(MeshArticle ret, string collection, string path, MarkdownDocument document, MarkdownPipeline pipeline)
+    private static Article SetStandardProperties(Article ret, string collection, string path, MarkdownDocument document, MarkdownPipeline pipeline)
     {
         return ret with
         {

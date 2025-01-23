@@ -6,6 +6,6 @@ namespace MeshWeaver.Connection.Orleans;
 
 public interface IArticleGrain : IGrainWithStringKey
 {
-    public Task Update(MeshArticle entry);
-    Task<MeshArticle> Get(ArticleOptions options);
+    public Task Update(Article entry);
+    Task<Article> Get(ArticleOptions options);
 }
