@@ -1,10 +1,19 @@
 @using Microsoft.JSInterop
 @inherits BlazorView<MarkdownControl, MarkdownView>
-@inject IJSRuntime JsRuntime;
 
+@inject IJSRuntime JsRuntime;
+<FluentDesignTheme @bind-Mode="@Mode"
+                   StorageName="theme" />
 <HeadContent>
-    <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/default.min.css" rel="stylesheet" />
-    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet" />
+    @if (Mode == DesignThemeModes.Light)
+    {
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet"/>
+    }
+    else
+    {
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet"/>
+    }
+    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet"/>
 </HeadContent>
 
 <article @ref="element" class="markdown-body">
@@ -17,6 +26,10 @@
     {
         <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
             <LayoutAreaView ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
-         </div>
+        </div>
     }
 </article>
+
+@code {
+    private DesignThemeModes Mode;
+}

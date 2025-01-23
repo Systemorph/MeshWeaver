@@ -16,6 +16,9 @@ public class JsonNodeConverter : JsonConverter<JsonNode>
 
     public override void Write(Utf8JsonWriter writer, JsonNode value, JsonSerializerOptions options)
     {
-        value.WriteTo(writer);
+        if(value is not null)
+            value.WriteTo(writer);
+        else
+            writer.WriteNullValue();
     }
 }

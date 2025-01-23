@@ -80,12 +80,9 @@ public static class DataCubeLayoutExtensions
                         .WithClass("dimension-filter")
                         .WithOrientation(Orientation.Horizontal)
                         .WithHorizontalGap(16)
-                        .WithView(Listbox(f.SelectedDimension)
-                            .WithOptions(
-                                f.AvailableDimensions
-                                    .Select(d => (Option)new Option<string>(d.SystemName, d.DisplayName))
-                                    .ToArray()
-                            ))
+                        .WithView(Listbox(f.SelectedDimension, f.AvailableDimensions
+                                .Select(d => (Option)new Option<string>(d.SystemName, d.DisplayName))
+                                .ToArray()))
                         .WithView(Stack
                             .WithClass("dimension-values")
                             .WithView(

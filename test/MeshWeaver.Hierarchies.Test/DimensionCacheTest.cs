@@ -1,5 +1,4 @@
-﻿using System;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Execution;
@@ -18,8 +17,7 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .AddData(data =>
-                data.FromConfigurableDataSource(
-                    "Test Data",
+                data.AddSource(
                     dataSource =>
                         dataSource
                             .WithType<TestHierarchicalDimensionA>(type =>
@@ -40,7 +38,7 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
             typeof(TestHierarchicalDimensionB)
         );
 
-        var ci = await ((IObservable<ChangeItem<EntityStore>>)stream).FirstAsync();
+        var ci = await stream.FirstAsync();
         return new(workspace, ci.Value);
     }
 

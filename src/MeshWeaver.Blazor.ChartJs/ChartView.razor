@@ -8,6 +8,7 @@
 {
     ElementReference element;
 
+
     [Inject] private IJSRuntime JsRuntime { get; set; }
     private IJSObjectReference jsModule;
 
@@ -15,30 +16,37 @@
     {
         if (firstRender)
         {
-            try
-            {
-                jsModule = await JsRuntime.Import("index.mjs"); ;
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"Error loading JavaScript module: {ex.Message}");
-            }
+            jsModule = await JsRuntime.Import("index.mjs");
 
-            DataBind(ViewModel.Data, o => o.Options);
+
         }
+        if (jsModule is not null)
+        {
+            await jsModule.InvokeVoidAsync("renderChart", element, Options);
+        }
+    }
 
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Data, o => o.Options);
+    }
+
+    private readonly string id = Guid.NewGuid().ToString();
+
+    private object Options { get; set; }
+
+    public override async ValueTask DisposeAsync()
+    {
         if (jsModule is not null)
         {
             try
             {
-                await jsModule.InvokeVoidAsync("renderChart", element, Options);
+                await jsModule.DisposeAsync();
             }
-            catch (Exception ex)
+            catch (JSDisconnectedException)
             {
-                Logger.LogError($"Error invoking renderChart function: {ex.Message}");
             }
         }
     }
-
-    private object Options { get; set; }
 }

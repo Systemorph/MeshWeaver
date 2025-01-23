@@ -81,7 +81,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (Hub != null)
         {
             Hub.Dispose();
-            await Hub.Disposed;
+            await Hub.Disposal;
         }
         Hub = null;
         if (loadContext != null)

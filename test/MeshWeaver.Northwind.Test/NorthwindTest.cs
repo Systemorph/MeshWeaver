@@ -49,15 +49,15 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureHost(configuration)
             .AddNorthwindViewModels()
             .AddData(data =>
-                data.FromHub(
+                data.AddHubSource(
                         new ReferenceDataAddress(),
                         dataSource => dataSource.AddNorthwindReferenceData()
                     )
-                    .FromHub(new CustomerAddress(), c => c.WithType<Customer>())
-                    .FromHub(new ProductAddress(), c => c.WithType<Product>())
-                    .FromHub(new EmployeeAddress(), c => c.WithType<Employee>())
-                    .FromHub(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
-                    .FromHub(new SupplierAddress(), c => c.WithType<Supplier>())
+                    .AddHubSource(new CustomerAddress(), c => c.WithType<Customer>())
+                    .AddHubSource(new ProductAddress(), c => c.WithType<Product>())
+                    .AddHubSource(new EmployeeAddress(), c => c.WithType<Employee>())
+                    .AddHubSource(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
+                    .AddHubSource(new SupplierAddress(), c => c.WithType<Supplier>())
             );
     }
 
@@ -67,7 +67,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         base.ConfigureClient(configuration)
             .WithTypes(typeof(ChartControl), typeof(GridControl))
             .AddData(data =>
-                data.FromHub(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
+                data.AddHubSource(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
             ).AddLayoutClient(x => x);
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
