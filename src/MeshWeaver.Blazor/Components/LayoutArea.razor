@@ -3,11 +3,11 @@
 <LayoutAreaView ViewModel="@ViewModel" />
 
 @code {
-    [Parameter] public string Application { get; set; }
+    [Parameter] public string Address { get; set; }
     [Parameter] public string Area { get; set; }
     [Parameter] public string Id { get; set; }
 
-    private LayoutAreaControl ViewModel => Controls.LayoutArea(new ApplicationAddress(Application), new(Area)
+    private LayoutAreaControl ViewModel => Controls.LayoutArea(Address, new(Area)
     {
         Id = Id
     });
