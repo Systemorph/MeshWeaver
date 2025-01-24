@@ -1,49 +1,81 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
+using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
+using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
-public abstract class ArticleCollection(string collection)
+public abstract record ArticleCollection(string Collection)
 {
-    public string Collection { get; } = collection;
+    public string DisplayName { get; init; } = Collection.Wordify();
+    public Icon Icon { get; set; }
+
     public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
 
-    public abstract Task InitializeAsync(CancellationToken ct);
+    public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
+
+    public abstract void Initialize(IMessageHub hub);
+
+}
+public abstract record ArticleCollection<TCollection>(string Collection) : ArticleCollection(Collection)
+    where TCollection:ArticleCollection<TCollection>
+{
+    protected TCollection This => (TCollection)this;
+    public TCollection WithDisplayName(string displayName)
+        => This with { DisplayName = displayName };
 }
 
-public class FileSystemCollection(string collection, string basePath) : ArticleCollection(collection)
+public record FileSystemCollection(string Collection, string BasePath) : ArticleCollection<FileSystemCollection>(Collection)
 {
-    private readonly ConcurrentDictionary<string, ReplaySubject<Article>> articleSubjects = new();
-    public string BasePath { get; } = basePath;
+    private readonly ConcurrentDictionary<string, ISynchronizationStream<Article>> articleStreams = new();
+    private IMessageHub Hub { get; set; }
+    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions)
+    => articleStreams.Values.Select(x => x.Select(y => y.Value))
+        .CombineLatest()
+        // TODO V10: Consider options here to steer query. (24.01.2025, Roland Bürgi)
+        .Select(x => x.OrderByDescending(a => a.Published))
+        ;
 
-
-    public override async Task InitializeAsync(CancellationToken ct)
+    public override void Initialize(IMessageHub hub)
     {
-        if (articleSubjects.Count > 0)
+        if (articleStreams.Count > 0)
             return;
         var files = Directory.GetFiles(BasePath, "*.md");
         foreach (var file in files)
         {
+            Hub = hub;
             var path = Path.GetRelativePath(BasePath, file);
-            var s = articleSubjects.GetOrAdd(path, _ => new(1));
-            s.OnNext(await LoadArticle(file));
+            var stream = articleStreams.GetOrAdd(path, CreateStream);
+            LoadAndSet(file, stream);
         }
         MonitorFileSystem();
     }
 
-    public override IObservable<Article> GetArticle(string path, ArticleOptions options)
+    private ISynchronizationStream<Article> CreateStream(string path)
     {
-        var ret = articleSubjects.GetValueOrDefault(path);
+        return new SynchronizationStream<Article>(
+            new(Hub.Address, path), 
+            Hub, 
+            new EntityReference(Collection, path),
+            null,
+            x => x);
+    }
+
+    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null)
+    {
+        var ret = articleStreams.GetValueOrDefault(path);
         if (ret is null)
             return null;
         if (options is not null && (!options.ContentIncluded || !options.PrerenderIncluded))
-            return ret.Select(art => art with
+            return ret.Select(art => art.Value with
             {
-                Content = options.ContentIncluded ? art.Content : null,
-                PrerenderedHtml = options.PrerenderIncluded ? art.PrerenderedHtml : null
+                Content = options.ContentIncluded ? art.Value.Content : null,
+                PrerenderedHtml = options.PrerenderIncluded ? art.Value.PrerenderedHtml : null
             });
-        return ret;
+        return ret.Select(x => x.Value);
     }
 
     public void MonitorFileSystem()
@@ -58,22 +90,21 @@ public class FileSystemCollection(string collection, string basePath) : ArticleC
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
         var path = Path.GetRelativePath(BasePath, e.FullPath);
-        var s = articleSubjects.GetOrAdd(path, _ => new(1));
+        var s = articleStreams.GetOrAdd(path, CreateStream);
         LoadAndSet(e.FullPath, s);
     }
 
-    private async void LoadAndSet(string fullPath, ReplaySubject<Article> s)
+    private void LoadAndSet(string fullPath, ISynchronizationStream<Article> s)
     {
-        s.OnNext(await LoadArticle(fullPath));
-
+        s.UpdateAsync(async (_, ct) => new ChangeItem<Article>(await LoadArticle(fullPath, ct), Hub.Address, ChangeType.Full, Hub.Version, null));
     }
 
-    private async Task<Article> LoadArticle(string fullPath)
+    private async Task<Article> LoadArticle(string fullPath, CancellationToken ct)
     {
         if(!File.Exists(fullPath))
            return null;
         await using var stream = File.OpenRead(fullPath);
-        var content = await new StreamReader(stream).ReadToEndAsync();
+        var content = await new StreamReader(stream).ReadToEndAsync(ct);
         return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), content);
     }
 }

@@ -192,7 +192,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         year!.Value.GetInt32().Should().Be(2024);
 
-        stream.UpdateAsync(ci =>
+        stream.Update(ci =>
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(
@@ -425,7 +425,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var firstValuePointer = enumerableReference.Pointer + "/0/value";
 
-        stream.UpdateAsync(ci =>
+        stream.Update(ci =>
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(JsonPointer.Parse(firstValuePointer), false)

@@ -78,18 +78,18 @@ public interface IMenuItem : IUiControl
 {
     object Title { get; init; }
     object Icon { get; init; }
-    object Href { get; init; }
+    object Url { get; init; }
 }
 
-public record NavLinkControl(object Title, object Icon, object Href) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IMenuItem
+public record NavLinkControl(object Title, object Icon, object Url) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IMenuItem
 {
     public NavLinkControl WithTitle(object title) => This with { Title = title };
-    public NavLinkControl WithHref(object href) => This with { Href = href };
+    public NavLinkControl WithHref(object href) => This with { Url = href };
 
     public NavLinkControl WithIcon(object icon) => This with { Icon = icon };
 }
 
-public record NavGroupControl(object Title, object Icon, object Href) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon, Href))
+public record NavGroupControl(object Title, object Icon, object Url) : ContainerControl<NavGroupControl, NavGroupSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new(Title, Icon, Url))
 {
     public NavGroupControl WithLink(object title, object href) =>
         WithView(new NavLinkControl(title, null, href));
