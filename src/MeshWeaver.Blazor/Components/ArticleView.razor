@@ -1,0 +1,48 @@
+﻿@using System.Collections
+@inherits SkinnedView<ArticleSkin, ArticleView>
+<div class="article-header">
+    <div class="thumbnail">
+        <img src="@Thumbnail" alt="Article Thumbnail" />
+    </div>
+    <div class="header-content">
+        <h1>@Title</h1>
+        <div class="meta-info">
+            <span class="authors">@string.Join(", ", Authors)</span>
+            <span class="published-date">@Published.ToString("MMMM dd, yyyy")</span>
+            <span class="tags">@Tags</span>
+        </div>
+        <p class="abstract">@Abstract</p>
+    </div>
+</div>
+
+<DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
+
+@code {
+    private string Name;
+    private string Collection;
+    private string Title;
+    private IReadOnlyCollection<string> Tags;
+    private string Thumbnail;
+    private string Abstract;
+    private IReadOnlyCollection<string> Authors;
+    private DateTime Published;
+    private DateTime LastUpdated;
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Name, x => x.Name);
+        DataBind(Skin.Collection, x => x.Collection);
+        DataBind(Skin.Title, x => x.Title);
+        DataBind(Skin.Tags, x => x.Tags, ConvertStringArray);
+        DataBind(Skin.Thumbnail, x => x.Thumbnail);
+        DataBind(Skin.Abstract, x => x.Abstract);
+        DataBind(Skin.Authors, x => x.Authors, ConvertStringArray);
+        DataBind(Skin.Published, x => x.Published);
+        DataBind(Skin.LastUpdated, x => x.LastUpdated);
+    }
+
+    private IReadOnlyCollection<string> ConvertStringArray(object tags)
+        => (tags as IEnumerable)?.Cast<string>().ToArray();
+
+}

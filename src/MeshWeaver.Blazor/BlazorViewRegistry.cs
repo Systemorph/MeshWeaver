@@ -101,6 +101,7 @@ public static class BlazorViewRegistry
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
+            ArticleSkin article => StandardSkinnedView<ArticleView>(article, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }

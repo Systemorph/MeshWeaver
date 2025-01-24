@@ -148,6 +148,7 @@ public static class LayoutClientExtensions
             TypeCode.Int16 => (T)(object)short.Parse(s),
             TypeCode.Byte => (T)(object)byte.Parse(s),
             TypeCode.Char => (T)(object)char.Parse(s),
+            TypeCode.DateTime => (T)(object)DateTime.Parse(s),
             _ => throw new InvalidOperationException($"Cannot convert {s} to {typeof(T)}")
         };
 

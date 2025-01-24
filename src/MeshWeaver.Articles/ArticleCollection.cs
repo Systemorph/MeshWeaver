@@ -117,6 +117,6 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
            return null;
         await using var stream = File.OpenRead(fullPath);
         var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), content);
+        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
     }
 }
