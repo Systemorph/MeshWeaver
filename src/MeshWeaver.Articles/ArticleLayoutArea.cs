@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -9,13 +10,8 @@ public static class ArticleLayoutArea
 {
 
 
-    private static HtmlControl RenderArticle(this LayoutDefinition host, object obj)
-    {
-        if (obj is not Article article)
-            return null;
-
-        return new HtmlControl(article.PrerenderedHtml).AddSkin(article.MapToSkin());
-    }
+    private static HtmlControl RenderArticle(Article article) => 
+        new HtmlControl(article.PrerenderedHtml).AddSkin(article.MapToSkin());
 
     private static ArticleSkin MapToSkin(this Article article)
     {
@@ -28,6 +24,8 @@ public static class ArticleLayoutArea
             Authors = article.Authors,
             Published = article.Published,
             Tags = article.Tags,
+            LastUpdated = article.LastUpdated,
+            Thumbnail = article.Thumbnail,
         };
     }
 
@@ -35,7 +33,8 @@ public static class ArticleLayoutArea
     {
         var collection = host.Hub.Address.GetCollectionName();
         var source = host.Hub.GetCollection(collection);
-        return source.GetArticle(host.Reference.Id.ToString());
+        return source.GetArticle(host.Reference.Id.ToString())
+            .Select(RenderArticle);
     }
 
 

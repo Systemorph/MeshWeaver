@@ -63,7 +63,7 @@ public static class ArticleExtensions
         => configuration.Get<ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>>>() ?? [];
 
 
-    public static Article ParseArticle(string collection, string path, string content)
+    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -77,6 +77,7 @@ public static class ArticleExtensions
         var yaml = yamlBlock.Lines.ToString();
         var deserializer = new YamlDotNet.Serialization.DeserializerBuilder().Build();
         var ret = deserializer.Deserialize<Article>(yaml);
+        ret.LastUpdated = lastWriteTime;
         return SetStandardProperties(ret, collection, path, document, pipeline);
     }
 

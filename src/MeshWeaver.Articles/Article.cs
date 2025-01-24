@@ -40,6 +40,7 @@ public record Article
     public List<string> Tags { get; set; } = [];
     public float[] VectorRepresentation { get; set; }
     public string AuthorAvatar { get; set; }
+    public DateTime LastUpdated { get; set; }
 
 
     public IDictionary<string, string> ToMetadata(string path, string type) =>
