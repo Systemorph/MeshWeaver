@@ -36,8 +36,8 @@ public record Article
     public Icon Icon { get; init; }
     public string Source { get; init; }
 
-    public List<string> Authors { get; set; }
-    public List<string> Tags { get; set; }
+    public List<string> Authors { get; set; } = [];
+    public List<string> Tags { get; set; } = [];
     public float[] VectorRepresentation { get; set; }
     public string AuthorAvatar { get; set; }
 

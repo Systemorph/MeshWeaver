@@ -89,6 +89,7 @@ public static class SharedPortalConfiguration
         app.MapBlazorHub();
         app.MapMeshWeaverHubs();
         app.MapFallbackToPage("/_Host");
+        app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
         app.Run();
         logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
     }

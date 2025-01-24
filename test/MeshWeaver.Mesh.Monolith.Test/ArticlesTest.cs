@@ -42,7 +42,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetRemoteStream(new ArticleAddress(Test),
-            ArticleLayouts.GetArticleLayoutReference("Overview.md"));
+            ArticleLayoutArea.GetArticleLayoutReference("Overview.md"));
 
         var control = await articleStream
             .GetControlStream("Article")

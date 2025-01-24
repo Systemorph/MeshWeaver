@@ -19,6 +19,7 @@ public abstract record ArticleCollection(string Collection)
 
     public abstract void Initialize(IMessageHub hub);
 
+    public abstract Task<byte[]> GetContentAsync(string path, CancellationToken ct = default);
 }
 public abstract record ArticleCollection<TCollection>(string Collection) : ArticleCollection(Collection)
     where TCollection:ArticleCollection<TCollection>
@@ -52,6 +53,17 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
             LoadAndSet(file, stream);
         }
         MonitorFileSystem();
+    }
+
+    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct)
+    {
+        if (path is null)
+            return null;
+        var fullPath = Path.Combine(BasePath, path);
+        if(!File.Exists(fullPath))
+            return null;
+        return await File.ReadAllBytesAsync(fullPath, ct);
+
     }
 
     private ISynchronizationStream<Article> CreateStream(string path)
