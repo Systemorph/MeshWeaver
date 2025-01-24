@@ -2,6 +2,7 @@
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +16,10 @@ public static class ArticleExtensions
     {
         var collection = GetCollectionName(config.Address);
         return config
-            .AddArticleViews()
+            .AddLayout(layout => layout
+                .WithView(nameof(ArticleLayoutArea.Article), ArticleLayoutArea.Article)
+                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog)
+            )
             .WithInitialization(hub =>
             {
                 var coll = GetCollection(hub, collection);

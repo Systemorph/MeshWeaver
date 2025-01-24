@@ -1,7 +1,7 @@
 ---
 Title: "Northwind Overview"
 Abstract: "This is a sample description of the article."
-Thumbnail: "images/thumbnail.jpg"
+Thumbnail: "images/thumbnail.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"

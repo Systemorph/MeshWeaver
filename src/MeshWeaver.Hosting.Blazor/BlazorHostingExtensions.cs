@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Application;
+using MeshWeaver.Articles;
 using MeshWeaver.Blazor;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
@@ -23,21 +24,19 @@ public static class BlazorHostingExtensions
             })
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
-    public static void MapStaticContent(this IEndpointRouteBuilder app, IMeshCatalog meshCatalog)
-        => app.MapGet("/static/{application}/{*fileName}", async (string application, string environment, string fileName) =>
-    {
-        var address = new ApplicationAddress(application);
-        var storageInfo = await meshCatalog.GetNodeAsync(address.GetType().FullName,address.ToString());
-        var filePath = Path.Combine(storageInfo.PackageName, storageInfo.ContentPath, fileName);
-
-        if (!File.Exists(filePath))
+    public static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
+        => app.MapGet("/static/{collection}/{**path}", async (string collection, string path) =>
         {
-            return Results.NotFound("File not found");
-        }
+            var articleCollection = articleService.GetCollection(collection);
+            var fileContent = await articleCollection.GetContentAsync(path);
 
-        var fileContent = await File.ReadAllBytesAsync(filePath);
-        var contentType = "application/octet-stream"; // Default content type, you can adjust based on file type
+            if (fileContent is null)
+            {
+                return Results.NotFound("File not found");
+            }
 
-        return Results.File(fileContent, contentType, fileName);
-    });
+            var contentType = "application/octet-stream"; // Default content type, you can adjust based on file type
+
+            return Results.File(fileContent, contentType, path);
+        });
 }

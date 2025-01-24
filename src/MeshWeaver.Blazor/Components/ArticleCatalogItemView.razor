@@ -1,5 +1,4 @@
-﻿@using System.Reflection
-@using MeshWeaver.Articles
+﻿@using MeshWeaver.Articles
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled
 @inherits BlazorView<ArticleCatalogItemControl, ArticleCatalogItemView>
 
@@ -54,9 +53,9 @@
     private string Created => Data.Created.ToShortDateString();
 
     // TODO V10: urls are to be clarified (28.08.2024, Alexander Kravets)
-    private readonly string imageBasePath = $"_content/{Assembly.GetExecutingAssembly().GetName().Name}";
-    private string Avatar => $"{imageBasePath}/avatars/{Data.AuthorAvatar}";
-    private string Thumbnail => $"{imageBasePath}/images/{Data.Thumbnail}";
+    private string ImageBasePath => $"static/{Data.Collection}";
+    private string Avatar => $"{ImageBasePath}/avatars/{Data.AuthorAvatar}";
+    private string Thumbnail => $"{ImageBasePath}/{Data.Thumbnail}";
 
     protected override void BindData()
     {

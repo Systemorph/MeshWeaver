@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Connection.Orleans;
@@ -63,7 +64,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-app.MapStaticContent(app.Services.GetRequiredService<IMeshCatalog>());
+app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 
