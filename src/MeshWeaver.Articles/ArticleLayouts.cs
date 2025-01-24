@@ -76,7 +76,7 @@ public static class ArticleLayouts
 
 
     public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection, string displayName = null)
-        => menu.WithView(Controls.NavLink(displayName ?? collection.Wordify(), $"{ArticleAddress.TypeName}/{nameof(Catalog)}/{collection}"));
+        => menu.WithView(Controls.NavLink(displayName ?? collection.Wordify(), $"articles/{collection}"));
 
     public static LayoutAreaReference GetArticleLayoutReference(string path, Func<ArticleOptions, ArticleOptions> options = null)
         => new(nameof(Article)) { Id = path }; // TODO V10: Create sth with options (22.01.2025, Roland Bürgi)

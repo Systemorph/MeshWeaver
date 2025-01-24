@@ -46,7 +46,7 @@ public static class ArticleExtensions
                 .AddMeshNodeFactory()
                 .Set(config.GetListOfLambdas().Add(articles))
             )
-            .ConfigureHub(config => config.WithServices(services => services.AddSingleton<IArticleService, ArticleService>()));
+            .ConfigureServices(services => services.AddSingleton<IArticleService, ArticleService>());
 
     private static MeshConfiguration AddMeshNodeFactory(this MeshConfiguration config)
         => config.AddMeshNodeFactory((type, id) => type == ArticleAddress.TypeName

@@ -7,7 +7,7 @@ Authors:
   - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
-  - "Financial Report
+  - "Financial Report"
   - "Sales Analysis"
   - "2022"
   - "2023"
