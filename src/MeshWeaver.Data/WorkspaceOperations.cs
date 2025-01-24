@@ -81,7 +81,7 @@ public static class WorkspaceOperations
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-            stream.UpdateAsync(store =>
+            stream.Update(store =>
             {
                 activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
                 try

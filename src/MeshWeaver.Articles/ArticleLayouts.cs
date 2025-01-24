@@ -1,15 +1,18 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
 public static class ArticleLayouts
 {
     internal static MessageHubConfiguration AddArticleViews(this MessageHubConfiguration config)
-        => config.AddLayout(layout => layout.AddArticleViews()
+        => config.AddLayout(layout => layout
+            .AddArticleViews()
             .AddRendering(layout.RenderArticle));
 
 
@@ -47,15 +50,33 @@ public static class ArticleLayouts
 
     private static IObservable<object> Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
-        throw new NotImplementedException();
+        var collectionName = host.Hub.Address.GetCollectionName();
+        var collection = host.Hub.GetCollection(collectionName);
+        return 
+            collection.GetArticles(ParseToOptions(host.Reference))
+            .Select(x => x.Aggregate(Controls.Stack, (s,a) => s.WithView(CreateControl(a))))
+            
+
+            ;
     }
-    public static string ArticleUrl(string source, string path)
-        => $"{ArticleAddress.TypeName}/{source}/{path}";
+
+    private static ArticleCatalogItemControl CreateControl(Article a) => 
+        new(a with{Content = null, PrerenderedHtml = null});
+
+    private static ArticleCatalogOptions ParseToOptions(LayoutAreaReference reference)
+    {
+        // TODO V10: Need to create some link from layout area reference id to options ==> url parsing. (24.01.2025, Roland Bürgi)
+        return new();
+    }
+
+
+    public static string ArticleUrl(string collection, string path)
+        => $"{ArticleAddress.TypeName}/{collection}/{path}";
 
 
 
-    public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection)
-        => menu.WithView(new LayoutAreaControl($"{ArticleAddress.TypeName}/{collection}", new(nameof(Catalog))));
+    public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection, string displayName = null)
+        => menu.WithView(Controls.NavLink(displayName ?? collection.Wordify(), $"{ArticleAddress.TypeName}/{nameof(Catalog)}/{collection}"));
 
     public static LayoutAreaReference GetArticleLayoutReference(string path, Func<ArticleOptions, ArticleOptions> options = null)
         => new(nameof(Article)) { Id = path }; // TODO V10: Create sth with options (22.01.2025, Roland Bürgi)

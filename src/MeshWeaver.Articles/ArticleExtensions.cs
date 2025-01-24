@@ -16,8 +16,13 @@ public static class ArticleExtensions
         var collection = GetCollectionName(config.Address);
         return config
             .AddArticleViews()
-            .WithInitialization((hub,ct) => GetCollection(hub,collection)?.InitializeAsync(ct) 
-                                            ?? throw new ArgumentException($"Misconfigured article collection {collection}"));
+            .WithInitialization(hub =>
+            {
+                var coll = GetCollection(hub, collection);
+                if (coll is null)
+                    throw new ArgumentException($"Misconfigured article collection {collection}");
+                coll.Initialize(hub);
+            });
     }
 
 

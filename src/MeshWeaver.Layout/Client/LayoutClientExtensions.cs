@@ -27,7 +27,7 @@ public static class LayoutClientExtensions
             }
 
             else
-                stream.UpdateAsync(ci =>
+                stream.Update(ci =>
                 {
                     var patch = stream.GetPatch(value, reference, dataContext, ci);
                     var updated = patch?.Apply(ci) ?? ci;

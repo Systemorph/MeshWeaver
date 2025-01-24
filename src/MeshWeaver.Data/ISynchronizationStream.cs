@@ -40,8 +40,8 @@ public interface ISynchronizationStream<TStream>
         IObserver<ChangeItem<TStream>>
 {
     ChangeItem<TStream> Current { get; }
-    void UpdateAsync(Func<TStream, ChangeItem<TStream>> update);
     void Update(Func<TStream, ChangeItem<TStream>> update);
+    void UpdateAsync(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update);
     void Initialize(Func<CancellationToken, Task<TStream>> init);
     void Initialize(Func<TStream> init) => Initialize(_ => Task.FromResult(init()));
     void Initialize(TStream init);

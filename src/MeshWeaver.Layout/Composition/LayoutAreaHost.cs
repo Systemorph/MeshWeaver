@@ -116,7 +116,7 @@ public record LayoutAreaHost : IDisposable
 
     public void UpdateArea(RenderingContext context, object view)
     {
-        Stream.UpdateAsync(store =>
+        Stream.Update(store =>
         {
             var changes = DisposeExistingAreas(store, context);
             var updates = RenderArea(context, view, changes.Store);
@@ -135,8 +135,8 @@ public record LayoutAreaHost : IDisposable
 
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
-        Stream.UpdateAsync(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId))
+        Stream.Update(ws =>
+            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId))
         );
     }
 

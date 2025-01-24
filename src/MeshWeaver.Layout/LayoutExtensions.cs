@@ -183,10 +183,10 @@ public static class LayoutExtensions
     {
         if (id is null)
             throw new ArgumentNullException(nameof(id));
-        stream.UpdateAsync(s =>
+        stream.Update(s =>
             stream.ApplyChanges(
                 s.MergeWithUpdates(
-                    s.Update(LayoutAreaReference.Data,
+                    WorkspaceOperations.Update(s, LayoutAreaReference.Data,
                         c => c.SetItem(id, value)
                     ),
                     changedBy

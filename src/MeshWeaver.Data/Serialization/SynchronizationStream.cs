@@ -107,10 +107,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
-    public void UpdateAsync(Func<TStream, ChangeItem<TStream>> update) =>
-        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
     public void Update(Func<TStream, ChangeItem<TStream>> update) =>
-        SetCurrent(update.Invoke(Current is null ? default : Current.Value));
+        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
+    public void UpdateAsync(Func<TStream,CancellationToken, Task<ChangeItem<TStream>>> update) =>
+        InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)));
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init)
     {
@@ -148,7 +148,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
-        UpdateAsync(update);
+        Update(update);
     }
 
     public SynchronizationStream(
