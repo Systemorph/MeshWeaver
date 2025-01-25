@@ -10,9 +10,8 @@ public static class ArticleLayoutArea
 {
 
 
-    private static ArticleControl RenderArticle(this Article article)
-    {
-        return new ArticleControl
+    private static ArticleControl RenderArticle(this Article article) =>
+        new()
         {
             Name = article.Name,
             Collection = article.Collection,
@@ -25,7 +24,6 @@ public static class ArticleLayoutArea
             Thumbnail = article.Thumbnail,
             Content = article.PrerenderedHtml
         };
-    }
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
     {

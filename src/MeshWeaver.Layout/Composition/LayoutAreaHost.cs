@@ -50,8 +50,8 @@ public record LayoutAreaHost : IDisposable
             workspace.ReduceManager.ReduceTo<EntityStore>(),
             configuration);
         Reference = reference;
-        Stream.AddDisposable(this);
-        Stream.AddDisposable(
+        Stream.RegisterForDisposal(this);
+        Stream.RegisterForDisposal(
             Stream.Hub.Register<ClickedEvent>(
                 OnClick,
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
@@ -328,7 +328,7 @@ public record LayoutAreaHost : IDisposable
 
         InvokeAsync(() =>
         {
-            DisposeAllAreas();
+            //DisposeAllAreas();
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };

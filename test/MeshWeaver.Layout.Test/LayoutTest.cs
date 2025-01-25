@@ -183,8 +183,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
-        dataPointer.Pointer.Should().Be("/year");
-        var pointer = JsonPointer.Parse(dataPointer.Pointer);
+        dataPointer.Pointer.Should().Be("year");
+        var pointer = JsonPointer.Parse($"/{dataPointer.Pointer}");
         var year = await stream
             .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
             .Select(s => pointer.Evaluate(s))
@@ -196,7 +196,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         {
             var patch = new JsonPatch(
                 PatchOperation.Replace(
-                    JsonPointer.Parse(yearTextBox.DataContext + dataPointer.Pointer),
+                    JsonPointer.Parse($"{yearTextBox.DataContext}/{dataPointer.Pointer}"),
                     2025
                 )
             );
@@ -253,8 +253,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Data.Should()
             .BeOfType<JsonPointerReference>()
             .Subject;
-        pointer.Pointer.Should().Be("/displayName");
-        var parsedPointer = JsonPointer.Parse(pointer.Pointer);
+        pointer.Pointer.Should().Be("displayName");
+        var parsedPointer = JsonPointer.Parse($"/{pointer.Pointer}");
         data.Select(d => parsedPointer.Evaluate(d).Value.ToString())
             .Should()
             .BeEquivalentTo("Hello", "World");
@@ -400,14 +400,14 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
         var itemTemplate = content.Should().BeOfType<ItemTemplateControl>().Which;
-        var enumReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be($"/data").And.Subject;
+        var enumReference = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be($"data").And.Subject;
         itemTemplate.DataContext.Should().Be($"/data/\"{nameof(DataBoundCheckboxes)}\"");
-        var enumerableReference = new JsonPointerReference($"{itemTemplate.DataContext}{enumReference}");
-        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference).FirstAsync();
+        var enumerableReference = new JsonPointerReference($"{itemTemplate.DataContext}/{enumReference}");
+        var filter = await stream.GetDataStream<IReadOnlyCollection<LabelAndBool>>(enumerableReference).Timeout(3.Seconds()).FirstAsync();
 
         filter.Should().HaveCount(3);
         var pointer = itemTemplate.Data.Should().BeOfType<JsonPointerReference>().Subject;
-        pointer.Pointer.Should().Be("/data");
+        pointer.Pointer.Should().Be("data");
         var first = filter.First();
         first.Value.Should().BeTrue();
 
