@@ -52,7 +52,7 @@ public partial class LayoutAreaView
     {
         if (address is string s)
             return Hub.GetAddress(s);
-        return (Address)address;
+        return Hub.GetAddress(address.ToString());
     }
 
     private bool ShowProgress { get; set; }
