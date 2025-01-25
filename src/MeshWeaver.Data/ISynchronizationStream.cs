@@ -12,7 +12,7 @@ public interface ISynchronizationStream : IDisposable
 
     StreamIdentity StreamIdentity { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
-    void AddDisposable(IDisposable disposable);
+    void RegisterForDisposal(IDisposable disposable);
 
     ISynchronizationStream Reduce(
         WorkspaceReference reference) => Reduce((dynamic)reference);

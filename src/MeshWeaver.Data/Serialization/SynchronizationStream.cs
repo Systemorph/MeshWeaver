@@ -134,7 +134,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Store.OnError(error);
     }
 
-    public void AddDisposable(IDisposable disposable) => Hub.RegisterForDisposal(_ => disposable.Dispose());
+    public void RegisterForDisposal(IDisposable disposable) => synchronizationHub
+        .RegisterForDisposal(_ => disposable.Dispose());
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
         synchronizationHub.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));

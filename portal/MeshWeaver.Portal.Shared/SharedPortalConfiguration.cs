@@ -60,14 +60,25 @@ public static class SharedPortalConfiguration
                     .AddAgGrid()
             )
             .AddArticles(articles => articles
-                .WithCollection(new FileSystemCollection(
+                .WithCollection(new FileSystemArticleCollection(
                     "Northwind", 
-                    Path.Combine(
-                        Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!, 
-                        "Markdown")
+                    GetBaseDirectory()
                     ).WithDefaultAddress(new ApplicationAddress("Northwind")))
             )
             .AddSignalRHubs();
+    }
+
+    private static string GetBaseDirectory()
+    {
+#if DEBUG
+        return Path.Combine(
+            Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!,
+            "../../../../../modules/Northwind/MeshWeaver.Northwind.ViewModel/Markdown");
+#else
+        return Path.Combine(
+            Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!,
+            "Markdown");
+#endif
     }
 
     public static void StartPortalApplication(this WebApplication app)

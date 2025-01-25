@@ -22,7 +22,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .AddKernel()
             .AddArticles(articles => articles
                 .WithCollection(
-                    new FileSystemCollection(
+                    new FileSystemArticleCollection(
                         Test, 
                         Path.Combine(GetAssemblyLocation(), "Markdown"))
                 ))

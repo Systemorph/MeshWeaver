@@ -8,7 +8,7 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
-public abstract record ArticleCollection(string Collection)
+public abstract record ArticleCollection(string Collection) : IDisposable
 {
     public string DisplayName { get; init; } = Collection.Wordify();
     public Icon Icon { get; init; }
@@ -21,6 +21,10 @@ public abstract record ArticleCollection(string Collection)
     public abstract void Initialize(IMessageHub hub);
 
     public abstract Task<byte[]> GetContentAsync(string path, CancellationToken ct = default);
+
+    public virtual void Dispose()
+    {
+    }
 }
 public abstract record ArticleCollection<TCollection>(string Collection) : ArticleCollection(Collection)
     where TCollection:ArticleCollection<TCollection>
@@ -35,9 +39,10 @@ public abstract record ArticleCollection<TCollection>(string Collection) : Artic
         => This with { DefaultAddress = address };
 }
 
-public record FileSystemCollection(string Collection, string BasePath) : ArticleCollection<FileSystemCollection>(Collection)
+public record FileSystemArticleCollection(string Collection, string BasePath) : ArticleCollection<FileSystemArticleCollection>(Collection)
 {
     private readonly ConcurrentDictionary<string, ISynchronizationStream<Article>> articleStreams = new();
+    private FileSystemWatcher watcher;
     private IMessageHub Hub { get; set; }
     public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions)
     => articleStreams.Values.Select(x => x.Select(y => y.Value))
@@ -98,18 +103,29 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
 
     public void MonitorFileSystem()
     {
-        var watcher = new FileSystemWatcher(BasePath);
+        watcher = new FileSystemWatcher(BasePath)
+        {
+            IncludeSubdirectories = true
+        };
         watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
         watcher.Changed += OnChanged;
+        watcher.Renamed += OnRenamed;
         watcher.EnableRaisingEvents = true;
+    }
+
+    private void OnRenamed(object sender, RenamedEventArgs e)
+    {
+        var path = Path.GetFileNameWithoutExtension(e.FullPath);
+        if (articleStreams.TryGetValue(path, out var s))
+            LoadAndSet(e.FullPath, s);
     }
 
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        var path = Path.GetRelativePath(BasePath, e.FullPath);
-        var s = articleStreams.GetOrAdd(path, CreateStream);
-        LoadAndSet(e.FullPath, s);
+        var path = Path.GetFileName(e.FullPath);
+        if(articleStreams.TryGetValue(path, out var s))
+            LoadAndSet(e.FullPath, s);
     }
 
     private void LoadAndSet(string fullPath, ISynchronizationStream<Article> s)
@@ -124,5 +140,15 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
         await using var stream = File.OpenRead(fullPath);
         var content = await new StreamReader(stream).ReadToEndAsync(ct);
         return ArticleExtensions.ParseArticle(Collection, DefaultAddress, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        foreach (var key in articleStreams.Keys.ToArray())
+            if(articleStreams.TryRemove(key, out var stream))
+               stream.Dispose();
+        watcher?.Dispose();
+        watcher = null;
     }
 }
