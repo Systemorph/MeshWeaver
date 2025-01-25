@@ -11,8 +11,9 @@ namespace MeshWeaver.Articles;
 public abstract record ArticleCollection(string Collection)
 {
     public string DisplayName { get; init; } = Collection.Wordify();
-    public Icon Icon { get; set; }
+    public Icon Icon { get; init; }
 
+    public string DefaultAddress { get; init; }
     public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
 
     public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
@@ -27,6 +28,11 @@ public abstract record ArticleCollection<TCollection>(string Collection) : Artic
     protected TCollection This => (TCollection)this;
     public TCollection WithDisplayName(string displayName)
         => This with { DisplayName = displayName };
+
+    public TCollection WithIcon(Icon icon)
+        => This with { Icon = icon };
+    public TCollection WithDefaultAddress(string address)
+        => This with { DefaultAddress = address };
 }
 
 public record FileSystemCollection(string Collection, string BasePath) : ArticleCollection<FileSystemCollection>(Collection)
@@ -48,8 +54,8 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
         foreach (var file in files)
         {
             Hub = hub;
-            var path = Path.GetRelativePath(BasePath, file);
-            var stream = articleStreams.GetOrAdd(path, CreateStream);
+            var name = Path.GetFileNameWithoutExtension(file); // Exclude extension
+            var stream = articleStreams.GetOrAdd(name, CreateStream);
             LoadAndSet(file, stream);
         }
         MonitorFileSystem();
@@ -117,6 +123,6 @@ public record FileSystemCollection(string Collection, string BasePath) : Article
            return null;
         await using var stream = File.OpenRead(fullPath);
         var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
+        return ArticleExtensions.ParseArticle(Collection, DefaultAddress, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
     }
 }

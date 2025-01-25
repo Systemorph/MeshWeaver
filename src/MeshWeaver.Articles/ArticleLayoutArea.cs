@@ -10,12 +10,9 @@ public static class ArticleLayoutArea
 {
 
 
-    private static HtmlControl RenderArticle(Article article) => 
-        new HtmlControl(article.PrerenderedHtml).AddSkin(article.MapToSkin());
-
-    private static ArticleSkin MapToSkin(this Article article)
+    private static ArticleControl RenderArticle(this Article article)
     {
-        return new ArticleSkin
+        return new ArticleControl
         {
             Name = article.Name,
             Collection = article.Collection,
@@ -26,6 +23,7 @@ public static class ArticleLayoutArea
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
+            Content = article.PrerenderedHtml
         };
     }
 

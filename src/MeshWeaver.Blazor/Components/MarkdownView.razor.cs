@@ -28,7 +28,8 @@ public partial class MarkdownView
         AddBinding(Convert<string>(ViewModel.Data).Subscribe(
             markdown => InvokeAsync(() =>
             {
-                var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
+                // TODO V10: Collection would not be good here. (25.01.2025, Roland Bürgi)
+                var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner, Stream.Owner);
                 var document = Markdig.Markdown.Parse(markdown, pipeline);
                 var newLayoutComponents =
                     document.Descendants<LayoutAreaComponentInfo>()

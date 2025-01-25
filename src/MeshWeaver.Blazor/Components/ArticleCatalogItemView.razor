@@ -52,7 +52,6 @@
     private Article Data { get; set; }
     private string Created => Data.Created.ToShortDateString();
 
-    // TODO V10: urls are to be clarified (28.08.2024, Alexander Kravets)
     private string ImageBasePath => $"static/{Data.Collection}";
     private string Avatar => $"{ImageBasePath}/avatars/{Data.AuthorAvatar}";
     private string Thumbnail => $"{ImageBasePath}/{Data.Thumbnail}";

@@ -13,7 +13,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <param name="output"></param>
 public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
 {
-
+    private const string TestAddress = "app/test";
     /// <summary>
     /// This tests the rendering of Layout Area Markdown
     /// </summary>
@@ -22,7 +22,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"MyArea\")";
-        var extension = new LayoutAreaMarkdownExtension();
+        var extension = new LayoutAreaMarkdownExtension(TestAddress);
         var html = RenderMarkdown(markdown, extension);
 
         extension.MarkdownParser.Areas.Should().HaveCount(1);
@@ -30,7 +30,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         area.Area.Should().Be("MyArea");
 
         // Verify the results
-        html.Trim().Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
+        html.Trim().Should().Be($"<div id='{area.DivId}' data-address='layout-area'></div>");
     }
 
     /// <summary>
@@ -42,7 +42,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         const string Doc = nameof(Doc);
         // Define a sample markdown string
         var markdown = $"@(\"MyArea\"){{ Layout = \"{Doc}\"}}";
-        var extension = new LayoutAreaMarkdownExtension();
+        var extension = new LayoutAreaMarkdownExtension(TestAddress);
         var html = RenderMarkdown( markdown, extension);
 
         extension.MarkdownParser.Areas.Should().HaveCount(1);
@@ -72,7 +72,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"Area1\")\n@(\"Area2\")";
-        var extension = new LayoutAreaMarkdownExtension();
+        var extension = new LayoutAreaMarkdownExtension(TestAddress);
         var html = RenderMarkdown( markdown, extension);
 
         extension.MarkdownParser.Areas.Should().HaveCount(2);

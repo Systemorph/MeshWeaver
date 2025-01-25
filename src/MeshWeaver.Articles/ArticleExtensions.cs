@@ -63,12 +63,12 @@ public static class ArticleExtensions
         => configuration.Get<ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>>>() ?? [];
 
 
-    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content)
+    public static Article ParseArticle(string collection, string defaultAddress, string path, DateTime lastWriteTime, string content)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
 
-        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection, defaultAddress);
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         if (yamlBlock is null)
@@ -81,14 +81,16 @@ public static class ArticleExtensions
         return SetStandardProperties(ret, collection, path, document, pipeline);
     }
 
+
     private static Article SetStandardProperties(Article ret, string collection, string path, MarkdownDocument document, MarkdownPipeline pipeline)
     {
+        var name = Path.GetFileNameWithoutExtension(path);
         return ret with
         {
-            Name = ret.Name ?? Path.GetFileNameWithoutExtension(path),
+            Name = name,
             Path = path,
             Collection = collection,
-            Url = $"{ArticleAddress.TypeName}/{collection}/{path}",
+            Url = $"{ArticleAddress.TypeName}/{collection}/{name}",
             Extension = Path.GetExtension(path),
             PrerenderedHtml = document.ToHtml(pipeline)
         };

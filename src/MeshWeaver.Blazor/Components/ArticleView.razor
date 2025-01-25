@@ -1,21 +1,32 @@
 ﻿@using System.Collections
-@inherits SkinnedView<ArticleSkin, ArticleView>
+@using HtmlAgilityPack
+@using MeshWeaver.Kernel
+@using MeshWeaver.Mesh
+@using MeshWeaver.Messaging
+@using Microsoft.AspNetCore.Components.Rendering
+
+@inherits BlazorView<ArticleControl, ArticleView>
 <div class="article-header">
-    <div class="thumbnail">
-        <img src="@Thumbnail" alt="Article Thumbnail" />
-    </div>
     <div class="header-content">
         <h1>@Title</h1>
         <div class="meta-info">
             <span class="authors">@string.Join(", ", Authors)</span>
             <span class="published-date">@Published.ToString("MMMM dd, yyyy")</span>
-            <span class="tags">@Tags</span>
+            <span class="tags">
+                @foreach (var tag in Tags)
+                {
+                    <span class="tag">@tag</span>
+                }
+            </span>
         </div>
         <p class="abstract">@Abstract</p>
     </div>
+    <div class="thumbnail">
+        <img src="@ThumbnailPath" alt="Article Thumbnail" />
+    </div>
 </div>
 
-<DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
+@((RenderFragment)RenderHtml)))
 
 @code {
     private string Name;
@@ -27,22 +38,85 @@
     private IReadOnlyCollection<string> Authors;
     private DateTime Published;
     private DateTime LastUpdated;
+    private readonly KernelAddress KernelAddress = new();
+    private string Content;
 
+    private string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin.Name, x => x.Name);
-        DataBind(Skin.Collection, x => x.Collection);
-        DataBind(Skin.Title, x => x.Title);
-        DataBind(Skin.Tags, x => x.Tags, ConvertStringArray);
-        DataBind(Skin.Thumbnail, x => x.Thumbnail);
-        DataBind(Skin.Abstract, x => x.Abstract);
-        DataBind(Skin.Authors, x => x.Authors, ConvertStringArray);
-        DataBind(Skin.Published, x => x.Published);
-        DataBind(Skin.LastUpdated, x => x.LastUpdated);
+        DataBind(ViewModel.Name, x => x.Name);
+        DataBind(ViewModel.Collection, x => x.Collection);
+        DataBind(ViewModel.Title, x => x.Title);
+        DataBind(ViewModel.Tags, x => x.Tags, ConvertStringArray);
+        DataBind(ViewModel.Thumbnail, x => x.Thumbnail);
+        DataBind(ViewModel.Abstract, x => x.Abstract);
+        DataBind(ViewModel.Authors, x => x.Authors, ConvertStringArray);
+        DataBind(ViewModel.Published, x => x.Published);
+        DataBind(ViewModel.LastUpdated, x => x.LastUpdated);
+        DataBind(ViewModel.Content, x => x.Content);
     }
 
     private IReadOnlyCollection<string> ConvertStringArray(object tags)
         => (tags as IEnumerable)?.Cast<string>().ToArray();
+
+
+    private void RenderHtml(RenderTreeBuilder builder)
+    {
+        if (Content is null)
+            return;
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml(Content);
+
+        var sequence = 0;
+        var nodes = new HashSet<HtmlNode>();
+
+        // Handle code blocks
+        foreach (var node in doc.DocumentNode.SelectNodes("//*"))
+        {
+            if(nodes.Contains(node.ParentNode))
+                continue;
+            nodes.Add(node);
+            if (node.Name == "code-block")
+            {
+                var id = node.GetAttributeValue("id", string.Empty);
+                var hideOutput = node.GetAttributeValue("data-hide-output", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+                var content = node.InnerHtml;
+                Stream.Hub.Post(new SubmitCodeRequest(content) { Id = id }, o => o.WithTarget(KernelAddress));
+                if(!hideOutput)
+                    RenderCodeBlock(builder, id, sequence++);
+                continue;
+            }
+            if (node.Name == "layout-area")
+            {
+                //var divId = node.GetAttributeValue("id", string.Empty);
+                var address = node.GetAttributeValue("data-address", "false");
+                var area = node.GetAttributeValue("data-area", "false");
+                var areaId = node.GetAttributeValue("data-id", "false");
+                RenderLayoutArea(builder, address, area, areaId, sequence++);
+                continue;
+            }
+            
+            builder.AddContent(sequence++, new MarkupString(node.OuterHtml));
+
+
+
+        }
+    }
+
+    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId, int sequence)
+    {
+        builder.OpenComponent<LayoutAreaView>(sequence);
+        builder.AddAttribute(sequence, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = Id }));
+        builder.CloseComponent();
+    }
+
+    private void RenderCodeBlock(RenderTreeBuilder builder, string id, int sequence) 
+    {
+        builder.OpenComponent<LayoutAreaView>(sequence);
+        builder.AddAttribute(sequence, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl(KernelAddress, new LayoutAreaReference(id)));
+        builder.CloseComponent();
+    }
 
 }

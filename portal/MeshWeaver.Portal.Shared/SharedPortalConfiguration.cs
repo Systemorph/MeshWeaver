@@ -65,7 +65,7 @@ public static class SharedPortalConfiguration
                     Path.Combine(
                         Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!, 
                         "Markdown")
-                    ))
+                    ).WithDefaultAddress(new ApplicationAddress("Northwind")))
             )
             .AddSignalRHubs();
     }
@@ -73,7 +73,9 @@ public static class SharedPortalConfiguration
     public static void StartPortalApplication(this WebApplication app)
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SharedPortalConfiguration));
+#pragma warning disable CA1416
         logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+#pragma warning restore CA1416
 
         app.MapDefaultEndpoints();
 
@@ -91,6 +93,8 @@ public static class SharedPortalConfiguration
         app.MapFallbackToPage("/_Host");
         app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
         app.Run();
+#pragma warning disable CA1416
         logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+#pragma warning restore CA1416
     }
 }

@@ -1,16 +1,10 @@
-@using HtmlAgilityPack
-@using MeshWeaver.Kernel
-@using MeshWeaver.Mesh
-@using MeshWeaver.Messaging
 @inherits BlazorView<HtmlControl, HtmlView>
 
-<div>@RenderHtmlWithLayoutAreas(Stream.Hub, KernelAddress, Html.Value)</div>
-
+@Html
 
 @code
 {
-        MarkupString Html;
-    private readonly KernelAddress KernelAddress = new();
+    MarkupString Html;
 
     protected override void BindData()
     {
@@ -18,39 +12,4 @@
         DataBind(ViewModel.Data, h => h.Html, o => o is null ? default : new(o.ToString()!));
     }
 
-    public IEnumerable<RenderFragment> RenderHtmlWithLayoutAreas(IMessageHub hub, KernelAddress kernelAddress, string htmlContent)
-    {
-        var doc = new HtmlDocument();
-        doc.LoadHtml(htmlContent);
-
-        var count = 0;
-
-
-        // Handle code blocks
-        foreach (var node in doc.DocumentNode.SelectNodes("//*"))
-        {
-            if (node.Name != "CodeBlock")
-            {
-                yield return b => b.AddContent(count++, node.OuterHtml);
-                continue;
-            }
-
-            var id = node.GetAttributeValue("id", string.Empty);
-            var hideOutput = node.GetAttributeValue("hide-output", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
-            var content = node.InnerHtml;
-            Stream.Hub.Post(new SubmitCodeRequest(content) { Id = id }, o => o.WithTarget(kernelAddress));
-            if(!hideOutput)
-                yield return RenderCodeBlock(kernelAddress, id);
-        }
-
-    }
-
-    private static RenderFragment RenderCodeBlock(KernelAddress kernelAddress, string id) => builder =>
-    {
-        builder.OpenComponent<LayoutAreaView>(0);
-        builder.AddAttribute(1, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl(kernelAddress, new LayoutAreaReference(id)));
-        builder.CloseComponent();
-    };
-
 }
-
