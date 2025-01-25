@@ -42,7 +42,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 
     private static string CreateCodeBlock(string content)
     {
-        var codeBlockTag = $"<CodeBlock id='{Guid.NewGuid().AsString()}'>{content}</CodeBlock>";
+        var codeBlockTag = $"<code-block id='{Guid.NewGuid().AsString()}'>{content}</CodeBlock>";
         return codeBlockTag;
     }
 

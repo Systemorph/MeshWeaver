@@ -4,17 +4,13 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Markdown;
 
-public class LayoutAreaMarkdownRenderer : HtmlObjectRenderer<LayoutAreaComponentInfo>
+public class LayoutAreaMarkdownRenderer(object defaultAddress) : HtmlObjectRenderer<LayoutAreaComponentInfo>
 {
     protected override void Write(HtmlRenderer renderer, LayoutAreaComponentInfo obj)
     {
         renderer.EnsureLine();
-        renderer.WriteLine($"<div id='{obj.DivId}' class='layout-area'></div>");
+        renderer.WriteLine($"<layout-area id='{obj.DivId}' data-address='{obj.Address ?? defaultAddress}' data-area={obj.Area}, data-id={obj.Id} />");
         renderer.EnsureLine();
     }
 
-    public static string LayoutAreaDiv(LayoutAreaComponentInfo obj)
-    {
-        return $"<div id='{obj.DivId}' class='layout-area' data-address='{obj.Address}' data-area='{obj.Area}'></div>";
-    }
 }

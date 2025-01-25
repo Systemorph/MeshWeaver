@@ -3,10 +3,10 @@ using Markdig.Renderers;
 
 namespace MeshWeaver.Markdown;
 
-public class LayoutAreaMarkdownExtension() : IMarkdownExtension
+public class LayoutAreaMarkdownExtension(object defaultAddress) : IMarkdownExtension
 {
     public LayoutAreaMarkdownParser MarkdownParser { get; } = new();
-    private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new();
+    private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new(defaultAddress);
 
     public void Setup(MarkdownPipelineBuilder pipeline)
     {

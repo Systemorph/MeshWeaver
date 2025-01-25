@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Layout;
 
-public record ArticleSkin : Skin<ArticleSkin>
+public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public object Name { get; init; }
     public object Collection { get; init; }
@@ -12,4 +12,6 @@ public record ArticleSkin : Skin<ArticleSkin>
     public object Authors { get; init; }
     public object Published { get; init; }
     public object LastUpdated { get; init; }
+
+    public object Content { get; init; }
 }

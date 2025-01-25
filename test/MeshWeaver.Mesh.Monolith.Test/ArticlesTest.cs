@@ -51,7 +51,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var html = control.Should().BeOfType<HtmlControl>().Subject;
         html.Skins.Should().HaveCount(1);
-        html.Skins[0].Should().BeOfType<ArticleSkin>().Subject.Name.Should().Be("Overview");
+        html.Skins[0].Should().BeOfType<ArticleControl>().Subject.Name.Should().Be("Overview");
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
