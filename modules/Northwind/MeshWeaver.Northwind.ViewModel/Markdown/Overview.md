@@ -26,6 +26,6 @@ The counter doesn't really fit here, we should move it to a spearate project.
 
 ## Interactive Reporting
 
-Make your reports interactive by using the [Interactive Reporting](InteractiveReporting.md) feature. Here an example:
+Make your reports interactive by using the [Interactive Reporting](./InteractiveReporting.md) feature. Here an example:
 
 @("OrderSummary"){ Layout = "Documentation" }
