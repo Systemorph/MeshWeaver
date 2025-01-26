@@ -4,8 +4,11 @@
 @using MeshWeaver.Mesh
 @using MeshWeaver.Messaging
 @using Microsoft.AspNetCore.Components.Rendering
+@using Microsoft.JSInterop
 
 @inherits BlazorView<ArticleControl, ArticleView>
+
+
 <div class="article-header">
     <div class="header-content">
         <h1>@Title</h1>
@@ -26,8 +29,7 @@
     </div>
 </div>
 
-@((RenderFragment)RenderHtml)
-
+<MarkdownComponent Html="@Content" Hub="@Hub" /> 
 @code {
     private string Name;
     private string Collection;
@@ -38,7 +40,6 @@
     private IReadOnlyCollection<string> Authors;
     private DateTime Published;
     private DateTime LastUpdated;
-    private readonly KernelAddress KernelAddress = new();
     private string Content;
 
     private string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
@@ -61,67 +62,5 @@
         => (tags as IEnumerable)?.Cast<string>().ToArray();
 
 
-    private void RenderHtml(RenderTreeBuilder builder)
-    {
-        if (Content is null)
-            return;
-
-        var doc = new HtmlDocument();
-        doc.LoadHtml(Content);
-
-        var sequence = 0;
-        RenderNodes(builder, doc.DocumentNode.SelectNodes("//*"), ref sequence);
-    }
-    private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes, ref int sequence){
-        // Handle code blocks
-        foreach (var node in nodes)
-        {
-            switch (node)
-            {
-                case HtmlTextNode text:
-                    builder.AddContent(sequence++, text.Text);
-                    break;
-                case { Name: "code-block" }:
-                    var id = node.GetAttributeValue("id", string.Empty);
-                    var hideOutput = node.GetAttributeValue("data-hide-output", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
-                    var content = node.InnerHtml;
-                    Stream.Hub.Post(new SubmitCodeRequest(content) { Id = id }, o => o.WithTarget(KernelAddress));
-                    if (!hideOutput)
-                        RenderCodeBlock(builder, id, ref sequence);
-                    break;
-                case { Name: "layout-area" }:
-                    //var divId = node.GetAttributeValue("id", string.Empty);
-                    var address = node.GetAttributeValue("data-address", "false");
-                    var area = node.GetAttributeValue("data-area", "false");
-                    var areaId = node.GetAttributeValue("data-id", "false");
-                    RenderLayoutArea(builder, address, area, areaId, ref sequence);
-                    break;
-                default:
-                    builder.OpenElement(sequence++, node.Name);
-                    foreach (var attribute in node.Attributes)
-                    {
-                        builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
-                    }
-
-                    RenderNodes(builder, node.ChildNodes, ref sequence);
-                    builder.CloseElement();
-                    break;
-            }
-        }
-    }
-
-    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId, ref int sequence)
-    {
-        builder.OpenComponent<LayoutAreaView>(sequence++);
-        builder.AddAttribute(sequence++, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = Id }));
-        builder.CloseComponent();
-    }
-
-    private void RenderCodeBlock(RenderTreeBuilder builder, string id, ref int sequence) 
-    {
-        builder.OpenComponent<LayoutAreaView>(sequence++);
-        builder.AddAttribute(sequence++, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl(KernelAddress, new LayoutAreaReference(id)));
-        builder.CloseComponent();
-    }
 
 }
