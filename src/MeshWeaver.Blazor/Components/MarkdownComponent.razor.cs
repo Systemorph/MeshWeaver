@@ -21,6 +21,7 @@ public partial class MarkdownComponent : IDisposable
         if (firstRender || markdownChanged)
         {
             htmlUtils ??= await JsRuntime.Import("htmlUtils.js");
+            await htmlUtils.InvokeVoidAsync("formatMath", Element);
             highlight ??= await JsRuntime.Import("highlight.js");
             await highlight.InvokeVoidAsync("highlightCode", Element);
         }
