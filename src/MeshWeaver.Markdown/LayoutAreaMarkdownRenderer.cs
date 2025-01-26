@@ -9,7 +9,7 @@ public class LayoutAreaMarkdownRenderer(object defaultAddress) : HtmlObjectRende
     protected override void Write(HtmlRenderer renderer, LayoutAreaComponentInfo obj)
     {
         renderer.EnsureLine();
-        renderer.WriteLine($"<layout-area id='{obj.DivId}' data-address='{obj.Address ?? defaultAddress}' data-area={obj.Area} data-id={obj.Id} />");
+        renderer.WriteLine($"<layout-area id='{obj.DivId}' data-address='{obj.Address ?? defaultAddress}' data-area={obj.Area} data-id={obj.Id} ></layout-area>");
         renderer.EnsureLine();
     }
 
