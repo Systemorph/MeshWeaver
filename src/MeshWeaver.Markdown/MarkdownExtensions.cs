@@ -11,6 +11,7 @@ public static  class MarkdownExtensions
             .UseYamlFrontMatter()
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
             .Use(new LayoutAreaMarkdownExtension(defaultAddress))
+            .Use(new ExecutableCodeBlockExtension())
             .Build();
 
     public static string ToStaticHref(string path, object collection)

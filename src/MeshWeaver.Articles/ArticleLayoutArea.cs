@@ -2,7 +2,6 @@
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
@@ -27,9 +26,11 @@ public static class ArticleLayoutArea
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
     {
-        var collection = host.Hub.Address.GetCollectionName();
-        var source = host.Hub.GetCollection(collection);
-        return source.GetArticle(host.Reference.Id.ToString())
+        var collectionName = host.Hub.Address.GetCollectionName();
+        var collection = host.Hub.GetCollection(collectionName);
+        if (collection is null)
+            return Observable.Return(new MarkdownControl($"No collection {collectionName} is configured. "));
+        return collection.GetArticle(host.Reference.Id.ToString())
             .Select(RenderArticle);
     }
 

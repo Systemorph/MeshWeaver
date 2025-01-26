@@ -13,7 +13,7 @@ public record KernelCommandEnvelope(string Command)
 public record SubmitCodeRequest(string Code)
 {
     public string IFrameUrl { get; init; }
-    public string Id { get; init; } = Guid.NewGuid().AsString();
+    public string ViewId { get; init; } = Guid.NewGuid().AsString();
 }
 
 public record SubscribeKernelEventsRequest;

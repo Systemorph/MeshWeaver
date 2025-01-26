@@ -9,6 +9,7 @@ namespace MeshWeaver.Markdown;
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
     private const string HideCode = "hide-code";
+    private const string HideOutput = "hide-output";
     private const string Execute = "execute";
 
     public readonly List<(ExecutionRequest Request, string Div)> ExecutionRequests = new(); 
@@ -32,7 +33,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         {
             var content = string.Join("\n", fenced.Lines.Lines.Select(line => line.ToString()));
 
-            var codeBlockTag = CreateCodeBlock(content);
+            var codeBlockTag = CreateCodeBlock(content, HasValue(args, HideOutput));
             renderer.EnsureLine();
             renderer.WriteLine(codeBlockTag);
             renderer.EnsureLine();
@@ -40,9 +41,9 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         }
     }
 
-    private static string CreateCodeBlock(string content)
+    private static string CreateCodeBlock(string content, bool showOutput)
     {
-        var codeBlockTag = $"<code-block id='{Guid.NewGuid().AsString()}'>{content}</CodeBlock>";
+        var codeBlockTag = $"<code-block id='{Guid.NewGuid().AsString()}' data-hide-output='{showOutput}'>{content}</code-block>";
         return codeBlockTag;
     }
 
