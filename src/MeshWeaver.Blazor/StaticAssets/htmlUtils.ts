@@ -1,4 +1,4 @@
-import katex from 'katex';
+import mathjax from 'mathjax';
 import mermaid from 'mermaid';
 
 export function moveElementContents(sourceId: string, targetId: string) {
@@ -14,7 +14,7 @@ export function moveElementContents(sourceId: string, targetId: string) {
 export function formatMath(element: HTMLElement) {
     var tex = element.getElementsByClassName("math");
     Array.prototype.forEach.call(tex, function (el) {
-        katex.render(el.textContent, el);
+        mathjax.render(el.textContent, el);
     });
 }
 

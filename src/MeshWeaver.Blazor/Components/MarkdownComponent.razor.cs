@@ -18,11 +18,15 @@ public partial class MarkdownComponent : IDisposable
     
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        htmlUtils ??= await JsRuntime.Import("htmlUtils.js");
-        await htmlUtils.InvokeVoidAsync("formatMath", Element);
-        await htmlUtils.InvokeVoidAsync("formatMermaid");
-        highlight ??= await JsRuntime.Import("highlight.js");
-        await highlight.InvokeVoidAsync("highlightCode", Element);
+        if (firstRender)
+        {
+            htmlUtils ??= await JsRuntime.Import("htmlUtils.js");
+            await htmlUtils.InvokeVoidAsync("formatMath", Element);
+            await htmlUtils.InvokeVoidAsync("formatMermaid");
+            highlight ??= await JsRuntime.Import("highlight.js");
+            await highlight.InvokeVoidAsync("highlightCode", Element);
+
+        }
     }
 
     private void RenderHtml(RenderTreeBuilder builder)

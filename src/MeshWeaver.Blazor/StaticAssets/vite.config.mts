@@ -14,11 +14,11 @@ export default defineConfig({
                     dest: './'
                 },
                 {
-                    src: 'node_modules/katex/dist/katex.min.css',
+                    src: 'node_modules/mathjax/dist/mathjax.min.css',
                     dest: './'
                 },
                 {
-                    src: 'node_modules/mermaid/dist/mermaid.min.js',
+                    src: 'node_modules/mermaid/dist/mermaid.min.css',
                     dest: './'
                 },
             ],
