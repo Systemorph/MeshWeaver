@@ -5,6 +5,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
@@ -21,9 +22,9 @@ public partial class MarkdownComponent : IDisposable
         if (firstRender)
         {
             highlight ??= await JsRuntime.Import("highlight.js");
-            await highlight.InvokeVoidAsync("highlightCode", Element);
             mermaid ??= await JsRuntime.Import("mermaid.js");
-            await mermaid.InvokeVoidAsync("contentLoaded");
+            await highlight.InvokeVoidAsync("highlightCode", Element);
+            await mermaid.InvokeVoidAsync("contentLoaded", Mode is DesignThemeModes.Dark);
         }
     }
 
@@ -47,6 +48,9 @@ public partial class MarkdownComponent : IDisposable
             {
                 case HtmlTextNode text:
                     builder.AddMarkupContent(sequence++, text.Text);
+                    break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
+                    RenderMermaidDiagram(builder, node.InnerHtml, ref sequence);
                     break;
                 case { Name: "code-block" }:
                     var id = node.GetAttributeValue("id", string.Empty);
@@ -76,7 +80,13 @@ public partial class MarkdownComponent : IDisposable
             }
         }
     }
-
+    private void RenderMermaidDiagram(RenderTreeBuilder builder, string content, ref int sequence)
+    {
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "mermaid");
+        builder.AddContent(sequence++, content);
+        builder.CloseElement();
+    }
     private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId, ref int sequence)
     {
         builder.OpenComponent<LayoutAreaView>(sequence++);
