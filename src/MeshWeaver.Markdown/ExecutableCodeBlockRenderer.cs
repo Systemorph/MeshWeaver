@@ -17,7 +17,9 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
     protected override void Write(HtmlRenderer renderer, CodeBlock obj)
     {
         var fenced = obj as FencedCodeBlock;
-        if (fenced is null || string.IsNullOrWhiteSpace(fenced.Arguments))
+        if (fenced is null || 
+            string.IsNullOrWhiteSpace(fenced.Arguments)
+            || fenced.Info != "csharp")
         {
             base.Write(renderer, obj);
             return;

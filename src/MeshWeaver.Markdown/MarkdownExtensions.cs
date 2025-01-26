@@ -7,6 +7,7 @@ public static  class MarkdownExtensions
     public static MarkdownPipeline CreateMarkdownPipeline(object collection, object defaultAddress) =>
         new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
+            .UseGenericAttributes()
             .UseEmojiAndSmiley()
             .UseYamlFrontMatter()
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
