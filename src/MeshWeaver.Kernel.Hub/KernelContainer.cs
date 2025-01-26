@@ -72,7 +72,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => a.Value.GetValueOrDefault(ctx.Area))
+                        .Select(a => a.Value.GetValueOrDefault(ctx.Area) ?? new MarkdownControl("Waiting to start execution."))
                 )
             )
             .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
@@ -181,7 +181,34 @@ public class KernelContainer : IDisposable
 
     private void HandleInteractiveMarkdownEvent(KernelEvent @event)
     {
-        throw new NotImplementedException();
+        if (@event.Command is not SubmitCode submit || 
+            !submit.Parameters.TryGetValue(ViewId, out var viewId))
+            return;
+
+        var view = @event switch
+        {
+            ReturnValueProduced ret => ret.Value,
+            StandardOutputValueProduced stdOut => stdOut.Value,
+            CommandFailed failed => Controls.Markdown($"**Execution failed**:\n{failed.Message}"),
+            CommandSucceeded succeeded => null,
+            _ => null,
+        };
+        if (view is not null) 
+            UpdateView(viewId, view);
+    }
+
+    private void UpdateView(string viewId, object view)
+    {
+        AreasStream.Update(x =>
+            (
+                    AreasStream.Current
+                    ?? new ChangeItem<ImmutableDictionary<string, object>>(ImmutableDictionary<string, object>.Empty,
+                        Hub.Address, ChangeType.Full, 0, []))
+                with
+                {
+                    Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
+                }
+        );
     }
 
     private void HandleNotebookEvent(KernelEvent @event)
@@ -191,10 +218,7 @@ public class KernelContainer : IDisposable
             && submit.Parameters.TryGetValue(ViewId, out var viewId)
            )
         {
-            AreasStream.Update(s => AreasStream.Current with {
-                Value = s.SetItem(viewId, retProduced.Value),
-                Version = Hub.Version,
-            });
+            UpdateView(viewId, retProduced.Value);
             if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
                 @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
         }

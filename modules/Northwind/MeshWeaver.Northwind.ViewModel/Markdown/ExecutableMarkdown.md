@@ -14,7 +14,5 @@ Tags:
 ---
 
 ```csharp execute
-Console.WriteLine("Hello World")
-if(bla == 1)
-   return null;
+"Hello World"
 ```
