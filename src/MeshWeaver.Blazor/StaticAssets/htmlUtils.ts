@@ -1,4 +1,5 @@
-import katex  from 'katex';
+import katex from 'katex';
+import mermaid from 'mermaid';
 
 export function moveElementContents(sourceId: string, targetId: string) {
     var sourceElement = document.getElementById(sourceId);
@@ -10,12 +11,13 @@ export function moveElementContents(sourceId: string, targetId: string) {
     }
 }
 
-export function formatMath(id: string) {
-    var element = document.getElementById(id);
-    if (element) {
-        var tex = element.getElementsByClassName("math");
-        Array.prototype.forEach.call(tex, function (el) {
-            katex.render(el.textContent, el);
-        });
-    }
+export function formatMath(element: HTMLElement) {
+    var tex = element.getElementsByClassName("math");
+    Array.prototype.forEach.call(tex, function (el) {
+        katex.render(el.textContent, el);
+    });
+}
+
+export function formatMermaid() {
+    mermaid.contentLoaded();
 }
