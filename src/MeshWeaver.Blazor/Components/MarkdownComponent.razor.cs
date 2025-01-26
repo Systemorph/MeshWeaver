@@ -11,8 +11,8 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class MarkdownComponent : IDisposable
 {
-    private IJSObjectReference htmlUtils;
     private IJSObjectReference highlight;
+    private IJSObjectReference mermaid;
     private bool markdownChanged;
     private readonly Lazy<KernelAddress> kernelAddress = new(() => new());
     
@@ -20,12 +20,10 @@ public partial class MarkdownComponent : IDisposable
     {
         if (firstRender)
         {
-            htmlUtils ??= await JsRuntime.Import("htmlUtils.js");
-            await htmlUtils.InvokeVoidAsync("formatMath", Element);
-            await htmlUtils.InvokeVoidAsync("formatMermaid");
             highlight ??= await JsRuntime.Import("highlight.js");
             await highlight.InvokeVoidAsync("highlightCode", Element);
-
+            mermaid ??= await JsRuntime.Import("mermaid.js");
+            await mermaid.InvokeVoidAsync("contentLoaded");
         }
     }
 

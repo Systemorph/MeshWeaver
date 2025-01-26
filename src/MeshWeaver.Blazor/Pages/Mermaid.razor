@@ -1,0 +1,23 @@
+﻿@page "/mermaid"
+@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime;
+<h3>Mermaid Diagram</h3>
+
+<div class="mermaid">
+    graph TD;
+    A-->B;
+    A-->C;
+    B-->D;
+    C-->D;
+</div>
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var mermaid = await JsRuntime.Import("mermaid.js");
+            await mermaid.InvokeVoidAsync("contentLoaded");
+        }
+    }
+    }

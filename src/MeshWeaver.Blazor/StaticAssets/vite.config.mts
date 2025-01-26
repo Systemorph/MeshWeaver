@@ -12,15 +12,11 @@ export default defineConfig({
                 {
                     src: 'node_modules/@primer/css/dist/markdown.css',
                     dest: './'
-                },
+                }, 
                 {
-                    src: 'node_modules/mathjax/dist/mathjax.min.css',
+                    src: 'node_modules/mermaid/dist/mermaid.min.js',
                     dest: './'
-                },
-                {
-                    src: 'node_modules/mermaid/dist/mermaid.min.css',
-                    dest: './'
-                },
+                }
             ],
             structured: true
         })
@@ -31,7 +27,7 @@ export default defineConfig({
         lib: {
             entry: [
                 'highlight.ts',
-                'htmlUtils.ts'
+                'mermaid.ts'
             ],
             formats: ['es']
         },
