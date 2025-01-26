@@ -93,7 +93,7 @@ public partial class MarkdownComponent : IDisposable
 
     public void Dispose()
     {
-        if (kernelAddress.IsValueCreated)
-            Hub.Post(new DisposeRequest(), o => o.WithTarget(kernelAddress.Value));
+        //if (kernelAddress.IsValueCreated)
+        //    Hub.Post(new DisposeRequest(), o => o.WithTarget(kernelAddress.Value));
     }
 }
