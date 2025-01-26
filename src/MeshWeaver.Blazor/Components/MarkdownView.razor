@@ -16,7 +16,7 @@
     <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet"/>
 </HeadContent>
 
-<div @ref="element" class="markdown-body">
+<article @ref="element" class="markdown-body">
     @if(Html != null)
     {
         @((MarkupString)Html) 
@@ -28,7 +28,7 @@
             <LayoutAreaView ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
         </div>
     }
-</div>
+</article>
 
 @code {
     private DesignThemeModes Mode;

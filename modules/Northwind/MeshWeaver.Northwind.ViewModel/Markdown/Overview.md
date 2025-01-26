@@ -1,21 +1,15 @@
----
+﻿---
 Title: "Northwind Overview"
 Abstract: "This is a sample description of the article."
 Thumbnail: "images/thumbnail.png"
 Published: "2024-09-24"
 Authors:
-  - "Roland B�rgi"
+  - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
   - "Northwind"
   - "Conceptual"
 ---
-
-```csharp
-Console.WriteLine("Hello World")
-if(bla == 1)
-   return null;
-```
 
 This is a model for the [Northwind Database](https://github.com/microsoft/sql-server-samples/blob/master/samples/databases/northwind-pubs/readme.md). 
 It is a small data domain modelling an e-commerce store. The complexity is moderate, it is more realistic than,

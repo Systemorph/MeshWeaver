@@ -1,5 +1,7 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -34,9 +36,28 @@ public class KernelContainer : IDisposable
         Hub = hub;
         Kernel = CreateKernel();
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
-
+        AreasStream =
+            new SynchronizationStream<ImmutableDictionary<string, object>>(
+                new(Guid.NewGuid().AsString(), Hub.Address),
+                Hub,
+                null,
+                null,
+                null
+            );
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Hub.RegisterForDisposal(this);
+        DisposeOnTimeout();
+    }
+
+    private ISynchronizationStream<ImmutableDictionary<string, object>> AreasStream { get; set; }
+
+
+    /// <summary>
+    /// When the kernel does not receive messages in a given timeout,
+    /// it will dispose itself.
+    /// </summary>
+    private void DisposeOnTimeout()
+    {
         var timer = new Timer(_ => Dispose(), this, DisconnectTimeout, DisconnectTimeout);
         Hub.Register<object>(d =>
         {
@@ -49,9 +70,9 @@ public class KernelContainer : IDisposable
     {
         return config
             .AddLayout(layout =>
-                layout.WithView(ctx =>
-                        areas.ContainsKey(ctx.Area),
-                    (_, ctx) => areas.GetValueOrDefault(ctx.Area)
+                layout.WithView(_ => true, 
+                    (_,ctx) => AreasStream
+                        .Select(a => a.Value.GetValueOrDefault(ctx.Area))
                 )
             )
             .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
@@ -151,22 +172,45 @@ public class KernelContainer : IDisposable
 
     private void PublishEventToContext(KernelEvent @event)
     {
+        var isNotebookKernel = IsNotebookKernel(@event);
+        if (isNotebookKernel)
+            HandleNotebookEvent(@event);
+        else
+            HandleInteractiveMarkdownEvent(@event);
+    }
+
+    private void HandleInteractiveMarkdownEvent(KernelEvent @event)
+    {
+        throw new NotImplementedException();
+    }
+
+    private void HandleNotebookEvent(KernelEvent @event)
+    {
         if (@event is ReturnValueProduced retProduced 
             && @event.Command is SubmitCode submit
             && submit.Parameters.TryGetValue(ViewId, out var viewId)
-            )
+           )
         {
-            areas[viewId] = retProduced.Value;
+            AreasStream.Update(s => AreasStream.Current with {
+                Value = s.SetItem(viewId, retProduced.Value),
+                Version = Hub.Version,
+            });
             if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
                 @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
         }
         var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
         var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
+
         foreach (var a in subscriptions)
             Hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
     }
 
-    private readonly ConcurrentDictionary<string, object> areas = new();
+    private static bool IsNotebookKernel(KernelEvent @event)
+    {
+        // TODO V10: may need to find a better differentiator for notebook kernel. (26.01.2025, Roland Bürgi)
+        return @event.Command is SubmitCode submit3 && submit3.Parameters.ContainsKey(IframeUrl);
+    }
+
     private IMessageHub Hub { get; set; }
     public CompositeKernel Kernel { get; set; }
 
@@ -184,9 +228,8 @@ public class KernelContainer : IDisposable
 
         ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
 
-
-
-        var composite = new CompositeKernel("mesh").UseNugetDirective(OnResolve);
+        var composite = new CompositeKernel("mesh")
+            .UseNugetDirective(OnResolve);
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
         return composite;
@@ -253,8 +296,10 @@ public class KernelContainer : IDisposable
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
     {
         subscriptions.Add(request.Sender);
-        var command = new SubmitCode(request.Message.Code);
-        command.Parameters[ViewId] = request.Message.Id;
+        var command = new SubmitCode(request.Message.Code)
+        {
+            Parameters = { [ViewId] = request.Message.ViewId }
+        };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
         executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command));

@@ -4,18 +4,17 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
 
-public partial class MarkdownComponent
+public partial class MarkdownComponent : IDisposable
 {
     private IJSObjectReference htmlUtils;
     private IJSObjectReference highlight;
     private bool markdownChanged;
-    private readonly KernelAddress kernelAddress = new();
+    private readonly Lazy<KernelAddress> kernelAddress = new(() => new());
     
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -52,7 +51,7 @@ public partial class MarkdownComponent
                     var id = node.GetAttributeValue("id", string.Empty);
                     var hideOutput = node.GetAttributeValue("data-hide-output", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
                     var content = node.InnerHtml;
-                    Hub.Post(new SubmitCodeRequest(content) { Id = id }, o => o.WithTarget(kernelAddress));
+                    Hub.Post(new SubmitCodeRequest(content) { ViewId = id }, o => o.WithTarget(kernelAddress.Value));
                     if (!hideOutput)
                         RenderCodeBlock(builder, id, ref sequence);
                     break;
@@ -91,4 +90,10 @@ public partial class MarkdownComponent
         builder.CloseComponent();
     }
 
+
+    public void Dispose()
+    {
+        if (kernelAddress.IsValueCreated)
+            Hub.Post(new DisposeRequest(), o => o.WithTarget(kernelAddress.Value));
+    }
 }
