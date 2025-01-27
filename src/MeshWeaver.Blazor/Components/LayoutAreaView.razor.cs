@@ -11,17 +11,14 @@ namespace MeshWeaver.Blazor.Components;
 [StreamRendering]
 public partial class LayoutAreaView
 {
-    [Inject] private IMessageHub Hub { get; set; }
-
     [Inject] protected IJSRuntime JsRuntime { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
     private LayoutAreaProperties Properties { get; set; }
-    public string DisplayArea { get; set; }
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = ShowProgress, DisplayArea = DisplayArea };
+        new(Area) { ShowProgress = ShowProgress, ProgressMessage=ProgressMessage };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
@@ -40,7 +37,7 @@ public partial class LayoutAreaView
 
     private void BindViewModel()
     {
-        DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
         DataBind(ViewModel.Address, x => x.Address, ConvertAddress);
@@ -55,7 +52,6 @@ public partial class LayoutAreaView
         return Hub.GetAddress(address.ToString());
     }
 
-    private bool ShowProgress { get; set; }
     private Address Address { get; set; }
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()

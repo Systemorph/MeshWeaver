@@ -56,7 +56,7 @@ public partial class ApplicationPage
         {
             ShowProgress = true
         };
-        PageTitle = $"{ViewModel.DisplayArea} - {Application}";
+        PageTitle = $"{ViewModel.ProgressMessage} - {Application}";
 
     }
 

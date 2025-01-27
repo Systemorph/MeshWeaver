@@ -20,7 +20,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <summary>
     /// Gets or initializes the display area of the layout area control.
     /// </summary>
-    public object DisplayArea { get; init; } 
+    public object ProgressMessage { get; init; } 
     /// <summary>
     /// Gets or initializes the progress display state of the layout area control.
     /// </summary>
@@ -31,7 +31,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <param name="displayArea">The display area to set.</param>
     /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified display area.</returns>
 
-    public LayoutAreaControl WithDisplayArea(string displayArea) => this with { DisplayArea = displayArea };
+    public LayoutAreaControl WithDisplayArea(string displayArea) => this with { ProgressMessage = displayArea };
 
     public virtual bool Equals(LayoutAreaControl other)
     {
@@ -39,7 +39,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
         if(ReferenceEquals(this, other)) return true;
 
         return base.Equals(other)
-               && DisplayArea == other.DisplayArea
+               && ProgressMessage == other.ProgressMessage
                && ShowProgress == other.ShowProgress 
                && Equals(Reference, other.Reference)
                && Address.Equals(other.Address)
@@ -61,7 +61,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     {
         return HashCode.Combine(
             base.GetHashCode(),
-            DisplayArea,
+            ProgressMessage,
             ShowProgress,
             Reference,
             Address

@@ -4,3 +4,9 @@
     Stream="@AreaStream" 
     ViewModel="@NamedArea"
     Area="@NamedArea.GetArea()" />
+    
+@code
+{
+    [Parameter] public bool ShowProgress { get; set; } = true;
+    [Parameter] public string ProgressMessage { get; set; }
+}

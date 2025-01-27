@@ -8,7 +8,7 @@ public partial class NamedAreaView
     private UiControl RootControl { get; set; }
 
 
-    private string DisplayArea { get; set; }
+    private string ProgressMessage { get; set; }
     private bool ShowProgress { get; set; }
 
     private IDisposable subscription = null;
@@ -21,7 +21,7 @@ public partial class NamedAreaView
         RootControl = null;
         AreaToBeRendered = ViewModel.Area.ToString();
         base.BindData();
-        DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
+        DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
         if (AreaToBeRendered != null && Stream != null)
             AddBinding(Stream.GetControlStream(AreaToBeRendered)
