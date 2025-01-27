@@ -26,19 +26,25 @@ namespace MeshWeaver.Northwind.ViewModel
                     .AddNorthwindDocumentation()
                     .AddDomainViews()
                     .AddLayout(layout =>
-                    layout
-                        .AddAnnualReport()
-                        .AddDashboard()
-                        .AddProductsSummary()
-                        .AddOrdersSummary()
-                        .AddCustomerSummary()
-                        .AddSupplierSummary()
-                        .WithNavMenu((menu, host, _) => 
-                            menu.WithViews(host.AddTypesCatalogs())
-                                .ArticlesNavMenu("Northwind")
+                        layout
+                            .AddAnnualReport()
+                            .AddDashboard()
+                            .AddProductsSummary()
+                            .AddOrdersSummary()
+                            .AddCustomerSummary()
+                            .AddSupplierSummary()
+                            .WithNavMenu((menu, host, _) =>
+                                menu.WithNavGroup(
+                                    "Northwind",
+                                    null,
+                                    "article/Northwind/Overview"
+                                )
+                                .WithNavLink("Articles", "articles/Northwind")
+                                .WithNavLink("Areas", "app/Northwind/LayoutAreas")
+                                .WithNavLink("Data Model", "app/Northwind/Model")
                             )
 
-                )
+                    )
                 ;
         }
 

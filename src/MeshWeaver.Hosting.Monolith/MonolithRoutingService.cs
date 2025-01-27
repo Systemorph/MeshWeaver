@@ -39,13 +39,11 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
             throw new MeshException($"No Mesh node was found for {address}");
 
         var hub = CreateHub(node, address);
-        if (hub is not null)
-        {
-            hub.DeliverMessage(delivery);
-            return delivery.Forwarded(hub.Address);
-        }
+        if (hub is null)
+            return delivery;
 
-        return delivery;
+        hub.DeliverMessage(delivery); 
+        return delivery.Forwarded(hub.Address);
     }
 
     private IMessageHub CreateHub(MeshNode node, Address address)

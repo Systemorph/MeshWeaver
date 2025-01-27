@@ -45,6 +45,14 @@ public record LayoutDefinition(IMessageHub Hub)
         Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
         return this;
     }
+
+    internal ImmutableList<LayoutAreaDefinition> AreaDefinitions { get; init; } = [];
+    public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition layoutArea)
+    {
+        if (layoutArea is null)
+            return this;
+        return this with { AreaDefinitions = AreaDefinitions.Add(layoutArea) };
+    }
 }
 
 

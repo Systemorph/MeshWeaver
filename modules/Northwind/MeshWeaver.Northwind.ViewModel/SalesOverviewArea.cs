@@ -23,7 +23,7 @@ public static class SalesOverviewArea
     public static LayoutDefinition AddSalesOverview(this LayoutDefinition layout)
         => 
             layout
-                .WithView(nameof(SalesByCategory), Controls.Stack.WithView(SalesByCategory))
+                .WithView(nameof(SalesByCategory), SalesByCategory)
     ;
 
     /// <summary>

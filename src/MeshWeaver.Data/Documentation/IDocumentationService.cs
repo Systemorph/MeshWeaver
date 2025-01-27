@@ -13,7 +13,6 @@ public interface IDocumentationService
     DocumentationContext Context { get; }
     Stream GetStream(string type, string dataSource, string documentName);
     DocumentationSource GetSource(string type, string id);
-
     Member GetDocumentation(MemberInfo member);
 }
 
@@ -36,22 +35,30 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
 
     public Member GetDocumentation(MemberInfo member)
     {
-        var assembly = (member as Type ?? member.DeclaringType)!.Assembly;
-        var members = docsByAssembly.GetOrAdd(assembly, GetAssembly);
-        if(members == null) 
-            return null;
-        var name = member switch
+        try
         {
-            Type t => $"T:{t.FullName}",
-            PropertyInfo p => $"P:{p.DeclaringType!.FullName}.{p.Name}",
-            MethodInfo m => $"M:{m.DeclaringType!.FullName}.{m.Name}",
-            FieldInfo f => $"F:{f.DeclaringType!.FullName}.{f.Name}",
-            EventInfo e => $"E:{e.DeclaringType!.FullName}.{e.Name}",
-            _ => null
-        };
-        if(name == null || !members.TryGetValue(name, out var ret))
+            var assembly = (member as Type ?? member.DeclaringType)!.Assembly;
+            var members = docsByAssembly.GetOrAdd(assembly, GetAssembly);
+            if (members == null)
+                return null;
+            var name = member switch
+            {
+                Type t => $"T:{t.FullName}",
+                PropertyInfo p => $"P:{p.DeclaringType!.FullName}.{p.Name}",
+                MethodInfo m => $"M:{m.DeclaringType!.FullName}.{m.Name}",
+                FieldInfo f => $"F:{f.DeclaringType!.FullName}.{f.Name}",
+                EventInfo e => $"E:{e.DeclaringType!.FullName}.{e.Name}",
+                _ => null
+            };
+            if (name == null || !members.TryGetValue(name, out var ret))
+                return null;
+            return ret;
+
+        }
+        catch
+        {
             return null;
-        return ret;
+        }
     }
 
     private IReadOnlyDictionary<string, Member> GetAssembly(Assembly assembly)
