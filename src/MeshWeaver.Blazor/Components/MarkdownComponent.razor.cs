@@ -14,7 +14,6 @@ public partial class MarkdownComponent : IDisposable
 {
     private IJSObjectReference highlight;
     private IJSObjectReference mermaid;
-    private bool markdownChanged;
     private readonly Lazy<KernelAddress> kernelAddress = new(() => new());
     
     protected override async Task OnAfterRenderAsync(bool firstRender)

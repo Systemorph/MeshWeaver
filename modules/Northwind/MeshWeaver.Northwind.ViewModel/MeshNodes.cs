@@ -1,6 +1,4 @@
 ﻿using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
-using MeshWeaver.Northwind.Model;
 using MeshWeaver.Northwind.ViewModel;
 [assembly: NorthwindApplication]
 
@@ -27,28 +25,6 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
         typeof(NorthwindApplicationAttribute).FullName
     )
     {
-        HubConfiguration = NorthwindApplicationExtensions.ConfigureHub,
-        ArticlePath = "Markdown"
+        HubConfiguration = NorthwindApplicationExtensions.ConfigureApplication,
     };
-}
-
-/// <summary>
-/// Extensions for creating the northwind application
-/// </summary>
-public static class NorthwindApplicationExtensions
-{
-    /// <summary>
-    /// Full configuration of the Northwind application mesh node.
-    /// </summary>    /// <returns></returns>
-    public static MessageHubConfiguration ConfigureHub(MessageHubConfiguration application)
-
-=>
-                application
-                    .AddNorthwindViewModels()
-                    .AddNorthwindEmployees()
-                    .AddNorthwindOrders()
-                    .AddNorthwindSuppliers()
-                    .AddNorthwindProducts()
-                    .AddNorthwindCustomers()
-                    .AddNorthwindReferenceData();
 }
