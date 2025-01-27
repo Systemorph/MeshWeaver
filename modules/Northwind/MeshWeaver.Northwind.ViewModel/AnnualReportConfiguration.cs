@@ -32,29 +32,11 @@ public static class AnnualReportConfiguration
         .AddClientsOverview()
         .AddOrdersOverview()
         .AddSalesOverview()
-        .AddAnnualReportMenu()
     ;
 
-    private static LayoutDefinition AddAnnualReportMenu(this LayoutDefinition layout)
-        => layout.WithNavMenu
-        (
-            (menu, _, _) => menu
-                .WithNavGroup(
-                    AnnualReportDocuments.Aggregate(
-                        Controls.NavGroup("Sales Dashboard 2023")
-                            .WithIcon(FluentIcons.Folder)
-                            .WithSkin(skin =>
-                                skin.WithUrl(layout.DocumentHref(SummaryDocument))
-                                .WithExpanded(true)),
-                            (navGroup, documentMenuDescriptor) => navGroup.WithNavLink(Path.GetFileNameWithoutExtension(documentMenuDescriptor.DocumentName).Wordify(),
-                                layout.DocumentationPath(ThisAssembly, documentMenuDescriptor.DocumentName), documentMenuDescriptor.Icon))
-                )
-        );
 
     private const string SummaryDocument = "AnnualReportSummary.md";
 
-    private static string DocumentHref(this LayoutDefinition layout, string documentName) =>
-        layout.DocumentationPath(ThisAssembly, documentName);
 
     private static IEnumerable<(string DocumentName, Icon Icon)> AnnualReportDocuments =>
         ThisAssembly.GetManifestResourceNames()

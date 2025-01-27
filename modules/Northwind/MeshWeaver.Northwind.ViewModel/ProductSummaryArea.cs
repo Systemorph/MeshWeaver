@@ -1,6 +1,4 @@
-﻿using MeshWeaver.Application.Styles;
-using MeshWeaver.Data;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -20,10 +18,7 @@ public static class ProductSummaryArea
     /// Box icon for the menu. It configures the Product Summary view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddProductsSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(ProductSummary), ProductSummary)
-            .WithNavMenu((menu, _, _) => menu.WithNavLink("Product Summary",
-                new LayoutAreaReference(nameof(ProductSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
-            );
+        => layout.WithView(nameof(ProductSummary), ProductSummary);
 
 
     /// <summary>

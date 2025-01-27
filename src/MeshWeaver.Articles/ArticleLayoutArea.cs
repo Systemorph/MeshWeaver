@@ -7,8 +7,6 @@ namespace MeshWeaver.Articles;
 
 public static class ArticleLayoutArea
 {
-
-
     private static ArticleControl RenderArticle(this Article article) =>
         new()
         {

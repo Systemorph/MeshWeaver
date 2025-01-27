@@ -11,4 +11,8 @@ public record LayoutAreaDefinition(string Area)
     public ImmutableList<string> CRefs { get; init; } = [];
     public LayoutAreaDefinition WithReferences(params IEnumerable<string> reference) => 
         this with{CRefs = CRefs.AddRange(reference.Where(x => x != null))};
+
+    public string Category { get; init; }
+    public LayoutAreaDefinition WithCategory(string category)
+        => this with { Category = category };
 }
