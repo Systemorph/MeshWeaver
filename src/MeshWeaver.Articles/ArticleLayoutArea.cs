@@ -30,7 +30,10 @@ public static class ArticleLayoutArea
         var collection = host.Hub.GetCollection(collectionName);
         if (collection is null)
             return Observable.Return(new MarkdownControl($"No collection {collectionName} is configured. "));
-        return collection.GetArticle(host.Reference.Id.ToString())
+        var stream = collection.GetArticle(host.Reference.Id.ToString());
+        if(stream is null)
+            return Observable.Return(new MarkdownControl($"No article {host.Reference.Id} found in collection {collectionName}"));
+        return stream
             .Select(RenderArticle);
     }
 

@@ -41,11 +41,12 @@ public static class AnnualReportConfiguration
             (menu, _, _) => menu
                 .WithNavGroup(
                     AnnualReportDocuments.Aggregate(
-                        Controls.NavGroup("Sales Dashboard 2023", FluentIcons.Folder)
+                        Controls.NavGroup("Sales Dashboard 2023")
+                            .WithIcon(FluentIcons.Folder)
                             .WithSkin(skin =>
-                                skin.WithHref(layout.DocumentHref(SummaryDocument))
+                                skin.WithUrl(layout.DocumentHref(SummaryDocument))
                                 .WithExpanded(true)),
-                            (navGroup, documentMenuDescriptor) => navGroup.WithLink(Path.GetFileNameWithoutExtension(documentMenuDescriptor.DocumentName).Wordify(),
+                            (navGroup, documentMenuDescriptor) => navGroup.WithNavLink(Path.GetFileNameWithoutExtension(documentMenuDescriptor.DocumentName).Wordify(),
                                 layout.DocumentationPath(ThisAssembly, documentMenuDescriptor.DocumentName), documentMenuDescriptor.Icon))
                 )
         );

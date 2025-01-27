@@ -9,12 +9,11 @@ public static class DocumentationViewModels
             .WithNavMenu((menu, host, _) =>
                 menu.WithNavGroup(
                         "Documentation",
-                        null,
-                        "/article/Documentation/Overview"
+                        group => group
+                            .WithUrl("/article/Documentation/Overview")
+                            .WithNavLink("Articles", "/articles/Documentation")
+                            .WithNavLink("Areas", "/app/Documentation/LayoutAreas")
                     )
-                    .WithNavLink("Articles", "/articles/Documentation")
-                    .WithNavLink("Areas", "/app/Documentation/LayoutAreas")
-                    //.WithNavLink("Data Model", "/app/Documentation/Model")
             )
         );
 

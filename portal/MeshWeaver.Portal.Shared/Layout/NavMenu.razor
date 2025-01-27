@@ -6,8 +6,8 @@
         <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Neutral" /></label>
         <nav class="sitenav" aria-labelledby="main-menu" >
             <FluentNavMenu Id="main-menu" Title="Main menu" CustomToggle="true">
-                <LayoutArea Address="app/Documentation" Area="@NavMenuArea"></LayoutArea>
-                <LayoutArea Address="app/Northwind" Area="@NavMenuArea"></LayoutArea>
+                <LayoutArea Address="app/Documentation" Area="@NavMenuArea" ShowProgress="false"></LayoutArea>
+                <LayoutArea Address="app/Northwind" Area="@NavMenuArea" ShowProgress="false"></LayoutArea>
             </FluentNavMenu>
         </nav>
     </div>

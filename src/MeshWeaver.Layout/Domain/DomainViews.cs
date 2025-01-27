@@ -84,7 +84,7 @@ public static class DomainViews
                 : [ m.types.Select(t =>
                     new NavLinkControl(t.TypeDefinition.DisplayName, t.TypeDefinition.Icon,
                     new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
-                        .ToHref(host.Hub.Address)) ).Aggregate(new NavGroupControl(m.Key, null, null), (g,l) => g.WithView(l))]
+                        .ToHref(host.Hub.Address)) ).Aggregate(new NavGroupControl(m.Key), (g,l) => g.WithView(l))]
                 );
 
 

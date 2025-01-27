@@ -29,10 +29,8 @@ public static class Controls
     /// Creates a new instance of <see cref="NavGroupControl"/> with the specified title, icon, and href.
     /// </summary>
     /// <param name="title">The title of the navigation group.</param>
-    /// <param name="icon">The icon of the navigation group.</param>
-    /// <param name="href">The href of the navigation group.</param>
     /// <returns>A new instance of <see cref="NavGroupControl"/>.</returns>
-    public static NavGroupControl NavGroup(string title, object icon = null, object href = null) => new(title, icon, href);
+    public static NavGroupControl NavGroup(string title) => new(title);
 
     /// <summary>
     /// Gets a new instance of <see cref="TabsControl"/>.

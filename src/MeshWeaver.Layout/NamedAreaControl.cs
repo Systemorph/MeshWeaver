@@ -8,14 +8,14 @@
         : UiControl<NamedAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     {
         /// <summary>
-        /// Gets or initializes the display area of the named area control.
-        /// </summary>
-        public object DisplayArea { get; init; }
-
-        /// <summary>
         /// Gets or initializes the progress display state of the named area control.
         /// </summary>
         public object ShowProgress { get; init; }
+
+        /// <summary>
+        /// Message to be shown while waiting for the area.
+        /// </summary>
+        public object ProgressMessage { get; init; }
 
         /// <summary>
         /// Sets the area of the named area control.
@@ -28,9 +28,9 @@
         /// <summary>
         /// Sets the display area of the named area control.
         /// </summary>
-        /// <param name="displayArea">The display area to set.</param>
+        /// <param name="progressMessage">The progress message to be shown while waiting for the area.</param>
         /// <returns>A new <see cref="NamedAreaControl"/> instance with the specified display area.</returns>
-        public NamedAreaControl WithDisplayArea(object displayArea)
-            => this with { DisplayArea = displayArea };
+        public NamedAreaControl WithProgressMessage(object progressMessage)
+            => this with { ProgressMessage = progressMessage };
     }
 }

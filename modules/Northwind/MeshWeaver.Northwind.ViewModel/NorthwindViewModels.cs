@@ -36,12 +36,12 @@ namespace MeshWeaver.Northwind.ViewModel
                             .WithNavMenu((menu, host, _) =>
                                 menu.WithNavGroup(
                                     "Northwind",
-                                    null,
-                                    "article/Northwind/Overview"
+                                    group => group.WithUrl("article/Northwind/Overview")
+                                        .WithNavLink("Articles", "articles/Northwind")
+                                        .WithNavLink("Areas", "app/Northwind/LayoutAreas")
+                                        .WithNavLink("Data Model", "app/Northwind/Model")
+
                                 )
-                                .WithNavLink("Articles", "articles/Northwind")
-                                .WithNavLink("Areas", "app/Northwind/LayoutAreas")
-                                .WithNavLink("Data Model", "app/Northwind/Model")
                             )
 
                     )
