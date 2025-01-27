@@ -2,6 +2,7 @@
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Documentation;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
@@ -15,7 +16,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
-using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled;
 
 namespace MeshWeaver.Portal.Shared;
 
@@ -26,24 +26,27 @@ public static class SharedPortalConfiguration
         builder.AddServiceDefaults();
         // Add services to the container.
         builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
-        builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
-        {
-            options.TimestampFormat = "hh:mm:ss:fff";
-            options.IncludeTimestamp = true;
-        });
 
-        builder.Services.AddLogging(config => config.AddConsole(
-            options =>
-            {
-                options.FormatterName = nameof(CsvConsoleFormatter);
-            }).AddDebug());
+        // this adds CSV formatting which makes it easier to, e.g., copy in Excel
+        //builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
+        //{
+        //    options.TimestampFormat = "hh:mm:ss:fff";
+        //    options.IncludeTimestamp = true;
+        //});
+        //builder.Services.AddLogging(config => config.AddConsole(
+        //    options =>
+        //    {
+        //        options.FormatterName = nameof(CsvConsoleFormatter);
+        //    }).AddDebug());
+
         builder.Services.AddSignalR();
         builder.Services.AddResponseCompression(opts =>
         {
             opts.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
-                new[] { "application/octet-stream" });
+                ["application/octet-stream"]);
         });
 
+        builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
 
     }
 
@@ -51,6 +54,7 @@ public static class SharedPortalConfiguration
     {
         return builder.ConfigureMesh(
                 mesh => mesh
+                    .InstallAssemblies(typeof(DocumentationViewModels).Assembly.Location)
                     .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
             )
             .AddKernel()
@@ -59,27 +63,12 @@ public static class SharedPortalConfiguration
                     .AddChartJs()
                     .AddAgGrid()
             )
-            .AddArticles(articles => articles
-                .WithCollection(new FileSystemArticleCollection(
-                    "Northwind", 
-                    GetBaseDirectory()
-                    ).WithDefaultAddress(new ApplicationAddress("Northwind")))
-            )
+            .AddArticles(articles 
+                => articles.FromAppSettings()
+                )
             .AddSignalRHubs();
     }
 
-    private static string GetBaseDirectory()
-    {
-#if DEBUG
-        return Path.Combine(
-            Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!,
-            "../../../../../modules/Northwind/MeshWeaver.Northwind.ViewModel/Markdown");
-#else
-        return Path.Combine(
-            Path.GetDirectoryName(typeof(NorthwindViewModels).Assembly.Location)!,
-            "Markdown");
-#endif
-    }
 
     public static void StartPortalApplication(this WebApplication app)
     {

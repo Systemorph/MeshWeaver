@@ -43,14 +43,15 @@ public static class ArticleExtensions
     internal static ArticleCollection GetCollection(this IMessageHub hub, string collection)
         => hub.ServiceProvider.GetRequiredService<IArticleService>().GetCollection(collection);
 
-    public static MeshBuilder AddArticles(this MeshBuilder builder,Func<ArticleConfiguration, ArticleConfiguration> articles) 
+    public static MeshBuilder AddArticles(this MeshBuilder builder, Func<ArticleConfiguration, ArticleConfiguration> articles)
         => builder
             .ConfigureMesh(config =>
-            config
-                .AddMeshNodeFactory()
-                .Set(config.GetListOfLambdas().Add(articles))
+                config
+                    .AddMeshNodeFactory()
+                    .Set(config.GetListOfLambdas().Add(articles))
             )
             .ConfigureServices(services => services.AddSingleton<IArticleService, ArticleService>());
+   
 
     private static MeshConfiguration AddMeshNodeFactory(this MeshConfiguration config)
         => config.AddMeshNodeFactory((type, id) => type == ArticleAddress.TypeName

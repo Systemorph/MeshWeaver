@@ -1,14 +1,13 @@
 ﻿using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Articles;
 
 public class ArticleService : IArticleService
 {
-    public ArticleService(IMeshCatalog meshCatalog)
+    public ArticleService(IMeshCatalog meshCatalog, IMessageHub hub)
     {
-        Configuration = meshCatalog.Configuration.GetListOfLambdas().Aggregate(new ArticleConfiguration(), (l,c) => c.Invoke(l));
+        Configuration = meshCatalog.Configuration.GetListOfLambdas().Aggregate(new ArticleConfiguration(hub), (l,c) => c.Invoke(l));
     }
 
     public ArticleConfiguration Configuration { get; }
