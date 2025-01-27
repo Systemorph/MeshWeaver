@@ -7,8 +7,14 @@
     [Parameter] public string Id { get; set; }
     [Parameter] public bool ShowProgress { get; set; } = true;
     [Parameter] public string ProgressMessage { get; set; }
-    private LayoutAreaControl ViewModel => Controls.LayoutArea(Address, new(Area)
-    {
-        Id = Id
-    });
+
+    private LayoutAreaControl ViewModel => Controls.LayoutArea(
+            Address,
+            new(Area)
+            {
+                Id = Id,
+            })
+        .WithProgressMessage(ProgressMessage)
+        .WithShowProgress(ShowProgress);
+
 }

@@ -21,11 +21,7 @@ public static class DiscountPercentageArea
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountPercentage(this LayoutDefinition layout)
         => layout.WithView(nameof(DiscountPercentage), Controls.Stack.WithView(DiscountPercentage))
-            .WithNavMenu((menu, _, _) =>
-                menu.WithNavLink(
-                    nameof(DiscountPercentage),
-                    new LayoutAreaReference(nameof(DiscountPercentage)).ToHref(layout.Hub.Address), FluentIcons.Document)
-            )
+            
         ;
 
     /// <summary>

@@ -28,9 +28,8 @@ public static class OrdersSummaryArea
         => layout.WithView(nameof(OrderSummary), OrderSummary)
             .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
             .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
-            .WithNavMenu((menu,_, _) =>menu.WithNavLink(nameof(OrderSummary).Wordify(),
-                new LayoutAreaReference(nameof(OrderSummary)).ToHref(layout.Hub.Address), FluentIcons.Box)
-        );
+            
+        ;
 
     /// <summary>
     /// Generates the Orders Summary view for a given layout area and rendering context.

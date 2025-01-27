@@ -116,7 +116,7 @@ public record NavGroupControl(object Title) : ContainerControl<NavGroupControl, 
 }
 public record NavGroupSkin(object Title) : Skin<NavGroupSkin>
 {
-    public object Expanded { get; init; }
+    public object Expanded { get; init; } = true;
 
     public NavGroupSkin WithTitle(object title) => this with { Title = title };
 

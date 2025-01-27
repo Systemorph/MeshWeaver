@@ -22,11 +22,6 @@ public static class DiscountVsRevenueArea
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountVsRevenue(this LayoutDefinition layout)
         => layout.WithView(nameof(DiscountVsRevenue), Controls.Stack.WithView(DiscountVsRevenue))
-            .WithNavMenu((menu, _, _) =>
-                menu.WithNavLink(
-                    nameof(DiscountVsRevenue),
-                    new LayoutAreaReference(nameof(DiscountVsRevenue)).ToHref(layout.Hub.Address), FluentIcons.Document)
-            )
         ;
 
     /// <summary>

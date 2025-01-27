@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
@@ -27,9 +26,7 @@ public static class SupplierSummaryArea
     /// It configures the Supplier Summary view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddSupplierSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(SupplierSummary), SupplierSummary)
-            .WithNavMenu("Supplier Summary",
-                new LayoutAreaReference(nameof(SupplierSummary)).ToHref(layout.Hub.Address), FluentIcons.Document);
+        => layout.WithView(nameof(SupplierSummary), SupplierSummary);
 
 
     /// <summary>

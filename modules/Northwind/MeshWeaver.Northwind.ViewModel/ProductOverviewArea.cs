@@ -22,11 +22,6 @@ public static class ProductOverviewArea
         =>
             layout
                 .WithView(nameof(ProductOverview), ProductOverview)
-                .WithNavMenu((menu, _, _) =>
-                    menu.WithNavLink(
-                        nameof(ProductOverview),
-                        new LayoutAreaReference(nameof(ProductOverview)).ToHref(layout.Hub.Address), FluentIcons.Document)
-                )
     ;
 
     /// <summary>

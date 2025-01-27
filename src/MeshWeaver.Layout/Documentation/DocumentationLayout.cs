@@ -83,7 +83,7 @@ public static class DocumentationLayout
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })
                 .Aggregate(tabs, (t, s) =>
-                    t.WithView(s.Control.WithDisplayArea(s.TabName), s.TabName)));
+                    t.WithView(s.Control.WithProgressMessage(s.TabName), s.TabName)));
     }
     public static LayoutDefinition WithEmbeddedDocument(
         this LayoutDefinition layout,
@@ -96,7 +96,7 @@ public static class DocumentationLayout
         return layout.WithDocumentation(contextFilter,
                 (tabs, _, _) => tabs.WithView(
                     Controls.LayoutArea(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
-                        .WithDisplayArea(name),
+                        .WithProgressMessage(name),
                     name
                 )
             )

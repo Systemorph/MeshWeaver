@@ -28,10 +28,10 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <summary>
     /// Sets the display area of the layout area control.
     /// </summary>
-    /// <param name="displayArea">The display area to set.</param>
+    /// <param name="progressMessage">The display area to set.</param>
     /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified display area.</returns>
 
-    public LayoutAreaControl WithDisplayArea(string displayArea) => this with { ProgressMessage = displayArea };
+    public LayoutAreaControl WithProgressMessage(string progressMessage) => this with { ProgressMessage = progressMessage };
 
     public virtual bool Equals(LayoutAreaControl other)
     {
@@ -67,4 +67,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
             Address
         );
     }
+
+    public LayoutAreaControl WithShowProgress(bool showProgress)
+        => this with { ShowProgress = showProgress };
 }
