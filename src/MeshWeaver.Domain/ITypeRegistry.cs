@@ -3,6 +3,7 @@
 public interface ITypeRegistry
 {
     ITypeRegistry WithType<TEvent>() => WithType(typeof(TEvent));
+    ITypeRegistry WithType<TEvent>(string name) => WithType(typeof(TEvent), name);
     ITypeRegistry WithType(Type type);
     ITypeRegistry WithType(Type type, string typeName);
     KeyFunction GetKeyFunction(string collection);

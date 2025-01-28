@@ -3,7 +3,6 @@ using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Documentation;
-using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Kernel.Hub;
@@ -15,7 +14,6 @@ using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Console;
 
 namespace MeshWeaver.Portal.Shared;
 
@@ -24,11 +22,6 @@ public static class SharedPortalConfiguration
     public static void ConfigurePortalApplication(this WebApplicationBuilder builder)
     {
         builder.AddServiceDefaults();
-        // Add services to the container.
-        builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
-
-        builder.Services.AddRazorComponents()
-            .AddInteractiveServerComponents();
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
 
@@ -47,6 +40,7 @@ public static class SharedPortalConfiguration
                     .AddChartJs()
                     .AddAgGrid()
             )
+            .ConfigureHub(c => c.ConfigurePortalApplication())
             .AddArticles(articles 
                 => articles.FromAppSettings()
                 )
@@ -86,4 +80,6 @@ public static class SharedPortalConfiguration
         logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
 #pragma warning restore CA1416
     }
+
+
 }

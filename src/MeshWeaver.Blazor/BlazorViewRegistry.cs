@@ -85,7 +85,7 @@ public static class BlazorViewRegistry
             LayoutSkin layout => StandardSkinnedView<LayoutView>(layout, stream, area, control),
             LayoutGridSkin grid => StandardSkinnedView<LayoutGridView>(grid, stream, area, control),
             NavGroupSkin group => StandardSkinnedView<NavGroup>(group, stream, area, control),
-            //NavMenuSkin navMenu => StandardSkinnedView<NavMenuView>(navMenu, stream, area, control),
+            NavMenuSkin navMenu => StandardSkinnedView<NavMenuView>(navMenu, stream, area, control),
             MainSkin main => StandardSkinnedView<MainView>(main, stream, area, control),
             ToolbarSkin toolbar => StandardSkinnedView<ToolbarView>(toolbar, stream, area, control),
             LayoutStackSkin stack => StandardSkinnedView<LayoutStackView>(stack, stream, area, control),

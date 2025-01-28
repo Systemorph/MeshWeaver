@@ -31,7 +31,7 @@ public record NotebookAddress(string Id = null) : Address(TypeName, Id ?? Guid.N
 {
     public const string TypeName = "nb";
 }
-public record ArticleAddress(string Id) : Address(TypeName, Id)
+public record ArticlesAddress(string Id) : Address(TypeName, Id)
 {
-    public const string TypeName = "article";
+    public const string TypeName = "articles";
 }

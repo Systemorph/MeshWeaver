@@ -33,7 +33,7 @@ public record NavMenuSkin : Skin<NavMenuSkin>
 /// <summary>
 /// Represents a navigation menu control with customizable properties.
 /// </summary>
-public record NavMenuControl() : ContainerControl<NavMenuControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
+public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new())
 {
     /// <summary>
     /// Adds a navigation link to the navigation menu.
