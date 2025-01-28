@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Application;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -24,7 +25,12 @@ public static class BlazorHostingExtensions
             })
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
-    public static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
+    public static void MapMeshWeaver(this IEndpointRouteBuilder app)
+    {
+        app.MapStaticContent(app.ServiceProvider.GetRequiredService<IArticleService>());
+        //app.MapRazorComponents<ApplicationPage>();
+    }
+    private static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
         => app.MapGet("/static/{collection}/{**path}", async (string collection, string path) =>
         {
             var articleCollection = articleService.GetCollection(collection);

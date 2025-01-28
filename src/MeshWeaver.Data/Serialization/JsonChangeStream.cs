@@ -77,7 +77,7 @@ public static class JsonSynchronizationStream
             )
         );
         reduced.RegisterForDisposal(
-            reduced.Hub.Register<UnsubscribeDataRequest>(
+            reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
                 {
                     reduced.DeliverMessage(delivery);
@@ -89,7 +89,7 @@ public static class JsonSynchronizationStream
 
         reduced.RegisterForDisposal(
             new AnonymousDisposable(
-                () => hub.Post(new UnsubscribeDataRequest(reduced.StreamId), o => o.WithTarget(owner))
+                () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))
             )
         );
 
@@ -124,7 +124,7 @@ public static class JsonSynchronizationStream
 
         // forwarding unsubscribe
         reduced.RegisterForDisposal(
-            reduced.Hub.Register<UnsubscribeDataRequest>(
+            reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
                 {
                     reduced.DeliverMessage(delivery);
@@ -206,7 +206,7 @@ public static class JsonSynchronizationStream
                     stream.Stream.Set(currentJson);
                     return delivery.Processed();
                 }
-            ).WithHandler<UnsubscribeDataRequest>(
+            ).WithHandler<UnsubscribeRequest>(
                 (hub, delivery) =>
                 {
                     hub.Dispose();

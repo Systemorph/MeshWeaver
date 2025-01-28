@@ -27,25 +27,9 @@ public static class SharedPortalConfiguration
         // Add services to the container.
         builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
 
-        // this adds CSV formatting which makes it easier to, e.g., copy in Excel
-        //builder.Services.Configure<CsvConsoleFormatterOptions>(options =>
-        //{
-        //    options.TimestampFormat = "hh:mm:ss:fff";
-        //    options.IncludeTimestamp = true;
-        //});
-        //builder.Services.AddLogging(config => config.AddConsole(
-        //    options =>
-        //    {
-        //        options.FormatterName = nameof(CsvConsoleFormatter);
-        //    }).AddDebug());
-
+        builder.Services.AddRazorComponents()
+            .AddInteractiveServerComponents();
         builder.Services.AddSignalR();
-        builder.Services.AddResponseCompression(opts =>
-        {
-            opts.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(
-                ["application/octet-stream"]);
-        });
-
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
 
     }
@@ -77,21 +61,27 @@ public static class SharedPortalConfiguration
         logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
 #pragma warning restore CA1416
 
-        app.MapDefaultEndpoints();
 
+        // Configure the HTTP request pipeline.
         if (!app.Environment.IsDevelopment())
         {
-            app.UseExceptionHandler("/Error");
+            app.UseExceptionHandler("/Error", createScopeForErrors: true);
+            // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
             app.UseHsts();
         }
-
-        app.UseHttpsRedirection();
-        app.UseStaticFiles();
         app.UseRouting();
-        app.MapBlazorHub();
-        app.MapMeshWeaverHubs();
-        app.MapFallbackToPage("/_Host");
-        app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
+        app.UseAntiforgery();
+        app.MapMeshWeaverSignalRHubs();
+
+        app.MapMeshWeaver();
+        app.UseHttpsRedirection();
+
+
+
+        app.MapStaticAssets();
+        app.MapRazorComponents<App>()
+            .AddInteractiveServerRenderMode();
+
         app.Run();
 #pragma warning disable CA1416
         logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);

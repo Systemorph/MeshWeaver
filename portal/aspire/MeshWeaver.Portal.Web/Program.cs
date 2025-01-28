@@ -64,7 +64,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
+app.MapMeshWeaver();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 

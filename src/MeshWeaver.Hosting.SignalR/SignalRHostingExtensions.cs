@@ -30,7 +30,7 @@ public static class SignalRHostingExtensions
         return services;
     }
 
-    public static IApplicationBuilder MapMeshWeaverHubs(this IApplicationBuilder app)
+    public static IApplicationBuilder MapMeshWeaverSignalRHubs(this IApplicationBuilder app)
     {
         app.UseEndpoints(endpoints =>
             {

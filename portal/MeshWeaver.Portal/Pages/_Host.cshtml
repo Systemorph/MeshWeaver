@@ -1,8 +1,0 @@
-﻿@page "/"
-@using Microsoft.AspNetCore.Mvc.TagHelpers
-@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
-@{
-    Layout = $"_Layout";
-}
-
-<component type="typeof(MeshWeaver.Portal.Shared.App)" render-mode="ServerPrerendered" asp-prerender-data="@(new { })" />
