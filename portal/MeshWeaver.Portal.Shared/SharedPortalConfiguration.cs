@@ -28,10 +28,10 @@ public static class SharedPortalConfiguration
     }
 
     public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder) =>
-        builder.ConfigureServices(c =>
+        builder.ConfigureServices(services =>
             {
-                c.AddRazorComponents().AddInteractiveServerComponents();
-                return c;
+                services.AddRazorComponents().AddInteractiveServerComponents();
+                return services;
             })
             .ConfigureMesh(
                 mesh => mesh
@@ -75,8 +75,7 @@ public static class SharedPortalConfiguration
 
 
         app.MapStaticAssets();
-        app.MapRazorComponents<App>()
-            .AddInteractiveServerRenderMode();
+        app.MapRazorComponents<App>();
         app.MapRazorComponents<ApplicationPage>()
             .AddInteractiveServerRenderMode();
 
