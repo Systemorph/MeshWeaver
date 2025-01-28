@@ -8,7 +8,6 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
 
-[StreamRendering]
 public partial class LayoutAreaView
 {
     [Inject] protected IJSRuntime JsRuntime { get; set; }
@@ -31,6 +30,16 @@ public partial class LayoutAreaView
             if (AreaStream != null)
                 AreaStream.Dispose();
             AreaStream = null;
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        if(firstRender)
+        {
+            IsNotPreRender = true;
+            StateHasChanged();
         }
     }
 
@@ -73,6 +82,6 @@ public partial class LayoutAreaView
         AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
     }
 
-    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
+    protected bool IsNotPreRender { get; set; }
 
 }
