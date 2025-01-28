@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Layout;
+﻿namespace MeshWeaver.Layout.Views;
 
 public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {

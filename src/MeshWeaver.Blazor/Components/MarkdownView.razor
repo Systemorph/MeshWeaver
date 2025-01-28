@@ -16,20 +16,7 @@
     <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet"/>
 </HeadContent>
 
-<article @ref="element" class="markdown-body">
-    @if(Html != null)
-    {
-        @((MarkupString)Html) 
-    }
-
-    @foreach (var component in LayoutAreaComponents)
-    {
-        <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
-            <LayoutAreaView ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
-        </div>
-    }
-</article>
-
+<MarkdownComponent Hub="@Hub" Html="@Html"></MarkdownComponent>
 @code {
     private DesignThemeModes Mode;
 }

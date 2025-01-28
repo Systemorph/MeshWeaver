@@ -9,6 +9,7 @@
     </PropertyGroup>
 
 
+
     <ItemGroup>
         <SupportedPlatform Include="browser" />
         <Content Update="StaticAssets\**" Pack="false" />
@@ -32,13 +33,5 @@
       <Folder Include="Serialization\" />
     </ItemGroup>
 
-    <ItemGroup>
-      <None Update="Components\ArticleCatalogItemView.razor.css">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </None>
-      <None Update="Components\ArticleView.razor.css">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </None>
-    </ItemGroup>
 
 </Project>

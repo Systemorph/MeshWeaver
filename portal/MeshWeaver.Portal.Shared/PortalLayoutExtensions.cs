@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Portal.Shared;
@@ -38,7 +39,7 @@ public static class PortalLayoutExtensions
             group => group.WithUrl("article/Northwind/Overview")
                 .WithNavLink("Articles", "articles/Northwind")
                 .WithNavLink("Areas", $"app/Northwind/{LayoutAreaCatalogArea.LayoutAreas}")
-                .WithNavLink("Data Model", $"app/Northwind/Model")
+                .WithNavLink("Data Model", $"app/Northwind/DataModel")
 
         );
 
