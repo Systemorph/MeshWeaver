@@ -1,15 +1,25 @@
 ﻿@using MeshWeaver.Blazor.Pages
-<FluentDesignTheme StorageName="theme" />
+<!DOCTYPE html>
+<html lang="en">
 
-<Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="[typeof(ApplicationPage).Assembly]">
-    <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)"  />
-        @* <FocusOnNavigate RouteData="@routeData" Selector="h1" /> *@
-    </Found>
-    <NotFound>
-        <PageTitle>Not found</PageTitle>
-        <FluentLayout Layout="@typeof(MainLayout)">
-            <p role="alert">Sorry, there's nothing at this address.</p>
-        </FluentLayout>
-    </NotFound>
-</Router>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link href="MeshWeaver.Portal.styles.css" rel="stylesheet" />
+    <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
+    <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
+    <component type="typeof(HeadOutlet)" render-mode="ServerPrerendered" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet />
+</head>
+
+<body>
+    <FluentDesignTheme StorageName="theme" />
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+
+</body>
+
+</html>

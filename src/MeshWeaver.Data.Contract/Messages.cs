@@ -75,4 +75,4 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
-public record UnsubscribeDataRequest(string StreamId);
+public record UnsubscribeRequest(string StreamId);
