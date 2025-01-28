@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
 
@@ -97,12 +96,6 @@ public static class Controls
     public static NumberFieldControl Number(object data, object type) => new(data, type);
 
     public static DateControl Date(object data) => new(data);
-
-    public static MenuItemControl Menu(object title) => new(title, null);
-
-    public static MenuItemControl Menu(Icon icon) => new(null, icon);
-
-    public static MenuItemControl Menu(object title, object icon) => new(title, icon);
 
     public static ButtonControl Button(object title) => new(title) { Style = "button" };
 

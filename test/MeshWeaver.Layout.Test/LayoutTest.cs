@@ -266,7 +266,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls
             .Stack
             .WithView(Controls
-                .Menu("Increase Counter")
+                .Html("Increase Counter")
                 .WithClickAction(context =>
                     context.Host.UpdateArea(
                         new($"{nameof(Counter)}/{nameof(Counter)}"),
@@ -293,8 +293,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         content
             .Should()
-            .BeOfType<MenuItemControl>()
-            .Which.Title.ToString()
+            .BeOfType<HtmlControl>()
+            .Which.Data.ToString()
             .Should()
             .Contain("Count");
         hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(new HostAddress()));
