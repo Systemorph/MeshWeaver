@@ -353,4 +353,7 @@ public record LayoutAreaHost : IDisposable
             .ForEach(d => d.Dispose());
         disposablesByArea.Clear();
     }
+
+    internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
+        => LayoutDefinition.AreaDefinitions;
 }

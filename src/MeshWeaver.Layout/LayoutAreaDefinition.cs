@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Layout;
 
-public record LayoutAreaDefinition(string Area)
+public record LayoutAreaDefinition(string Area, string Url)
 {
     public string Description { get; set; }
     public LayoutAreaDefinition WithDescription(string description) => 

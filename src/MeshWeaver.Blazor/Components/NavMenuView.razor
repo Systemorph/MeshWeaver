@@ -1,0 +1,28 @@
+@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
+@inherits SkinnedView<NavMenuControl, NavMenuSkin,NavMenuView>
+
+<nav class="sitenav" aria-labelledby="main-menu" onclick="document.getElementById('navmenu-toggle').click();">
+    <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon"/>
+    <label for="navmenu-toggle" class="navmenu-icon">
+        <FluentIcon Value="@(new Size20.Navigation())" Color="Color.Fill"/>
+    </label>
+
+    <FluentNavMenu Id="main-menu" Collapsible="@Collapsible" Width="@Width" @bind-Expanded="@expanded">
+        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
+    </FluentNavMenu>
+</nav>
+
+@code {
+    private bool expanded = true;
+
+    private int? Width { get; set; }
+    public bool Collapsible { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.Collapsible, x => x.Collapsible);
+    }
+
+}

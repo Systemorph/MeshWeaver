@@ -130,6 +130,17 @@ public record MessageHubConfiguration
     public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
     public MessageHubConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
 
+
+    public MessageHubConfiguration WithType<T>(string name = null)
+    {
+        TypeRegistry.WithType(typeof(T), name);
+        return this;
+    }
+    public MessageHubConfiguration WithType(Type type, string name = null)
+    {
+        TypeRegistry.WithType(type, name);
+        return this;
+    }
 }
 
 
