@@ -32,7 +32,7 @@ public static class ArticleExtensions
 
     internal static string GetCollectionName(this Address address)
     {
-        var collection = (address as ArticleAddress)?.Id;
+        var collection = (address as ArticlesAddress)?.Id;
         if (collection is null)
             throw new ArgumentException(
                 $"Expected address to be of type ArticleAddress. But was: {address.GetType().Name}");
@@ -54,7 +54,7 @@ public static class ArticleExtensions
    
 
     private static MeshConfiguration AddMeshNodeFactory(this MeshConfiguration config)
-        => config.AddMeshNodeFactory((type, id) => type == ArticleAddress.TypeName
+        => config.AddMeshNodeFactory((type, id) => type == ArticlesAddress.TypeName
             ? new MeshNode(type, id, "Articles", "Articles") { HubConfiguration = ConfigureArticleHub }
             : null
         );
@@ -91,11 +91,13 @@ public static class ArticleExtensions
             Name = name,
             Path = path,
             Collection = collection,
-            Url = $"{ArticleAddress.TypeName}/{collection}/{name}",
+            Url = GetArticleUrl(collection, name),
             Extension = Path.GetExtension(path),
             PrerenderedHtml = document.ToHtml(pipeline)
         };
     }
+    public static string GetArticleUrl(string collection, string path)
+        => $"article/{collection}/{path}";
 
 
 
