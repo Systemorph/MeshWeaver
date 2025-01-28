@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Activities;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Data;
 

@@ -77,7 +77,6 @@ public static class SharedPortalConfiguration
         app.UseHttpsRedirection();
 
 
-
         app.MapStaticAssets();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
