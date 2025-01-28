@@ -2,6 +2,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Views;
 
 namespace MeshWeaver.Articles;
 

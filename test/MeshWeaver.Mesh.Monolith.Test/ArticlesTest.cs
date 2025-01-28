@@ -7,6 +7,7 @@ using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;

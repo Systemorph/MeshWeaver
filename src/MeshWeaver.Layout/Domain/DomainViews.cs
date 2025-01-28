@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Reflection;
+using System.Text;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
@@ -14,8 +16,14 @@ public static class DomainViews
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
+            .WithView(nameof(DataModel), DataModel)
             )
             .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
+
+    private static object DataModel(LayoutAreaHost host, RenderingContext arg)
+    {
+        return new MarkdownControl("```mermaid\n" + host.GetMermaidDiagram() + "\n```"); 
+    }
 
 
     public const string Type = nameof(Type);
@@ -67,27 +75,82 @@ public static class DomainViews
 
     }
 
-    public static IEnumerable<UiControl> AddTypesCatalogs(this LayoutAreaHost host)
-        => host
-            .Workspace
-            .DataContext
-            .TypeSources
-            .Values
+    
 
-            .OrderBy(x => x.TypeDefinition.Order ?? int.MaxValue)
-            .GroupBy(x => x.TypeDefinition.GroupName)
+    public static IEnumerable<UiControl> AddTypesCatalogs(this LayoutAreaHost host)
+        => GetTypes(host)
+            .GroupBy(x => x.GroupName)
             .Select(types => (types.Key, types))
             .SelectMany(m => m.Key is null ? m.types.Select(t => 
-                (UiControl)new NavLinkControl(t.TypeDefinition.DisplayName, t.TypeDefinition.Icon,
+                (UiControl)new NavLinkControl(t.DisplayName, t.Icon,
                 new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
                     .ToHref(host.Hub.Address)) )
                 : [ m.types.Select(t =>
-                    new NavLinkControl(t.TypeDefinition.DisplayName, t.TypeDefinition.Icon,
+                    new NavLinkControl(t.DisplayName, t.Icon,
                     new LayoutAreaReference(nameof(Catalog)) { Id = t.CollectionName }
                         .ToHref(host.Hub.Address)) ).Aggregate(new NavGroupControl(m.Key), (g,l) => g.WithView(l))]
                 );
 
+    private static IOrderedEnumerable<ITypeDefinition> GetTypes(this LayoutAreaHost host)
+    {
+        return host
+            .Workspace
+            .DataContext
+            .TypeSources
+            .Values
+            .Select(x => x.TypeDefinition)
+            .OrderBy(x => x.Order ?? int.MaxValue).ThenBy(x => x.DisplayName);
+    }
 
+    private static string GetMermaidDiagram(this LayoutAreaHost host)
+    {
+        var types = host.GetTypes().ToArray();
+        var sb = new StringBuilder();
+        sb.AppendLine("classDiagram");
+
+        foreach (var type in types)
+        {
+            var typeName = type.Type.Name;
+            var collectionName = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type.Type);
+            var link = $"{host.Hub.Address}/type/{collectionName}";
+
+            sb.AppendLine($"class {typeName} {{");
+
+            // Add properties
+            foreach (var prop in type.Type.GetProperties())
+            {
+                sb.AppendLine($"  {prop.PropertyType.Name} {prop.Name}");
+            }
+
+            // Add methods
+            foreach (var method in type.Type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (!method.IsSpecialName) // Exclude property accessors
+                {
+                    var parameters = string.Join(", ", method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                    sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({parameters})");
+                }
+            }
+
+            sb.AppendLine("}");
+            sb.AppendLine($"click {typeName} href \"{link}\"");
+        }
+
+        // Add relationships
+        foreach (var type in types)
+        {
+            var typeName = type.Type.Name;
+            foreach (var prop in type.Type.GetProperties())
+            {
+                if (types.Any(t => t.Type == prop.PropertyType))
+                {
+                    sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
+                }
+            }
+        }
+
+        return sb.ToString();
+    }
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
         GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
