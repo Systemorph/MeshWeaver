@@ -2,6 +2,7 @@
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
@@ -10,7 +11,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.ViewModel;
 using MeshWeaver.Portal.Shared.Infrastructure;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -27,9 +27,13 @@ public static class SharedPortalConfiguration
 
     }
 
-    public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder)
-    {
-        return builder.ConfigureMesh(
+    public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder) =>
+        builder.ConfigureServices(c =>
+            {
+                c.AddRazorComponents().AddInteractiveServerComponents();
+                return c;
+            })
+            .ConfigureMesh(
                 mesh => mesh
                     .InstallAssemblies(typeof(DocumentationViewModels).Assembly.Location)
                     .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
@@ -43,9 +47,8 @@ public static class SharedPortalConfiguration
             .ConfigureHub(c => c.ConfigurePortalApplication())
             .AddArticles(articles 
                 => articles.FromAppSettings()
-                )
+            )
             .AddSignalRHubs();
-    }
 
 
     public static void StartPortalApplication(this WebApplication app)
@@ -73,6 +76,8 @@ public static class SharedPortalConfiguration
 
         app.MapStaticAssets();
         app.MapRazorComponents<App>()
+            .AddInteractiveServerRenderMode();
+        app.MapRazorComponents<ApplicationPage>()
             .AddInteractiveServerRenderMode();
 
         app.Run();

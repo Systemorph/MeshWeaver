@@ -14,12 +14,7 @@ public static class BlazorHostingExtensions
 {
     public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null) =>
         builder
-            .ConfigureServices(services =>
-            {
-                services.AddRazorPages();
-                services.AddServerSideBlazor();
-                return services.AddFluentUIComponents();
-            })
+            .ConfigureServices(services => services.AddFluentUIComponents())
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
     public static void MapMeshWeaver(this IEndpointRouteBuilder app)
