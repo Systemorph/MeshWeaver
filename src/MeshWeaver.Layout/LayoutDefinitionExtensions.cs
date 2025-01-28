@@ -138,7 +138,7 @@ public static class LayoutDefinitionExtensions
 
     private static LayoutAreaDefinition CreateLayoutAreaDefinition(this LayoutDefinition layout, string area, Func<LayoutAreaDefinition, LayoutAreaDefinition> options, Delegate delgate)
     {
-        LayoutAreaDefinition ret = new(area);
+        LayoutAreaDefinition ret = new(area, $"{layout.Hub.Address}/{area}");
         if (delgate is not null)
         {
             var method = delgate.Method;

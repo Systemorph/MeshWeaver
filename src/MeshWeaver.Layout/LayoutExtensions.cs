@@ -62,7 +62,10 @@ public static class LayoutExtensions
         this MessageHubConfiguration config
     ) =>
         config.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>()
-        ?? ImmutableList<Func<LayoutDefinition, LayoutDefinition>>.Empty;
+        ?? [(Func<LayoutDefinition, LayoutDefinition>)(layout => layout.AddStandardViews())];
+
+    private static LayoutDefinition AddStandardViews(this LayoutDefinition layout)
+        => layout.AddLayoutAreaCatalog();
 
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration

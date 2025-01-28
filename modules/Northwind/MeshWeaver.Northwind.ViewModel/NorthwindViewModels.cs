@@ -32,17 +32,6 @@ namespace MeshWeaver.Northwind.ViewModel
                             .AddOrdersSummary()
                             .AddCustomerSummary()
                             .AddSupplierSummary()
-                            .WithNavMenu((menu, host, _) =>
-                                menu.WithNavGroup(
-                                    "Northwind",
-                                    group => group.WithUrl("article/Northwind/Overview")
-                                        .WithNavLink("Articles", "articles/Northwind")
-                                        .WithNavLink("Areas", "app/Northwind/LayoutAreas")
-                                        .WithNavLink("Data Model", "app/Northwind/Model")
-
-                                )
-                            )
-
                     )
                 ;
         }

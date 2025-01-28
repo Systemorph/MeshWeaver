@@ -1,20 +1,18 @@
 ﻿@using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
-<div class="navmenu">
-    <div class="navmenu">
-        <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon" />
-        <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Neutral" /></label>
-        <nav class="sitenav" aria-labelledby="main-menu" >
-            <FluentNavMenu Id="main-menu" Title="Main menu" CustomToggle="true">
-                <LayoutArea Address="app/Documentation" Area="@NavMenuArea" ShowProgress="false"></LayoutArea>
-                <LayoutArea Address="app/Northwind" Area="@NavMenuArea" ShowProgress="false"></LayoutArea>
-            </FluentNavMenu>
-        </nav>
-    </div>
+@using MeshWeaver.Messaging
+@inject IMessageHub Hub
+<div class="navmenu" >
+    <LayoutArea 
+        Area="@NavMenuExtensions.NavMenu" 
+        Address="@LayoutHubAddress" 
+        ShowProgress="false"
+    />
 </div>
 
-@code{
-
-    private const string NavMenuArea = NavMenuExtensions.NavMenu;
-
+@code
+{
+    // TODO V10: This is a bit hacky but will guarantee that the hosted hub is instantiated. Still need a better concept. (28.01.2025, Roland Bürgi)
+    Address LayoutHubAddress
+        => Hub.GetHostedHub(Hub.Address.GetPortalLayoutAddress(), c => c.ConfigurePortalLayout()).Address;
 }
