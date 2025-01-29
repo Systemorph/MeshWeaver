@@ -107,6 +107,7 @@ public static class DomainViews
         var types = host.GetTypes().ToArray();
         var sb = new StringBuilder();
         sb.AppendLine("classDiagram");
+        sb.AppendLine("direction TB"); // Top to Bottom direction for vertical layout
 
         foreach (var type in types)
         {
@@ -123,7 +124,9 @@ public static class DomainViews
             }
 
             // Add methods
-            foreach (var method in type.Type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            foreach (var method in type.Type
+                         .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                         .Where(m => m.DeclaringType != typeof(object) && m.Name != "Deconstruct" && m.Name != "<Clone>$"))
             {
                 if (!method.IsSpecialName) // Exclude property accessors
                 {
@@ -132,8 +135,8 @@ public static class DomainViews
                 }
             }
 
+            //sb.AppendLine($"click {typeName} href \"{link}\"");
             sb.AppendLine("}");
-            sb.AppendLine($"click {typeName} href \"{link}\"");
         }
 
         // Add relationships
