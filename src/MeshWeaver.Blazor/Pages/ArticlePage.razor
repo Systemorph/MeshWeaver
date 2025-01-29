@@ -1,7 +1,7 @@
 @page "/article/{Collection}/{**Path}"
 @using MeshWeaver.Mesh
 
-<LayoutArea Address="@Address" Area="Article" Id="@Path"></LayoutArea>
+<LayoutArea Address="@Address" Area="Article" Id="@Path" />
 @code
 {
     private ArticlesAddress Address => new(Collection);

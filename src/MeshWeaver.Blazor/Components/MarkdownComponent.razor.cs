@@ -61,10 +61,11 @@ public partial class MarkdownComponent : IDisposable
                     break;
                 case { Name: "layout-area" }:
                     //var divId = node.GetAttributeValue("id", string.Empty);
-                    var address = node.GetAttributeValue("data-address", "false");
-                    var area = node.GetAttributeValue("data-area", "false");
-                    var areaId = node.GetAttributeValue("data-id", "false");
-                    RenderLayoutArea(builder, address, area, areaId, ref sequence);
+                    var address = node.GetAttributeValue("data-address", null);
+                    var area = node.GetAttributeValue("data-area", null);
+                    var areaId = node.GetAttributeValue("data-id", null);
+                    var areaName = node.GetAttributeValue("data-name", null);
+                    RenderLayoutArea(builder, address, area, areaId, areaName, ref sequence);
                     break;
                 default:
                     builder.OpenElement(sequence++, node.Name);
@@ -86,17 +87,37 @@ public partial class MarkdownComponent : IDisposable
         builder.AddContent(sequence++, content);
         builder.CloseElement();
     }
-    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId, ref int sequence)
+    private void RenderLayoutArea(
+        RenderTreeBuilder builder, 
+        string address, 
+        string area, 
+        string areaId, 
+        string areaName,
+        ref int sequence)
     {
         builder.OpenComponent<LayoutAreaView>(sequence++);
-        builder.AddAttribute(sequence++, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = areaId }));
+        builder.AddAttribute(sequence++,
+            nameof(LayoutAreaView.ViewModel),
+            new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = areaId })
+            {
+                ShowProgress = true,
+                ProgressMessage = $"Loading {area}"
+            }
+        );
         builder.CloseComponent();
     }
 
     private void RenderCodeBlock(RenderTreeBuilder builder, string id, ref int sequence)
     {
         builder.OpenComponent<LayoutAreaView>(sequence++);
-        builder.AddAttribute(sequence++, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl(kernelAddress, new LayoutAreaReference(id)));
+        builder.AddAttribute(sequence++,
+            nameof(LayoutAreaView.ViewModel),
+            new LayoutAreaControl(kernelAddress, new LayoutAreaReference(id))
+            {
+                ShowProgress = true,
+                ProgressMessage = "Allocating..."
+            }
+        );
         builder.CloseComponent();
     }
 

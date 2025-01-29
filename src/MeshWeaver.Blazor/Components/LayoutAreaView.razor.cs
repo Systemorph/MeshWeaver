@@ -18,7 +18,7 @@ public partial class LayoutAreaView
     private LayoutAreaProperties Properties { get; set; }
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = ShowProgress, ProgressMessage=ProgressMessage };
+        new(Area) { ShowProgress = showProgress, ProgressMessage=progressMessage };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
@@ -33,12 +33,13 @@ public partial class LayoutAreaView
             AreaStream = null;
         }
     }
-
+    private bool showProgress;
+    private string progressMessage;
 
     private void BindViewModel()
     {
-        DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
-        DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
+        DataBind(ViewModel.ProgressMessage, x => x.progressMessage);
+        DataBind(ViewModel.ShowProgress, x => x.showProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
         DataBind(ViewModel.Address, x => x.Address, ConvertAddress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
