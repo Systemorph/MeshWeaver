@@ -16,6 +16,7 @@ namespace MeshWeaver.Northwind.Domain
     /// <seealso cref="INamed"/>
     /// <seealso cref="IconAttribute"/>
     [Icon(FluentIcons.Provider, "Album")]
+    [Display(GroupName = "Suppliers")]
     public record Shipper([property: Key] int ShipperId, string CompanyName, string Phone) : INamed
     {
         string INamed.DisplayName => CompanyName;

@@ -23,7 +23,7 @@ namespace MeshWeaver.Northwind.Domain;
 /// </remarks>
 /// <seealso cref="INamed"/>
 [Icon(FluentIcons.Provider, "Album")]
-[Display()]
+[Display(GroupName = "Customer")]
 public record Customer(
     [property: Key] string CustomerId,
     string CompanyName,

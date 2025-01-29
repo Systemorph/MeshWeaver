@@ -24,6 +24,7 @@ namespace MeshWeaver.Northwind.Domain
     /// <seealso cref="INamed"/>
     /// <seealso cref="IconAttribute"/>
     [Icon(FluentIcons.Provider, "Album")]
+    [Display(GroupName = "Product")]
     public record Product(
         [property: Key] int ProductId,
         string ProductName,
