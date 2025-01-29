@@ -22,7 +22,7 @@ public static class DomainViews
 
     private static object DataModel(LayoutAreaHost host, RenderingContext arg)
     {
-        return new MarkdownControl("```mermaid\n" + host.GetMermaidDiagram() + "\n```"); 
+        return new MarkdownControl(host.GetMermaidDiagram()); 
     }
 
 
@@ -102,58 +102,72 @@ public static class DomainViews
             .OrderBy(x => x.Order ?? int.MaxValue).ThenBy(x => x.DisplayName);
     }
 
+
     private static string GetMermaidDiagram(this LayoutAreaHost host)
     {
         var types = host.GetTypes().ToArray();
         var sb = new StringBuilder();
-        sb.AppendLine("classDiagram");
-        sb.AppendLine("direction TB"); // Top to Bottom direction for vertical layout
 
-        foreach (var type in types)
+        // Group types into subgraphs based on some criteria, e.g., namespace or group name
+        var groupedTypes = types.GroupBy(t => t.GroupName ?? "Default");
+
+        foreach (var group in groupedTypes)
         {
-            var typeName = type.Type.Name;
-            var collectionName = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type.Type);
-            var link = $"{host.Hub.Address}/type/{collectionName}";
+            sb.AppendLine($"## {group.Key}");
+            sb.AppendLine("```mermaid");
+            sb.AppendLine("classDiagram");
 
-            sb.AppendLine($"class {typeName} {{");
-
-            // Add properties
-            foreach (var prop in type.Type.GetProperties())
+            foreach (var type in group)
             {
-                sb.AppendLine($"  {prop.PropertyType.Name} {prop.Name}");
+                var typeName = type.Type.Name;
+                var collectionName = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
+                    .GetCollectionName(type.Type);
+                var link = $"{host.Hub.Address}/type/{collectionName}";
+
+                sb.AppendLine($"class {typeName} {{");
+
+                // Add properties
+                foreach (var prop in type.Type.GetProperties())
+                {
+                    sb.AppendLine($"  {prop.PropertyType.Name} {prop.Name}");
+                }
+
+                // Add methods
+                foreach (var method in type.Type
+                             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                             .Where(m => m.DeclaringType != typeof(object) && m.Name != "Deconstruct" &&
+                                         m.Name != "<Clone>$"))
+                {
+                    if (!method.IsSpecialName) // Exclude property accessors
+                    {
+                        var parameters = string.Join(", ",
+                            method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
+                        sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({parameters})");
+                    }
+                }
+
+                sb.AppendLine("}");
             }
 
-            // Add methods
-            foreach (var method in type.Type
-                         .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                         .Where(m => m.DeclaringType != typeof(object) && m.Name != "Deconstruct" && m.Name != "<Clone>$"))
+            // Add relationships within the group
+            foreach (var type in group)
             {
-                if (!method.IsSpecialName) // Exclude property accessors
+                var typeName = type.Type.Name;
+                foreach (var prop in type.Type.GetProperties())
                 {
-                    var parameters = string.Join(", ", method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                    sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({parameters})");
+                    if (group.Any(t => t.Type == prop.PropertyType))
+                    {
+                        sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
+                    }
                 }
             }
 
-            //sb.AppendLine($"click {typeName} href \"{link}\"");
-            sb.AppendLine("}");
-        }
-
-        // Add relationships
-        foreach (var type in types)
-        {
-            var typeName = type.Type.Name;
-            foreach (var prop in type.Type.GetProperties())
-            {
-                if (types.Any(t => t.Type == prop.PropertyType))
-                {
-                    sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
-                }
-            }
+            sb.AppendLine("```");
         }
 
         return sb.ToString();
     }
+
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
         GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
