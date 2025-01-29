@@ -8,7 +8,6 @@ namespace MeshWeaver.Markdown;
 
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
-    private const string HideCode = "hide-code";
     private const string ShowCode = "show-code";
     private const string HideOutput = "hide-output";
     private const string Execute = "execute";
@@ -41,7 +40,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
                 }
                 break;
             case Csharp:
-                if (!HasValue(args, HideCode))
+                if (!HasValue(args, Execute) || HasValue(args, ShowCode))
                     base.Write(renderer, obj);
                 if (HasValue(args, Execute))
                 {

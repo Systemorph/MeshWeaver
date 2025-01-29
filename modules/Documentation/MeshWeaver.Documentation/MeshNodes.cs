@@ -25,6 +25,6 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
         typeof(DocumentationApplicationAttribute).FullName
     )
     {
-        HubConfiguration = DocumentationViewModels.ConfigureHub
+        HubConfiguration = DocumentationViewModels.AddDocumentation
     };
 }
