@@ -102,7 +102,14 @@ public static class DomainViews
             .OrderBy(x => x.Order ?? int.MaxValue).ThenBy(x => x.DisplayName);
     }
 
-
+    private static readonly HashSet<string> ExcludedMethods =
+    [
+        "<Clone>$",
+        "Deconstruct",
+        "ToString",
+        "Equals",
+        "GetHashCode"
+    ];
     private static string GetMermaidDiagram(this LayoutAreaHost host)
     {
         var types = host.GetTypes().ToArray();
@@ -135,37 +142,38 @@ public static class DomainViews
                 // Add methods
                 foreach (var method in type.Type
                              .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                             .Where(m => m.DeclaringType != typeof(object) && m.Name != "Deconstruct" &&
-                                         m.Name != "<Clone>$"))
-                {
-                    if (!method.IsSpecialName) // Exclude property accessors
-                    {
-                        var parameters = string.Join(", ",
-                            method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"));
-                        sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({parameters})");
-                    }
-                }
-
+                             .Where(m => !m.IsSpecialName && !ExcludedMethods.Contains(m.Name)))
+                    sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({GetParameters(method)})");
                 sb.AppendLine("}");
             }
 
+
+            // TODO V10: Need to create relationships, but they will be across the diagram.
+            //  Need to think of different diagram type. (29.01.2025, Roland Bürgi)
             // Add relationships within the group
-            foreach (var type in group)
-            {
-                var typeName = type.Type.Name;
-                foreach (var prop in type.Type.GetProperties())
-                {
-                    if (group.Any(t => t.Type == prop.PropertyType))
-                    {
-                        sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
-                    }
-                }
-            }
+            //foreach (var type in group)
+            //{
+            //    var typeName = type.Type.Name;
+            //    foreach (var prop in type.Type.GetProperties())
+            //    {
+            //        if (group.Any(t => t.Type == prop.PropertyType))
+            //        {
+            //            sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
+            //        }
+            //    }
+            //}
 
             sb.AppendLine("```");
         }
 
         return sb.ToString();
+    }
+
+    private static string GetParameters(MethodInfo method)
+    {
+        return string.Join(", ",
+            method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}")
+        );
     }
 
     public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
