@@ -1,8 +1,7 @@
 ﻿using HtmlAgilityPack;
 using MeshWeaver.Data;
-using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
+using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -10,11 +9,10 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
 
-public partial class MarkdownComponent : IDisposable
+public partial class MarkdownComponent
 {
     private IJSObjectReference highlight;
     private IJSObjectReference mermaid;
-    private readonly Lazy<KernelAddress> kernelAddress = new(() => new());
     
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -48,24 +46,23 @@ public partial class MarkdownComponent : IDisposable
                 case HtmlTextNode text:
                     builder.AddMarkupContent(sequence++, text.Text);
                     break;
-                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
-                    RenderMermaidDiagram(builder, node.InnerHtml, ref sequence);
-                    break;
-                case { Name: "code-block" }:
-                    var id = node.GetAttributeValue("id", string.Empty);
-                    var hideOutput = node.GetAttributeValue("data-hide-output", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+                case { Name: "code" } when node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CodeBlock):
+                    var arguments = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.Arguments}", null);
+                    var language = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.Language}", null);
+                    var rawContent = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.RawContent}", null);
                     var content = node.InnerHtml;
-                    Hub.Post(new SubmitCodeRequest(content) { ViewId = id }, o => o.WithTarget(kernelAddress.Value));
-                    if (!hideOutput)
-                        RenderCodeBlock(builder, id, ref sequence);
+                    var control = new CodeBlockControl(rawContent, language)
+                        .WithArguments(arguments)
+                        .WithHtml(content);
+
+                    RenderCodeBlock(builder, control, ref sequence);
                     break;
-                case { Name: "layout-area" }:
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     //var divId = node.GetAttributeValue("id", string.Empty);
-                    var address = node.GetAttributeValue("data-address", null);
-                    var area = node.GetAttributeValue("data-area", null);
-                    var areaId = node.GetAttributeValue("data-id", null);
-                    var areaName = node.GetAttributeValue("data-name", null);
-                    RenderLayoutArea(builder, address, area, areaId, areaName, ref sequence);
+                    var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
+                    var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
+                    var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
+                    RenderLayoutArea(builder, address, area, areaId, ref sequence);
                     break;
                 default:
                     builder.OpenElement(sequence++, node.Name);
@@ -80,6 +77,12 @@ public partial class MarkdownComponent : IDisposable
             }
         }
     }
+
+    private bool ConvertToBool(string val)
+    {
+        throw new NotImplementedException();
+    }
+
     private void RenderMermaidDiagram(RenderTreeBuilder builder, string content, ref int sequence)
     {
         builder.OpenElement(sequence++, "div");
@@ -92,7 +95,6 @@ public partial class MarkdownComponent : IDisposable
         string address, 
         string area, 
         string areaId, 
-        string areaName,
         ref int sequence)
     {
         builder.OpenComponent<LayoutAreaView>(sequence++);
@@ -107,24 +109,15 @@ public partial class MarkdownComponent : IDisposable
         builder.CloseComponent();
     }
 
-    private void RenderCodeBlock(RenderTreeBuilder builder, string id, ref int sequence)
+    private void RenderCodeBlock(RenderTreeBuilder builder, CodeBlockControl viewModel, ref int sequence)
     {
-        builder.OpenComponent<LayoutAreaView>(sequence++);
+        builder.OpenComponent<CodeBlockView>(sequence++);
         builder.AddAttribute(sequence++,
-            nameof(LayoutAreaView.ViewModel),
-            new LayoutAreaControl(kernelAddress, new LayoutAreaReference(id))
-            {
-                ShowProgress = true,
-                ProgressMessage = "Allocating..."
-            }
+            nameof(CodeBlockView.ViewModel),
+            viewModel
         );
         builder.CloseComponent();
     }
 
 
-    public void Dispose()
-    {
-        //if (kernelAddress.IsValueCreated)
-        //    Hub.Post(new DisposeRequest(), o => o.WithTarget(kernelAddress.Value));
-    }
 }

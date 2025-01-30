@@ -1,0 +1,35 @@
+﻿.code-block-container {
+    border: 1px solid #d1d5da;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.code-header {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 8px;
+    border-bottom: none;
+}
+
+.copy-button {
+    background: none;
+    border: none;
+    color: #0366d6;
+    cursor: pointer;
+    padding: 0;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+}
+
+.copy-button:hover {
+    text-decoration: underline;
+}
+
+.code-content {
+    padding: 0;
+    overflow-x: auto;
+}
+
+

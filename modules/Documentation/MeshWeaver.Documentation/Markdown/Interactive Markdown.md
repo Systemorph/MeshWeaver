@@ -13,6 +13,6 @@ Tags:
   - "Conceptual"
 ---
 
-```csharp execute
-"Hello World"
+```csharp --execute HelloWorld --show-header
+Console.Writeln("Hello World");
 ```
