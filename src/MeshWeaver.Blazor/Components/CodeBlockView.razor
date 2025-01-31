@@ -5,16 +5,18 @@
 @inject IJSRuntime JsRuntime;
 
 
-@if (!HideCode)
-{
-    <div class="code-content">
-        @((MarkupString)CodeHtml)
-    </div>
-}
-
 @if (Language == "mermaid")
 {
     <div class='mermaid'>@Code</div>
+}
+else 
+{
+    @if (!HideCode)
+    {
+        <div class="code-content">
+            @((MarkupString)CodeHtml)
+        </div>
+    }
 }
 
 @if (OutputArea is not null)

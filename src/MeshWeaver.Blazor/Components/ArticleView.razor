@@ -2,27 +2,44 @@
 
 @inherits BlazorView<ArticleControl, ArticleView>
 
-<div class="article-header">
-    <div class="header-content">
-        <h1>@Title</h1>
-        <div class="meta-info">
-            <span class="authors">@string.Join(", ", Authors)</span>
-            <span class="published-date">@Published.ToString("MMMM dd, yyyy")</span>
-            <span class="tags">
-                @foreach (var tag in Tags)
-                {
-                    <span class="tag">@tag</span>
-                }
-            </span>
+<HeadContent>
+    <title>@Title</title>
+</HeadContent>
+
+<div class="article-container">
+    <div class="article-header">
+        <div class="header-content">
+            <div class="meta-info">
+                <div class="author-info">
+                    @foreach (var author in Authors)
+                    {
+                        <div class="author">
+                            <FluentPersona Name="@author" ImageSize="24px" />
+                        </div>
+                    }
+                </div>
+                <span class="published-date">@Published.ToString("MMMM dd, yyyy")</span>
+            </div>
+            <h1 class="title">@Title</h1>
+            <p class="abstract">@Abstract</p>
         </div>
-        <p class="abstract">@Abstract</p>
+        <div class="media">
+            @if (!string.IsNullOrEmpty(VideoUrl))
+            {
+                <iframe width="560" height="315" src="@GetEmbedUrl(VideoUrl)" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+            }
+            else
+            {
+                <img src="@ThumbnailPath" alt="Article Thumbnail" />
+            }
+        </div>
     </div>
-    <div class="thumbnail">
-        <img src="@ThumbnailPath" alt="Article Thumbnail" />
+
+    <div class="article-content">
+        <MarkdownView ViewModel="@MarkdownControl" />
     </div>
 </div>
 
-<MarkdownView ViewModel="@MarkdownControl" /> 
 @code {
     private string Name;
     private string Collection;
@@ -34,8 +51,10 @@
     private DateTime Published;
     private DateTime LastUpdated;
     private string Html;
+    private string VideoUrl;
     private MarkdownControl MarkdownControl;
     private string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
+
     protected override void BindData()
     {
         base.BindData();
@@ -49,12 +68,25 @@
         DataBind(ViewModel.Published, x => x.Published);
         DataBind(ViewModel.LastUpdated, x => x.LastUpdated);
         DataBind(ViewModel.Html, x => x.Html);
+        DataBind(ViewModel.VideoUrl, x => x.VideoUrl);
         MarkdownControl = new(null) { Html = Html };
     }
 
     private IReadOnlyCollection<string> ConvertStringArray(object tags)
         => (tags as IEnumerable)?.Cast<string>().ToArray();
 
-
-
+    private string GetEmbedUrl(string videoUrl)
+    {
+        if (videoUrl.Contains("youtube.com/watch"))
+        {
+            var videoId = videoUrl.Split("v=")[1];
+            var ampersandPosition = videoId.IndexOf('&');
+            if (ampersandPosition != -1)
+            {
+                videoId = videoId.Substring(0, ampersandPosition);
+            }
+            return $"https://www.youtube.com/embed/{videoId}";
+        }
+        return videoUrl;
+    }
 }
