@@ -29,7 +29,7 @@
     overflow: hidden; /* Prevent overflow */
     box-sizing: border-box; /* Include padding and border in the element's total width and height */
     background-color: var(--color-canvas-default); /* Use Primer CSS variable */
-    min-height: 300px; /* Ensure a minimum height for the card */
+    /* Remove or adjust min-height if necessary */
 }
 
     .article-card:hover {
@@ -84,8 +84,8 @@
 .content {
     display: flex;
     justify-content: space-between;
-    align-items: center; /* Ensure vertical alignment */
-    flex-grow: 1; /* Allow content to grow and fill the available space */
+    align-items: flex-start; /* Ensure vertical alignment */
+    flex-grow: 0; /* Allow content to grow and fill the available space */
     width: 100%; /* Ensure content takes full width */
     box-sizing: border-box; /* Include padding and border in the element's total width */
 }
