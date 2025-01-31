@@ -8,9 +8,12 @@ namespace MeshWeaver.Articles;
 
 public record Article
 {
+    public TimeSpan VideoDuration { get; set; } = TimeSpan.FromMinutes(13.2345);
+    public string VideoUrl { get; set; } = "https://youtu.be/zppfjeculUs?si=LbvFYyCp2kwCFXk2";
     public string Extension { get; init; }
     public string Name { get; init; }
     public string Title { get; set; }
+    public bool Pinned { get; init; }
     public string Collection { get; init; }
     [property: Key] public string Url { get; init; }
     public string Path { get; init; }
