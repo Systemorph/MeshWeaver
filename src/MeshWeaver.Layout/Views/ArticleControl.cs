@@ -14,4 +14,5 @@ public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleNam
     public object LastUpdated { get; init; }
     public object Content { get; init; }
     public object Html { get; init; }
+    public object VideoUrl { get; init; }
 }
