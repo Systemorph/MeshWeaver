@@ -1,66 +1,123 @@
-﻿article {
+﻿.article-card-link {
+    text-decoration: none;
+    color: inherit;
+}
+
+.article-card {
+    width: 50%;
+    margin: 16px auto; /* Center the card and add vertical spacing */
+    border: 1px solid #ddd;
+    padding: 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: box-shadow 0.3s ease;
     display: flex;
-    gap: 1rem;
-    min-width: 700px;
-    max-width: 700px;
+    flex-direction: column; /* Ensure vertical alignment */
+    overflow: hidden; /* Prevent overflow */
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+    .article-card:hover {
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    }
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    width: 100%; /* Ensure header takes full width */
+    box-sizing: border-box; /* Include padding and border in the element's total width */
+}
+
+.author-info {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap; /* Allow authors to wrap to the next line if needed */
+}
+
+.author {
+    margin-right: 8px; /* Added space between authors */
+}
+
+.author-name {
+    margin-left: 8px;
+    font-size: 13pt; /* Increased font size */
+    font-weight: bold;
+}
+
+.publish-info {
+    display: flex;
     align-items: center;
 }
 
-    article:not(:first-child) {
-        padding-top: 24px;
-        border-top: 1px solid #eee;
-    }
+.publish-date {
+    margin-right: 8px;
+    font-size: 12pt; /* Increased font size */
+}
 
-.details {
-    flex-grow: 1;
+.new-indicator {
+    width: 8px;
+    height: 8px;
+    background-color: red;
+    border-radius: 50%;
+}
+
+.content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center; /* Ensure vertical alignment */
+    flex-grow: 1; /* Allow content to grow and fill the available space */
+    width: 100%; /* Ensure content takes full width */
+    box-sizing: border-box; /* Include padding and border in the element's total width */
+}
+
+.text {
+    flex: 1;
+    margin-right: 16px;
+    overflow: hidden; /* Prevent text overflow */
 }
 
 .title {
-    line-height: 1;
+    font-size: 14pt; /* Increased font size */
+    font-weight: bold;
+    margin-bottom: 4px;
+    white-space: nowrap; /* Prevent title from wrapping */
+    overflow: hidden; /* Prevent title overflow */
+    text-overflow: ellipsis; /* Add ellipsis for overflowed text */
 }
-
-    .title a {
-        text-decoration: none;
-    }
 
 .summary {
-    display: flex;
+    font-size: 10pt; /* Increased font size */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    margin-bottom: 8px;
 }
 
-.footer {
+.video-info {
     display: flex;
+    align-items: center;
+    font-size: 10pt; /* Increased font size */
 }
 
-    .footer .mesh-node {
-        flex-grow: 1;
+    .video-info .fluent-icon {
+        margin-right: 4px; /* Added space between icon and time */
     }
 
-        .footer .mesh-node ::deep .fluent-persona .name {
-            margin-inline-start: 8px;
-            font-weight: 500;
-        }
-
-    .footer .stats {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-    }
-
-        .footer .stats .label {
-            display: flex;
-            font-size: 0.9em;
-            align-items: center;
-        }
-
-.tags {
-    margin-top: 1rem;
-    display: flex;
-    gap: 0.25rem;
+.thumbnail img {
+    width: 4cm;
+    height: 4cm;
+    object-fit: cover;
 }
 
-    .tags ::deep fluent-badge span {
-        padding: 0 0.2rem;
-    }
-
-.thumbnail {
+/* Ensure the container of the cards is properly aligned and has enough width */
+.stack-vertical {
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* Center the cards horizontally */
+    justify-content: start;
+    width: 100%; /* Ensure the container takes full width */
+    box-sizing: border-box; /* Include padding and border in the element's total width */
 }
