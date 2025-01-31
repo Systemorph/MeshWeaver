@@ -3,7 +3,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
-using MeshWeaver.Mesh;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
@@ -17,7 +16,7 @@ public static class ArticleCatalogLayoutArea
         return
             collection.GetArticles(ParseToOptions(host.Reference))
                 .Select(x =>
-                    x.Aggregate(Controls.Stack, (s, a) =>
+                    x.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))
                     )
                 )
