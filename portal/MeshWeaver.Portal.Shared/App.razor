@@ -1,5 +1,14 @@
 ﻿@using MeshWeaver.Blazor.Pages
-<FluentDesignTheme StorageName="theme" />
+<FluentDesignTheme StorageName="theme" @bind-mode="@Mode"/>
+@if (Mode == DesignThemeModes.Light)
+{
+    <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet" />
+}
+else
+{
+    <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet" />
+}
+<link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet" />
 
 <Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="[typeof(ApplicationPage).Assembly]">
     <Found Context="routeData">
@@ -13,3 +22,7 @@
         </FluentLayout>
     </NotFound>
 </Router>
+@code {
+    private DesignThemeModes Mode;
+    private ElementReference Element;
+}

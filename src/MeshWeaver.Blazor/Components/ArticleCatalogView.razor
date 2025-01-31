@@ -1,5 +1,5 @@
-﻿<h3>ArticleCatalogView</h3>
+﻿@inherits SkinnedView<ArticleCatalogSkin, ArticleCatalogView>
 
-@code {
-
-}
+<div class="articles-catalog">
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"></DispatchView>
+</div>
