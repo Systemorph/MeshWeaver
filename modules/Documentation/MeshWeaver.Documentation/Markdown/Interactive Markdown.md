@@ -14,5 +14,5 @@ Tags:
 ---
 
 ```csharp --execute HelloWorld --show-header
-Console.Writeln("Hello World");
+"Hello World"
 ```

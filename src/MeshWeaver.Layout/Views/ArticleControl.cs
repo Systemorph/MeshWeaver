@@ -12,6 +12,6 @@ public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleNam
     public object Authors { get; init; }
     public object Published { get; init; }
     public object LastUpdated { get; init; }
-
     public object Content { get; init; }
+    public object Html { get; init; }
 }
