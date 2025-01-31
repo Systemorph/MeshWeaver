@@ -7,16 +7,20 @@
 <HeadContent>
     @if (Mode == DesignThemeModes.Light)
     {
-        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet"/>
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet" />
     }
     else
     {
-        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet"/>
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet" />
     }
-    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet"/>
+    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet" />
 </HeadContent>
 
-<MarkdownComponent Hub="@Hub" Html="@Html"></MarkdownComponent>
+<article @ref="Element" class="markdown-body" data-theme="@Mode.ToString().ToLower()">
+    @((RenderFragment)RenderHtml)
+</article>
+
 @code {
     private DesignThemeModes Mode;
+    private ElementReference Element;
 }

@@ -1,7 +1,5 @@
 ﻿@using MeshWeaver.Kernel
 @using MeshWeaver.Mesh
-@using MeshWeaver.Messaging
-@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @using Microsoft.JSInterop
 @inherits BlazorView<CodeBlockControl, CodeBlockView>
 @inject IJSRuntime JsRuntime;
@@ -9,38 +7,19 @@
 
 @if (!HideCode)
 {
-    <div class="code-block-container">
-        <div class="code-header">
-            <button class="copy-button" @onclick="CopyToClipboard">
-                <FluentIcon Icon="Size20.Copy" />
-            </button>
-        </div>
-        @if (ShowHeader)
-        {
-            <pre class="code-content">
-                <code>
-                    &#96;&#96;&#96;@Language @MarkdownArguments
-                </code>
-            </pre>
-        }
-        <pre class="code-content">
-            <code class="language-@Language">@((MarkupString)CodeHtml)</code>
-        </pre>
-        @if (ShowHeader)
-        {
-            <pre class="code-content">
-                <code>
-                    &#96;&#96;&#96;
-                </code>
-            </pre>
-        }
+    <div class="code-content">
+        @((MarkupString)CodeHtml)
     </div>
+}
 
-    if (OutputArea is not null)
-    {
-        <LayoutAreaView ViewModel="@OutputArea" Stream="@Stream" Area="@ExecutionArea"></LayoutAreaView>
-    }
+@if (Language == "mermaid")
+{
+    <div class='mermaid'>@Code</div>
+}
 
+@if (OutputArea is not null)
+{
+    <LayoutAreaView ViewModel="@OutputArea" Stream="@Stream" Area="@ExecutionArea"></LayoutAreaView>
 }
 
 
@@ -81,10 +60,6 @@
                 OutputArea = new(kernel, new(ExecutionArea));
         }
 
-        if (Language == "mermaid")
-        {
-            CodeHtml = $"<div class='mermaid'>{Code}</div>";
-        }
     }
 
     private string CreateMermaid(string content)

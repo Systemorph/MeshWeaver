@@ -20,7 +20,7 @@ public static class ArticleLayoutArea
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
-            Content = article.PrerenderedHtml
+            Html = article.PrerenderedHtml
         };
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)

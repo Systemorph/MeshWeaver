@@ -22,7 +22,7 @@
     </div>
 </div>
 
-<MarkdownComponent Html="@Content" Hub="@Hub" /> 
+<MarkdownView ViewModel="@MarkdownControl" /> 
 @code {
     private string Name;
     private string Collection;
@@ -33,8 +33,8 @@
     private IReadOnlyCollection<string> Authors;
     private DateTime Published;
     private DateTime LastUpdated;
-    private string Content;
-
+    private string Html;
+    private MarkdownControl MarkdownControl;
     private string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
     protected override void BindData()
     {
@@ -48,7 +48,8 @@
         DataBind(ViewModel.Authors, x => x.Authors, ConvertStringArray);
         DataBind(ViewModel.Published, x => x.Published);
         DataBind(ViewModel.LastUpdated, x => x.LastUpdated);
-        DataBind(ViewModel.Content, x => x.Content);
+        DataBind(ViewModel.Html, x => x.Html);
+        MarkdownControl = new(null) { Html = Html };
     }
 
     private IReadOnlyCollection<string> ConvertStringArray(object tags)
