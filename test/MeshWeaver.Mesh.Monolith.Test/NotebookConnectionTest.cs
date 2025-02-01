@@ -93,8 +93,8 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
 
         var md = control.Should().BeOfType<MarkdownControl>()
             .Subject;
-        md.Data.Should().NotBeNull();
-        md.Data.ToString()!.TrimEnd('\n','\r').Should().Be("Hello World");
+        md.Markdown.Should().NotBeNull();
+        md.Markdown.ToString()!.TrimEnd('\n','\r').Should().Be("Hello World");
     }
     protected async Task<CompositeKernel> ConnectToRemoteKernelAsync()
     {

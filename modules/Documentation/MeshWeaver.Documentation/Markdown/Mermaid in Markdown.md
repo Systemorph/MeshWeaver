@@ -2,7 +2,7 @@
 Title: "Mermaid: Advanced Diagrams"
 Abstract: >
   Mermaid is a popular diagramming language.
-Thumbnail: "images/thumbnail.png"
+Thumbnail: "images/InteractiveMarkdown.png"
 Published: "2025-01-26"
 Authors:
   - "Roland Bürgi"

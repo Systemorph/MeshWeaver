@@ -1,0 +1,10 @@
+﻿@inherits BlazorView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>
+
+<a href="@ViewModel.Definition.Url" class="card text-decoration-none">
+    <img src="@ViewModel.Definition.ImageUrl" class="card-img-top" alt="Card image">
+    <div class="card-body">
+        <h5 class="card-title">@ViewModel.Definition.Title</h5>
+        <p class="card-text">@ViewModel.Definition.Description</p>
+        <span class="btn btn-primary">Go to Area</span>
+    </div>
+</a>

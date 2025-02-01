@@ -2,55 +2,51 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled
 @inherits BlazorView<ArticleCatalogItemControl, ArticleCatalogItemView>
 
-<article>
-    <div class="details">
-        <div class="title">
-            <a href="@Data.Url">
-                <h3>@Data.Title</h3>
-            </a>
-        </div>
-        <p class="summary">
-            @Data.Abstract
-        </p>
-        <div class="footer">
-            <div class="mesh-node">
-                <FluentPersona Name="@Data.Name" ImageSize="24px" />
+<a href="@Data.Url" class="article-card-link">
+    <article class="article-card">
+        <div class="header">
+            <div class="author-info">
+                @foreach (var author in Data.Authors)
+                {
+                    <div class="author">
+                        <FluentPersona Name="@author" ImageSize="24px" />
+                    </div>
+                }
             </div>
-            <div class="stats">
-                <span>@Created</span>
-                <span class="label">
-                    <FluentIcon Title="Views"
-                                Value="@(new Size20.Eye())" />
-                    <span>@Data.Views</span>
-                </span>
-                <span class="label">
-                    <FluentIcon Title="Likes"
-                                Value="@(new Size20.ThumbLike())" />
-                    <span>@Data.Likes</span>
-                </span>
+            <div class="publish-info">
+                <span class="publish-date">@PublishedDate</span>
+                @if (IsNewArticle)
+                {
+                    <span class="new-indicator"></span>
+                }
             </div>
         </div>
-        <div class="tags">
-            @foreach (var tag in Data.Tags)
-            {
-                <FluentBadge>@tag</FluentBadge>
-            }
+        <div class="content">
+            <div class="text">
+                <h3 class="title">@Data.Title</h3>
+                <p class="summary">@Data.Abstract</p>
+                @if (HasVideo)
+                {
+                    <div class="video-info">
+                        <FluentIcon Title="Video" Value="@(new Size20.Video())" />
+                        <span>@VideoDuration</span>
+                    </div>
+                }
+            </div>
+            <div class="thumbnail">
+                <img alt="@Data.Title" src="@Thumbnail" width="160" height="160" />
+            </div>
         </div>
-    </div>
-    <div class="thumbnail">
-        <a href="@Data.Url">
-            <img alt="@Data.Title"
-                 src="@Thumbnail"
-                 width="160"
-                 height="100" />
-        </a>
-    </div>
-</article>
+    </article>
+</a>
 
 @code
 {
     private Article Data { get; set; }
-    private string Created => Data.Created.ToShortDateString();
+    private string PublishedDate => Data.Published.Year == DateTime.Now.Year ? Data.Published.ToString("dd MMM") : Data.Published.ToString("dd MMM yyyy");
+    private bool IsNewArticle => (DateTime.Now - Data.Published).TotalDays <= 7;
+    private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
+    private string VideoDuration => Data.VideoDuration.ToString(@"hh\:mm\:ss");
 
     private string ImageBasePath => $"static/{Data.Collection}";
     private string Avatar => $"{ImageBasePath}/avatars/{Data.AuthorAvatar}";

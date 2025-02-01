@@ -120,25 +120,25 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
-        control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("0");
+        control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("0");
 
         // update once ==> will issue "add", as 0 was not there
         area.UpdatePointer(1, editor.DataContext, new("/x"));
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString())
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Data: "0" });
+            .FirstAsync(x => x is not MarkdownControl { Markdown: "0" });
 
-        control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("1");
+        control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("1");
 
         // update once ==> will issue "replace"
         area.UpdatePointer(2, editor.DataContext, new("/x"));
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString())
             //.Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Data: "1" });
+            .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
 
-        control.Should().BeOfType<MarkdownControl>().Subject.Data.Should().Be("2");
+        control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
     [Fact]
     public async Task TestEditorWithDelayed()
@@ -165,7 +165,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         
         var controlStream = area
             .GetControlStream(stack.Areas.Last().Area.ToString())
-            .TakeUntil(x => x is MarkdownControl { Data: var data } && data.ToString()!.StartsWith("5"));
+            .TakeUntil(x => x is MarkdownControl { Markdown: var data } && data.ToString()!.StartsWith("5"));
 
 
         // update once ==> will issue "replace"
@@ -176,7 +176,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var controls = await controlStream.ToArray();
         controls.Should().HaveCountLessThanOrEqualTo(3);
-        controls.Last().Should().BeOfType<MarkdownControl>().Which.Data.ToString().Should().StartWith("5");
+        controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }
 
     [Fact]

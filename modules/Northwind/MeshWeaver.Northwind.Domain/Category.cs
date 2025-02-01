@@ -14,6 +14,7 @@ namespace MeshWeaver.Northwind.Domain
     /// This record implements the <see cref="INamed"/> interface, which means it provides a DisplayName property that returns the CategoryName.
     /// </remarks>
     /// <seealso cref="INamed"/>
+    [Display(GroupName = "Reference Data")]
     public record Category(
         [property: Key] int CategoryId,
         string CategoryName,

@@ -10,10 +10,6 @@
     <PackageReference Include="System.Text.Encodings.Web" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="Conventions\" />
-    <Folder Include="Markdown\" />
-  </ItemGroup>
-  <ItemGroup>
     <PackageReference Update="Roslynator.Analyzers">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Mesh;
+using MeshWeaver.Layout.Views;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
@@ -73,6 +74,8 @@ public static class BlazorViewRegistry
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
             ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
+            LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
+            CodeBlockControl codeBlock => StandardView<CodeBlockControl, CodeBlockView>(codeBlock, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }
@@ -101,6 +104,7 @@ public static class BlazorViewRegistry
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
+            ArticleCatalogSkin articleCatalog => StandardSkinnedView<ArticleCatalogView>(articleCatalog, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }

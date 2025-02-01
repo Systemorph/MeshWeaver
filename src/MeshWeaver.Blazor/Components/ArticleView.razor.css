@@ -1,45 +1,71 @@
 ﻿.article-header {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    margin-bottom: 20px;
-}
-
-.thumbnail img {
-    width: 100%;
-    max-width: 800px;
-    height: auto;
-    border-radius: 8px;
+    align-items: flex-start; /* Align content to the left */
+    padding: 16px;
+    box-sizing: border-box;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
+    width: 75%; /* Decrease overall page width to 75% */
+    margin: 0 auto; /* Center the page content */
 }
 
 .header-content {
-    text-align: center;
-    margin-top: 20px;
+    width: 100%;
+    text-align: left; /* Left-align text */
 }
-
-    .header-content h1 {
-        font-size: 2.5em;
-        margin-bottom: 10px;
-    }
 
 .meta-info {
     display: flex;
-    justify-content: center;
-    gap: 15px;
-    font-size: 0.9em;
-    color: #757575;
-    margin-bottom: 15px;
+    justify-content: flex-start;
+    align-items: center;
+    margin-bottom: 8px;
 }
 
-    .meta-info .authors,
-    .meta-info .published-date,
-    .meta-info .tags {
-        display: inline-block;
-    }
+.author-info {
+    display: flex;
+    align-items: center;
+    margin-right: 16px;
+}
+
+.author {
+    margin-right: 8px;
+}
+
+.published-date {
+    font-size: 12pt;
+    margin-right: 8px;
+}
+
+.title {
+    font-size: 24pt;
+    font-weight: bold;
+    margin-bottom: 16px; /* Increase space between title and abstract */
+}
 
 .abstract {
-    font-size: 1.2em;
-    color: #333;
-    max-width: 800px;
-    margin: 0 auto;
+    font-size: 14pt;
+    margin-bottom: 24px; /* Increase space between abstract and video */
 }
+
+.media {
+    width: 75%; /* Decrease the width to 75% */
+    text-align: center; /* Center the media content */
+    margin: 0 auto 16px auto; /* Center the media container */
+    position: relative;
+    padding-bottom: 56.25%; /* 16:9 aspect ratio */
+    height: 0;
+}
+
+    .media iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+    }
+
+    .media img {
+        max-width: 100%;
+        height: auto;
+    }

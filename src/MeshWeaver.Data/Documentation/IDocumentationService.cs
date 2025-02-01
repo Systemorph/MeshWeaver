@@ -45,7 +45,7 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
             {
                 Type t => $"T:{t.FullName}",
                 PropertyInfo p => $"P:{p.DeclaringType!.FullName}.{p.Name}",
-                MethodInfo m => $"M:{m.DeclaringType!.FullName}.{m.Name}",
+                MethodInfo m => $"M:{m.DeclaringType!.FullName}.{m.Name}({string.Join(',',m.GetParameters().Select(p =>p.ParameterType.FullName))})",
                 FieldInfo f => $"F:{f.DeclaringType!.FullName}.{f.Name}",
                 EventInfo e => $"E:{e.DeclaringType!.FullName}.{e.Name}",
                 _ => null
