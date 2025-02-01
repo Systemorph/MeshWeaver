@@ -29,6 +29,7 @@ namespace MeshWeaver.Northwind.Domain
     /// This record is decorated with an <see cref="IconAttribute"/> indicating the visual representation of an employee in UI components.
     /// </remarks>
     /// <seealso cref="IconAttribute"/>
+    [Display(GroupName = "Organization")]
     public record Employee(
         [property: Key] int EmployeeId,
         string LastName,

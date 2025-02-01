@@ -2,6 +2,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Views;
 
 namespace MeshWeaver.Articles;
 
@@ -19,7 +20,9 @@ public static class ArticleLayoutArea
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
-            Content = article.PrerenderedHtml
+            Html = article.PrerenderedHtml,
+            Content = article.Content,
+            VideoUrl = article.VideoUrl
         };
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
