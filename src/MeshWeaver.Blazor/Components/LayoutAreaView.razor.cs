@@ -34,16 +34,6 @@ public partial class LayoutAreaView
     }
     private bool showProgress;
     private string progressMessage;
-    protected override void OnAfterRender(bool firstRender)
-    {
-        base.OnAfterRender(firstRender);
-        if(firstRender)
-        {
-            IsNotPreRender = true;
-            StateHasChanged();
-        }
-    }
-
 
     private void BindViewModel()
     {
@@ -83,6 +73,6 @@ public partial class LayoutAreaView
         AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
     }
 
-    protected bool IsNotPreRender { get; set; }
+    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
 
 }
