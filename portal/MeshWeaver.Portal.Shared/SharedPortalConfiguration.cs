@@ -75,8 +75,7 @@ public static class SharedPortalConfiguration
 
 
         app.MapStaticAssets();
-        app.MapRazorComponents<App>();
-        app.MapRazorComponents<ApplicationPage>()
+        app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 
         app.Run();
