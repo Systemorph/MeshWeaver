@@ -46,7 +46,7 @@ This financial report provides a detailed analysis of the revenue and discounts 
 
 **Percentage of Discount Given from Total Revenue:** 6.76%
 
-@("DiscountVsRevenue")
+@("app/Northwind/app/Northwind/DiscountVsRevenue")
 
 #### Monthly Breakdown
 - **January:**
@@ -93,7 +93,7 @@ This financial report provides a comprehensive analysis of the sales amounts ver
 
 <div class="discount-percentage-chart">
 
-@("DiscountPercentage")
+@("app/Northwind/DiscountPercentage")
 
 </div>
 

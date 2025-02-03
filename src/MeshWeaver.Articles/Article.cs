@@ -1,7 +1,9 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Text.Json;
 using MeshWeaver.Domain;
+using MeshWeaver.Kernel;
 
 namespace MeshWeaver.Articles;
 
@@ -45,21 +47,7 @@ public record Article
     public string AuthorAvatar { get; set; }
     public DateTime LastUpdated { get; set; }
 
-
-    public IDictionary<string, string> ToMetadata(string path, string type) =>
-        new Dictionary<string, string>()
-        {
-            { nameof(Url), Url },
-            { nameof(Name), Name },
-            { nameof(Abstract), Abstract },
-            { nameof(Thumbnail), Thumbnail },
-            { nameof(Published), Published.ToString(CultureInfo.InvariantCulture) },
-            { nameof(Authors), JsonSerializer.Serialize(Authors) },
-            { nameof(Tags), JsonSerializer.Serialize(Tags) },
-            { nameof(Path), path },
-            { nameof(Type), type },
-        };
-
+    public IReadOnlyList<SubmitCodeRequest> CodeSubmissions { get; set; }
 
 
 }

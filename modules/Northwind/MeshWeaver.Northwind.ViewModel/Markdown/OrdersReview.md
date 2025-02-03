@@ -27,7 +27,7 @@ Tags:
 
 This report provides a comprehensive analysis of the number of orders received each month in the year 2023. The data, extracted from the provided spreadsheet, highlights the trends and patterns in order volumes over the year. By examining these trends, we can gain insights into the business's performance and identify areas for improvement.
 
-@("OrdersCount")
+@("app/Northwind/OrdersCount")
 
 #### Summary Statistics
 - **Total Months Analyzed**: 12
@@ -59,7 +59,7 @@ This report provides a comprehensive analysis of the number of orders received e
 
 The average prices of orders throughout the year 2023 exhibited noticeable fluctuations, indicating potential seasonality. The prices peaked in April, July, and August, with the highest average price recorded in August at $1841.02. Conversely, the lowest average prices were observed in May and November, with November having the lowest at $1309.55. These variations suggest that certain months experience higher demand or other influencing factors that drive prices up, while others see a decline.
 
-@("AvgOrderValue")
+@("app/Northwind/AvgOrderValue")
 
 **Average Price of Orders:** $1543.17
 

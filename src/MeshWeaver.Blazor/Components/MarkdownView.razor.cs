@@ -15,6 +15,7 @@ public partial class MarkdownView
 {
     private string Html { get; set; }
     private string Markdown { get; set; }
+
     protected override void BindData()
     {
         base.BindData();
@@ -65,20 +66,6 @@ public partial class MarkdownView
                 case HtmlTextNode text:
                     builder.AddMarkupContent(sequence++, text.Text);
                     break;
-                case { Name: "code" } when node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CodeBlock):
-                    var arguments = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.Arguments}", null);
-                    var language = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.Language}", null);
-                    var rawContent = node.GetAttributeValue($"data-{ExecutableCodeBlockRenderer.RawContent}", null);
-                    var content = node.InnerHtml;
-                    var control = new CodeBlockControl(rawContent, language)
-                        .WithArguments(arguments)
-                        .WithHtml(content);
-
-                    if (control.HeaderShown is "true")
-                        control = AddHeaderToContent(control,node,  arguments);
-
-                    RenderCodeBlock(builder, control, ref sequence);
-                    break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     //var divId = node.GetAttributeValue("id", string.Empty);
                     var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
@@ -99,20 +86,6 @@ public partial class MarkdownView
             }
         }
     }
-    private static CodeBlockControl AddHeaderToContent(
-        CodeBlockControl control,
-        HtmlNode node,
-        string arguments)
-    {
-        var preNode = node.SelectSingleNode("pre/code");
-        if (preNode != null)
-        {
-            var newContent = $"&#96;&#96;&#96;{control.Language} {arguments}\n{preNode.InnerHtml}\n&#96;&#96;&#96;";
-            preNode.InnerHtml = newContent;
-            return control with { Html = node.OuterHtml };
-        }
-        return control;
-    }
     private void RenderLayoutArea(
         RenderTreeBuilder builder,
         string address,
@@ -132,15 +105,6 @@ public partial class MarkdownView
         builder.CloseComponent();
     }
 
-    private void RenderCodeBlock(RenderTreeBuilder builder, CodeBlockControl viewModel, ref int sequence)
-    {
-        builder.OpenComponent<CodeBlockView>(sequence++);
-        builder.AddAttribute(sequence++,
-            nameof(CodeBlockView.ViewModel),
-            viewModel
-        );
-        builder.CloseComponent();
-    }
 
     private string ComponentContainerId(string id) => $"component-container-{id}";
 

@@ -75,7 +75,6 @@ public static class BlazorViewRegistry
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
             ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
             LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
-            CodeBlockControl codeBlock => StandardView<CodeBlockControl, CodeBlockView>(codeBlock, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };
     }

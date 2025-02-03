@@ -59,7 +59,7 @@ This financial report provides an analysis of the top sales by category based on
 
 <div class="product-overview-table">
 
-@("ProductOverview"){ Id = "?Year=2023" }
+@("app/Northwind/ProductOverview?Year=2023")
 
 </div>
 

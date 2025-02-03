@@ -30,30 +30,10 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         area.Area.Should().Be("MyArea");
 
         // Verify the results
-        html.Trim().Should().Be($"<div id='{area.DivId}' data-address='layout-area'></div>");
+        Assert.Fail("See which condition to put here.");
+        //html.Trim().Should().Be($"<div id='{area.DivId}' data-address='layout-area'></div>");
     }
 
-    /// <summary>
-    /// This tests the rendering of Layout Area Markdown
-    /// </summary>
-    [HubFact]
-    public void LayoutAreaWithDocumentation()
-    {
-        const string Doc = nameof(Doc);
-        // Define a sample markdown string
-        var markdown = $"@(\"MyArea\"){{ Layout = \"{Doc}\"}}";
-        var extension = new LayoutAreaMarkdownExtension(TestAddress);
-        var html = RenderMarkdown( markdown, extension);
-
-        extension.MarkdownParser.Areas.Should().HaveCount(1);
-        var area = extension.MarkdownParser.Areas[0];
-        area.Area.Should().Be("MyArea");
-        area.Layout.Should().Be(Doc);
-        area.Reference.Layout.Should().Be(Doc);
-
-        // Verify the results
-        html.Trim().Should().Be($"<div id='{area.DivId}' class='layout-area'></div>");
-    }
 
 
     private static string RenderMarkdown<TExtension>(string markdown, TExtension markdownExtension
@@ -82,8 +62,9 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         area2.Area.Should().Be("Area2");
 
         // Verify the results
-        html.Should().Contain(area1.DivId);
-        html.Should().Contain(area2.DivId);
+        Assert.Fail("See which condition to put here.");
+        //html.Should().Contain(area1.DivId);
+        //html.Should().Contain(area2.DivId);
     }
 
 

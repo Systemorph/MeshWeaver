@@ -34,7 +34,7 @@ Click the year above the chart to select which information to display.
 
 <div class="sales-by-category-comparison-chart">
 
-@("SalesByCategoryWithPrevYear"){ Id = "?Year=2023" }
+@("app/Northwind/SalesByCategoryWithPrevYear?Year=2023")
 
 </div>
 

@@ -33,7 +33,7 @@ Tags:
 This report highlights the top-performing employees of the month based on the amounts earned. The data is used to recognize and reward hard-working employees with bonuses, acknowledging their dedication and contribution to the company's success.
 <div class="top-employees-chart">
 
-@("TopEmployees")
+@("app/Northwind/TopEmployees")
 
 </div>
 

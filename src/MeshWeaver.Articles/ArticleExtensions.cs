@@ -3,6 +3,7 @@ using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -72,30 +73,28 @@ public static class ArticleExtensions
         var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection, defaultAddress);
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
-        if (yamlBlock is null)
-            return SetStandardProperties(new(), collection, path, document, pipeline);
-
-        var yaml = yamlBlock.Lines.ToString();
-        var deserializer = new YamlDotNet.Serialization.DeserializerBuilder().Build();
-        var ret = deserializer.Deserialize<Article>(yaml);
-        ret.LastUpdated = lastWriteTime;
-        return SetStandardProperties(ret, collection, path, document, pipeline);
-    }
-
-
-    private static Article SetStandardProperties(Article ret, string collection, string path, MarkdownDocument document, MarkdownPipeline pipeline)
-    {
         var name = Path.GetFileNameWithoutExtension(path);
-        return ret with
-        {
-            Name = name,
-            Path = path,
-            Collection = collection,
-            Url = GetArticleUrl(collection, name),
-            Extension = Path.GetExtension(path),
-            PrerenderedHtml = document.ToHtml(pipeline)
-        };
+
+        return (
+                yamlBlock is null
+                    ? new Article()
+                    : new YamlDotNet.Serialization.DeserializerBuilder().Build()
+                        .Deserialize<Article>(yamlBlock.Lines.ToString())
+            )
+            with
+            {
+                Name = name,
+                Path = path,
+                Collection = collection,
+                Url = GetArticleUrl(collection, name),
+                Extension = Path.GetExtension(path),
+                PrerenderedHtml = document.ToHtml(pipeline),
+                LastUpdated = lastWriteTime,
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()
+            };
     }
+
+
     public static string GetArticleUrl(string collection, string path)
         => $"article/{collection}/{path}";
 
