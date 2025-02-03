@@ -79,12 +79,18 @@ public partial class MarkdownView
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
                     RenderLayoutArea(builder, address, area, areaId, ref sequence);
                     break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
+                    builder.OpenElement(sequence++, node.Name);
+                    foreach (var attribute in node.Attributes)
+                        builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
+                    builder.AddContent(sequence++, string.Join('\n', node.ChildNodes.OfType<HtmlTextNode>().Select(t => t.Text)));
+                    builder.CloseElement();
+                    break;
+
                 default:
                     builder.OpenElement(sequence++, node.Name);
                     foreach (var attribute in node.Attributes)
-                    {
                         builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
-                    }
 
                     RenderNodes(builder, node.ChildNodes, ref sequence);
                     builder.CloseElement();

@@ -16,12 +16,26 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
     {
 
         var fenced = obj as ExecutableCodeBlock;
-        if (fenced is null || string.IsNullOrWhiteSpace(fenced.Arguments))
+        if (fenced is null)
         {
             base.Write(renderer, obj);
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(fenced.Arguments))
+        {
+            if (fenced.Info == "mermaid")
+            {
+                renderer.Write("<div class='mermaid'>");
+                renderer.EnsureLine();
+                renderer.Write(fenced.Lines.ToString());
+                renderer.EnsureLine();
+                renderer.Write("</div>");
+            }
+            else
+                base.Write(renderer, obj);
+            return;
+        }
         fenced.Initialize();
 
         renderer.EnsureLine();
@@ -34,8 +48,8 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             obj.Lines.Add(new StringLine(ref sl));
             foreach (var line in orig.Lines)
                 obj.Lines.Add(line);
-            sl = new StringSlice("```");
-            obj.Lines.Add(new StringLine(ref sl));
+            var sl2 = new StringSlice("```");
+            obj.Lines.Add(new StringLine(ref sl2));
             base.Write(renderer, obj);
             obj.Lines = orig;
         }
