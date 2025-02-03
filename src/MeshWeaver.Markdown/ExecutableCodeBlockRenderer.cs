@@ -42,16 +42,14 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         var args = fenced.Args;
         if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
         {
-            var orig = obj.Lines;
-            obj.Lines = new(obj.Lines.Count + 2);
-            var sl = new StringSlice("```" + fenced.Info + $" {fenced.Arguments}");
-            obj.Lines.Add(new StringLine(ref sl));
-            foreach (var line in orig.Lines)
-                obj.Lines.Add(line);
-            var sl2 = new StringSlice("```");
-            obj.Lines.Add(new StringLine(ref sl2));
-            base.Write(renderer, obj);
-            obj.Lines = orig;
+            renderer.Write("<pre><code class='language-csharp'>");
+            renderer.EnsureLine();
+            renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
+
+            renderer.WriteLeafRawLines(obj, true, true);
+
+            renderer.WriteLine("```");
+            renderer.Write("</code></pre>");
         }
         else if (args.TryGetValue(ShowCode, out var showCode) && bool.TryParse(showCode, out var sc) && sc)
             base.Write(renderer, obj);

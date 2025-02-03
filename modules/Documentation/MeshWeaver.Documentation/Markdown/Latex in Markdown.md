@@ -12,6 +12,10 @@ Tags:
   - "Conceptual"
 ---
 
+Some text before the formula.
+
 $$
   \int_0^\infty \frac{x^3}{e^x-1}\,dx = \frac{\pi^4}{15}
 $$
+
+And some text after the formula.
