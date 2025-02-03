@@ -39,7 +39,4 @@
             <Embed>true</Embed>
         </EmbeddedResource>
     </ItemGroup>
-    <ItemGroup>
-      <Folder Include="Markdown\AnnualReport\" />
-    </ItemGroup>
 </Project>

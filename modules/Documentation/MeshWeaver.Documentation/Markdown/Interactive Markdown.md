@@ -13,6 +13,6 @@ Tags:
   - "Conceptual"
 ---
 
-```csharp --execute HelloWorld --show-header
+```csharp --render HelloWorld --show-header
 "Hello World"
 ```

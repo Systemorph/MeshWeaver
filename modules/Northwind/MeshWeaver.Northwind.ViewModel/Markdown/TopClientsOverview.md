@@ -33,7 +33,7 @@ Tags:
 This report provides an analysis of the top 5 clients based on their total purchase amounts. By identifying these key clients, we can develop targeted strategies to reward their loyalty and encourage continued business. The following sections outline the top clients and suggest various reward programs to enhance customer satisfaction and retention.
 <div class="top-clients-chart">
 
-@("TopClients")
+@("app/Northwind/TopClients")
 
 </div>
 

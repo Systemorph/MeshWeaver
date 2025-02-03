@@ -3,13 +3,25 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
 public static class ArticleLayoutArea
 {
-    private static ArticleControl RenderArticle(this Article article) =>
-        new()
+    private static ArticleControl RenderArticle(this IMessageHub hub, Article article)
+    {
+        var content = article.Content;
+        if (article.CodeSubmissions is not null && article.CodeSubmissions.Any())
+        {
+            var kernel = new KernelAddress();
+            foreach (var s in article.CodeSubmissions)
+                hub.Post(s, o => o.WithTarget(kernel));
+            content = content.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
+        }
+        return new ArticleControl
         {
             Name = article.Name,
             Collection = article.Collection,
@@ -21,9 +33,10 @@ public static class ArticleLayoutArea
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
             Html = article.PrerenderedHtml,
-            Content = article.Content,
+            Content = content,
             VideoUrl = article.VideoUrl
         };
+    }
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
     {
@@ -35,7 +48,7 @@ public static class ArticleLayoutArea
         if(stream is null)
             return Observable.Return(new MarkdownControl($"No article {host.Reference.Id} found in collection {collectionName}"));
         return stream
-            .Select(RenderArticle);
+            .Select(host.Hub.RenderArticle);
     }
 
 

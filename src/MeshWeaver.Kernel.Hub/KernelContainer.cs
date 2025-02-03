@@ -322,7 +322,7 @@ public class KernelContainer : IDisposable
         subscriptions.Add(request.Sender);
         var command = new SubmitCode(request.Message.Code)
         {
-            Parameters = { [ViewId] = request.Message.ViewId }
+            Parameters = { [ViewId] = request.Message.Id }
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;

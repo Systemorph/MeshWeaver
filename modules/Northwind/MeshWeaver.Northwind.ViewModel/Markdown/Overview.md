@@ -24,7 +24,7 @@ For the first time ever, we have created an annual report of Northwind, and
 we demonstrate our ideas to create interactive articles to report and explain data.
 Here is the major dashboard:
 
-@("AnnualReportSummary"){ Id = "?Year=2023" }
+@("app/Northwind/AnnualReportSummary?Year=2023")
 The counter doesn't really fit here, we should move it to a spearate project. 
 
 Please have a look at the [Northwind Articles](/articles/Northwind) for a detailed look.

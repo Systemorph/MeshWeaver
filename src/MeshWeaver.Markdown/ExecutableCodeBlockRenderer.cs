@@ -1,38 +1,50 @@
-﻿using System.Text;
+﻿using Markdig.Helpers;
 using Markdig.Renderers;
 using Markdig.Renderers.Html;
 using Markdig.Syntax;
-using MeshWeaver.Messaging;
+using MeshWeaver.Kernel;
 
 namespace MeshWeaver.Markdown;
 
 public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 {
-    public const string Language = "language";
-    public const string RawContent = "raw-content";
-    public const string CodeBlock = "code-block";
-    public const string Arguments = "arguments";
-    public const string ShowCode = "--show-code";
-    public readonly List<(ExecutionRequest Request, string Div)> ExecutionRequests = new();
+    public const string ShowCode = "show-code";
+    public const string ShowHeader = "show-header";
+    public const string KernelAddressPlaceholder = "__KERNEL_ADDRESS__";
 
     protected override void Write(HtmlRenderer renderer, CodeBlock obj)
     {
-        var fenced = obj as FencedCodeBlock;
-        if (fenced is null)
+
+        var fenced = obj as ExecutableCodeBlock;
+        if (fenced is null || string.IsNullOrWhiteSpace(fenced.Arguments))
         {
             base.Write(renderer, obj);
             return;
         }
 
-        var htmlStringBuilder = new StringBuilder();
-        var localRenderer = new HtmlRenderer(new StringWriter(htmlStringBuilder));
-        base.Write(localRenderer, obj);
-        var htmlString = htmlStringBuilder.ToString();
-
-        var content = string.Join('\n', fenced.Lines);
         renderer.EnsureLine();
-        renderer.Write($"<code class='{CodeBlock}' data-{Language}={fenced.Info} data-{Arguments}='{fenced.Arguments}'  data-{RawContent}='{content}' >{htmlString}</code>");
+        var args = fenced.Args;
+        if (args.TryGetValue(ShowHeader, out var showHeader) && bool.TryParse(showHeader, out var sh) && sh)
+        {
+            var orig = obj.Lines;
+            obj.Lines = new(obj.Lines.Count + 2);
+            var sl = new StringSlice("```" + fenced.Info + $" {fenced.Arguments}");
+            obj.Lines.Add(new StringLine(ref sl));
+            foreach (var line in orig.Lines)
+                obj.Lines.Add(line);
+            sl = new StringSlice("```");
+            obj.Lines.Add(new StringLine(ref sl));
+            base.Write(renderer, obj);
+            obj.Lines = orig;
+        }
+        else if (args.TryGetValue(ShowCode, out var showCode) && bool.TryParse(showCode, out var sc) && sc)
+            base.Write(renderer, obj);
+
+        if (fenced.SubmitCode is not null)
+            LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null);
+
         renderer.EnsureLine();
     }
+
 
 }

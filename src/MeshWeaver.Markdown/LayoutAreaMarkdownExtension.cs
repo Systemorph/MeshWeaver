@@ -5,7 +5,7 @@ namespace MeshWeaver.Markdown;
 
 public class LayoutAreaMarkdownExtension(object defaultAddress) : IMarkdownExtension
 {
-    public LayoutAreaMarkdownParser MarkdownParser { get; } = new();
+    public LayoutAreaMarkdownParser MarkdownParser { get; } = new(defaultAddress);
     private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new(defaultAddress);
 
     public void Setup(MarkdownPipelineBuilder pipeline)
