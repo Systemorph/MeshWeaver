@@ -7,7 +7,6 @@ namespace MeshWeaver.Markdown;
 public class LayoutAreaMarkdownParser : BlockParser
 {
     private readonly object defaultAddress;
-    public readonly List<LayoutAreaComponentInfo> Areas = new();
 
     public LayoutAreaMarkdownParser(object defaultAddress)
     {
@@ -46,7 +45,7 @@ public class LayoutAreaMarkdownParser : BlockParser
             return BlockState.None;
 
         var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, defaultAddress, this);
-        Areas.Add(layoutAreaComponentInfo);
+        processor.NewBlocks.Push(layoutAreaComponentInfo);
 
         return BlockState.ContinueDiscard;
 

@@ -12,7 +12,10 @@ public class ExecutableCodeBlockExtension : IMarkdownExtension
     public ExecutableCodeBlockParser Parser { get; } = new();
     public ExecutableCodeBlockRenderer Renderer { get; } = new();
 
-    public void Setup(MarkdownPipelineBuilder pipeline){}
+    public void Setup(MarkdownPipelineBuilder pipeline)
+    {
+        pipeline.BlockParsers.Replace<FencedCodeBlockParser>(Parser);
+    }
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer)
     {
         if (renderer is HtmlRenderer htmlRenderer)
@@ -41,20 +44,14 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 
 }
 
-public class ExecutableCodeBlock : FencedCodeBlock
+public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
     public const string Execute = "execute";
     public const string Render = "render";
-    public IReadOnlyDictionary<string, string> Args => args.Value;
-    private readonly Lazy<Dictionary<string, string>> args;
-    public SubmitCodeRequest SubmitCode { get; private set; }
+    public IReadOnlyDictionary<string, string> Args { get; set; }
+    public SubmitCodeRequest SubmitCode { get; set; }
 
-
-    public ExecutableCodeBlock(BlockParser parser) : base(parser)
-    {
-        args =   new(() => ParseArguments(this.Arguments).ToDictionary());
-    }
-    private static IEnumerable<KeyValuePair<string, string>> ParseArguments(string arguments)
+    public static IEnumerable<KeyValuePair<string, string>> ParseArguments(string arguments)
     {
         var linear = (arguments ?? string.Empty).Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
 
@@ -79,15 +76,20 @@ public class ExecutableCodeBlock : FencedCodeBlock
 
     }
 
-    public SubmitCodeRequest GetSubmitCodeRequest(string defaultId)
+    public SubmitCodeRequest GetSubmitCodeRequest()
     {
         if(Args.TryGetValue(Execute, out var executionId))
-            return SubmitCode = new(string.Join('\n', Lines)) { Id = executionId ?? defaultId };
+            return new(string.Join('\n', Lines.Lines)) { Id = executionId };
         if (SubmitCode is not null)
             return SubmitCode;
         if (Args.TryGetValue(Render, out var renderId))
-            return SubmitCode = new(string.Join('\n', Lines)) { Id = renderId ?? defaultId };
+            return new(string.Join('\n', Lines.Lines)) { Id = renderId };
         return null;
     }
 
+    public void Initialize()
+    {
+        Args = ParseArguments(Arguments).ToDictionary();
+        SubmitCode = GetSubmitCodeRequest();
+    }
 }

@@ -11,7 +11,7 @@ public class LayoutAreaComponentInfo : ContainerBlock
     public LayoutAreaComponentInfo(string url, object defaultAddress, BlockParser blockParser) : base(blockParser)
     {
         var parts = url.Split('/');
-        Address = $"{{parts[0]}}/{parts[1]}";
+        Address = $"{parts[0]}/{parts[1]}";
         Area = parts[2];
         if (parts.Length == 3)
         {

@@ -22,9 +22,11 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             return;
         }
 
+        fenced.Initialize();
+
         renderer.EnsureLine();
         var args = fenced.Args;
-        if (args.TryGetValue(ShowHeader, out var showHeader) && bool.TryParse(showHeader, out var sh) && sh)
+        if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
         {
             var orig = obj.Lines;
             obj.Lines = new(obj.Lines.Count + 2);
@@ -41,7 +43,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             base.Write(renderer, obj);
 
         if (fenced.SubmitCode is not null)
-            LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null);
+            renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null));
 
         renderer.EnsureLine();
     }

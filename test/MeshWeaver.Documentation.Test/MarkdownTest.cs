@@ -1,5 +1,7 @@
-﻿using FluentAssertions;
+﻿using System.Linq;
+using FluentAssertions;
 using Markdig;
+using Markdig.Syntax;
 using MeshWeaver.Fixture;
 using MeshWeaver.Markdown;
 using Xunit;
@@ -23,10 +25,10 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         // Define a sample markdown string
         var markdown = "@(\"MyArea\")";
         var extension = new LayoutAreaMarkdownExtension(TestAddress);
-        var html = RenderMarkdown(markdown, extension);
-
-        extension.MarkdownParser.Areas.Should().HaveCount(1);
-        var area = extension.MarkdownParser.Areas[0];
+        var document = ParseMarkdown(markdown, extension);
+        var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
+        layoutAreas.Should().HaveCount(1);
+        var area = layoutAreas[0];
         area.Area.Should().Be("MyArea");
 
         // Verify the results
@@ -35,6 +37,12 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
+    private static MarkdownDocument ParseMarkdown<TExtension>(string markdown, TExtension markdownExtension
+    ) where TExtension : class, IMarkdownExtension
+    {
+        var pipeline = new MarkdownPipelineBuilder().Use(markdownExtension).Build();
+        return Markdig.Markdown.Parse(markdown, pipeline);
+    }
 
     private static string RenderMarkdown<TExtension>(string markdown, TExtension markdownExtension
     ) where TExtension : class, IMarkdownExtension
@@ -53,11 +61,12 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
         // Define a sample markdown string
         var markdown = "@(\"Area1\")\n@(\"Area2\")";
         var extension = new LayoutAreaMarkdownExtension(TestAddress);
-        var html = RenderMarkdown( markdown, extension);
+        var document = ParseMarkdown( markdown, extension);
+        var areas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
 
-        extension.MarkdownParser.Areas.Should().HaveCount(2);
-        var area1 = extension.MarkdownParser.Areas[0];
-        var area2 = extension.MarkdownParser.Areas[1];
+        areas.Should().HaveCount(2);
+        var area1 = areas[0];
+        var area2 = areas[1];
         area1.Area.Should().Be("Area1");
         area2.Area.Should().Be("Area2");
 
