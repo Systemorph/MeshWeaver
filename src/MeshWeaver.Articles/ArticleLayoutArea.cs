@@ -13,13 +13,13 @@ public static class ArticleLayoutArea
 {
     private static ArticleControl RenderArticle(this IMessageHub hub, Article article)
     {
-        var content = article.Content;
+        var content = article.PrerenderedHtml;
         if (article.CodeSubmissions is not null && article.CodeSubmissions.Any())
         {
             var kernel = new KernelAddress();
             foreach (var s in article.CodeSubmissions)
                 hub.Post(s, o => o.WithTarget(kernel));
-            content = content.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
+            content = article.PrerenderedHtml.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
         }
         return new ArticleControl
         {
@@ -32,8 +32,7 @@ public static class ArticleLayoutArea
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
-            Html = article.PrerenderedHtml,
-            Content = content,
+            Html = content,
             VideoUrl = article.VideoUrl
         };
     }

@@ -90,6 +90,7 @@ public static class ArticleExtensions
                 Extension = Path.GetExtension(path),
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
+                Content = content,
                 CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()
             };
     }

@@ -12,9 +12,13 @@ export default defineConfig({
                 {
                     src: 'node_modules/@primer/css/dist/markdown.css',
                     dest: './'
-                }, 
+                },
                 {
                     src: 'node_modules/mermaid/dist/mermaid.min.js',
+                    dest: './'
+                },
+                {
+                    src: 'node_modules/katex/dist/katex.min.css',
                     dest: './'
                 }
             ],
@@ -27,7 +31,8 @@ export default defineConfig({
         lib: {
             entry: [
                 'highlight.ts',
-                'mermaid.ts'
+                'mermaid.ts',
+                'katex.ts'
             ],
             formats: ['es']
         },

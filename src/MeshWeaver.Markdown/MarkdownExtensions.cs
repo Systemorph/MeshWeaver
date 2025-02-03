@@ -9,6 +9,7 @@ public static  class MarkdownExtensions
         object defaultLayoutAreaAddress
         ) =>
         new MarkdownPipelineBuilder()
+            .UseMathematics()
             .UseAdvancedExtensions()
             .UseGenericAttributes()
             .UseEmojiAndSmiley()
