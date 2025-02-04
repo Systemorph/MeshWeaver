@@ -42,6 +42,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         var args = fenced.Args;
         if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
         {
+            renderer.Write("<div class=\"code-content\">");
             renderer.Write("<pre><code class='language-csharp'>");
             renderer.EnsureLine();
             renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
@@ -50,9 +51,17 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 
             renderer.WriteLine("```");
             renderer.Write("</code></pre>");
+            renderer.WriteLine("<div class=\"copy-to-clipboard\"></div>");
+            renderer.Write("</div>");
         }
-        else if (args.TryGetValue(ShowCode, out var showCode) && bool.TryParse(showCode, out var sc) && sc)
+        else if (args.TryGetValue(ShowCode, out var showCode) && showCode is null ||
+                 (bool.TryParse(showCode, out var sc) && sc))
+        {
+            renderer.Write("<div class=\"code-content\">");
             base.Write(renderer, obj);
+            renderer.WriteLine("<div class=\"copy-to-clipboard\"></div>");
+            renderer.Write("</div>");
+        }
 
         if (fenced.SubmitCode is not null)
             renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null));

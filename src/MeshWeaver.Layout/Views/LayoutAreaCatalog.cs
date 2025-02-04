@@ -4,7 +4,7 @@ namespace MeshWeaver.Layout.Views;
 
 public static class LayoutAreaCatalogArea
 {
-    public const string LayoutAreas = "$" + nameof(LayoutAreas);
+    public const string LayoutAreas = nameof(LayoutAreas);
 
     internal static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
         => layout.WithView(LayoutAreas, LayoutAreaCatalog);
