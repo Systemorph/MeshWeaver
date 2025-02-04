@@ -191,7 +191,6 @@ public class KernelContainer : IDisposable
             ReturnValueProduced ret => ret.Value,
             StandardOutputValueProduced stdOut => stdOut.Value,
             CommandFailed failed => Controls.Markdown($"**Execution failed**:\n{failed.Message}"),
-            CommandSucceeded succeeded => null,
             _ => null,
         };
         if (view is not null) 
