@@ -1,6 +1,8 @@
 import hljs from 'highlight.js';
 
 export function highlightCode(element: HTMLElement) {
+    if (!element)
+        return;
     var preElements = element.getElementsByTagName('pre');
     if (!preElements)
         return;
