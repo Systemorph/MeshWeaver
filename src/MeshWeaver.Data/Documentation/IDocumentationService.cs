@@ -65,6 +65,8 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
     {
         try
         {
+            if (string.IsNullOrEmpty(assembly.Location))
+                return null;
             var assemblyName = assembly.GetName().Name;
             var source = GetSource(EmbeddedDocumentationSource.Embedded, assemblyName);
             var stream = source.GetStream($"{assemblyName}.xml");
