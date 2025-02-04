@@ -12,13 +12,15 @@ namespace MeshWeaver.Documentation;
 public static class DocumentationViewModels
 {
     /// <summary>
-    /// Use this configuration to add the views of the documentation module to the hub.
+    /// This method adds the views defined in the documentation module to
+    /// the Documentation hub.
     /// </summary>
     /// <param name="config"></param>
     /// <returns></returns>
     public static MessageHubConfiguration AddDocumentation(MessageHubConfiguration config)
         => config.AddLayout(layout => layout
             .AddCounter()
+            .AddCalculator()
         );
 
 }
