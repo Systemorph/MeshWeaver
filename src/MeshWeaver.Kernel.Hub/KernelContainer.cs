@@ -75,6 +75,7 @@ public class KernelContainer : IDisposable
                         .Select(a => a.Value.GetValueOrDefault(ctx.Area) ?? new MarkdownControl("Waiting to start execution."))
                 )
             )
+            .AddMeshTypes()
             .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
             .WithInitialization((hub, _) =>
             {

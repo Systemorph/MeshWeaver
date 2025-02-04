@@ -51,8 +51,10 @@
 }
 
 .abstract {
-    font-size: 14pt;
-    margin-bottom: 24px; /* Increase space between abstract and video */
+    font-size: 18pt; /* Increase font size */
+    color: var(--color-accent-fg); /* Change the color to an accent color */
+    line-height: 1.8; /* Increase line height to make it less dense */
+    margin-bottom: 24px; /* Keep the space between abstract and video */
 }
 
 .media {

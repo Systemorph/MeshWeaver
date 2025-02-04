@@ -42,7 +42,7 @@ public static class SupplierSummaryArea
         public const string Chart = nameof(Chart);
 
         [UiControl<RadioGroupControl>(Options = new[] { "Table", "Chart" })]
-        public string Display { get; init; } = Chart;
+        public string Display { get; init; } = Table;
     }
 
     /// <summary>

@@ -105,6 +105,11 @@ public partial class MarkdownView
         string areaId,
         ref int sequence)
     {
+        // Open the outer div with the 'layout-area' class
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "layout-area");
+
+        // Render the LayoutAreaView component inside the outer div
         builder.OpenComponent<LayoutAreaView>(sequence++);
         builder.AddAttribute(sequence++,
             nameof(LayoutAreaView.ViewModel),
@@ -115,8 +120,10 @@ public partial class MarkdownView
             }
         );
         builder.CloseComponent();
-    }
 
+        // Close the outer div
+        builder.CloseElement();
+    }
 
     private string ComponentContainerId(string id) => $"component-container-{id}";
 

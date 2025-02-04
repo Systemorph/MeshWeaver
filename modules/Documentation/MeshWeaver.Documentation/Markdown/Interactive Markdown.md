@@ -7,10 +7,10 @@ Thumbnail: "images/InteractiveMarkdown.png"
 Published: "2025-01-26"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
-  - "Northwind"
+  - "Documentation"
   - "Conceptual"
+  - "Markdown"
 ---
 
 In the previous blog posts, we have shown how to connect to Mesh Weaver 
@@ -42,14 +42,45 @@ Let's look at a practical example:
 "Hello World " + DateTime.Now.ToString()
 ```
 
+In this example, we render the output to an area called HelloWorld. the additional --show-header 
+shows the full code block, including the header. We do this only here to explain how to use headers.
+
+Alternatively, you can only use --show-code, which will show the code without the header:
 
 
-```csharp --render Poisson --show-header
-#r "nuget:MathNet.Numerics"
-using MathNet.Numerics.Distributions;
-using System.Linq;
-
-var poisson = new Poisson(3);
-Enumerable.Range(0,5).Select(_ => poisson.Sample()).ToArray()
+```csharp --render HelloWorld2 --show-code
+"Hello World " + DateTime.Now.ToString()
 ```
 
+Behind the scenes, Mesh Weaver allocates a kernel and executes the statements. The results 
+are stored as layout areas in the kernel and displayed by the markdown component:
+
+```mermaid
+sequenceDiagram
+    participant View
+    participant Article
+    participant Kernel
+    View->>Article: Requests Content
+    Article->>Kernel: Submits Code Execution
+    Article->>View: Issues HTML
+    View->>Kernel: Requests Layout Area
+    Kernel->>View: Returns Layout Area
+```
+
+This diagram was produced using [Mermaid](https://mermaid.js.org/). Refer to their
+documentation for a full set of supported syntax. Mermaid diagrams can be embedded in 
+interactive markdowns by declaring them as fenced code block:
+
+````
+```mermaid
+sequenceDiagram
+    participant View
+    participant Article
+    participant Kernel
+    View->>Article: Requests Content
+    Article->>Kernel: Submits Code Execution
+    Article->>View: Issues HTML
+    View->>Kernel: Requests Layout Area
+    Kernel->>View: Returns Layout Area
+```
+````
