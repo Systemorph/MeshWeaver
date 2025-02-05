@@ -1,5 +1,6 @@
 ﻿import { defineConfig } from 'vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
+import commonjs from '@rollup/plugin-commonjs';
 
 export default defineConfig({
     plugins: [
@@ -18,11 +19,16 @@ export default defineConfig({
                     dest: './'
                 },
                 {
-                    src: 'node_modules/katex/dist/katex.min.css',
-                    dest: './'
+                    src: 'node_modules/mathjax-full/es5/**/*',
+                    dest: './mathjax/'
                 }
             ],
             structured: true
+        }),
+        commonjs({
+            include: [/mathjax-full/],
+            transformMixedEsModules: true,
+            requireReturnsDefault: 'auto'
         })
     ],
     build: {
@@ -32,10 +38,18 @@ export default defineConfig({
             entry: [
                 'highlight.ts',
                 'mermaid.ts',
-                'katex.ts'
+                'mathjax.ts'
             ],
             formats: ['es']
         },
-        outDir: '../wwwroot'
+        outDir: '../wwwroot',
+        rollupOptions: {
+            external: [/^mathjax-full\/es5\//]
+        }
     },
+    resolve: {
+        alias: {
+            'mathjax-full': 'mathjax-full/es5'
+        }
+    }
 })

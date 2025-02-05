@@ -33,7 +33,7 @@ public partial class MarkdownView
 
     private IJSObjectReference highlight;
     private IJSObjectReference mermaid;
-    private IJSObjectReference katex;
+    private IJSObjectReference mathjax;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -41,14 +41,14 @@ public partial class MarkdownView
         {
             highlight ??= await JsRuntime.Import("highlight.js");
             mermaid ??= await JsRuntime.Import("mermaid.js");
-            katex ??= await JsRuntime.Import("katex.js");
+            mathjax ??= await JsRuntime.Import("mathjax.js");
         }
         if (highlight is not null)
             await highlight.InvokeVoidAsync("highlightCode", Element);
         if (mermaid is not null)
             await mermaid.InvokeVoidAsync("contentLoaded", Mode is DesignThemeModes.Dark);
-        if (katex is not null)
-            await katex.InvokeVoidAsync("renderElement", Element);
+        if (mathjax is not null)
+            await mathjax.InvokeVoidAsync("typeset");
     }
 
     private void RenderHtml(RenderTreeBuilder builder)
