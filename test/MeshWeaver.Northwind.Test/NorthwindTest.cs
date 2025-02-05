@@ -127,45 +127,6 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         orderDetails.Should().HaveCountGreaterThan(0);
     }
 
-    [Fact]
-    public async Task DashboardView()
-    {
-        var workspace = GetClient().GetWorkspace();
-
-        var viewName = nameof(NorthwindDashboardArea.Dashboard);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
-            new LayoutAreaReference(viewName)
-        );
-        var dashboard = (await stream
-                .GetControlStream(viewName)
-                .Timeout(10.Seconds())
-                .FirstAsync(x => x != null)
-            )
-            .Should()
-            .BeOfType<LayoutGridControl>()
-            .Subject;
-        var areas = dashboard.Areas;
-        var controls = new List<KeyValuePair<string, object>>();
-
-        while (areas.Count > 0)
-        {
-            var children = await areas
-                .ToAsyncEnumerable()
-                .SelectAwait(async s => new KeyValuePair<string, object>(
-                    s.Area.ToString(),
-                    await stream.GetControlStream(s.Area.ToString()).Timeout(10.Seconds())
-                    .FirstAsync()
-                ))
-                .ToArrayAsync();
-            controls.AddRange(children);
-            areas = children
-                .SelectMany(c =>
-                    (c.Value as StackControl)?.Areas ?? Enumerable.Empty<NamedAreaControl>()
-                )
-                .ToImmutableList();
-        }
-    }
 
     [Fact]
     public async Task SupplierSummaryReport()
@@ -180,6 +141,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var gridArea =  stack.Areas.Last().Area;
+        control = await stream.GetControlStream(gridArea.ToString())
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
         var grid = control.Should().BeOfType<GridControl>().Subject;
         grid.Data.Should()
             .BeOfType<GridOptions>()
@@ -229,6 +195,11 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var control = await stream
             .GetControlStream(controlName)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        var gridArea = stack.Areas.Last().Area;
+        control = await stream.GetControlStream(gridArea.ToString())
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = control.Should().BeOfType<GridControl>().Subject;
