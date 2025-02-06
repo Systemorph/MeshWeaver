@@ -31,10 +31,10 @@ public static class MeshExtensions
         => addressType switch
         {
             ApplicationAddress.TypeName => new ApplicationAddress(id),
-            KernelAddress.TypeName => new KernelAddress { Id = id },
+            KernelAddress.TypeName => new KernelAddress(id),
             NotebookAddress.TypeName => new NotebookAddress(id),
-            UiAddress.TypeName => new UiAddress { Id = id },
-            MeshAddress.TypeName => new MeshAddress(),
+            UiAddress.TypeName => new UiAddress(id),
+            MeshAddress.TypeName => new MeshAddress(id),
             _ => throw new NotSupportedException($"Address type '{addressType}' is not supported.")
         };
 

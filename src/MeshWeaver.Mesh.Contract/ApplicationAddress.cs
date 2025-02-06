@@ -3,7 +3,7 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Mesh;
 
-public record MeshAddress() : Address(MeshAddress.TypeName, null)
+public record MeshAddress(string Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().AsString())
 {
     public const string TypeName = "mesh";
 }
