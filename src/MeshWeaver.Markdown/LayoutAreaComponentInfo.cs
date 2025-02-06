@@ -1,14 +1,13 @@
 ﻿using Markdig.Parsers;
 using Markdig.Syntax;
 using MeshWeaver.Data;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Markdown;
 
 public class LayoutAreaComponentInfo : ContainerBlock
 {
 
-    public LayoutAreaComponentInfo(string url, object defaultAddress, BlockParser blockParser) : base(blockParser)
+    public LayoutAreaComponentInfo(string url, BlockParser blockParser) : base(blockParser)
     {
         var parts = url.Split('/');
         Address = $"{parts[0]}/{parts[1]}";

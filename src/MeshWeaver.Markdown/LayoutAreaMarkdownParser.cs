@@ -44,7 +44,7 @@ public class LayoutAreaMarkdownParser : BlockParser
         if (string.IsNullOrWhiteSpace(area))
             return BlockState.None;
 
-        var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, defaultAddress, this);
+        var layoutAreaComponentInfo = new LayoutAreaComponentInfo(area, this);
         processor.NewBlocks.Push(layoutAreaComponentInfo);
 
         return BlockState.ContinueDiscard;
