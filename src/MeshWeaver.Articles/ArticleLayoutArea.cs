@@ -53,8 +53,5 @@ public static class ArticleLayoutArea
 
 
 
-    public static LayoutAreaReference GetArticleLayoutReference(string path, Func<ArticleOptions, ArticleOptions> options = null)
-        => new(nameof(Article)) { Id = path }; // TODO V10: Create sth with options (22.01.2025, Roland Bürgi)
-
 
 }

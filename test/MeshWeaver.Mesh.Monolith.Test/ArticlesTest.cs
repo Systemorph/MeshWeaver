@@ -43,16 +43,17 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetRemoteStream(new ArticlesAddress(Test),
-            ArticleLayoutArea.GetArticleLayoutReference("Overview.md"));
+            new LayoutAreaReference("Article"){Id = "Overview"});
 
         var control = await articleStream
             .GetControlStream("Article")
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
 
-        var html = control.Should().BeOfType<HtmlControl>().Subject;
-        html.Skins.Should().HaveCount(1);
-        html.Skins[0].Should().BeOfType<ArticleControl>().Subject.Name.Should().Be("Overview");
+        var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
+        articleControl.Name.Should().Be("Overview");
+        articleControl.Content.Should().BeNull();
+        articleControl.Html.Should().NotBe(null);
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
