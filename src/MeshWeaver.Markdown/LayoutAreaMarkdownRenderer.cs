@@ -3,12 +3,12 @@ using Markdig.Renderers.Html;
 
 namespace MeshWeaver.Markdown;
 
-public class LayoutAreaMarkdownRenderer(object defaultAddress) : HtmlObjectRenderer<LayoutAreaComponentInfo>
+public class LayoutAreaMarkdownRenderer() : HtmlObjectRenderer<LayoutAreaComponentInfo>
 {
     protected override void Write(HtmlRenderer renderer, LayoutAreaComponentInfo obj)
     {
         renderer.EnsureLine();
-        renderer.WriteLine(GetLayoutAreaDiv(obj.Address ?? defaultAddress, obj.Area, obj.Id));
+        renderer.WriteLine(GetLayoutAreaDiv(obj.Address, obj.Area, obj.Id));
         renderer.EnsureLine();
     }
 

@@ -24,7 +24,7 @@ public partial class MarkdownView
         if (Html == null)
         {
             // TODO V10: Collection would not be good here. (25.01.2025, Roland Bürgi)
-            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner, Stream.Owner);
+            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
             var document = Markdig.Markdown.Parse(Markdown, pipeline);
             Html = document.ToHtml(pipeline);
         }
