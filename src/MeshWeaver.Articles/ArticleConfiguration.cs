@@ -33,7 +33,6 @@ public class ArticleSourceConfig
     public string SourceType { get; set; } = FileArticleCollectionFactory.Files;
     public string Name { get; set; }
     public string DisplayName { get; set; }
-    public string DefaultAddress { get; set; }
     public string BasePath { get; set; }
 }
 
@@ -42,6 +41,5 @@ public static class FileArticleCollectionFactory
     public const string Files = nameof(Files);
     public static ArticleCollection Create(ArticleSourceConfig config) =>
         new FileSystemArticleCollection(config.Name, config.BasePath)
-            .WithDisplayName(config.DisplayName)
-            .WithDefaultAddress(config.DefaultAddress);
+            .WithDisplayName(config.DisplayName);
 }

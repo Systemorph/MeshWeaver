@@ -9,12 +9,12 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress() : Address("router", "1");
+    protected record RouterAddress(string Id = null) : Address("router", Id ?? "1");
 
-    protected record HostAddress() : Address("host", "1");
+    protected record HostAddress(string Id = null) : Address("host", Id ?? "1");
 
 
-    protected record ClientAddress() : Address("client", "1");
+    protected record ClientAddress(string Id = null) : Address("client", Id ?? "1");
 
     [Inject]
     protected IMessageHub Router;

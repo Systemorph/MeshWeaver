@@ -5,8 +5,7 @@ namespace MeshWeaver.Markdown;
 public static  class MarkdownExtensions
 {
     public static MarkdownPipeline CreateMarkdownPipeline(
-        object collection, 
-        object defaultLayoutAreaAddress
+        object collection
         ) =>
         new MarkdownPipelineBuilder()
             .UseMathematics()
@@ -15,7 +14,7 @@ public static  class MarkdownExtensions
             .UseEmojiAndSmiley()
             .UseYamlFrontMatter()
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
-            .Use(new LayoutAreaMarkdownExtension(defaultLayoutAreaAddress))
+            .Use(new LayoutAreaMarkdownExtension())
             .Use(new ExecutableCodeBlockExtension())
             .Build();
 

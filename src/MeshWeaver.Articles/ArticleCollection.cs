@@ -13,7 +13,6 @@ public abstract record ArticleCollection(string Collection) : IDisposable
     public string DisplayName { get; init; } = Collection.Wordify();
     public Icon Icon { get; init; }
 
-    public string DefaultAddress { get; init; }
     public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
 
     public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
@@ -35,8 +34,6 @@ public abstract record ArticleCollection<TCollection>(string Collection) : Artic
 
     public TCollection WithIcon(Icon icon)
         => This with { Icon = icon };
-    public TCollection WithDefaultAddress(string address)
-        => This with { DefaultAddress = address };
 }
 
 public record FileSystemArticleCollection(string Collection, string BasePath) : ArticleCollection<FileSystemArticleCollection>(Collection)
@@ -66,7 +63,7 @@ public record FileSystemArticleCollection(string Collection, string BasePath) : 
         MonitorFileSystem();
     }
 
-    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct)
+    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
             return null;
@@ -139,7 +136,7 @@ public record FileSystemArticleCollection(string Collection, string BasePath) : 
            return null;
         await using var stream = File.OpenRead(fullPath);
         var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, DefaultAddress, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
+        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
     }
 
     public override void Dispose()

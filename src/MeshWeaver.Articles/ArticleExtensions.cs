@@ -65,12 +65,12 @@ public static class ArticleExtensions
         => configuration.Get<ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>>>() ?? [];
 
 
-    public static Article ParseArticle(string collection, string defaultAddress, string path, DateTime lastWriteTime, string content)
+    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
 
-        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection, defaultAddress);
+        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection);
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         var name = Path.GetFileNameWithoutExtension(path);

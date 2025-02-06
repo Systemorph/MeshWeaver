@@ -24,7 +24,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"MyArea\")";
-        var extension = new LayoutAreaMarkdownExtension(TestAddress);
+        var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
         var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
         layoutAreas.Should().HaveCount(1);
@@ -60,7 +60,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // Define a sample markdown string
         var markdown = "@(\"Area1\")\n@(\"Area2\")";
-        var extension = new LayoutAreaMarkdownExtension(TestAddress);
+        var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown( markdown, extension);
         var areas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
 

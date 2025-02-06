@@ -6,11 +6,9 @@ namespace MeshWeaver.Markdown;
 
 public class LayoutAreaMarkdownParser : BlockParser
 {
-    private readonly object defaultAddress;
 
-    public LayoutAreaMarkdownParser(object defaultAddress)
+    public LayoutAreaMarkdownParser()
     {
-        this.defaultAddress = defaultAddress;
         OpeningCharacters = ['@' ];
     }
 
