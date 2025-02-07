@@ -198,7 +198,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
 
-    private record SynchronizationStreamAddress(string Id) : Address("persistence", Id);
+    private record SynchronizationStreamAddress(string Id) : Address("sync", Id);
 
 
     public void Revert<TReduced>(ChangeItem<TReduced> change)
