@@ -153,7 +153,7 @@ public record ReduceManager<TStream>
             .Select(reduceStream =>
                 reduceStream.Invoke(workspace, reference, configuration)
             )
-            .FirstOrDefault(x => x != null);
+            .FirstOrDefault(x => x is not null);
 
     public ReduceManager<TReduced> ReduceTo<TReduced>() =>
         typeof(TReduced) == typeof(TStream)

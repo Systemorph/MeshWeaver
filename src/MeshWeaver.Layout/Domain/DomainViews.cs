@@ -188,7 +188,7 @@ public static class DomainViews
     }
 
     public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, string collection, object id) =>
-        new(nameof(Details)) { Id = $"{collection}/{JsonSerializer.Serialize(id, hub.JsonSerializerOptions)}" };
+        new(nameof(Details)) { Id = $"{collection}/{id}" };
     public static LayoutAreaReference GetCatalogReference(this IMessageHub hub, string collection) =>
         new(nameof(Catalog)) { Id = $"{collection}" };
 }
