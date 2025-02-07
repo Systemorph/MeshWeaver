@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
     <ProjectReference Include="..\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
   </ItemGroup>
 
 </Project>

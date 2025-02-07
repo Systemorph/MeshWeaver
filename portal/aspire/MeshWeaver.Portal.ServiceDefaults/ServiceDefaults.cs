@@ -15,7 +15,7 @@ namespace MeshWeaver.Portal.ServiceDefaults
     // To learn more about using this project, see https://aka.ms/dotnet/aspire/service-defaults
     public static class ServiceDefaults
     {
-        public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
+        public static IHostApplicationBuilder AddAspireServiceDefaults(this IHostApplicationBuilder builder)
         {
             builder.ConfigureOpenTelemetry();
 

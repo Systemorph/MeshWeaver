@@ -3,30 +3,26 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
+using MeshWeaver.Portal.Shared.Services;
 using Microsoft.Extensions.Hosting;
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.AddServiceDefaults();
+builder.AddAspireServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
 builder.AddKeyedRedisClient(StorageProviders.Redis);
 var address = new OrleansAddress();
 
 
-var currentDirectory = Directory.GetCurrentDirectory();
-var deployDirectory = Path.GetFullPath(Path.Combine(currentDirectory, "..", "..", "..", "..", "..", "deploy"));
-var directories = Directory.GetDirectories(deployDirectory);
-var modules = directories.Select(d => Path.Combine(d, $"{Path.GetFileName(d)}.dll")).ToArray();
-
-// Now you can use the solutionDirectory and deployFolder variables as needed
-
+builder.AddAspireServiceDefaults();
 
 builder.
     UseMeshWeaver(address, conf =>
         conf
             .UseOrleansMeshServer()
-            .ConfigureMesh(mesh => mesh.InstallAssemblies(modules))
-            );
+            .ConfigurePortalMesh()
+            )
+    ;
 
 var app = builder.Build();
 

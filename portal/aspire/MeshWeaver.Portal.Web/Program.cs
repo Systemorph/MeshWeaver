@@ -1,16 +1,17 @@
-﻿using System.Diagnostics;
-using MeshWeaver.Blazor.AgGrid;
-using MeshWeaver.Blazor.ChartJs;
-using MeshWeaver.Connection.Orleans;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting;
-using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
+using MeshWeaver.Portal.Shared.Web;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.AddServiceDefaults();
+builder.AddAspireServiceDefaults();
 builder.AddKeyedRedisClient(StorageProviders.Redis);
 
 builder.Services.AddSingleton<ConsoleFormatter, CsvConsoleFormatter>();
@@ -27,44 +28,13 @@ builder.Services.AddLogging(config => config.AddConsole(
 
 // Add services to the container.
 var blazorAddress = new UiAddress();
-
+builder.ConfigurePortalApplication();
 builder.UseMeshWeaver(blazorAddress,
-        config => config
+        configuration: config => config
             .UseOrleansMeshClient()
-            .AddBlazor(x =>
-                x.AddChartJs()
-                    .AddAgGrid()
-            )
-    )
-    ;
+            .ConfigureWebPortalMesh()
+    );
 
-
-if (!builder.Environment.IsDevelopment())
-{
-    builder.WebHost.UseStaticWebAssets();
-}
 
 var app = builder.Build();
-
-var logger = app.Services.GetRequiredService<ILogger<Program>>();
-logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
-
-app.MapDefaultEndpoints();
-
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Error");
-    app.UseHsts();
-}
-
-app.UseHttpsRedirection();
-app.UseStaticFiles();
-app.UseRouting();
-
-app.MapMeshWeaver();
-app.MapBlazorHub();
-app.MapFallbackToPage("/_Host");
-
-app.Run();
-
+app.StartPortalApplication();
