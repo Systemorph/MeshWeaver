@@ -23,7 +23,7 @@ public class MarkdownTest(ITestOutputHelper output) : HubTestBase(output)
     public void BasicLayoutArea()
     {
         // Define a sample markdown string
-        var markdown = "@(\"MyArea\")";
+        var markdown = $"@(\"{TestAddress}/MyArea\")";
         var extension = new LayoutAreaMarkdownExtension();
         var document = ParseMarkdown(markdown, extension);
         var layoutAreas = document.Descendants<LayoutAreaComponentInfo>().ToArray();
