@@ -75,6 +75,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             .AllBeOfType<NumberFieldControl>()
             ;
 
+        await Task.Delay(1000);
     }
     [Fact]
     public async Task TestEditorWithResult()
@@ -135,7 +136,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         area.UpdatePointer(2, editor.DataContext, new("/x"));
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString())
-            //.Timeout(10.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
@@ -171,7 +172,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         // update once ==> will issue "replace"
         for (var i = 1; i <= 5; i++)
         {
-            area.UpdatePointer(i, editor.DataContext, new("/x"));
+            area.UpdatePointer(i, editor.DataContext, new("x"));
         }
 
         var controls = await controlStream.ToArray();
