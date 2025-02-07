@@ -6,7 +6,7 @@
     </PropertyGroup>
     <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Portal.Shared\MeshWeaver.Portal.Shared.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Portal.Shared\MeshWeaver.Portal.Shared.Web.csproj" />
   </ItemGroup>
 
 

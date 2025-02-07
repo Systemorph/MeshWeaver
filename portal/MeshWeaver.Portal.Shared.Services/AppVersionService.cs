@@ -3,9 +3,8 @@
 // ------------------------------------------------------------------------
 
 using System.Reflection;
-using MeshWeaver.Portal.Infrastructure;
 
-namespace MeshWeaver.Portal.Shared.Infrastructure;
+namespace MeshWeaver.Portal.Shared.Services;
 internal class AppVersionService : IAppVersionService
 {
     public string Version

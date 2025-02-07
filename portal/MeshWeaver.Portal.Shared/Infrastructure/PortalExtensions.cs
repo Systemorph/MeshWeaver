@@ -1,13 +1,14 @@
-﻿using MeshWeaver.Portal.Infrastructure;
+﻿using MeshWeaver.Portal.Shared.Services;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Portal.Shared.Infrastructure;
+namespace MeshWeaver.Portal.Shared.Web.Infrastructure;
 
 public static class PortalExtensions
 {
-    public static IServiceCollection AddPortalServices(this IServiceCollection services)
+    public static IServiceCollection AddPortalWebServices(this IServiceCollection services)
     {
         return  services.AddSingleton<CacheStorageAccessor>()
-            .AddSingleton<IAppVersionService, AppVersionService>();
+            .AddPortalServices();
+
     }
 }
