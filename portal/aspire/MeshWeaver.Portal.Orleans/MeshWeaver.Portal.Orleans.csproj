@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+        <TargetFrameworks>net9.0</TargetFrameworks>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
     <ItemGroup>
@@ -25,6 +26,7 @@
     <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\..\MeshWeaver.Portal.Shared.Services\MeshWeaver.Portal.Shared.Services.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
     <ItemGroup>

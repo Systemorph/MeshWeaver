@@ -1,15 +1,13 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Generic;
+using System.Diagnostics;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Pages;
-using MeshWeaver.Documentation;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
-using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
-using MeshWeaver.Northwind.ViewModel;
-using MeshWeaver.Portal.Shared.Services;
+using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -27,27 +25,17 @@ public static class SharedPortalConfiguration
 
     }
 
-    public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder) =>
+    public static MeshBuilder ConfigureWebPortalMesh(this MeshBuilder builder) =>
         builder.ConfigureServices(services =>
             {
                 services.AddRazorComponents().AddInteractiveServerComponents();
                 return services;
             })
-            .ConfigureMesh(
-                mesh => mesh
-                    .InstallAssemblies(typeof(DocumentationViewModels).Assembly.Location)
-                    .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
-            )
-            .AddKernel()
-            .AddBlazor(x =>
-                x
+            .AddBlazor(layoutClient => layoutClient
                     .AddChartJs()
                     .AddAgGrid()
             )
             .ConfigureHub(c => c.ConfigurePortalApplication())
-            .AddArticles(articles 
-                => articles.FromAppSettings()
-            )
             .AddSignalRHubs();
 
 

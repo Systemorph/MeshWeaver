@@ -4,7 +4,7 @@
 
 using System.Reflection;
 
-namespace MeshWeaver.Portal.Shared.Services;
+namespace MeshWeaver.Portal.Shared.Web.Infrastructure;
 internal class AppVersionService : IAppVersionService
 {
     public string Version
