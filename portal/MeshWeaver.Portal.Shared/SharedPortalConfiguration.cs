@@ -9,13 +9,13 @@ using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.ViewModel;
-using MeshWeaver.Portal.Shared.Infrastructure;
+using MeshWeaver.Portal.Shared.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Portal.Shared;
+namespace MeshWeaver.Portal.Shared.Web;
 
 public static class SharedPortalConfiguration
 {

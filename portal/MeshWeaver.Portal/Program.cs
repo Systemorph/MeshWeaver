@@ -2,6 +2,7 @@
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared;
+using MeshWeaver.Portal.Shared.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
