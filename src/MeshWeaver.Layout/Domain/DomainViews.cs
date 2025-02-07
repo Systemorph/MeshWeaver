@@ -184,10 +184,10 @@ public static class DomainViews
         var collection = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type);
         if (collection == null)
             return null;
-        return hub.GetDetailsReference(collection, id);
+        return GetDetailsReference(collection, id);
     }
 
-    public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, string collection, object id) =>
+    public static LayoutAreaReference GetDetailsReference(string collection, object id) =>
         new(nameof(Details)) { Id = $"{collection}/{id}" };
     public static LayoutAreaReference GetCatalogReference(this IMessageHub hub, string collection) =>
         new(nameof(Catalog)) { Id = $"{collection}" };

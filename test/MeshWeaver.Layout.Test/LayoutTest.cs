@@ -218,7 +218,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Contain("2025");
     }
 
-    private object ItemTemplate(LayoutAreaHost area, IReadOnlyCollection<DataRecord> data) =>
+    private object ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
         data.BindMany(record => Controls.Text(record.DisplayName).WithId(record.SystemName)
         );
 
