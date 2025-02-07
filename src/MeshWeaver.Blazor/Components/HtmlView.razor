@@ -1,15 +1,15 @@
 @inherits BlazorView<HtmlControl, HtmlView>
 
-<div>@(@Html)</div>
-
+@Html
 
 @code
 {
-    MarkupString Html { get; set; }
+    MarkupString Html;
 
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Data, h => h.Html, o => o is null ? default : new(o.ToString()!));
     }
+
 }

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor;
@@ -15,7 +16,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TView : BlazorView<TViewModel, TView>
 {
     [Inject] protected ILogger<TView> Logger { get; set; }
-
+    [Inject] protected IMessageHub Hub { get; set; }
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
@@ -84,7 +85,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (value is JsonPointerReference reference)
         {
             if (Model is not null)
-                setter(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
+                setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             else
                 bindings.Add(Stream.DataBind(reference, DataContext, conversion)
                     .Subscribe(v =>
@@ -102,7 +103,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         }
         else
         {
-            setter(Stream.ConvertSingle(value, conversion));
+            setter(Hub.ConvertSingle(value, conversion));
         }
     }
 
@@ -115,11 +116,11 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         if (value is JsonPointerReference reference)
         {
             if (Model != null)
-                return Observable.Return(Stream.ConvertSingle(Model.GetValueFromModel(reference), conversion));
+                return Observable.Return(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             return Stream.DataBind(reference, DataContext, conversion);
         }
 
-        return Observable.Return(Stream.ConvertSingle(value, conversion));
+        return Observable.Return(Hub.ConvertSingle(value, conversion));
     }
 
     protected string SubArea(string area)

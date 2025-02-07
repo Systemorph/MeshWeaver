@@ -3,26 +3,21 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Components;
 
-[StreamRendering]
 public partial class LayoutAreaView
 {
-    [Inject] private IMessageHub Hub { get; set; }
-
     [Inject] protected IJSRuntime JsRuntime { get; set; }
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
     private LayoutAreaProperties Properties { get; set; }
-    public string DisplayArea { get; set; }
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = ShowProgress, DisplayArea = DisplayArea };
+        new(Area) { ShowProgress = showProgress, ProgressMessage=progressMessage };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
@@ -37,24 +32,27 @@ public partial class LayoutAreaView
             AreaStream = null;
         }
     }
-
+    private bool showProgress;
+    private string progressMessage;
 
     private void BindViewModel()
     {
-        DataBind(ViewModel.DisplayArea, x => x.DisplayArea);
-        DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
+        DataBind(ViewModel.ProgressMessage, x => x.progressMessage);
+        DataBind(ViewModel.ShowProgress, x => x.showProgress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
-        DataBind(ViewModel.AddressType, x => x.AddressType);
-        DataBind(ViewModel.AddressId, x => x.AddressId);
+        DataBind(ViewModel.Address, x => x.Address, ConvertAddress);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
 
-        Address = MeshExtensions.MapAddress(AddressType, AddressId);
+    }
+
+    private Address ConvertAddress(object address)
+    {
+        if (address is string s)
+            return Hub.GetAddress(s);
+        return Hub.GetAddress(address.ToString());
     }
 
     private Address Address { get; set; }
-    private bool ShowProgress { get; set; }
-    private string AddressType { get; set; }
-    private string AddressId { get; set; }
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {

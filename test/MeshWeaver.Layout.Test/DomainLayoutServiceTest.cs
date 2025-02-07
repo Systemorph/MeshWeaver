@@ -53,7 +53,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestEntityView()
     {
         var host = GetHost();
-        var reference = host.GetDetailsReference(typeof(DataRecord).FullName, "Hello");
+        var reference = host.GetDetailsReference(typeof(DataRecord), "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -78,7 +78,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         dataContext.Should().NotBeNullOrWhiteSpace();
 
 
-        var namePointer = new JsonPointerReference($"/displayName");
+        var namePointer = new JsonPointerReference($"displayName");
         var nameStream = stream.DataBind<string>(namePointer, dataContext);
         var value = await nameStream
             .Where(x => x != null)

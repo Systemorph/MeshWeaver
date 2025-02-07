@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+﻿using MeshWeaver.Disposables;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -14,16 +14,12 @@ namespace MeshWeaver.Connection.Orleans
         private readonly IRoutingGrain routingGrain = 
             grainFactory.GetGrain<IRoutingGrain>(hub.Address.ToString());
 
-        private readonly ConcurrentDictionary<Address, Func<Task>>
-            streams = new();
 
 
 
 
-        public override async Task Async(Address address)
+        protected override async Task UnsubscribeAsync(Address address)
         {
-            if (streams.TryRemove(address, out var unsubscribe))
-                await unsubscribe();
             await GetAddressRegistryGrain(address)
                 .Unregister();
         }
@@ -38,7 +34,7 @@ namespace MeshWeaver.Connection.Orleans
         }
 
 
-        public override async Task RegisterStreamAsync(Address address, AsyncDelivery callback)
+        public override async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
         {
             var info = new StreamInfo(address.Type, address.Id, StreamProviders.Memory, IRoutingService.MessageIn);
             await GetAddressRegistryGrain(address)
@@ -57,8 +53,12 @@ namespace MeshWeaver.Connection.Orleans
                 });
 
 
-            streams[address] =
-                    () => subscription.UnsubscribeAsync();
+
+            return new AnonymousAsyncDisposable(async () =>
+            {
+                await UnsubscribeAsync(address);
+                await subscription.UnsubscribeAsync();
+            });
 
         }
 

@@ -50,8 +50,8 @@ public record LayoutAreaHost : IDisposable
             workspace.ReduceManager.ReduceTo<EntityStore>(),
             configuration);
         Reference = reference;
-        Stream.AddDisposable(this);
-        Stream.AddDisposable(
+        Stream.RegisterForDisposal(this);
+        Stream.RegisterForDisposal(
             Stream.Hub.Register<ClickedEvent>(
                 OnClick,
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
@@ -116,9 +116,9 @@ public record LayoutAreaHost : IDisposable
 
     public void UpdateArea(RenderingContext context, object view)
     {
-        Stream.UpdateAsync(store =>
+        Stream.Update(store =>
         {
-            var changes = DisposeExistingAreas(store, context);
+            var changes = RemoveViews(store, context.Area);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(
@@ -135,8 +135,8 @@ public record LayoutAreaHost : IDisposable
 
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
-        Stream.UpdateAsync(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId))
+        Stream.Update(ws =>
+            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId))
         );
     }
 
@@ -328,16 +328,16 @@ public record LayoutAreaHost : IDisposable
 
         InvokeAsync(() =>
         {
-            DisposeAllAreas();
+            //DisposeAllAreas();
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(() => 
-                    LayoutDefinition
-                        .Render(this, context, new EntityStore()
+            Stream.Initialize(async ct => 
+                    (await LayoutDefinition
+                        .RenderAsync(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
-                        )
+                        ))
                         .Store);
             logger.LogDebug("End re-rendering");
         });
@@ -353,4 +353,7 @@ public record LayoutAreaHost : IDisposable
             .ForEach(d => d.Dispose());
         disposablesByArea.Clear();
     }
+
+    internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
+        => LayoutDefinition.AreaDefinitions;
 }

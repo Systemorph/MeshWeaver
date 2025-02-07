@@ -9,29 +9,29 @@
 }
 else
 {
-    <EditForm Model="@data" OnValidSubmit="Submit" >
-        <div>
-            <dl class="form-group">
-                <CascadingValue Name="Model" Value="@data">
-                    <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
-                </CascadingValue>
-            </dl>
-            @if(Log != null)
-            {
-                <div class="validation-errors">
-                    <h5>Validation failed</h5>
-                    <ul>
-                        @foreach (var logMessage in Log.Messages)
-                        {
-                            <li>@logMessage</li>
-                    
-                        }
+    <CascadingValue Name="Model" Value="@data">
+        <EditForm Model="@data" OnValidSubmit="Submit" >
+            <div>
+                <dl class="form-group">
+                        <DispatchView ViewModel="@ViewModel" Area="@Area" Stream="@Stream"></DispatchView>
+                </dl>
+                @if(Log != null)
+                {
+                    <div class="validation-errors">
+                        <h5>Validation failed</h5>
+                        <ul>
+                            @foreach (var logMessage in Log.Messages)
+                            {
+                                <li>@logMessage</li>
+                        
+                            }
 
-                    </ul>
-                </div>
-            }
-            <FluentButton Appearance="Appearance.Accent" type="@ButtonType.Submit" class="btn btn-primary" disabled="@data.IsUpToDate">Update</FluentButton>
-            <FluentButton Appearance="Appearance.Lightweight" type="@ButtonType.Reset" class="btn btn-secondary" @onclick="Reset" disabled="@data.IsUpToDate">Reset</FluentButton>
-        </div>
-    </EditForm>
+                        </ul>
+                    </div>
+                }
+                <FluentButton Appearance="Appearance.Accent" type="@ButtonType.Submit" class="btn btn-primary" disabled="@data.IsUpToDate">Update</FluentButton>
+                <FluentButton Appearance="Appearance.Lightweight" type="@ButtonType.Reset" class="btn btn-secondary" @onclick="Reset" disabled="@data.IsUpToDate">Reset</FluentButton>
+            </div>
+        </EditForm>
+    </CascadingValue>
 }

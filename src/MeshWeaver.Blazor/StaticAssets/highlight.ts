@@ -1,18 +1,28 @@
 import hljs from 'highlight.js';
 
 export function highlightCode(element: HTMLElement) {
-    var preElements = element.getElementsByTagName('pre');
-    for (let preElement of preElements) {
-        var codeElement = preElement.getElementsByTagName('code')[0];
+    if (!element) return;
 
-        if (codeElement) {
-            hljs.highlightElement(codeElement);
+    const preElements = element.getElementsByTagName('pre');
+    if (!preElements) return;
 
-            const copyButton = document.createElement('i');
-            copyButton.className = 'copy-to-clipboard';
-            copyButton.addEventListener('click',
-                (function (el: HTMLElement) { return () => navigator.clipboard.writeText(el.innerText) })(codeElement));
-            preElement.appendChild(copyButton);
+    try {
+        for (const preElement of preElements) {
+            const codeElement = preElement.getElementsByTagName('code')[0];
+
+            if (codeElement) {
+                hljs.highlightElement(codeElement);
+
+                const copyButton = document.createElement('i');
+                copyButton.className = 'copy-to-clipboard';
+                copyButton.addEventListener(
+                    'click',
+                    () => navigator.clipboard.writeText(codeElement.innerText)
+                );
+                preElement.appendChild(copyButton);
+            }
         }
+    } catch (error) {
+        console.error('Error highlighting code:', error);
     }
 }

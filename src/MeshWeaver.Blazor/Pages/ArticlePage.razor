@@ -1,2 +1,11 @@
-@page "/Article/{Application}/{Id}"
+@page "/article/{Collection}/{**Path}"
+@using MeshWeaver.Mesh
+
+<LayoutArea Address="@Address" Area="Article" Id="@Path" />
+@code
+{
+    private ArticlesAddress Address => new(Collection);
+    [Parameter] public string Collection { get; set; }
+    [Parameter] public string Path { get; set; }
+}
 

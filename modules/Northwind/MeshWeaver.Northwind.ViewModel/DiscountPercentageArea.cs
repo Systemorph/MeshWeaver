@@ -5,7 +5,6 @@ using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -22,11 +21,7 @@ public static class DiscountPercentageArea
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountPercentage(this LayoutDefinition layout)
         => layout.WithView(nameof(DiscountPercentage), Controls.Stack.WithView(DiscountPercentage))
-            .WithNavMenu((menu, _, _) =>
-                menu.WithNavLink(
-                    nameof(DiscountPercentage),
-                    new LayoutAreaReference(nameof(DiscountPercentage)).ToHref(layout.Hub.Address), FluentIcons.Document)
-            )
+            
         ;
 
     /// <summary>

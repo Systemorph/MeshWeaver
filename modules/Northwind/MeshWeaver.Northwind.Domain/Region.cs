@@ -16,6 +16,7 @@ namespace MeshWeaver.Northwind.Domain
     /// <seealso cref="IconAttribute"/>
    
     [Icon(FluentIcons.Provider, "Album")]
+    [Display(GroupName = "Reference Data")]
     public record Region([property: Key] int RegionId, string RegionDescription) : INamed
     {
         string INamed.DisplayName => RegionDescription;

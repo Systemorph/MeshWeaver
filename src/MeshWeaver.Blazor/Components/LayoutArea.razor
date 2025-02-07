@@ -1,14 +1,21 @@
-@using MeshWeaver.Mesh
 
 <LayoutAreaView ViewModel="@ViewModel" />
 
 @code {
-    [Parameter] public string Application { get; set; }
+    [Parameter] public string Address { get; set; }
     [Parameter] public string Area { get; set; }
     [Parameter] public string Id { get; set; }
+    [Parameter] public bool ShowProgress { get; set; }
+    [Parameter] public string ProgressMessage { get; set; } = "Loading";
 
-    private LayoutAreaControl ViewModel => Controls.LayoutArea(new ApplicationAddress(Application), new(Area)
-    {
-        Id = Id
-    });
+    private LayoutAreaControl ViewModel =>
+        new LayoutAreaControl(
+            Address,
+            new(Area) { Id = Id }
+        )
+        {
+            ShowProgress = ShowProgress,
+            ProgressMessage = ProgressMessage
+        };
+
 }

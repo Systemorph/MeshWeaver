@@ -51,7 +51,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     webBuilder.Configure(app =>
                     {
                         app.UseRouting();
-                        app.MapMeshWeaverHubs();
+                        app.MapMeshWeaverSignalRHubs();
                     });
                 })
                 .StartAsync();

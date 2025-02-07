@@ -21,6 +21,7 @@ namespace MeshWeaver.Northwind.Domain;
 /// <param name="ShipPostalCode">The postal code for the shipping address.</param>
 /// <param name="ShipCountry">The country to ship this order to.</param>
 [Icon(FluentIcons.Provider, "Album")]
+[Display(GroupName = "Order")]
 public record Order(
     [property: Key] int OrderId,
     [property: Dimension(typeof(Customer))] string CustomerId,

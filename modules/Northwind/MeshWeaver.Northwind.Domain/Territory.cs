@@ -17,6 +17,7 @@ namespace MeshWeaver.Northwind.Domain
     /// <seealso cref="Dimension"/>
     /// <seealso cref="Icon"/>
     [Icon(FluentIcons.Provider, "Album")]
+    [Display(GroupName = "Reference Data")]
     public record Territory(
         [property: Key] string TerritoryId,
         string TerritoryDescription,

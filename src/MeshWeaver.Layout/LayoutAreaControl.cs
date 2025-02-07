@@ -1,5 +1,5 @@
 ﻿using MeshWeaver.Data;
-using MeshWeaver.Utils;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
 /// <summary>
@@ -12,7 +12,7 @@ namespace MeshWeaver.Layout;
 /// <param name="Address">The address associated with the layout area control.</param>
 /// <param name="Reference">The reference to the layout area.</param>
 
-public record LayoutAreaControl(string AddressType, string AddressId, LayoutAreaReference Reference)
+public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     : UiControl<LayoutAreaControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
 
@@ -20,7 +20,7 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
     /// <summary>
     /// Gets or initializes the display area of the layout area control.
     /// </summary>
-    public object DisplayArea { get; init; } 
+    public object ProgressMessage { get; init; } 
     /// <summary>
     /// Gets or initializes the progress display state of the layout area control.
     /// </summary>
@@ -28,10 +28,10 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
     /// <summary>
     /// Sets the display area of the layout area control.
     /// </summary>
-    /// <param name="displayArea">The display area to set.</param>
+    /// <param name="progressMessage">The display area to set.</param>
     /// <returns>A new <see cref="LayoutAreaControl"/> instance with the specified display area.</returns>
 
-    public LayoutAreaControl WithDisplayArea(string displayArea) => this with { DisplayArea = displayArea };
+    public LayoutAreaControl WithProgressMessage(string progressMessage) => this with { ProgressMessage = progressMessage };
 
     public virtual bool Equals(LayoutAreaControl other)
     {
@@ -39,12 +39,11 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
         if(ReferenceEquals(this, other)) return true;
 
         return base.Equals(other)
-               && DisplayArea == other.DisplayArea
+               && ProgressMessage == other.ProgressMessage
                && ShowProgress == other.ShowProgress 
                && Equals(Reference, other.Reference)
-               && AddressType == other.AddressType
-                && AddressId == other.AddressId;
-        ;
+               && Address.Equals(other.Address)
+                ;
     }
 /// <summary>
     /// Returns a string that represents the current <see cref="LayoutAreaControl"/>.
@@ -52,7 +51,7 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
     /// <returns>A string that represents the current <see cref="LayoutAreaControl"/>.</returns>
     public override string ToString()
     {
-        return Reference.ToHref((object)AddressType, AddressId);
+        return Reference.ToHref(Address);
     }
  /// <summary>
     /// Serves as the default hash function.
@@ -62,11 +61,13 @@ public record LayoutAreaControl(string AddressType, string AddressId, LayoutArea
     {
         return HashCode.Combine(
             base.GetHashCode(),
-            DisplayArea,
+            ProgressMessage,
             ShowProgress,
             Reference,
-            AddressType.ToString(),
-            AddressId.ToString()
+            Address
         );
     }
+
+    public LayoutAreaControl WithShowProgress(bool showProgress)
+        => this with { ShowProgress = showProgress };
 }

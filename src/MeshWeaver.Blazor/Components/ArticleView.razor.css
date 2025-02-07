@@ -1,0 +1,86 @@
+﻿.article-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* Center the container content */
+    width: 100%;
+}
+
+.article-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start; /* Align content to the left */
+    padding: 16px;
+    box-sizing: border-box;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
+    width: 75%; /* Decrease overall page width to 75% */
+    margin: 0 auto; /* Center the page content */
+}
+
+.header-content {
+    width: 100%;
+    text-align: left; /* Left-align text */
+}
+
+.meta-info {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.author-info {
+    display: flex;
+    align-items: center;
+    margin-right: 16px;
+}
+
+.author {
+    margin-right: 8px;
+}
+
+.published-date {
+    font-size: 12pt;
+    margin-right: 8px;
+}
+
+.title {
+    font-size: 24pt;
+    font-weight: bold;
+    margin-bottom: 16px; /* Increase space between title and abstract */
+}
+
+.abstract {
+    font-size: 18pt; /* Increase font size */
+    color: var(--color-accent-fg); /* Change the color to an accent color */
+    line-height: 1.8; /* Increase line height to make it less dense */
+    margin-bottom: 24px; /* Keep the space between abstract and video */
+}
+
+.media {
+    width: 75%; /* Decrease the width to 75% */
+    text-align: center; /* Center the media content */
+    margin: 0 auto; /* Center the media container */
+    position: relative;
+}
+
+    .media iframe {
+        width: 100%;
+        height: 315px; /* Set a fixed height for the iframe */
+    }
+
+    .media img.thumbnail {
+        width: 100%;
+        height: 315px; /* Set a fixed height for the image */
+        object-fit: cover; /* Ensure the image covers the container and is truncated if necessary */
+    }
+
+.article-content {
+    width: 75%; /* Decrease the width to 75% */
+    margin: 16px auto; /* Center the article content and add margin */
+    padding: 16px;
+    box-sizing: border-box;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
+    font-size: 16pt; /* Increase the font size */
+}

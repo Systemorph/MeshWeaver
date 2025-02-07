@@ -4,32 +4,35 @@
 @inject IJSRuntime JsRuntime;
 <FluentDesignTheme @bind-Mode="@Mode"
                    StorageName="theme" />
+
 <HeadContent>
     @if (Mode == DesignThemeModes.Light)
     {
-        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet"/>
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github.min.css" rel="stylesheet" />
     }
     else
     {
-        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet"/>
+        <link href="_content/MeshWeaver.Blazor/node_modules/highlight.js/styles/github-dark.min.css" rel="stylesheet" />
     }
-    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet"/>
+
+    <link href="_content/MeshWeaver.Blazor/node_modules/@@primer/css/dist/markdown.css" rel="stylesheet" />
+    <script>
+    MathJax = {
+        tex: {
+            packages: ['base', 'ams', 'noundefined', 'newcommand', 'boldsymbol']
+        },
+        startup: {
+            typeset: false
+        }
+    };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
 </HeadContent>
-
-<article @ref="element" class="markdown-body">
-    @if(Html != null)
-    {
-        @((MarkupString)Html) 
-    }
-
-    @foreach (var component in LayoutAreaComponents)
-    {
-        <div id="@(ComponentContainerId(component.Id.ToString()))" style="display:none;">
-            <LayoutAreaView ViewModel="@component" Area="@SubArea(component.Id.ToString())"/>
-        </div>
-    }
+<article @ref="Element" class="markdown-body" data-theme="@Mode.ToString().ToLower()">
+    @((RenderFragment)RenderHtml)
 </article>
 
 @code {
     private DesignThemeModes Mode;
+    private ElementReference Element;
 }

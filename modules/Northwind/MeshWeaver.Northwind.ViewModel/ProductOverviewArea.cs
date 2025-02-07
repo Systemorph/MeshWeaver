@@ -4,7 +4,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -23,11 +22,6 @@ public static class ProductOverviewArea
         =>
             layout
                 .WithView(nameof(ProductOverview), ProductOverview)
-                .WithNavMenu((menu, _, _) =>
-                    menu.WithNavLink(
-                        nameof(ProductOverview),
-                        new LayoutAreaReference(nameof(ProductOverview)).ToHref(layout.Hub.Address), FluentIcons.Document)
-                )
     ;
 
     /// <summary>

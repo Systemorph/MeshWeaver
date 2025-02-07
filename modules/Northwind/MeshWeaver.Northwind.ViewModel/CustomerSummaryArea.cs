@@ -1,9 +1,5 @@
-﻿using MeshWeaver.Application.Styles;
-using MeshWeaver.Data;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
-using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -21,13 +17,7 @@ public static class CustomerSummaryArea
     /// </remarks>
     public static LayoutDefinition AddCustomerSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(CustomerSummary), CustomerSummary)
-            .WithNavMenu((menu,_, _) => 
-                menu.WithNavLink(
-                    nameof(CustomerSummary).Wordify(),
-                    new LayoutAreaReference(nameof(CustomerSummary)).ToHref(layout.Hub.Address),
-                    FluentIcons.Person
-                    )
-        );
+        ;
 
     /// <summary>
     /// Generates the customer summary view for a given layout area and rendering context.

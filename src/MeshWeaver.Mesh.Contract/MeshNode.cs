@@ -15,8 +15,6 @@ public record MeshNode(
     public string ThumbNail { get; init; }
     public string StreamProvider { get; init; } = StreamProviders.Mesh;
     public string Namespace { get; init; } = MeshNode.MeshIn;
-    public string ContentPath { get; init; } = "wwwroot";
-    public string ArticlePath { get; init; } = "articles";
     public string AssemblyLocation { get; init; }
     public Func<MessageHubConfiguration, MessageHubConfiguration> HubConfiguration { get; init; }
     public string StartupScript { get; init; }
