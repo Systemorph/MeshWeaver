@@ -17,7 +17,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     {
         var client = GetClient();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress())
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address)
                 , new CancellationTokenSource(10.Seconds()).Token
                 );
         response.Should().NotBeNull();
