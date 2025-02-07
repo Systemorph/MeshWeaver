@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Layout;
 
@@ -29,10 +28,8 @@ public static class Controls
     /// Creates a new instance of <see cref="NavGroupControl"/> with the specified title, icon, and href.
     /// </summary>
     /// <param name="title">The title of the navigation group.</param>
-    /// <param name="icon">The icon of the navigation group.</param>
-    /// <param name="href">The href of the navigation group.</param>
     /// <returns>A new instance of <see cref="NavGroupControl"/>.</returns>
-    public static NavGroupControl NavGroup(string title, object icon = null, object href = null) => new(title, icon, href);
+    public static NavGroupControl NavGroup(string title) => new(title);
 
     /// <summary>
     /// Gets a new instance of <see cref="TabsControl"/>.
@@ -100,12 +97,6 @@ public static class Controls
 
     public static DateControl Date(object data) => new(data);
 
-    public static MenuItemControl Menu(object title) => new(title, null);
-
-    public static MenuItemControl Menu(Icon icon) => new(null, icon);
-
-    public static MenuItemControl Menu(object title, object icon) => new(title, icon);
-
     public static ButtonControl Button(object title) => new(title) { Style = "button" };
 
     public static ExceptionControl Exception(Exception ex) => new(ex.Message, ex.GetType().Name);
@@ -167,19 +158,10 @@ public static class Controls
 
     public static IconControl Icon(object data) => new(data);
 
-    public static LayoutAreaControl LayoutArea(object address, LayoutAreaReference reference)
-    {
-        var (addressType, addressId) = MessageHubExtensions.GetAddressTypeAndId(address);
-        return LayoutArea(addressType, addressId, reference);
-    }
-
     public static LayoutAreaControl LayoutArea(object address, string area, object id = null)
-        => LayoutArea(address, new(area) { Id = id });
-
-    public static LayoutAreaControl LayoutArea(string addressType, string addressId, string area, object id = null)
-        => LayoutArea(addressType, addressId, new(area) { Id = id });
-    public static LayoutAreaControl LayoutArea(string addressType, string addressId, LayoutAreaReference reference)
-        => new(addressType, addressId, reference);
+        => LayoutArea(address, new LayoutAreaReference(area) { Id = id });
+    public static LayoutAreaControl LayoutArea(object address, LayoutAreaReference reference)
+        => new(address, reference);
 
 
     public static RadioGroupControl RadioGroup(object data, object options, object type)

@@ -15,9 +15,9 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [Fact]
     public async Task BasicMessage()
     {
-        var client = CreateClient();
+        var client = GetClient();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(new MeshAddress())
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(Mesh.Address)
                 , new CancellationTokenSource(10.Seconds()).Token
                 );
         response.Should().NotBeNull();
@@ -30,7 +30,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)
     {
-        var client = CreateClient();
+        var client = GetClient();
         var address = new ApplicationAddress(id);
 
         var response = await client

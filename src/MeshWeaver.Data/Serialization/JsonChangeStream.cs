@@ -38,7 +38,7 @@ public static class JsonSynchronizationStream
                     .WithClientId(config.Stream.StreamId)
             );
         reduced.Initialize(ct => (tcs2 = new(ct)).Task);
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
                 reduced
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
         .Subscribe(e =>
@@ -59,7 +59,7 @@ public static class JsonSynchronizationStream
         });
         reduced.BindToTask(task);
         var first = true;
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
             reduced.Hub.Register<DataChangedEvent>(delivery =>
                 {
                     if (first)
@@ -76,8 +76,8 @@ public static class JsonSynchronizationStream
                 d => reduced.StreamId.Equals(d.Message.StreamId)
             )
         );
-        reduced.AddDisposable(
-            reduced.Hub.Register<UnsubscribeDataRequest>(
+        reduced.RegisterForDisposal(
+            reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
                 {
                     reduced.DeliverMessage(delivery);
@@ -87,9 +87,9 @@ public static class JsonSynchronizationStream
             )
         );
 
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
             new AnonymousDisposable(
-                () => hub.Post(new UnsubscribeDataRequest(reduced.StreamId), o => o.WithTarget(owner))
+                () => hub.Post(new UnsubscribeRequest(reduced.StreamId), o => o.WithTarget(owner))
             )
         );
 
@@ -123,8 +123,8 @@ public static class JsonSynchronizationStream
             );
 
         // forwarding unsubscribe
-        reduced.AddDisposable(
-            reduced.Hub.Register<UnsubscribeDataRequest>(
+        reduced.RegisterForDisposal(
+            reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
                 {
                     reduced.DeliverMessage(delivery);
@@ -135,7 +135,7 @@ public static class JsonSynchronizationStream
         );
 
         // Incoming data changed register and dispatch to synchronization stream
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
             reduced.Hub.Register<DataChangedEvent>(
                 delivery =>
                 {
@@ -147,7 +147,7 @@ public static class JsonSynchronizationStream
         );
 
         // outgoing data changed
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
             reduced
                 .ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Subscribe(e =>
@@ -157,7 +157,7 @@ public static class JsonSynchronizationStream
                 })
         );
         // outgoing data changed
-        reduced.AddDisposable(
+        reduced.RegisterForDisposal(
             reduced
                 .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
                 .Subscribe(e =>
@@ -206,7 +206,7 @@ public static class JsonSynchronizationStream
                     stream.Stream.Set(currentJson);
                     return delivery.Processed();
                 }
-            ).WithHandler<UnsubscribeDataRequest>(
+            ).WithHandler<UnsubscribeRequest>(
                 (hub, delivery) =>
                 {
                     hub.Dispose();

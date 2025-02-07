@@ -3,7 +3,6 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -21,14 +20,8 @@ public static class AnnualReportSummaryArea
     public static LayoutDefinition AddAnnualReportSummary(this LayoutDefinition layout)
         => 
             layout
-                .WithView(nameof(AnnualReportSummary), Controls.Layout.WithView(AnnualReportSummary))
-                .WithNavMenu((menu, _, _) =>
-                    menu.WithNavLink(
-                        nameof(AnnualReportSummary),
-                        new LayoutAreaReference(nameof(AnnualReportSummary)).ToHref(layout.Hub.Address), FluentIcons.Document)
-                )
-
-    ;
+                .WithView(nameof(AnnualReportSummary), AnnualReportSummary, area => area.WithCategory("Dashboard"))
+            ;
 
     /// <summary>
     /// Renders the annual report summary area.

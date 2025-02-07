@@ -5,7 +5,6 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Portal.ServiceDefaults;
 using Microsoft.Extensions.Logging.Console;
 
@@ -63,7 +62,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-app.MapStaticContent(app.Services.GetRequiredService<IMeshCatalog>());
+app.MapMeshWeaver();
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
 

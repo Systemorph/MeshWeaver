@@ -677,7 +677,10 @@ public sealed class MessageHub : IMessageHub
         AsyncDelivery rule = (delivery, cancellationToken) =>
             WrapFilter(delivery, action, filter, cancellationToken);
         Rules.AddFirst(rule);
-        return new AnonymousDisposable(() => Rules.Remove(rule));
+        return new AnonymousDisposable(() =>
+        {
+            if (Rules.Contains(rule)) Rules.Remove(rule);
+        });
     }
 
     private Task<IMessageDelivery> WrapFilter(

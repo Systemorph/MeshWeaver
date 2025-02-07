@@ -3,7 +3,6 @@ using MeshWeaver.Collections;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.ViewModel;
@@ -33,28 +32,11 @@ public static class AnnualReportConfiguration
         .AddClientsOverview()
         .AddOrdersOverview()
         .AddSalesOverview()
-        .AddAnnualReportMenu()
     ;
 
-    private static LayoutDefinition AddAnnualReportMenu(this LayoutDefinition layout)
-        => layout.WithNavMenu
-        (
-            (menu, _, _) => menu
-                .WithNavGroup(
-                    AnnualReportDocuments.Aggregate(
-                        Controls.NavGroup("Sales Dashboard 2023", FluentIcons.Folder)
-                            .WithSkin(skin =>
-                                skin.WithHref(layout.DocumentHref(SummaryDocument))
-                                .WithExpanded(true)),
-                            (navGroup, documentMenuDescriptor) => navGroup.WithLink(Path.GetFileNameWithoutExtension(documentMenuDescriptor.DocumentName).Wordify(),
-                                layout.DocumentationPath(ThisAssembly, documentMenuDescriptor.DocumentName), documentMenuDescriptor.Icon))
-                )
-        );
 
     private const string SummaryDocument = "AnnualReportSummary.md";
 
-    private static string DocumentHref(this LayoutDefinition layout, string documentName) =>
-        layout.DocumentationPath(ThisAssembly, documentName);
 
     private static IEnumerable<(string DocumentName, Icon Icon)> AnnualReportDocuments =>
         ThisAssembly.GetManifestResourceNames()

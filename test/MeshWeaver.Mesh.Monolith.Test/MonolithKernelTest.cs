@@ -29,15 +29,20 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task HelloWorld()
     {
-        var client = CreateClient();
+        var client = GetClient();
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
-            new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command)), null),
+            new KernelCommandEnvelope(Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Serialize
+                (Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Create(command)))
+            {
+                IFrameUrl = "http://localhost/area"
+            },
             o => o.WithTarget(new KernelAddress()));
         var kernelEvent = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
             .TakeUntil(e => e is CommandSucceeded || e is CommandFailed)
             .ToArray()
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         var standardOutput = kernelEvent.OfType<StandardOutputValueProduced>().Single();
@@ -48,7 +53,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task RoutingToHub()
     {
-        var client = CreateClient();
+        var client = GetClient();
         var area = await client
             .GetControlStream(new ApplicationAddress(Test), "Dashboard")
             .Timeout(10.Seconds())
@@ -60,9 +65,9 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task HubViaKernel()
     {
         const string url = "http://localhost/area";
-        var client = CreateClient();
+        var client = GetClient();
         client.Post(
-            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand, url),
+            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand){ IFrameUrl = url },
             o => o.WithTarget(new KernelAddress()));
         var kernelEvents = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)

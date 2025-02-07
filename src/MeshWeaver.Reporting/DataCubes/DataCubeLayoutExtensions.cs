@@ -5,7 +5,6 @@ using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using static MeshWeaver.Layout.Template;
 using static MeshWeaver.Layout.Controls;
 
@@ -135,20 +134,6 @@ public static class DataCubeLayoutExtensions
     }
 
     public const string DataCubeFilterId = "$DataCubeFilter";
-
-    private static void OpenContextPanel(this LayoutAreaHost host, IObservable<IDataCube> cubeStream, IObservable<DataCubeFilter> filterStream)
-    {
-
-        var viewDefinition = cubeStream
-            .CombineLatest(host.Stream.GetDataStream<DataCubeFilter>(DataCubeFilterId)
-                    .DefaultIfEmpty(),
-                (cube, filter) => (filter ?? cube.CreateFilter()).Update(cube))
-            .Subscribe(filter =>
-                host.UpdateArea(
-                    new(StandardPageLayout.ContextMenu),
-                    host.Render(filter, DataCubeFilterId)
-                ));
-    }
 
 
 

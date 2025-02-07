@@ -21,6 +21,7 @@ namespace MeshWeaver.Northwind.Domain;
 /// <seealso cref="IconAttribute"/>
 /// <seealso cref="NotVisibleAttribute"/>
 [Icon(FluentIcons.Provider, "Album")]
+[Display(GroupName = "Order")]
 public record OrderDetails(
     [property: Key] int Id,
     int OrderId,

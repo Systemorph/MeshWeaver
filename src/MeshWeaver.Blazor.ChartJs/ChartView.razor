@@ -1,28 +1,28 @@
-﻿@using Microsoft.Extensions.Logging
-@using Microsoft.JSInterop
+﻿@using Microsoft.JSInterop
 @inherits BlazorView<MeshWeaver.Charting.ChartControl, ChartView>
 
-<canvas @ref="element" class="@Class"></canvas>
+<canvas @ref="Element" class="@Class"></canvas>
 
 @code
 {
-    ElementReference element;
+    ElementReference Element;
 
+    private object Options;
 
     [Inject] private IJSRuntime JsRuntime { get; set; }
-    private IJSObjectReference jsModule;
+    private IJSObjectReference JsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            jsModule = await JsRuntime.Import("index.mjs");
+            JsModule = await JsRuntime.Import("index.mjs");
 
 
         }
-        if (jsModule is not null)
+        if (JsModule is not null)
         {
-            await jsModule.InvokeVoidAsync("renderChart", element, Options);
+            await JsModule.InvokeVoidAsync("renderChart", Element, Options);
         }
     }
 
@@ -32,17 +32,15 @@
         DataBind(ViewModel.Data, o => o.Options);
     }
 
-    private readonly string id = Guid.NewGuid().ToString();
 
-    private object Options { get; set; }
 
     public override async ValueTask DisposeAsync()
     {
-        if (jsModule is not null)
+        if (JsModule is not null)
         {
             try
             {
-                await jsModule.DisposeAsync();
+                await JsModule.DisposeAsync();
             }
             catch (JSDisconnectedException)
             {

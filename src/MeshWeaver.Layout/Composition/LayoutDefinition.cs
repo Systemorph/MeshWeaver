@@ -1,36 +1,58 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Composition;
 
 public delegate EntityStoreAndUpdates Renderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
+public delegate Task<EntityStoreAndUpdates> AsyncRenderer(LayoutAreaHost host, RenderingContext context, EntityStore store);
 public record LayoutDefinition(IMessageHub Hub)
 {
-    private ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)> Renderers { get; init; } = ImmutableList<(Func<RenderingContext, bool> Filter, Renderer Renderer)>.Empty;
+    private ImmutableList<(Func<RenderingContext, bool> Filter, AsyncRenderer Renderer)> AsyncRenderers { get; init; } = [];
 
-    public LayoutDefinition WithRenderer(Func<RenderingContext,bool> filter, Renderer renderer)
+    public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, Renderer renderer)
         => this with
         {
-            Renderers = Renderers.Add((filter, renderer))
+            AsyncRenderers = AsyncRenderers.Add((filter, (h,ctx, s) => Task.FromResult(renderer.Invoke(h, ctx, s))))
+        };
+    public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, AsyncRenderer renderer)
+        => this with
+        {
+            AsyncRenderers = AsyncRenderers.Add((filter, renderer))
         };
 
-    public EntityStoreAndUpdates Render(
+    public ValueTask<EntityStoreAndUpdates> RenderAsync(
         LayoutAreaHost host,
         RenderingContext context,
         EntityStore store) =>
-        Renderers
+        AsyncRenderers
+            .ToAsyncEnumerable()
             .Where(r => r.Filter(context))
-            .Aggregate(new EntityStoreAndUpdates(store, [], host.Stream.StreamId),(r,x) =>
+            .AggregateAwaitAsync(new EntityStoreAndUpdates(store, [], host.Stream.StreamId),
+                async (r,x) =>
             {
-                var ret = x.Renderer.Invoke(host, context, r.Store);
+                var ret = await x.Renderer.Invoke(host, context, r.Store);
                 return ret with{
                     Updates = r.Updates.Concat(ret.Updates)
                 };
             });
 
-    public int Count => Renderers.Count;
+    public int Count => AsyncRenderers.Count;
 
+    public LayoutDefinition AddRendering(Func<object, UiControl> rule)
+    {
+        Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
+        return this;
+    }
+
+    internal ImmutableList<LayoutAreaDefinition> AreaDefinitions { get; init; } = [];
+    public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition layoutArea)
+    {
+        if (layoutArea is null)
+            return this;
+        return this with { AreaDefinitions = AreaDefinitions.Add(layoutArea) };
+    }
 }
 
 

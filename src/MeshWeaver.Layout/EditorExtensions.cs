@@ -169,7 +169,7 @@ public static class EditorExtensions
         if (result == null)
             return editor;
         return Controls
-            .Toolbar
+            .Stack
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)

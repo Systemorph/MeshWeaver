@@ -61,7 +61,7 @@ public static class DataExtensions
                 typeof(DataChangeRequest),
                 typeof(DataChangeResponse),
                 typeof(SubscribeRequest),
-                typeof(UnsubscribeDataRequest)
+                typeof(UnsubscribeRequest)
             )
             .RegisterDataEvents()
             ;

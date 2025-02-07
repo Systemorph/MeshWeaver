@@ -54,4 +54,17 @@ public static class MessageHubExtensions
             return GetAddressOfType<T>(hosted.Address);
         return default;
     }
+
+    public static Address GetAddress(this IMessageHub hub, string address)
+    {
+        var split = address.Split('/');
+        if (split.Length < 2)
+            throw new InvalidOperationException($"Address {address} is not in the correct format. Expected format is AddressType/AddressId");
+        var type = hub.GetTypeRegistry().GetType(split[0]);
+
+        if(type is null)
+            throw new InvalidOperationException($"Unknown address type {split[0]} for {address}. Expected format is AddressType/AddressId");
+
+        return (Address)Activator.CreateInstance(type, [string.Join('/',split.Skip(1))]);
+    }
 }

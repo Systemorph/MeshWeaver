@@ -1,10 +1,10 @@
----
-Name: "Northwind Overview"
-Description: "This is a sample description of the article."
+﻿---
+Title: "Northwind Overview"
+Abstract: "This is a sample description of the article."
 Thumbnail: "images/thumbnail.jpg"
 Published: "2024-09-24"
 Authors:
-  - "Roland B�rgi"
+  - "Roland Bürgi"
   - "Anna Kuleshova"
 Tags:
   - "Northwind"
@@ -22,10 +22,10 @@ describe the basic principles of data modeling.
 
 The counter doesn't really fit here, we should move it to a spearate project. 
 
-@("ProductSummary"){ Layout = "Documentation" }
+@("app/demo/ProductSummary")
 
 ## Interactive Reporting
 
 Make your reports interactive by using the [Interactive Reporting](InteractiveReporting.md) feature. Here an example:
 
-@("OrderSummary"){ Layout = "Documentation" }
+@("app/demo/OrderSummary")

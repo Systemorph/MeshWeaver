@@ -1,8 +1,5 @@
-﻿using MeshWeaver.Application.Styles;
-using MeshWeaver.Data;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 
 namespace MeshWeaver.Northwind.ViewModel;
 
@@ -19,12 +16,8 @@ public static class NorthwindDashboardArea
     /// <remarks>This method enhances the provided layout definition by adding a navigation link to the Northwind Dashboard view, using the FluentIcons.Grid icon for the menu. It configures the dashboard view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
-        => layout.WithView(nameof(Dashboard), Dashboard)
-            .WithNavMenu((menu,_, _) =>
-                menu.WithNavLink(
-                    nameof(Dashboard),
-                    new LayoutAreaReference(nameof(Dashboard)).ToHref(layout.Hub.Address), FluentIcons.Grid)
-            );
+        => layout.WithView(nameof(Dashboard), Dashboard, area => area.WithCategory("Dashboards"))
+            ;
 
     /// <summary>
     /// Generates the main dashboard view for a given layout area and rendering context.

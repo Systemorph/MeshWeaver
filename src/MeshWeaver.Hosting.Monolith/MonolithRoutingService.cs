@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -9,17 +10,19 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    public override Task Async(Address address)
+    protected override Task UnsubscribeAsync(Address address)
     {
         streams.TryRemove(address, out _);
         return Task.FromResult<Address>(null);
     }
 
 
-    public override Task RegisterStreamAsync(Address address, AsyncDelivery callback)
+    public override Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
     {
         streams[address] = callback;
-        return Task.CompletedTask;
+        return Task.FromResult<IAsyncDisposable>(new AnonymousAsyncDisposable(() => { streams.TryRemove(address, out _);
+            return Task.CompletedTask;
+        }));
     }
 
 
@@ -36,13 +39,11 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
             throw new MeshException($"No Mesh node was found for {address}");
 
         var hub = CreateHub(node, address);
-        if (hub is not null)
-        {
-            hub.DeliverMessage(delivery);
-            return delivery.Forwarded(hub.Address);
-        }
+        if (hub is null)
+            return delivery;
 
-        return delivery;
+        hub.DeliverMessage(delivery); 
+        return delivery.Forwarded(hub.Address);
     }
 
     private IMessageHub CreateHub(MeshNode node, Address address)
@@ -50,7 +51,7 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         if (node.HubConfiguration is not null)
         {
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
-            hub.RegisterForDisposal((_, _) => Async(hub.Address));
+            hub.RegisterForDisposal((_, _) => UnsubscribeAsync(hub.Address));
             return hub;
         }
         return null;

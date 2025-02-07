@@ -1,8 +1,0 @@
-# Privacy Policy
-Systemorph AG, headquartered at Bellerivestrasse 5, 8008 Zurich, Switzerland (hereinafter “SM“) primarily processes the personal data that Systemorph collects in the course of its business relations with customers (hereinafter “customer“), other business partners from these and other persons involved in these activities or which are generally collected from their users (hereinafter “you” or “you”) in the operation of the Systemorph websites (hereinafter “SM-sites“), contact information and the Systemorph Cloud Portal (hereinafter “SMC “). This Privacy Policy describes how Systemorph AG and its subsidiaries collects and uses personal data when you use he SM-Sites and/or the SMC.
-
-Personal data is all information about personal and factual circumstances of a specific or determinable natural person – i.e. individual information that is or can be assigned to you as a natural person and visitor to the SM-sites or the SMC. This includes, for example, your name, address, telephone number, e-mail address, IP address.
-
-Personal data is only collected and stored if you provide us with this information yourself, e.g. when registering for the SMC and using it or in other correspondence/communication, or if you authorize us to obtain this information, e.g. from publicly accessible sources and registers.
-
-SM attempts to store only as much data about you as is necessary to enable SM to offer the complete range of functions of the service used with the highest possible security. In order for SM to offer the use of the SM-sites and the SMC, SM collects, stores, processes and uses personal data. SM creates profiles only with your consent by registering for the SMC.

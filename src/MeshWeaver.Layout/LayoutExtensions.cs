@@ -13,7 +13,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Layout.Documentation;
-using MeshWeaver.Layout.Domain;
+using MeshWeaver.Layout.Views;
 
 namespace MeshWeaver.Layout;
 
@@ -63,7 +63,10 @@ public static class LayoutExtensions
         this MessageHubConfiguration config
     ) =>
         config.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>()
-        ?? ImmutableList<Func<LayoutDefinition, LayoutDefinition>>.Empty;
+        ?? [(Func<LayoutDefinition, LayoutDefinition>)(layout => layout.AddStandardViews())];
+
+    private static LayoutDefinition AddStandardViews(this LayoutDefinition layout)
+        => layout.AddLayoutAreaCatalog();
 
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration
@@ -184,10 +187,10 @@ public static class LayoutExtensions
     {
         if (id is null)
             throw new ArgumentNullException(nameof(id));
-        stream.UpdateAsync(s =>
+        stream.Update(s =>
             stream.ApplyChanges(
                 s.MergeWithUpdates(
-                    s.Update(LayoutAreaReference.Data,
+                    WorkspaceOperations.Update(s, LayoutAreaReference.Data,
                         c => c.SetItem(id, value)
                     ),
                     changedBy

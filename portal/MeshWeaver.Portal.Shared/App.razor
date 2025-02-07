@@ -1,16 +1,27 @@
-﻿@using MeshWeaver.Blazor.Pages
-@using MeshWeaver.Portal.Shared.Layout
-<FluentDesignTheme StorageName="theme" />
+﻿@using MeshWeaver.Blazor.Layouts;
 
-<Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="[typeof(ApplicationPage).Assembly]">
-    <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)"  />
-        @* <FocusOnNavigate RouteData="@routeData" Selector="h1" /> *@
-    </Found>
-    <NotFound>
-        <PageTitle>Not found</PageTitle>
-        <FluentLayout Layout="@typeof(MainLayout)">
-            <p role="alert">Sorry, there's nothing at this address.</p>
-        </FluentLayout>
-    </NotFound>
-</Router>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link href="MeshWeaver.Portal.styles.css" rel="stylesheet" />
+    <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
+    <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="RenderMode.InteractiveServer"/>
+    <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>
+@code {
+    private DesignThemeModes Mode;
+}

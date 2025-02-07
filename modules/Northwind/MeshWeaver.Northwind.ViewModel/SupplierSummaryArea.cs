@@ -1,12 +1,10 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
@@ -28,9 +26,7 @@ public static class SupplierSummaryArea
     /// It configures the Supplier Summary view's appearance and behavior within the application's navigation structure.
     /// </remarks>
     public static LayoutDefinition AddSupplierSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(SupplierSummary), SupplierSummary)
-            .WithNavMenu("Supplier Summary",
-                new LayoutAreaReference(nameof(SupplierSummary)).ToHref(layout.Hub.Address), FluentIcons.Document);
+        => layout.WithView(nameof(SupplierSummary), SupplierSummary);
 
 
     /// <summary>
@@ -46,7 +42,7 @@ public static class SupplierSummaryArea
         public const string Chart = nameof(Chart);
 
         [UiControl<RadioGroupControl>(Options = new[] { "Table", "Chart" })]
-        public string Display { get; init; } = Chart;
+        public string Display { get; init; } = Table;
     }
 
     /// <summary>

@@ -54,7 +54,7 @@ c => c
             x.Merge(y.Value), cancellationToken: ct));
 
         foreach (var stream in streams)
-            ret.AddDisposable(stream.Skip(1).Subscribe(s => ret.Update(current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)))));
+            ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => ret.Update(current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)))));
 
         return ret.Reduce(reference, configuration);
     }
@@ -101,12 +101,12 @@ c => c
             configuration
         );
 
-        stream.AddDisposable(reducedStream);
+        stream.RegisterForDisposal(reducedStream);
         var selected = stream
             .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference))
             .Where(x => x is{Value: not null});
 
-        reducedStream.AddDisposable(
+        reducedStream.RegisterForDisposal(
             selected
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)
