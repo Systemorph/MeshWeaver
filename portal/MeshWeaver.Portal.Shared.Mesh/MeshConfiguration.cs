@@ -4,7 +4,7 @@ using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.ViewModel;
 
-namespace MeshWeaver.Portal.Shared.Services;
+namespace MeshWeaver.Portal.Shared.Mesh;
 
 public static  class SharedMeshConfiguration
 {
