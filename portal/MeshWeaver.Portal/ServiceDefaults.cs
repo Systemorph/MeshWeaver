@@ -8,7 +8,7 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
-namespace MeshWeaver.Portal.Shared.Web.Infrastructure
+namespace MeshWeaver.Portal
 {
     // Adds common .NET Aspire services: service discovery, resilience, health checks, and OpenTelemetry.
     // This project should be referenced by each service project in your solution.
@@ -20,7 +20,6 @@ namespace MeshWeaver.Portal.Shared.Web.Infrastructure
             builder.ConfigureOpenTelemetry();
 
             builder.AddDefaultHealthChecks();
-            builder.Services.AddSingleton<IAppVersionService, AppVersionService>();
 
             return builder;
         }
