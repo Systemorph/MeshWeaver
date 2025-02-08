@@ -5,7 +5,6 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
@@ -39,18 +38,16 @@ public static class OrleansClientExtensions
                 if (orleansConfiguration != null)
                     orleansConfiguration.Invoke(client);
             });
-        builder.AddOrleansMeshInternal();
+        builder.Host.Services.AddOrleansMeshServices();
         return builder;
     }
 
 
-    internal static void AddOrleansMeshInternal<TBuilder>(this TBuilder builder)
-        where TBuilder : MeshHostApplicationBuilder
+    public static void AddOrleansMeshServices(this IServiceCollection services)
     {
-        builder.Host.Services
+        services
                 .AddSingleton<IRoutingService, OrleansRoutingService>()
-                .AddSingleton<IMeshCatalog, MeshCatalog>()
-                ;
+                .AddSingleton<IMeshCatalog, MeshCatalog>();
     }
 
 
