@@ -3,6 +3,6 @@
 public static class StorageProviders
 {
     public const string MeshCatalog = "mesh-catalog";
-    public const string Redis = "orleans-redis";
+    public const string AddressRegistry = "address-registry";
     public const string Activity = "activity";
 }

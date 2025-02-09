@@ -4,7 +4,6 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
@@ -21,15 +20,6 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
     public override async Task InitializeAsync()
     {
         await base.InitializeAsync();
-        // Set up the test cluster options
-        var options = new TestClusterOptions
-        {
-            InitialSilosCount = 1,
-            ClusterId = "test-cluster",
-            ServiceId = "test-service"
-        };
-        // Configure the silo
-        // Set up the test cluster (Server)
         var builder = new TestClusterBuilder();
 
 
@@ -46,7 +36,10 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 
 
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null) =>
-        Cluster.Client.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        ClientMesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+
+
+    protected IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         configuration;
@@ -75,11 +68,6 @@ public class TestClientConfigurator : IHostConfigurator
 
 public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
-
-    public TestSiloConfigurator()
-    {
-        
-    }
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .ConfigurePortalMesh()
@@ -88,13 +76,16 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(ISiloBuilder siloBuilder)
     {
-
-        siloBuilder.ConfigureMeshWeaverServer();
+        siloBuilder.ConfigureMeshWeaverServer()
+            .AddMemoryGrainStorage(StorageProviders.MeshCatalog)
+            .AddMemoryGrainStorage(StorageProviders.Activity)
+            .AddMemoryGrainStorage(StorageProviders.AddressRegistry)
+            .AddMemoryGrainStorageAsDefault();
     }
 
     public void Configure(IHostBuilder hostBuilder)
     {
-        var meshBuilder = hostBuilder.UseOrleansMeshServer();
+        hostBuilder.UseOrleansMeshServer();
     }
 }
 

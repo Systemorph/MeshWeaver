@@ -11,9 +11,29 @@ namespace MeshWeaver.Connection.Orleans
 {
     public static class OrleansConnectionExtensions
     {
+        internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address)
+        {
+            var builder = new MeshHostApplicationBuilder(hostBuilder, address);
+            ConfigureMeshWeaver(builder);
+            builder.ConfigureServices(services => 
+                services.AddOrleansMeshServices());
+
+            return builder;
+        }
         internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
         {
             var builder = new MeshHostBuilder(hostBuilder, new OrleansAddress());
+            ConfigureMeshWeaver(builder);
+            builder.Host.ConfigureServices(services =>
+            {
+                services.AddOrleansMeshServices();
+            });
+
+            return builder;
+        }
+
+        private static void ConfigureMeshWeaver(MeshBuilder builder)
+        {
             builder.ConfigureServices(services => services.AddSerializer(serializerBuilder =>
                 {
                     serializerBuilder.AddJsonSerializer(
@@ -30,18 +50,11 @@ namespace MeshWeaver.Connection.Orleans
                 .WithTypes(typeof(Article), typeof(StreamInfo))
                 .AddMeshTypes()
             );
-            builder.Host.ConfigureServices(services =>
-            {
-                services.AddOrleansMeshServices();
-            });
-
-            return builder;
         }
-        public static void AddOrleansMeshServices(this IServiceCollection services)
-        {
+
+        public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
             services
                 .AddSingleton<IRoutingService, OrleansRoutingService>()
                 .AddSingleton<IMeshCatalog, MeshCatalog>();
-        }
     }
 }
