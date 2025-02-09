@@ -116,7 +116,9 @@ internal class HierarchicalRouting
 
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
-        parentHub.DeliverMessage(delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address)));
+        if (parentHub.Address is not MeshAddress)
+            delivery = delivery.WithSender(new HostedAddress(delivery.Sender, parentHub.Address));
+        parentHub.DeliverMessage(delivery);
         return delivery.Forwarded();
     }
 }

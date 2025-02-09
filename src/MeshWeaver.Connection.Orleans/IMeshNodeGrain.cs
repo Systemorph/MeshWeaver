@@ -6,6 +6,7 @@ namespace MeshWeaver.Connection.Orleans
     {
         public Task<MeshNode> Get();
         public Task Update(MeshNode entry);
+        Task Delete();
     }
 }
 

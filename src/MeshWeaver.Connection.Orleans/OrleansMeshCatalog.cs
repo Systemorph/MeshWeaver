@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Connection.Orleans
 {
-    public class MeshCatalog(IMessageHub hub, ILogger<MeshCatalog> logger, MeshConfiguration meshConfiguration) 
+    public class OrleansMeshCatalog(IMessageHub hub, ILogger<OrleansMeshCatalog> logger, MeshConfiguration meshConfiguration) 
         : MeshCatalogBase(meshConfiguration)
     {
         private readonly IGrainFactory grainFactory = hub.ServiceProvider.GetRequiredService<IGrainFactory>();

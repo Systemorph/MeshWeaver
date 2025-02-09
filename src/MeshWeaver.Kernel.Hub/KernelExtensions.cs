@@ -10,7 +10,7 @@ public static class KernelExtensions
             .ConfigureMesh(mesh => mesh
             .AddMeshNodeFactory((addressType, addressId) =>
                 addressType == KernelAddress.TypeName
-                    ? new(addressType, addressId, "Kernel", typeof(KernelExtensions).FullName)
+                    ? new(addressType, addressId, $"{addressType}/{addressId}")
                     {
                         AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
                         HubConfiguration = ConfigureHub

@@ -21,8 +21,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     public static readonly MeshNode Northwind = new(
         ApplicationAddress.TypeName,
         nameof(Northwind),
-        nameof(Northwind),
-        typeof(NorthwindApplicationAttribute).FullName
+        nameof(Northwind)
     )
     {
         HubConfiguration = NorthwindApplicationExtensions.ConfigureApplication,

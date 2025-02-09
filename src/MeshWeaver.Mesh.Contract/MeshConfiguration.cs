@@ -1,37 +1,45 @@
-﻿using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
 
 namespace MeshWeaver.Mesh;
 
-public record MeshConfiguration
+public class MeshConfiguration
 {
-    internal ImmutableList<string> InstallAtStartup { get; init; } = ImmutableList<string>.Empty;
+    internal List<string> InstallAtStartup { get; } = new();
 
     public MeshConfiguration InstallAssemblies(params string[] assemblyLocations)
-        => this with { InstallAtStartup = InstallAtStartup.AddRange(assemblyLocations) };
+    {
+        InstallAtStartup.AddRange(assemblyLocations);
+        return this;
+    }
 
 
-    internal ImmutableList<Func<string, string, MeshNode>> MeshNodeFactories { get; init; } = [];
+    internal List<Func<string, string, MeshNode>> MeshNodeFactories { get;  } = [];
 
     public MeshConfiguration AddMeshNodeFactory(Func<string, string, MeshNode> meshNodeFactory)
-        => this with { MeshNodeFactories = MeshNodeFactories.Add(meshNodeFactory) };
+    {
+        MeshNodeFactories.Add(meshNodeFactory);
+        return this;
+    }
 
-    internal ImmutableDictionary<(string AddressType, string AddressId), MeshNode> Nodes { get; init; } = ImmutableDictionary<(string AddressType, string AddressId), MeshNode>.Empty;
+    internal Dictionary<(string AddressType, string AddressId), MeshNode> Nodes { get; } = new();
+
     public MeshConfiguration AddMeshNodes(params IEnumerable<MeshNode> nodes)
-        => this with
+    {
+        foreach (var node in nodes)
         {
-            Nodes = Nodes.SetItems(nodes
-                .Select(n =>
-                    new KeyValuePair<(string AddressType, string AddressId), MeshNode>((n.AddressType, n.AddressId), n)
-                )
-            )
-        };
-    internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
+            Nodes[(node.AddressType, node.AddressId)] = node;
+        }
+
+        return this;
+    }
+    internal Dictionary<Type, object> Properties { get; } = new();
     public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
-    public MeshConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
-
-
+    public MeshConfiguration Set<T>(T value)
+    {
+        Properties[typeof(T)] = value;
+        return this; 
+    }
 }

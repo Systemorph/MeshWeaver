@@ -15,7 +15,11 @@ public interface IMeshCatalog
 
 
 
-public record StreamInfo(string AddressType, string Id, string StreamProvider, string Namespace);
+public record StreamInfo(
+    string AddressType, 
+    string Id, 
+    string StreamProvider, 
+    string Namespace);
 
 public record StorageInfo(
     string Id, 

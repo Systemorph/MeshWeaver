@@ -31,4 +31,9 @@ public class MeshNodeGrain(ILogger<MeshNode> logger) : Grain<MeshNode>, IMeshNod
         await WriteStateAsync();
     }
 
+    public async Task Delete()
+    {
+        await ClearStateAsync();
+        State = null;
+    }
 }

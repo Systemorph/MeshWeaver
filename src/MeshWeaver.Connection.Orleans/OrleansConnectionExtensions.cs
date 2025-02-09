@@ -22,7 +22,7 @@ namespace MeshWeaver.Connection.Orleans
         }
         internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
         {
-            var builder = new MeshHostBuilder(hostBuilder, new OrleansAddress());
+            var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
             ConfigureMeshWeaver(builder);
             builder.Host.ConfigureServices(services =>
             {
@@ -55,6 +55,6 @@ namespace MeshWeaver.Connection.Orleans
         public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
             services
                 .AddSingleton<IRoutingService, OrleansRoutingService>()
-                .AddSingleton<IMeshCatalog, MeshCatalog>();
+                .AddSingleton<IMeshCatalog, OrleansMeshCatalog>();
     }
 }
