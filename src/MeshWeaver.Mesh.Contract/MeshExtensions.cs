@@ -22,7 +22,7 @@ public static class MeshExtensions
     public static MessageHubConfiguration AddMeshTypes(this MessageHubConfiguration config)
     {
         MeshAddressTypes.ForEach(kvp => config.TypeRegistry.WithType(kvp.Value, kvp.Key));
-        config.TypeRegistry.WithTypes(typeof(PingRequest), typeof(PingResponse));
+        config.TypeRegistry.WithTypes(typeof(PingRequest), typeof(PingResponse), typeof(MeshNode));
         return config;
     }
 

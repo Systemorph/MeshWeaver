@@ -1,75 +1,47 @@
-﻿using MeshWeaver.Connection.Orleans;
+﻿using MeshWeaver.Articles;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Hosting;
-using Orleans.Runtime;
-using Orleans.Serialization;
 
 namespace MeshWeaver.Hosting.Orleans;
 
-public static  class OrleansServerRegistryExtensions
+public static class OrleansServerRegistryExtensions
 {
-    public static TBuilder UseOrleansMeshServer<TBuilder>(this TBuilder builder, 
+    public static MeshHostBuilder UseOrleansMeshServer(this IHostBuilder hostBuilder,
         Action<ISiloBuilder> siloConfiguration = null)
-    where TBuilder: MeshHostApplicationBuilder
     {
-        
+        var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
+        return meshBuilder.UseOrleansMeshServer(siloConfiguration);
+    }
+
+    internal static TBuilder UseOrleansMeshServer<TBuilder>(this TBuilder builder,
+        Action<ISiloBuilder> siloConfiguration = null)
+        where TBuilder : MeshHostBuilder
+    {
+
         builder.Host.UseOrleans(silo =>
         {
-            silo.UseMeshWeaverServer(siloConfiguration);
+
+            silo.ConfigureMeshWeaverServer(siloConfiguration);
         });
         builder.ConfigureHub(conf => conf
             .WithTypes(typeof(StreamActivity))
             .AddMeshTypes()
         );
-        builder.Host.Services.AddOrleansMeshServices();
 
         return builder;
     }
 
-    public static MeshBuilder UseOrleansMeshServer(
-        this ISiloBuilder silo,
-        Func<MeshBuilder, MeshBuilder> meshConfiguration = null)
-    {
-        var builder = new MeshBuilder(c =>
-        {
-            c.Invoke(silo.Services);
-        }, new OrleansAddress());
-
-        if(meshConfiguration is not null)
-            builder = meshConfiguration(builder);
-
-        silo.UseMeshWeaverServer();
-
-        silo.Services.AddOrleansMeshServices();
-        builder.ConfigureHub(conf => conf
-            .WithTypes(typeof(StreamActivity))
-            .AddMeshTypes()
-        );
-        silo.Services.AddOrleansMeshServices();
-
-        return builder;
-    }
-
-    internal static void UseMeshWeaverServer(this ISiloBuilder silo, Action<ISiloBuilder> siloConfiguration = null)
+    public static void ConfigureMeshWeaverServer(this ISiloBuilder silo, Action<ISiloBuilder> siloConfiguration = null)
     {
         silo.AddMemoryStreams(StreamProviders.Memory)
             .AddMemoryStreams(StreamProviders.Mesh)
             .AddMemoryGrainStorage("PubSubStore");
 
-        silo.Services.AddSerializer(serializerBuilder =>
-        {
-
-            serializerBuilder.AddJsonSerializer(
-                type => true,
-                type => true,
-                ob =>
-                    ob.PostConfigure<IMessageHub>(
-                        (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
-                    )
-            );
-        });
 
     }
-}
 
+
+}

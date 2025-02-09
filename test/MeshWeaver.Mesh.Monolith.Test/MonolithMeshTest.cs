@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     [Fact]
-    public async Task BasicMessage()
+    public async Task PingPong()
     {
         var client = GetClient();
         var response = await client
