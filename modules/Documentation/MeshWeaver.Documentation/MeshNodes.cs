@@ -21,8 +21,7 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
     public static readonly MeshNode Documentation = new(
         ApplicationAddress.TypeName,
         nameof(Documentation),
-        nameof(Documentation),
-        typeof(DocumentationApplicationAttribute).FullName
+        nameof(Documentation)
     )
     {
         HubConfiguration = DocumentationViewModels.AddDocumentation

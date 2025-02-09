@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Orleans
             logger.LogDebug("Delivering Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);
             var target = delivery.Target;
             var (targetType,targetId) = MessageHubExtensions.GetAddressTypeAndId(target);
-            var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>($"{targetType}/{targetId}").GetStreamInfo();
+            var streamInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>($"{targetType}/{targetId}").GetMeshNode();
             if (streamInfo.StreamProvider is StreamProviders.Mesh)
             {
                 logger.LogDebug("Forwarding Message {Message} from {Sender} to {Target}", delivery.Message, delivery.Sender, delivery.Target);

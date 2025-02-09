@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,7 +16,6 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(output)
 {
     protected TestCluster Cluster { get; private set; }
-
 
     public override async Task InitializeAsync()
     {
@@ -35,8 +35,13 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 
 
 
-    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null) =>
-        ClientMesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+    protected async Task<IMessageHub> GetClientAsync(Func<MessageHubConfiguration, MessageHubConfiguration> config = null)
+    {
+        var client = ClientMesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
+            .RegisterStreamAsync(client.Address, client.DeliverMessage);
+        return client;
+    }
 
 
     protected IMessageHub ClientMesh => Cluster.Client.ServiceProvider.GetRequiredService<IMessageHub>();
@@ -85,7 +90,7 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
 
     public void Configure(IHostBuilder hostBuilder)
     {
-        hostBuilder.UseOrleansMeshServer();
+        ConfigureMesh(hostBuilder.UseOrleansMeshServer());
     }
 }
 

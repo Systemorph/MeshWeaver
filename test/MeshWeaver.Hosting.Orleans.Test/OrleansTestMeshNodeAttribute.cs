@@ -18,8 +18,7 @@ public class OrleansTestMeshNodeAttribute : MeshNodeAttribute
     public static readonly MeshNode OrleansTest = new(
         ApplicationAddress.TypeName,
         nameof(OrleansTest),
-        nameof(OrleansTest),
-        typeof(OrleansTestMeshNodeAttribute).FullName
+        nameof(OrleansTest)
     )
     {
         HubConfiguration = OrleansTestMeshExtensions.ConfigureOrleansTestApplication,
