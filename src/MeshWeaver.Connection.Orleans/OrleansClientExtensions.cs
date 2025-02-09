@@ -1,21 +1,25 @@
 ﻿using System.Runtime.CompilerServices;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Orleans.Serialization;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
 namespace MeshWeaver.Connection.Orleans;
 
+
+
 public static class OrleansClientExtensions
 {
 
-    public static TBuilder UseOrleansMeshClient<TBuilder>(this TBuilder builder,
+    public static MeshHostBuilder UseOrleansMeshClient(this IHostBuilder hostBuilder,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
-        where TBuilder : MeshHostApplicationBuilder
+    {
+        var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
+        return meshBuilder.UseOrleansMeshClient(orleansConfiguration);
+    }
+    internal static TBuilder UseOrleansMeshClient<TBuilder>(this TBuilder builder,
+        Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
+        where TBuilder : MeshHostBuilder
     {
         builder.Host
             .UseOrleansClient(client =>
@@ -23,32 +27,13 @@ public static class OrleansClientExtensions
                 client.AddMemoryStreams(StreamProviders.Memory);
                 client.AddMemoryStreams(StreamProviders.Mesh);
 
-                client.Services.AddSerializer(serializerBuilder =>
-                {
-
-                    serializerBuilder.AddJsonSerializer(
-                        _ => true,
-                        _ => true,
-                        ob =>
-                            ob.PostConfigure<IMessageHub>(
-                                (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
-                            )
-                    );
-                });
                 if (orleansConfiguration != null)
                     orleansConfiguration.Invoke(client);
             });
-        builder.Host.Services.AddOrleansMeshServices();
         return builder;
     }
 
 
-    public static void AddOrleansMeshServices(this IServiceCollection services)
-    {
-        services
-                .AddSingleton<IRoutingService, OrleansRoutingService>()
-                .AddSingleton<IMeshCatalog, MeshCatalog>();
-    }
 
 
 
