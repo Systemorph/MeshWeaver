@@ -14,12 +14,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output)
 {
     [Fact]
-    public async Task BasicMessage()
+    public async Task PingPong()
     {
         var client = await GetClientAsync();
         var response = await client
             .AwaitResponse(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)
-                //, new CancellationTokenSource(10.Seconds()).Token
+                , new CancellationTokenSource(20.Seconds()).Token
             );
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
