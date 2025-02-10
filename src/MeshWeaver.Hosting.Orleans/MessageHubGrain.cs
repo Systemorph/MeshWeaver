@@ -58,11 +58,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Could not load assembly {node.AssemblyLocation}."
             );
 
-        var att = assembly.GetCustomAttributes<MeshNodeAttribute>()
+        node = assembly.GetCustomAttributes<MeshNodeAttribute>()
             .SelectMany(x => x.Nodes)
             .FirstOrDefault(x => x.Key == node.Key);
 
-        if(node.HubConfiguration is null)
+        if(node?.HubConfiguration is null)
             throw new ArgumentException(
                 $"No hub configuration is specified for {node.Key}."
             );
@@ -112,8 +112,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             loadContext.Unload();
         loadContext = null;
         State = State with { IsDeactivated = true };
-        await WriteStateAsync();
-        await base.OnDeactivateAsync(reason, cancellationToken);
+        try
+        {
+            await WriteStateAsync();
+            await base.OnDeactivateAsync(reason, cancellationToken);
+        }
+        catch(Exception e)
+        {
+            logger.LogError(e, "Error during deactivation of {address}", this.GetPrimaryKeyString());
+            throw;
+        }
     }
 }
 

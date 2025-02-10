@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Orleans
             var info = new MeshNode(address.Type, address.Id, address.ToString())
             {
                 StreamProvider = StreamProviders.Mesh,
-                Namespace = IRoutingService.MessageIn
+                Namespace = address
             };
             await GetMeshNodeGrain(address)
                 .Update(info);
