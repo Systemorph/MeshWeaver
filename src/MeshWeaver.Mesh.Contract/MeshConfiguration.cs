@@ -1,4 +1,5 @@
 ﻿using System.Runtime.CompilerServices;
+using MeshWeaver.Messaging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
@@ -16,21 +17,21 @@ public class MeshConfiguration
     }
 
 
-    internal List<Func<string, string, MeshNode>> MeshNodeFactories { get;  } = [];
+    internal List<Func<Address, MeshNode>> MeshNodeFactories { get;  } = [];
 
-    public MeshConfiguration AddMeshNodeFactory(Func<string, string, MeshNode> meshNodeFactory)
+    public MeshConfiguration AddMeshNodeFactory(Func<Address, MeshNode> meshNodeFactory)
     {
         MeshNodeFactories.Add(meshNodeFactory);
         return this;
     }
 
-    internal Dictionary<(string AddressType, string AddressId), MeshNode> Nodes { get; } = new();
+    internal Dictionary<string, MeshNode> Nodes { get; } = new();
 
     public MeshConfiguration AddMeshNodes(params IEnumerable<MeshNode> nodes)
     {
         foreach (var node in nodes)
         {
-            Nodes[(node.AddressType, node.AddressId)] = node;
+            Nodes[node.Key] = node;
         }
 
         return this;

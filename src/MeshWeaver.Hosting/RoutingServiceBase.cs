@@ -31,7 +31,7 @@ namespace MeshWeaver.Hosting
 
         public abstract Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
 
-        protected abstract Task UnsubscribeAsync(Address address);
+        public abstract Task UnregisterStreamAsync(Address address);
 
 
 
@@ -92,7 +92,7 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
-            var node = await MeshCatalog.GetNodeAsync(address.Type, address.Id);
+            var node = await MeshCatalog.GetNodeAsync(address);
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, address,cancellationToken);

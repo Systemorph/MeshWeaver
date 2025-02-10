@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Disposables;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -7,12 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Streams;
 
-namespace MeshWeaver.Connection.Orleans
+namespace MeshWeaver.Hosting.Orleans
 {
     public class OrleansRoutingService(IGrainFactory grainFactory, IMessageHub hub, ILogger<OrleansRoutingService> logger) : RoutingServiceBase(hub)
     {
 
-        protected override async Task UnsubscribeAsync(Address address)
+        public override async Task UnregisterStreamAsync(Address address)
         {
             await GetMeshNodeGrain(address)
                 .Delete();
@@ -55,7 +55,7 @@ namespace MeshWeaver.Connection.Orleans
 
             return new AnonymousAsyncDisposable(async () =>
             {
-                await UnsubscribeAsync(address);
+                await UnregisterStreamAsync(address);
                 await subscription.UnsubscribeAsync();
             });
 
@@ -72,7 +72,7 @@ namespace MeshWeaver.Connection.Orleans
 
             // TODO V10: Consider caching locally. (09.02.2025, Roland Bürgi)
             var meshNode =
-                await MeshCatalog.GetNodeAsync(address.Type, address.Id);
+                await MeshCatalog.GetNodeAsync(address);
             if (meshNode is null)
                 return delivery.Failed($"No mesh node found for {address.ToString()}");
             if (string.IsNullOrWhiteSpace(meshNode.StreamProvider))

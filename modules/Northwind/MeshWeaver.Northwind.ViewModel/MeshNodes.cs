@@ -18,12 +18,9 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     /// <summary>
     /// Main definition of the mesh node.
     /// </summary>
-    public static readonly MeshNode Northwind = new(
-        ApplicationAddress.TypeName,
+    public MeshNode Northwind => CreateFromHubConfiguration(
+        new ApplicationAddress(nameof(Northwind)),
         nameof(Northwind),
-        nameof(Northwind)
-    )
-    {
-        HubConfiguration = NorthwindApplicationExtensions.ConfigureApplication,
-    };
+        NorthwindApplicationExtensions.ConfigureApplication
+    );
 }
