@@ -8,9 +8,9 @@ namespace MeshWeaver.Hosting
 {
     public abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
     {
-        private readonly ITypeRegistry typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
-        private readonly IMeshCatalog meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        protected readonly IMeshCatalog MeshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
         {
             try
@@ -31,7 +31,7 @@ namespace MeshWeaver.Hosting
 
         public abstract Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback);
 
-        protected abstract Task UnsubscribeAsync(Address address);
+        public abstract Task UnregisterStreamAsync(Address address);
 
 
 
@@ -48,6 +48,7 @@ namespace MeshWeaver.Hosting
                 Mesh.DeliverMessage(delivery);
                 return delivery.Forwarded(Mesh.Address);
             }
+
             if (delivery.Target is HostedAddress { Host: MeshAddress } hosted)
                 delivery = delivery.WithTarget(hosted.Address);
 
@@ -80,7 +81,7 @@ namespace MeshWeaver.Hosting
             {
                 RoutingType.Shared => $"{address}",
                 RoutingType.Individual =>
-                    $"{address}/{typeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}",
+                    $"{address}/{TypeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}",
                 _ => throw new NotSupportedException($"The routing type {node.RoutingType} is currently not supported.")
             };
         }
@@ -91,8 +92,7 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
         )
         {
-            var node = await meshCatalog.GetNodeAsync(address.Type, address.Id);
-
+            var node = await MeshCatalog.GetNodeAsync(address);
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))
                 return await RouteToKernel(delivery, node, address,cancellationToken);

@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     )
                 )
             );
-        public static readonly MeshNode Node = new(ApplicationAddress.TypeName, nameof(Test), nameof(Test), typeof(TestHubExtensions).Assembly.FullName)
+        public static readonly MeshNode Node = new(ApplicationAddress.TypeName, nameof(Test), nameof(Test))
         {
             StartupScript = $"""
                              #r "{typeof(TestHubExtensions).Namespace}"

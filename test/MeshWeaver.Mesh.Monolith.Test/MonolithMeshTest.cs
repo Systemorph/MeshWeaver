@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     [Fact]
-    public async Task BasicMessage()
+    public async Task PingPong()
     {
         var client = GetClient();
         var response = await client
@@ -52,11 +52,11 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .ConfigureMesh(mesh => mesh
-                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "HubFactory", "HubFactory", "host")
+                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "HubFactory", "HubFactory")
                 {
                     HubConfiguration = x => x
                 })
-                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "Kernel", "Kernel", "host")
+                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "Kernel", "Kernel")
                 {
                     StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(new {typeof(ApplicationAddress).FullName}(""Kernel""))"
                 })

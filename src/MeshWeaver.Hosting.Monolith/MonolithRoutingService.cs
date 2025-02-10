@@ -10,7 +10,7 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    protected override Task UnsubscribeAsync(Address address)
+    public override Task UnregisterStreamAsync(Address address)
     {
         streams.TryRemove(address, out _);
         return Task.FromResult<Address>(null);
@@ -51,7 +51,7 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
         if (node.HubConfiguration is not null)
         {
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
-            hub.RegisterForDisposal((_, _) => UnsubscribeAsync(hub.Address));
+            hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
             return hub;
         }
         return null;

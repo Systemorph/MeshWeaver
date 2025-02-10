@@ -55,8 +55,8 @@ public static class ArticleExtensions
    
 
     private static MeshConfiguration AddMeshNodeFactory(this MeshConfiguration config)
-        => config.AddMeshNodeFactory((type, id) => type == ArticlesAddress.TypeName
-            ? new MeshNode(type, id, "Articles", "Articles") { HubConfiguration = ConfigureArticleHub }
+        => config.AddMeshNodeFactory(address => address.Type == ArticlesAddress.TypeName
+            ? new MeshNode(address.Type, address.Id, address) { HubConfiguration = ConfigureArticleHub }
             : null
         );
 

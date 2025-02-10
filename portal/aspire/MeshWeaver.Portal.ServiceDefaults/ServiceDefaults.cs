@@ -15,8 +15,9 @@ namespace MeshWeaver.Portal.ServiceDefaults
     // To learn more about using this project, see https://aka.ms/dotnet/aspire/service-defaults
     public static class ServiceDefaults
     {
-        public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
+        public static IHostApplicationBuilder AddAspireServiceDefaults(this IHostApplicationBuilder builder)
         {
+            builder.ConfigureLogging();
             builder.ConfigureOpenTelemetry();
 
             builder.AddDefaultHealthChecks();
@@ -41,21 +42,43 @@ namespace MeshWeaver.Portal.ServiceDefaults
             return builder;
         }
 
-        public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
+        public static IHostApplicationBuilder ConfigureLogging(this IHostApplicationBuilder builder)
         {
-            builder.Logging.AddOpenTelemetry(logging =>
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+
+            var appInsightsConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
+            if (!string.IsNullOrEmpty(appInsightsConnectionString))
             {
-                logging.IncludeFormattedMessage = true;
-                logging.IncludeScopes = true;
+                builder.Logging.AddApplicationInsights(config =>
+                {
+                    config.ConnectionString = appInsightsConnectionString;
+                }, options =>
+                {
+                    options.TrackExceptionsAsExceptionTelemetry = true;
+                    options.IncludeScopes = true;
+                    options.FlushOnDispose = true;
+                });
+            }
+
+            builder.Logging.AddOpenTelemetry(options =>
+            {
+                options.IncludeFormattedMessage = true;
+                options.IncludeScopes = true;
             });
 
+            return builder;
+        }
+
+        public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
+        {
             builder.Services.AddOpenTelemetry()
                 .WithMetrics(metrics =>
                 {
                     metrics.AddAspNetCoreInstrumentation()
                         .AddHttpClientInstrumentation()
                         .AddRuntimeInstrumentation()
-                        .AddMeter("Microsoft.Orleans"); 
+                        .AddMeter("Microsoft.Orleans");
                 })
                 .WithTracing(tracing =>
                 {
@@ -95,7 +118,7 @@ namespace MeshWeaver.Portal.ServiceDefaults
         {
             builder.Services.AddHealthChecks()
                 // Add a default liveness check to ensure app is responsive
-                .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+                .AddCheck("self", () => HealthCheckResult.Healthy(), new[] { "live" });
 
             return builder;
         }

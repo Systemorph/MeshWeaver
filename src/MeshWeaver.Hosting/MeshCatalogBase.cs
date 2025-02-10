@@ -1,38 +1,62 @@
 ﻿using System.Reflection;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace MeshWeaver.Hosting;
 
-public abstract class MeshCatalogBase(MeshConfiguration configuration) : IMeshCatalog
+public abstract class MeshCatalogBase : IMeshCatalog
 {
-    public MeshConfiguration Configuration { get; } = configuration;
+    public MeshConfiguration Configuration { get; }
+    private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
+    private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
+    private readonly IMessageHub persistence;
 
-
-    public async Task<MeshNode> GetNodeAsync(string addressType, string id)
-        => 
-            Configuration.Nodes.GetValueOrDefault((addressType, id))
-            ??
-            Configuration.MeshNodeFactories
-                .Select(f => f.Invoke(addressType, id))
-                .FirstOrDefault(x => x != null)
-            ?? 
-            await LoadMeshNode(addressType, id)
-    ;
-
-    protected abstract Task<MeshNode> LoadMeshNode(string addressType, string id);
-
-    public abstract Task UpdateAsync(MeshNode node);
-
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration)
     {
+        Configuration = configuration;
+        persistence = hub.GetHostedHub(new PersistenceAddress());
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
             var assembly = Assembly.LoadFrom(assemblyLocation);
             foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().SelectMany(a => a.Nodes))
-                await InitializeNodeAsync(node);
+            {
+                UpdateNode(node);
+            }
         }
+
     }
 
-    protected abstract Task InitializeNodeAsync(MeshNode node);
+    public async Task<MeshNode> GetNodeAsync(Address address)
+    {
+        if (cache.TryGetValue(address.ToString(), out var ret))
+            return (MeshNode)ret;
+        var node = Configuration.Nodes.GetValueOrDefault(address.ToString())
+               ??
+               Configuration.MeshNodeFactories
+                   .Select(f => f.Invoke(address))
+                   .FirstOrDefault(x => x != null)
+               ??
+               await LoadMeshNode(address);
+        if (node is null)
+            return null;
+        cache.Set(node.Key, node, cacheOptions);
+        return UpdateNode(node);
+    }
+
+    private MeshNode UpdateNode(MeshNode node)
+    {
+        cache.Set(node.Key, node, cacheOptions);
+        persistence.InvokeAsync(_ => UpdateNodeAsync(node));
+        return node;
+    }
+
+    protected abstract Task<MeshNode> LoadMeshNode(Address address);
+
+
+    public abstract Task UpdateAsync(MeshNode node);
+
+
+    protected abstract Task UpdateNodeAsync(MeshNode node);
 }

@@ -30,7 +30,7 @@ public static class ServiceProviderExtensions
         {
             var lifetimeScope = parent.GetService<ILifetimeScope>();
             if (lifetimeScope == null)
-                throw new NotSupportedException("Open Smc has not been properly configured.");
+                throw new NotSupportedException("Mesh Weaver has not been properly configured.");
             else if (tag != null)
                 ret = new AutofacServiceProvider(
                     lifetimeScope.BeginLifetimeScope(tag, c => c.Populate(services))

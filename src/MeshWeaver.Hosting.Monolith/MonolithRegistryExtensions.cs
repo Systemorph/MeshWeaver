@@ -12,11 +12,10 @@ public static class MonolithRegistryExtensions
             .AddSingleton<IMeshCatalog, MonolithMeshCatalog>()
             .AddSingleton<IRoutingService, MonolithRoutingService>()
         );
-        return builder.ConfigureHub(conf => 
+        return builder.ConfigureHub(conf =>
             conf
                 .AddMeshTypes()
-                .WithInitialization((hub,ct) =>
-                    hub.ServiceProvider.GetRequiredService<IMeshCatalog>().InitializeAsync(ct)));
+            );
     }
 
 

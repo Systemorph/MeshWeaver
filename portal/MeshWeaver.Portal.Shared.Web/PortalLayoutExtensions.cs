@@ -3,7 +3,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Portal.Shared;
+namespace MeshWeaver.Portal.Shared.Web;
 
 public static class PortalLayoutExtensions
 {

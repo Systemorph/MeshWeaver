@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFrameworks>net9.0</TargetFrameworks>
+    </PropertyGroup>
+
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\modules\Documentation\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>
