@@ -53,7 +53,8 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
     {
         if (!typeRegistry.TryGetType(addressType, out var concreteType))
         {
-            throw new JsonException($"Unknown address type: {addressType}");
+            return new Address(addressType, id);
+            //throw new JsonException($"Unknown address type: {addressType}");
         }
 
         var json = $"{{\"Id\":\"{id}\"}}";

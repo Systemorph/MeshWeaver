@@ -6,6 +6,8 @@ using System.Threading;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Messaging;
+using MeshWeaver.Connection.Orleans;
+using Orleans;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -16,7 +18,7 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output
     {
         var client = await GetClientAsync();
         var response = await client
-            .AwaitResponse(new PingRequest(), o => o.WithTarget(new ApplicationAddress(OrleansTestMeshNodeAttribute.OrleansTest.Name))
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(OrleansTestMeshNodeAttribute.Address)
                 //, new CancellationTokenSource(10.Seconds()).Token
             );
         response.Should().NotBeNull();

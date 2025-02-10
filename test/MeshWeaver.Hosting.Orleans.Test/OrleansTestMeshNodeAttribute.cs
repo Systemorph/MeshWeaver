@@ -12,16 +12,16 @@ public class OrleansTestMeshNodeAttribute : MeshNodeAttribute
     /// </summary>
     public override IEnumerable<MeshNode> Nodes
         => [OrleansTest];
+
     /// <summary>
     /// Main definition of the mesh node.
     /// </summary>
-    public static readonly MeshNode OrleansTest = new(
-        ApplicationAddress.TypeName,
+    public MeshNode OrleansTest => CreateFromHubConfiguration(
+        Address,
         nameof(OrleansTest),
-        nameof(OrleansTest)
-    )
-    {
-        HubConfiguration = OrleansTestMeshExtensions.ConfigureOrleansTestApplication,
-    };
+        OrleansTestMeshExtensions.ConfigureOrleansTestApplication
+    );
 
+    public static readonly ApplicationAddress Address = 
+        new ApplicationAddress(nameof(OrleansTest));
 }

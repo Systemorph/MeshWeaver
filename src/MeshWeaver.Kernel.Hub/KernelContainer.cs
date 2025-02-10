@@ -107,9 +107,8 @@ public class KernelContainer : IDisposable
                 return request.Processed();
             }
 
-            var (addressType, addressId) = MessageHubExtensions.GetAddressTypeAndId(hosted.Address);
 
-            var meshNode = await meshCatalog.GetNodeAsync(addressType, addressId);
+            var meshNode = await meshCatalog.GetNodeAsync(hosted.Address);
             if (meshNode == null)
                 return DeliveryFailure(kernelHub, request, $"No mesh node was found for {hosted.Address}");
 

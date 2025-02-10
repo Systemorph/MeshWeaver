@@ -1,30 +1,31 @@
 ﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting.Orleans;
 
 public static class OrleansServerRegistryExtensions
 {
-    public static MeshHostApplicationBuilder UseOrleansMeshServer(this HostApplicationBuilder hostBuilder,
-        Address address,
-        Action<ISiloBuilder> siloConfiguration = null)
+    public static MeshHostApplicationBuilder UseOrleansMeshServer(
+        this HostApplicationBuilder hostBuilder,
+        Address address)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
         meshBuilder.Host.UseOrleans(silo =>
         {
-            silo.ConfigureMeshWeaverServer(siloConfiguration);
+            silo.ConfigureMeshWeaverServer();
         });
         return meshBuilder.UseOrleansMeshServer();
     }
-    public static MeshHostBuilder UseOrleansMeshServer(this IHostBuilder hostBuilder,
-        Action<ISiloBuilder> siloConfiguration = null)
+    public static MeshHostBuilder UseOrleansMeshServer(this IHostBuilder hostBuilder)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
         meshBuilder.Host.UseOrleans(silo =>
         {
-            silo.ConfigureMeshWeaverServer(siloConfiguration);
+            silo.ConfigureMeshWeaverServer();
         });
         return meshBuilder.UseOrleansMeshServer();
     }
@@ -41,7 +42,7 @@ public static class OrleansServerRegistryExtensions
         return builder;
     }
 
-    public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo, Action<ISiloBuilder> siloConfiguration = null)
+    public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
         return silo.AddMemoryStreams(StreamProviders.Memory)
             .AddMemoryStreams(StreamProviders.Mesh)
@@ -49,6 +50,32 @@ public static class OrleansServerRegistryExtensions
 
 
     }
+
+    internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address)
+    {
+        var builder = new MeshHostApplicationBuilder(hostBuilder, address);
+        builder.ConfigureMeshWeaver();
+        builder.ConfigureServices(services =>
+            services.AddOrleansMeshServices());
+
+        return builder;
+    }
+    internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
+    {
+        var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
+        builder.ConfigureMeshWeaver();
+        builder.Host.ConfigureServices(services =>
+        {
+            services.AddOrleansMeshServices();
+        });
+
+        return builder;
+    }
+
+    public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
+        services
+            .AddSingleton<IRoutingService, OrleansRoutingService>()
+            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>();
 
 
 }
