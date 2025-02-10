@@ -54,7 +54,7 @@ public static class SerializationExtensions
         var serializationOptions = serializationConfig.Options;
         var deserializationOptions = new JsonSerializerOptions(serializationOptions);
         var addressTypes = hub.TypeRegistry.Types.Where(x => x.Value.Type.IsAssignableTo(typeof(Address))).Select(x => new KeyValuePair<string, Type>(x.Key, x.Value.Type)).ToDictionary();
-        var addressConverter = new AddressConverter(addressTypes);
+        var addressConverter = new AddressConverter(hub.TypeRegistry);
         serializationOptions.Converters.Add(addressConverter);
         deserializationOptions.Converters.Add(addressConverter);
 

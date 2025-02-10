@@ -1,9 +1,10 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
 
-public class AddressConverter(Dictionary<string, Type> addressTypes) : JsonConverter<Address>
+public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Address>
 {
     public override Address Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
@@ -50,13 +51,14 @@ public class AddressConverter(Dictionary<string, Type> addressTypes) : JsonConve
 
     private Address ParseAddress(string addressType, string id)
     {
-        if (!addressTypes.TryGetValue(addressType, out var concreteType))
+        if (!typeRegistry.TryGetType(addressType, out var concreteType))
         {
-            throw new JsonException($"Unknown address type: {addressType}");
+            return new Address(addressType, id);
+            //throw new JsonException($"Unknown address type: {addressType}");
         }
 
         var json = $"{{\"Id\":\"{id}\"}}";
-        var address = Activator.CreateInstance(concreteType, [id]);
+        var address = Activator.CreateInstance(concreteType.Type, [id]);
         return (Address)address;
     }
 

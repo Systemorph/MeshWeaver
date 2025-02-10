@@ -15,16 +15,13 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
     /// </summary>
     public override IEnumerable<MeshNode> Nodes
         => [Documentation];
+
     /// <summary>
     /// Main definition of the mesh node.
     /// </summary>
-    public static readonly MeshNode Documentation = new(
-        ApplicationAddress.TypeName,
+    public MeshNode Documentation => CreateFromHubConfiguration(
+        new ApplicationAddress(nameof(Documentation)),
         nameof(Documentation),
-        nameof(Documentation),
-        typeof(DocumentationApplicationAttribute).FullName
-    )
-    {
-        HubConfiguration = DocumentationViewModels.AddDocumentation
-    };
+        DocumentationViewModels.AddDocumentation
+    );
 }

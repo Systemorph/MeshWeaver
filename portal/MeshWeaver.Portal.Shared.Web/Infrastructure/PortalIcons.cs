@@ -1,6 +1,6 @@
 ﻿using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Portal.Infrastructure;
+namespace MeshWeaver.Portal.Shared.Web.Infrastructure;
 
 internal static class PortalIcons
 {

@@ -6,7 +6,7 @@ namespace MeshWeaver.Hosting
 {
     public static class HostBuilderExtensions
     {
-        public static void UseMeshWeaver
+        public static MeshHostApplicationBuilder UseMeshWeaver
         (
             this IHostApplicationBuilder hostBuilder,
             Address address,
@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting
             var builder = new MeshHostApplicationBuilder(hostBuilder, address);
             if (configuration != null)
                 builder = (MeshHostApplicationBuilder)configuration.Invoke(builder);
-
+            return builder;
         }
 
     }

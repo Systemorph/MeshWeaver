@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -11,7 +12,7 @@ using Orleans.Streams;
 namespace MeshWeaver.Hosting.Orleans;
 
 [StorageProvider(ProviderName = StorageProviders.Activity)]
-public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub, IRoutingService routingService)
+public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain<StreamActivity>, IMessageHubGrain
 {
 
@@ -24,28 +25,50 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     {
 
         var streamId = this.GetPrimaryKeyString();
-        var startupInfo = await GrainFactory.GetGrain<IAddressRegistryGrain>(streamId).GetStartupInfo();
-        if (startupInfo == null || startupInfo is { AssemblyLocation: null })
-        {
-            logger.LogError("Cannot find info for {address}", this.GetPrimaryKeyString());
-            return;
-        }
 
+        var address = meshHub.GetAddress(streamId);
+        var node = await meshCatalog.GetNodeAsync(address);
 
-        var node = await meshCatalog.GetNodeAsync(startupInfo.Address.Type, startupInfo.Address.Id);
-        if (node.HubConfiguration is null)
+        if(node is null)
             throw new MeshException(
-                $"Cannot instantiate Node {node.Name}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
+                $"Cannot instantiate Node {streamId}. Neither a {nameof(MeshNode.StartupScript)} nor a {nameof(MeshNode.HubConfiguration)}  are specified.");
 
-        Hub = meshHub.GetHostedHub(startupInfo.Address, node.HubConfiguration);
-        var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
-        Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
+        Hub = node.InstantiationType switch
+        {
+            InstantiationType.HubConfiguration => InstantiateFromHubConfiguration(address, node),
+            _ => throw new NotSupportedException()
+        };
+
+        //var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
+        //Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
         State = State with { IsDeactivated = false };
 
         await this.WriteStateAsync();
     }
 
+    private IMessageHub InstantiateFromHubConfiguration(Address address, MeshNode node)
+    {
+        if (node.AssemblyLocation is null)
+            throw new ArgumentException(
+                $"Assembly location is not configured for node {node.Key}."
+            );
+        var assembly = Assembly.LoadFrom(node.AssemblyLocation);
+        if(assembly is null)
+            throw new ArgumentException(
+                $"Could not load assembly {node.AssemblyLocation}."
+            );
 
+        node = assembly.GetCustomAttributes<MeshNodeAttribute>()
+            .SelectMany(x => x.Nodes)
+            .FirstOrDefault(x => x.Key == node.Key);
+
+        if(node?.HubConfiguration is null)
+            throw new ArgumentException(
+                $"No hub configuration is specified for {node.Key}."
+            );
+
+        return meshHub.GetHostedHub(address, node.HubConfiguration);
+    }
 
 
     public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
@@ -89,8 +112,16 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             loadContext.Unload();
         loadContext = null;
         State = State with { IsDeactivated = true };
-        await WriteStateAsync();
-        await base.OnDeactivateAsync(reason, cancellationToken);
+        try
+        {
+            await WriteStateAsync();
+            await base.OnDeactivateAsync(reason, cancellationToken);
+        }
+        catch(Exception e)
+        {
+            logger.LogError(e, "Error during deactivation of {address}", this.GetPrimaryKeyString());
+            throw;
+        }
     }
 }
 

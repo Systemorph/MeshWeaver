@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Charting;
-using MeshWeaver.Charting.Models;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging;
 

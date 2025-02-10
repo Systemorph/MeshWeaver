@@ -37,4 +37,12 @@ public interface IRoutingService
     /// Stream Namespace for incoming messages
     /// </summary>
     public const string MessageIn = nameof(MessageIn);
+
+    /// <summary>
+    /// Unregisters the stream.
+    /// </summary>
+    /// <param name="address"></param>
+    /// <returns></returns>
+    Task UnregisterStreamAsync(Address address);
+
 }

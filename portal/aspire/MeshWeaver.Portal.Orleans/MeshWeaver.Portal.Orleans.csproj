@@ -25,6 +25,7 @@
     <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Orleans\MeshWeaver.Hosting.Orleans.csproj" />
+    <ProjectReference Include="..\..\MeshWeaver.Portal.Shared.Mesh\MeshWeaver.Portal.Shared.Mesh.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
     <ItemGroup>
