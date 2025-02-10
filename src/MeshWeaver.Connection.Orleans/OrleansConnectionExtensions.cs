@@ -8,6 +8,7 @@ using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
+using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
 
@@ -59,7 +60,7 @@ public static class OrleansConnectionExtensions
 
 }
 
-public class OrleansClientRoutingService(IGrainFactory grainFactory) : IRoutingService
+public class OrleansClientRoutingService(IGrainFactory grainFactory, IServiceProvider serviceProvider) : IRoutingService
 {
     private readonly string routingGrainId = Guid.NewGuid().AsString();
     public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
@@ -70,9 +71,16 @@ public class OrleansClientRoutingService(IGrainFactory grainFactory) : IRoutingS
 
     public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
     {
-        await grainFactory.GetGrain<IRoutingGrain>(routingGrainId).RegisterStream(address, StreamProviders.Mesh, MeshNode.MeshIn);
-
-        return new AnonymousAsyncDisposable(() => UnregisterStreamAsync(address));
+        await grainFactory.GetGrain<IRoutingGrain>(routingGrainId).RegisterStream(address, StreamProviders.Mesh, address.ToString());
+        var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(StreamProviders.Mesh)
+            .GetStream<IMessageDelivery>(address.ToString());
+        var subscription = await stream.SubscribeAsync((v, e) => 
+            callback.Invoke(v, CancellationToken.None));
+        return new AnonymousAsyncDisposable(async () =>
+        {
+            await subscription.UnsubscribeAsync();
+            await UnregisterStreamAsync(address);
+        });
     }
 
     public Task UnregisterStreamAsync(Address address)
