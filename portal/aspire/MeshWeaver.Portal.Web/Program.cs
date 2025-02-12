@@ -15,7 +15,7 @@ builder.AddKeyedRedisClient("orleans-redis");
 builder.ConfigurePortalApplication();
 builder.UseOrleansMeshClient(new UiAddress())
             .ConfigureWebPortalMesh()
-            .ConfigurePortalMesh()
+            .ConfigureArticles()
     ;
 
 
