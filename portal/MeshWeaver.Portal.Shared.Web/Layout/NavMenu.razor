@@ -4,15 +4,14 @@
 @inject IMessageHub Hub
 <div class="navmenu" >
     <LayoutArea 
-        Area="@NavMenuExtensions.NavMenu" 
-        Address="@LayoutHubAddress" 
-        ShowProgress="false"
+        Area="@NavMenuExtensions.NavMenu"
+                Address="@PortalAddress"
+                ShowProgress="false"
     />
 </div>
 
 @code
 {
     // TODO V10: This is a bit hacky but will guarantee that the hosted hub is instantiated. Still need a better concept. (28.01.2025, Roland Bürgi)
-    Address LayoutHubAddress
-        => Hub.GetHostedHub(Hub.Address.GetPortalLayoutAddress(), c => c.ConfigurePortalLayout()).Address;
+    [Parameter] public Address PortalAddress { get; set; }
 }

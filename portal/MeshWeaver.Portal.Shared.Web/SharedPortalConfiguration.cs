@@ -33,7 +33,6 @@ public static class SharedPortalConfiguration
                     .AddChartJs()
                     .AddAgGrid()
             )
-            .ConfigureHub(c => c.ConfigurePortalApplication())
             .AddSignalRHubs();
 
 

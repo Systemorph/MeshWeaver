@@ -12,11 +12,13 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistence;
+    private readonly IDisposable deferral;
 
     protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration)
     {
         Configuration = configuration;
         persistence = hub.GetHostedHub(new PersistenceAddress());
+        deferral = persistence.Defer(_ => true);
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
             var assembly = Assembly.LoadFrom(assemblyLocation);
@@ -56,6 +58,10 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
 
     public abstract Task UpdateAsync(MeshNode node);
+    public void StartSync()
+    {
+        deferral.Dispose();
+    }
 
 
     protected abstract Task UpdateNodeAsync(MeshNode node);
