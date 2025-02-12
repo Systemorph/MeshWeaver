@@ -7,6 +7,7 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
+using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -20,7 +21,8 @@ public static class SharedPortalConfiguration
     {
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
-
+        builder.Services.Configure<StylesConfiguration>(
+            builder.Configuration.GetSection("Styles"));
     }
 
     public static MeshBuilder ConfigureWebPortalMesh(this MeshBuilder builder) =>
