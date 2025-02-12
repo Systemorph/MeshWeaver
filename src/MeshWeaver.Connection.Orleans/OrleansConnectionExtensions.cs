@@ -40,7 +40,8 @@ public static class OrleansConnectionExtensions
 
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
-        builder.ConfigureServices(services => services.AddSerializer(serializerBuilder =>
+        builder.ConfigureServices(services => 
+            services.AddSerializer(serializerBuilder =>
             {
                 serializerBuilder.AddJsonSerializer(
                     _ => true,
@@ -51,6 +52,7 @@ public static class OrleansConnectionExtensions
                         )
                 );
             })
+            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>()
         );
         builder.ConfigureHub(conf => conf
             .WithTypes(typeof(Article), typeof(StreamInfo))
