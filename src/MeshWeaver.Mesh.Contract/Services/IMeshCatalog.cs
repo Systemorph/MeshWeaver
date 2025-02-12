@@ -11,6 +11,7 @@ public interface IMeshCatalog
     Task UpdateAsync(MeshNode node);
 
 
+    void StartSync();
 }
 
 

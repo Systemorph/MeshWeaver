@@ -75,7 +75,8 @@ public static class OrleansServerRegistryExtensions
     public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
         services
             .AddSingleton<IRoutingService, OrleansRoutingService>()
-            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>();
+            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>()
+            .AddSingleton<IHostedService, InitializationHostedService>();
 
 
 }

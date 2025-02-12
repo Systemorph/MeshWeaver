@@ -46,14 +46,3 @@ public static class OrleansClientExtensions
     }
 }
 
-//public class InitializationHostedService(IMessageHub hub, IMeshCatalog catalog, ILogger<InitializationHostedService> logger) : IHostedService
-//{
-//    public virtual async Task StartAsync(CancellationToken cancellationToken)
-//    {
-//        logger.LogInformation("Starting initialization of {Address}", hub.Address);
-//        await catalog.InitializeAsync(cancellationToken);
-//    }
-
-//    public virtual Task StopAsync(CancellationToken cancellationToken)
-//        => Task.CompletedTask;
-//}

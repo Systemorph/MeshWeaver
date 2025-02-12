@@ -1,24 +1,18 @@
-﻿using MeshWeaver.Layout;
+﻿using System;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
 public static class PortalLayoutExtensions
 {
-    internal static PortalApplicationAddress GetPortalLayoutAddress(this Address address)
-    => new(address.Id);
-
-    internal record PortalApplicationAddress(string Id) : Address(AddressType, Id)
-    {
-        public const string AddressType = "portal";
-    }
-
-    internal static MessageHubConfiguration ConfigurePortalApplication(this MessageHubConfiguration config)
-        => config
-            .WithType<PortalApplicationAddress>(PortalApplicationAddress.AddressType)
-            .WithHostedHub(new PortalApplicationAddress(config.Address.Id), ConfigurePortalLayout);
+    internal static IMessageHub GetPortalApplication(this IMessageHub hub, Address address)
+        => hub
+            .GetHostedHub(address, ConfigurePortalLayout);
 
     internal static MessageHubConfiguration ConfigurePortalLayout(this MessageHubConfiguration config)
         => config.AddLayout(PortalLayouts);

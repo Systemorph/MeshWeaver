@@ -31,3 +31,9 @@ public record ArticlesAddress(string Id) : Address(TypeName, Id)
 {
     public const string TypeName = "articles";
 }
+
+public record PortalAddress(string Id = null) : Address(TypeName, Id ?? Guid.NewGuid().AsString())
+{
+    public const string TypeName = "portal";
+}
+
