@@ -1,17 +1,17 @@
 ﻿using System.Reflection;
 using System.Runtime.Loader;
-using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Hosting.Orleans;
+namespace MeshWeaver.Connection.Orleans;
 
-public class OrleansMeshCatalog(IMessageHub hub, ILogger<OrleansMeshCatalog> logger, MeshConfiguration meshConfiguration) 
+public class OrleansMeshCatalog(IServiceProvider serviceProvider, IMessageHub hub, ILogger<OrleansMeshCatalog> logger, MeshConfiguration meshConfiguration) 
     : MeshCatalogBase(hub, meshConfiguration)
 {
-    private readonly IGrainFactory grainFactory = hub.ServiceProvider.GetRequiredService<IGrainFactory>();
+    private readonly IGrainFactory grainFactory = serviceProvider.GetRequiredService<IGrainFactory>();
 
     protected override Task<MeshNode> LoadMeshNode(Address address)
         => grainFactory.GetGrain<IMeshNodeGrain>(address.ToString()).Get();

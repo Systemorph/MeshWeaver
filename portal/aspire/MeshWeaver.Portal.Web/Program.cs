@@ -9,7 +9,7 @@ using Microsoft.Extensions.Hosting;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddAspireServiceDefaults();
-builder.AddKeyedRedisClient(StorageProviders.AddressRegistry);
+builder.AddKeyedRedisClient("orleans-redis");
 
 // Add services to the container.
 builder.ConfigurePortalApplication();

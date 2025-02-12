@@ -4,7 +4,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Portal;
 using MeshWeaver.Portal.Shared.Mesh;
 using MeshWeaver.Portal.Shared.Web;
-using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 
 var builder = WebApplication.CreateBuilder(args);

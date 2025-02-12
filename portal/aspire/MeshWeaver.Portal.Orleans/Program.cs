@@ -9,6 +9,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.AddAspireServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
+builder.AddKeyedRedisClient("orleans-redis");
 builder.AddKeyedRedisClient(StorageProviders.AddressRegistry);
 var address = new MeshAddress();
 
