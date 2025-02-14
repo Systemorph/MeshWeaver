@@ -231,7 +231,7 @@ public static class LayoutExtensions
         return config
             .AddData()
             .AddLayoutTypes()
-            .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())
+            .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
             .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
             .WithSerialization(serialization => serialization);
     }
