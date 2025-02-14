@@ -352,5 +352,5 @@ public class KernelContainer : IDisposable
         Hub.Dispose();
     }
 
-    private record KernelExecutionAddress() : Address("ke", Guid.NewGuid().AsString());
+    private record KernelExecutionAddress() : Address("execution", Guid.NewGuid().AsString());
 }
