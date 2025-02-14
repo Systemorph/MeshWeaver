@@ -2,6 +2,7 @@
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
@@ -31,13 +32,16 @@ namespace MeshWeaver.Hosting.Monolith.Test
 
 
         protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
+        protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
 
-        protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null) =>
-            Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null)
+        {
+            return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        }
 
         protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-            configuration;
+            configuration.WithInitialization((h,_) => RoutingService.RegisterStreamAsync(h));
 
         public override async Task DisposeAsync()
         {
