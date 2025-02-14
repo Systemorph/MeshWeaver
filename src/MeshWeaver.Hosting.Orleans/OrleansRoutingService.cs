@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -12,20 +11,11 @@ namespace MeshWeaver.Hosting.Orleans
     public class OrleansRoutingService(IGrainFactory grainFactory, IMessageHub hub, ILogger<OrleansRoutingService> logger) : RoutingServiceBase(hub)
     {
 
-        public override async Task UnregisterStreamAsync(Address address)
+        public override Task UnregisterStreamAsync(Address address)
         {
-            await GetMeshNodeGrain(address)
-                .Delete();
+            return Task.CompletedTask; // TODO V10: Provide proper implementation (13.02.2025, Roland Bürgi)
         }
 
-        private IMeshNodeGrain GetMeshNodeGrain(Address address)
-            => GetMeshNodeGrain(address.Type, address.Id);
-        private IMeshNodeGrain GetMeshNodeGrain(string addressType, string id)
-        {
-            return Mesh.ServiceProvider
-                .GetRequiredService<IGrainFactory>()
-                .GetGrain<IMeshNodeGrain>($"{addressType}/{id}");
-        }
 
 
         public override async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
@@ -36,8 +26,8 @@ namespace MeshWeaver.Hosting.Orleans
                 StreamProvider = StreamProviders.Mesh,
                 Namespace = address
             };
-            await GetMeshNodeGrain(address)
-                .Update(info);
+
+            // TODO V10: Update storage if needed. (13.02.2025, Roland Bürgi)
 
             var streamProvider = Mesh.ServiceProvider
                 .GetKeyedService<IStreamProvider>(info.StreamProvider);

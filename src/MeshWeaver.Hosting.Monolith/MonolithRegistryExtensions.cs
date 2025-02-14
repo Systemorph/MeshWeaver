@@ -9,7 +9,7 @@ public static class MonolithRegistryExtensions
     public static MeshBuilder UseMonolithMesh(this MeshBuilder builder)
     {
         builder.ConfigureServices(services => services
-            .AddSingleton<IMeshCatalog, MonolithMeshCatalog>()
+            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>()
             .AddSingleton<IRoutingService, MonolithRoutingService>()
         );
         return builder.ConfigureHub(conf =>

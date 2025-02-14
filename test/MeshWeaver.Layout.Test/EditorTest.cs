@@ -270,7 +270,6 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 pointer.Pointer.Should().StartWith("/data/");
             if(benchmark.Options is not null)
                 options = await stream.Reduce(pointer)
-                    .Where(x => x.Value is not null)
                     .Select(p =>
                         JsonNode.Parse(p.Value.ToString())
                             .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))

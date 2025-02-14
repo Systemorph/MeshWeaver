@@ -14,9 +14,9 @@ namespace MeshWeaver.Connection.Orleans;
 
 public static class OrleansConnectionExtensions
 {
-    internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address)
+    internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address = null)
     {
-        var builder = new MeshHostApplicationBuilder(hostBuilder, address);
+        var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? new MeshAddress());
         ConfigureMeshWeaver(builder);
         builder.ConfigureServices(services => 
             services.AddOrleansMeshServices());
@@ -52,7 +52,7 @@ public static class OrleansConnectionExtensions
                         )
                 );
             })
-            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>()
+            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>()
         );
         builder.ConfigureHub(conf => conf
             .WithTypes(typeof(Article), typeof(StreamInfo))

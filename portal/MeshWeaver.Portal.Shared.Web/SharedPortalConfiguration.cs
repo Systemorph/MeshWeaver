@@ -17,7 +17,7 @@ namespace MeshWeaver.Portal.Shared.Web;
 
 public static class SharedPortalConfiguration
 {
-    public static void ConfigurePortalApplication(this WebApplicationBuilder builder)
+    public static void ConfigureWebPortalServices(this WebApplicationBuilder builder)
     {
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
@@ -34,6 +34,7 @@ public static class SharedPortalConfiguration
             .AddBlazor(layoutClient => layoutClient
                     .AddChartJs()
                     .AddAgGrid()
+                    .WithPortalConfiguration(c => c.AddNavMenu())
             )
             .AddSignalRHubs();
 

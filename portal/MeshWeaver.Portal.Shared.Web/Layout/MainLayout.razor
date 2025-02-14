@@ -1,12 +1,7 @@
-﻿@using MeshWeaver.Mesh
-@using MeshWeaver.Mesh.Services
-@using MeshWeaver.Messaging
+﻿@using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Portal.Shared.Web.Infrastructure
 @inherits LayoutComponentBase
-@inject IRoutingService RoutingService
-@inject IMessageHub Mesh
-@implements IAsyncDisposable
-
+@inject PortalApplication PortalApplication;
 <FluentLayout>
     <FluentHeader>
         <FluentNavLink href="/">Mesh Weaver</FluentNavLink>
@@ -31,7 +26,7 @@
         </div>
     </FluentHeader>
     <FluentStack Class="main" Orientation="Orientation.Horizontal" Width="100%">
-        <NavMenu PortalAddress="@PortalHub.Address" />
+        <NavMenu />
         <FluentBodyContent Class="body-content">
             <div class="main">
                 @Body
@@ -58,22 +53,3 @@
     <a class="dismiss">🗙</a>
 </div>
 
-@code {
-    private IMessageHub PortalHub { get; set; }
-    private IAsyncDisposable meshRegistry;
-    protected override async Task OnInitializedAsync()
-    {
-        await base.OnInitializedAsync();
-        PortalHub ??= Mesh.GetPortalApplication(new PortalAddress());
-        meshRegistry = await RoutingService.RegisterStreamAsync(PortalHub);
-        
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await meshRegistry.DisposeAsync();
-        PortalHub.Dispose();
-        PortalHub = null;
-    }
-
-}

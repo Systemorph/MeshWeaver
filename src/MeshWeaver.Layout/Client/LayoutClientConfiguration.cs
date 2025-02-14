@@ -16,6 +16,13 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 
     public delegate ViewDescriptor ViewMap<in T>(T instance, ISynchronizationStream<JsonElement> stream, string area);
 
+    public ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> PortalConfiguration { get; init; } 
+        = [];
+
+    public LayoutClientConfiguration WithPortalConfiguration(
+        Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        => this with { PortalConfiguration = PortalConfiguration.Add(config) };
+
     internal ImmutableList<ViewMap> ViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
 
 
@@ -71,6 +78,5 @@ public record LayoutClientConfiguration(IMessageHub Hub)
         ret.Parameters.Add(nameof(Skin), skin);
         return ret;
     }
-
 
 }

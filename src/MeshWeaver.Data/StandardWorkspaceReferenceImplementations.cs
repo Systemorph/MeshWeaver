@@ -25,15 +25,15 @@ public static class StandardWorkspaceReferenceImplementations
             )
             .ForReducedStream<JsonElement>(reduced =>
                 reduced.AddPatchFunction(PatchJsonElement)
-                    .AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonElementTo)
+                    .AddWorkspaceReference<JsonPointerReference, JsonElement>(ReduceJsonElementTo)
                 );
 
     }
 
-    private static ChangeItem<JsonElement?> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
+    private static ChangeItem<JsonElement> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-        return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates
+        return new(pointer.Evaluate(current.Value) ?? default, current.ChangedBy, current.ChangeType, current.Version, current.Updates
             .Where(u => u.Collection == pointer.First()
                         && pointer.Skip(1).Equals(u.Id)).ToArray());
     }
