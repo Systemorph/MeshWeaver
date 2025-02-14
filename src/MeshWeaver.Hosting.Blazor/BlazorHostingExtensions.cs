@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Articles;
 using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
@@ -14,7 +15,10 @@ public static class BlazorHostingExtensions
 {
     public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration> clientConfig = null) =>
         builder
-            .ConfigureServices(services => services.AddFluentUIComponents())
+            .ConfigureServices(services => services
+                .AddFluentUIComponents()
+                .AddScoped<PortalApplication>()
+            )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
     public static void MapMeshWeaver(this IEndpointRouteBuilder app)

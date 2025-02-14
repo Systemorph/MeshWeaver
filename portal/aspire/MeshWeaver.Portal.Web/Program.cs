@@ -12,8 +12,8 @@ builder.AddAspireServiceDefaults();
 builder.AddKeyedRedisClient("orleans-redis");
 
 // Add services to the container.
-builder.ConfigurePortalApplication();
-builder.UseOrleansMeshClient(new UiAddress())
+builder.ConfigureWebPortalServices();
+builder.UseOrleansMeshClient()
             .ConfigureWebPortalMesh()
             .ConfigureArticles()
     ;

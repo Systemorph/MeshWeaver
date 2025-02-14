@@ -12,7 +12,7 @@ namespace MeshWeaver.Connection.Orleans;
 public static class OrleansClientExtensions
 {
     public static MeshHostApplicationBuilder UseOrleansMeshClient(this IHostApplicationBuilder hostBuilder,
-        Address address,
+        Address address = null,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);

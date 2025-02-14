@@ -1,20 +1,13 @@
-﻿using System;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
 public static class PortalLayoutExtensions
 {
-    internal static IMessageHub GetPortalApplication(this IMessageHub hub, Address address)
-        => hub
-            .GetHostedHub(address, ConfigurePortalLayout);
-
-    internal static MessageHubConfiguration ConfigurePortalLayout(this MessageHubConfiguration config)
+    internal static MessageHubConfiguration AddNavMenu(this MessageHubConfiguration config)
         => config.AddLayout(PortalLayouts);
 
     private static LayoutDefinition PortalLayouts(LayoutDefinition layout)

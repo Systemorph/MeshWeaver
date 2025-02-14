@@ -11,6 +11,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Layout.Views;
 
@@ -19,7 +20,6 @@ namespace MeshWeaver.Blazor;
 
 public static class BlazorViewRegistry
 {
-
     internal static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null

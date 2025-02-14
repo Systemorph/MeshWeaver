@@ -14,7 +14,7 @@ public abstract record WorkspaceReference
 // ReSharper disable once UnusedTypeParameter
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
-public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
+public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement>
 {
     public override string ToString() => Pointer;
 }

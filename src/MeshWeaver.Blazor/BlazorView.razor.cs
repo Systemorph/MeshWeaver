@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using MeshWeaver.Blazor.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -16,7 +17,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TView : BlazorView<TViewModel, TView>
 {
     [Inject] protected ILogger<TView> Logger { get; set; }
-    [Inject] protected IMessageHub Hub { get; set; }
+    [Inject] protected PortalApplication PortalApplication { get; set; }
+    protected IMessageHub Hub => PortalApplication.Hub;
     [Parameter]
     public TViewModel ViewModel { get; set; }
 
