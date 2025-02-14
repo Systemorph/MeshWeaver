@@ -220,7 +220,9 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)
             .Select(x =>
-                    x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
+                x.Value.ValueKind == JsonValueKind.Undefined 
+                    ? default(T) 
+                    : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
             );
 
     public static MessageHubConfiguration AddLayoutClient(
