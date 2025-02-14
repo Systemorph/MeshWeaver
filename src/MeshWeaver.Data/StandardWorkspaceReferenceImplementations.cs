@@ -19,6 +19,7 @@ public static class StandardWorkspaceReferenceImplementations
             .AddWorkspaceReference<PartitionedWorkspaceReference<InstanceCollection>, InstanceCollection>(
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
+            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci,r) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
@@ -63,6 +64,15 @@ public static class StandardWorkspaceReferenceImplementations
         if (change == null)
             return null;
         return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+    }
+    private static ChangeItem<JsonElement> ReduceEntityStoreTo(ChangeItem<EntityStore> current,
+        JsonPointerReference reference, JsonSerializerOptions options)
+    {
+        var serialized = JsonSerializer.SerializeToElement(current.Value, options);
+        if (!string.IsNullOrWhiteSpace(reference.Pointer) && reference.Pointer != "/")
+            serialized = JsonPointer.Parse(reference.Pointer).Evaluate(serialized)!.Value;
+
+        return new(serialized, current.ChangedBy, ChangeType.Patch, current.Version, current.Updates);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference)
     {
