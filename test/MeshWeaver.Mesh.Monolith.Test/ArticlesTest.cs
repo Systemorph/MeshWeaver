@@ -1,4 +1,5 @@
 ﻿using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -24,12 +25,17 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .AddArticles(articles => articles
                 .WithCollection(
                     new FileSystemArticleCollection(
-                        Test, 
-                        Path.Combine(GetAssemblyLocation(), "Markdown"))
+                        new()
+                        {
+                            Name = Test,
+                            BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+                        }, 
+                        articles.Hub)
                 ))
             .ConfigureMesh(config => config.AddMeshNodes(
                 TestHubExtensions.Node
             ));
+
 
     private string GetAssemblyLocation()
     {
@@ -42,8 +48,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public async Task BasicArticle()
     {
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetRemoteStream(new ArticlesAddress(Test),
-            new LayoutAreaReference("Article"){Id = "Overview"});
+        var articleStream = client.GetWorkspace().GetStream(
+            new LayoutAreaReference("Article") { Id = "Test/Overview" });
 
         var control = await articleStream
             .GetControlStream("Article")
@@ -55,9 +61,49 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         articleControl.Content.Should().BeNull();
         articleControl.Html.Should().NotBe(null);
     }
+    [Fact]
+    public async Task NotFound()
+    {
+        var client = GetClient();
+        var articleStream = client.GetWorkspace().GetStream(
+            new LayoutAreaReference("Article") { Id = "Test/NotFound" });
+
+        var control = await articleStream
+            .GetControlStream("Article")
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x is not null);
+
+        control.Should().BeOfType<MarkdownControl>();
+    }
+    [Fact]
+    public async Task Catalog()
+    {
+        var client = GetClient();
+        var articleStream = client.GetWorkspace().GetStream(
+            new LayoutAreaReference("Catalog")
+            );
+
+        var control = await articleStream
+            .GetControlStream("Catalog")
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Which;
+        stack.Areas.Should().HaveCount(2);
+
+        var articles = await stack.Areas.ToAsyncEnumerable()
+            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()).FirstAsync())
+            .ToArrayAsync();
+
+        articles.Should().HaveCount(2);
+        articles.First().Should().BeOfType<ArticleCatalogItemControl>()
+            .Which.Article.Should().BeOfType<Article>()
+            .Which.Name.Should().Be("ReadMe");
+    }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration).AddLayoutClient();
+        return base.ConfigureClient(configuration)
+            .AddLayout(x => x.AddArticleLayouts());
     }
 }

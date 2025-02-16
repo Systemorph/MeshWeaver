@@ -9,7 +9,7 @@ namespace MeshWeaver.Data;
 public static class StandardWorkspaceReferenceImplementations
 {
 
-    internal static ReduceManager<EntityStore> CreateReduceManager(IMessageHub hub)
+    public static ReduceManager<EntityStore> CreateReduceManager(this IMessageHub hub)
     {
         return new ReduceManager<EntityStore>(hub)
             .AddWorkspaceReference<EntityReference, object>(ReduceEntityStoreTo)
@@ -23,6 +23,7 @@ public static class StandardWorkspaceReferenceImplementations
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
+                    .AddWorkspaceReference<InstanceReference, object>(ReduceInstanceCollectionTo)
             )
             .ForReducedStream<JsonElement>(reduced =>
                 reduced.AddPatchFunction(PatchJsonElement)
@@ -44,12 +45,12 @@ public static class StandardWorkspaceReferenceImplementations
         return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions));
     }
 
-    private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, EntityReference reference)
+    private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference)
     {
         if (current.ChangeType != ChangeType.Patch)
-            return new(current.Value.Get<object>(reference), current.Version);
+            return new(current.Value.Get<object>(reference.Id), current.Version);
         var change =
-            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && x.Id == reference.Id);
+            current.Updates.FirstOrDefault(x => x.Id == reference.Id);
         if (change == null)
             return null;
         return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);

@@ -19,11 +19,10 @@ public interface ISynchronizationStream : IDisposable
     ISynchronizationStream<TReduced> Reduce<TReduced>(
         WorkspaceReference<TReduced> reference);
 
-    ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
-        TReference2 reference,
+    ISynchronizationStream<TReduced> Reduce<TReduced>(
+        WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
-    )
-        where TReference2 : WorkspaceReference;
+    );
 
     IMessageHub Hub { get; }
     T Get<T>(string key);

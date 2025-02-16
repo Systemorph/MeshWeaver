@@ -21,7 +21,7 @@ public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElem
 
 public record InstanceReference(object Id) : WorkspaceReference<object>
 {
-    public virtual string Pointer => $"$.['{Id}']";
+    public virtual string Pointer => $"/'{Id}'";
 
     public override string ToString() => Pointer;
 }
