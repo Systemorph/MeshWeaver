@@ -12,19 +12,9 @@ public static class PortalLayoutExtensions
 
 
     private static NavMenuControl NavMenu(this NavMenuControl menu) =>
-        menu.WithNavGroup(
-            "Documentation",
-            group => group.WithUrl("article/Documentation/Overview")
-                .WithNavLink("Articles", "articles/Documentation")
-                .WithNavLink("Areas", $"app/Documentation/{LayoutAreaCatalogArea.LayoutAreas}")
-            //.WithNavLink("Data Model", $"app/Documentation/Model")
-        ).WithNavGroup(
-            "Northwind",
-            group => group.WithUrl("article/Northwind/Overview")
-                .WithNavLink("Articles", "articles/Northwind")
-                .WithNavLink("Areas", $"app/Northwind/{LayoutAreaCatalogArea.LayoutAreas}")
-                .WithNavLink("Data Model", $"app/Northwind/DataModel")
-
-        );
+        menu.WithNavLink("Articles", "articles")
+            .WithNavLink("Documentation Areas", $"app/Documentation/{LayoutAreaCatalogArea.LayoutAreas}")
+            .WithNavLink("Northwind Areas", $"app/Northwind/{LayoutAreaCatalogArea.LayoutAreas}")
+    ;
 
 }

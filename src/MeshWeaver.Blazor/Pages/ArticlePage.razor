@@ -10,5 +10,7 @@
     private Address Address => PortalApplication.Hub.Address;
     [Parameter] public string Collection { get; set; }
     [Parameter] public string Path { get; set; }
+
+    private string Id => $"{Collection}/{Path}";
 }
 
