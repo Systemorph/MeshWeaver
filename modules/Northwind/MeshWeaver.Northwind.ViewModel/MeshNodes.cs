@@ -21,6 +21,6 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
     public MeshNode Northwind => CreateFromHubConfiguration(
         new ApplicationAddress(nameof(Northwind)),
         nameof(Northwind),
-        NorthwindApplicationExtensions.ConfigureApplication
+        NorthwindApplicationExtensions.ConfigureNorthwindApplication
     );
 }

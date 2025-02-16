@@ -3,6 +3,7 @@ using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -13,52 +14,28 @@ namespace MeshWeaver.Articles;
 
 public static class ArticleExtensions
 {
-    public static MessageHubConfiguration ConfigureArticleHub(this MessageHubConfiguration config)
+
+    public static LayoutDefinition AddArticleLayouts(this LayoutDefinition layout)
     {
-        var collection = GetCollectionName(config.Address);
-        return config
-            .AddLayout(layout => layout
-                .WithView(nameof(ArticleLayoutArea.Article), ArticleLayoutArea.Article)
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog)
-            )
-            .WithInitialization(hub =>
-            {
-                var coll = GetCollection(hub, collection);
-                if (coll is null)
-                    throw new ArgumentException($"Misconfigured article collection {collection}");
-                coll.Initialize(hub);
-            });
+        return layout
+            .WithView(nameof(ArticleLayoutArea.Article), ArticleLayoutArea.Article)
+            .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog);
     }
 
 
-    internal static string GetCollectionName(this Address address)
-    {
-        var collection = (address as ArticlesAddress)?.Id;
-        if (collection is null)
-            throw new ArgumentException(
-                $"Expected address to be of type ArticleAddress. But was: {address.GetType().Name}");
-        return collection;
-    }
 
 
-    internal static ArticleCollection GetCollection(this IMessageHub hub, string collection)
-        => hub.ServiceProvider.GetRequiredService<IArticleService>().GetCollection(collection);
+    internal static IArticleService GetArticleService(this IMessageHub hub)
+        => hub.ServiceProvider.GetRequiredService<IArticleService>();
 
     public static MeshBuilder AddArticles(this MeshBuilder builder, Func<ArticleConfiguration, ArticleConfiguration> articles)
         => builder
             .ConfigureMesh(config =>
                 config
-                    .AddMeshNodeFactory()
                     .Set(config.GetListOfLambdas().Add(articles))
             )
             .ConfigureServices(services => services.AddSingleton<IArticleService, ArticleService>());
    
-
-    private static MeshConfiguration AddMeshNodeFactory(this MeshConfiguration config)
-        => config.AddMeshNodeFactory(address => address.Type == ArticlesAddress.TypeName
-            ? new MeshNode(address.Type, address.Id, address) { HubConfiguration = ConfigureArticleHub }
-            : null
-        );
 
 
     internal static ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>> GetListOfLambdas(this MeshConfiguration configuration)

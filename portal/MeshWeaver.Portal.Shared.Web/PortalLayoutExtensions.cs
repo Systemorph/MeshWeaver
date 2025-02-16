@@ -7,10 +7,7 @@ namespace MeshWeaver.Portal.Shared.Web;
 
 public static class PortalLayoutExtensions
 {
-    internal static MessageHubConfiguration AddNavMenu(this MessageHubConfiguration config)
-        => config.AddLayout(PortalLayouts);
-
-    private static LayoutDefinition PortalLayouts(LayoutDefinition layout)
+    internal static LayoutDefinition AddNavMenu(this LayoutDefinition layout)
         => layout.WithNavMenu((menu, _, _) => menu.NavMenu());
 
 

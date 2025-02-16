@@ -17,10 +17,9 @@ public static class ArticleCatalogLayoutArea
     /// <returns></returns>
     public static IObservable<object> Catalog(LayoutAreaHost host, RenderingContext ctx)
     {
-        var collectionName = host.Hub.Address.GetCollectionName();
-        var collection = host.Hub.GetCollection(collectionName);
+        var collection = host.Hub.GetArticleService();
         return
-            collection.GetArticles(ParseToOptions(host.Reference))
+            collection.GetArticleCatalog(ParseToOptions(host.Reference))
                 .Select(x =>
                     x.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))

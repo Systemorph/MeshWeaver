@@ -1,11 +1,13 @@
 ﻿using System.Collections.Generic;
 using System.Diagnostics;
+using MeshWeaver.Activities;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using Microsoft.AspNetCore.Builder;
@@ -34,7 +36,10 @@ public static class SharedPortalConfiguration
             .AddBlazor(layoutClient => layoutClient
                     .AddChartJs()
                     .AddAgGrid()
-                    .WithPortalConfiguration(c => c.AddNavMenu())
+                    .WithPortalConfiguration(c => 
+                        c.AddLayout(layout => layout
+                            .AddNavMenu()
+                            .AddArticleLayouts()))
             )
             .AddSignalRHubs();
 

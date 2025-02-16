@@ -187,7 +187,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public string ClientId => Configuration.ClientId;
 
 
-    private StreamConfiguration<TStream> Configuration { get; }
+    internal StreamConfiguration<TStream> Configuration { get; }
 
     private readonly IMessageHub synchronizationHub;
     public void InvokeAsync(Action action)
@@ -244,6 +244,11 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
         [];
     public StreamConfiguration<TStream> ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
         this with { HubConfigurations = HubConfigurations.Add(configuration) };
+
+    internal bool NullReturn { get; init; }
+
+    public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
+        => this with{NullReturn = true};
 
 }
 

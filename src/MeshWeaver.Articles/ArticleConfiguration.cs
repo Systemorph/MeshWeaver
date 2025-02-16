@@ -15,7 +15,7 @@ public record ArticleConfiguration(IMessageHub Hub)
         => articles.Aggregate(this, (conf, coll) =>
             conf.WithCollection(coll.SourceType switch
             {
-                FileArticleCollectionFactory.Files => FileArticleCollectionFactory.Create(coll),
+                FileArticleCollectionFactory.Files => Hub.CreateArticleCollection(coll),
                 _ => throw new ArgumentException($"Unknown source type {coll.SourceType}")
             })
         );
@@ -39,7 +39,6 @@ public class ArticleSourceConfig
 public static class FileArticleCollectionFactory
 {
     public const string Files = nameof(Files);
-    public static ArticleCollection Create(ArticleSourceConfig config) =>
-        new FileSystemArticleCollection(config.Name, config.BasePath)
-            .WithDisplayName(config.DisplayName);
+    public static ArticleCollection CreateArticleCollection(this IMessageHub hub, ArticleSourceConfig config) =>
+        new FileSystemArticleCollection(config, hub);
 }

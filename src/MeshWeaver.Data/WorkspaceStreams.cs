@@ -103,8 +103,11 @@ c => c
 
         stream.RegisterForDisposal(reducedStream);
         var selected = stream
-            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference))
-            .Where(x => x is{Value: not null});
+            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference));
+
+        if (!reducedStream.Configuration.NullReturn)
+            selected = selected
+                .Where(x => x is { Value: not null });
 
         reducedStream.RegisterForDisposal(
             selected

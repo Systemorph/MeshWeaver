@@ -11,7 +11,7 @@ public static class NorthwindApplicationExtensions
     /// <summary>
     /// Full configuration of the Northwind application mesh node.
     /// </summary>    /// <returns></returns>
-    public static MessageHubConfiguration ConfigureApplication(MessageHubConfiguration application)
+    public static MessageHubConfiguration ConfigureNorthwindApplication(MessageHubConfiguration application)
 
         =>
             application
