@@ -1,5 +1,7 @@
 ﻿@page "/"
 @using MeshWeaver.Blazor.Components
+@using MeshWeaver.Blazor.Infrastructure
+@inject PortalApplication Application
 
-<LayoutArea Address="articles/Documentation" Area="Catalog"></LayoutArea>
+<LayoutArea Address="@Application.Hub.Address" Area="Catalog"></LayoutArea>
 
