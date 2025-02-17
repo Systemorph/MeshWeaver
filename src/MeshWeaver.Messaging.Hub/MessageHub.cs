@@ -29,7 +29,7 @@ public sealed class MessageHub : IMessageHub
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
-    private readonly LinkedList<AsyncDelivery> Rules = new();
+    private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
     private ILogger Logger { get; }
 
@@ -674,12 +674,14 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
     {
-        AsyncDelivery rule = (delivery, cancellationToken) =>
-            WrapFilter(delivery, action, filter, cancellationToken);
-        Rules.AddFirst(rule);
+        Task<IMessageDelivery> Rule
+            (IMessageDelivery delivery, CancellationToken cancellationToken)
+            => WrapFilter(delivery, action, filter, cancellationToken);
+        var node = new LinkedListNode<AsyncDelivery>(Rule);
+        Rules.AddFirst(node);
         return new AnonymousDisposable(() =>
         {
-            if (Rules.Contains(rule)) Rules.Remove(rule);
+            Rules.Remove(node);
         });
     }
 
