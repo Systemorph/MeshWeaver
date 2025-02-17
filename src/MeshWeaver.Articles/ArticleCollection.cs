@@ -97,7 +97,7 @@ public class FileSystemArticleCollection : ArticleCollection
         articleStream.UpdateAsync(async (x, ct) =>
         {
             var article = await LoadArticle(path, ct);
-            return new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
+            return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
         });
     }
 
