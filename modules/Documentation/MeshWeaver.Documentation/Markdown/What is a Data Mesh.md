@@ -7,6 +7,7 @@ Abstract: >
 Published: "2025-01-03"
 VideoUrl: "https://www.youtube.com/embed/a7sARIKDpXg?si=j-WE7F7qr-mVTq8z"
 VideoDuration: "00:12:47"
+Thumbnail: "images/DataMesh.jpeg"
 Authors:
   - "Roland Bürgi"
 Tags:
