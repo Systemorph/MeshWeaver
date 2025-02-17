@@ -110,6 +110,7 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
+                logger.LogError("An exception occurred during the processing of errors. Exception: {Exception}. Address: {Address}.", e, Address);
                 ReportFailure(delivery.Failed(e.ToString()));
             }
 
