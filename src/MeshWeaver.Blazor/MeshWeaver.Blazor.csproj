@@ -11,7 +11,7 @@
 
     <ItemGroup>
         <SupportedPlatform Include="browser" />
-        <Content Update="StaticAssets\**" Pack="false" />
+        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
     </ItemGroup>
 
     <ItemGroup>
