@@ -16,4 +16,8 @@
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
   </ItemGroup>
 
+    <ItemGroup>
+        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
+    </ItemGroup>
+
 </Project>
