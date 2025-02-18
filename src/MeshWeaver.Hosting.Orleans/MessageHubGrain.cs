@@ -58,11 +58,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Could not load assembly {node.AssemblyLocation}."
             );
 
-        node = assembly.GetCustomAttributes<MeshNodeAttribute>()
-            .SelectMany(x => x.Nodes)
-            .FirstOrDefault(x => x.Key == node.Key);
 
-        if(node?.HubConfiguration is null)
+        if(node.HubConfiguration is null)
             throw new ArgumentException(
                 $"No hub configuration is specified for {node.Key}."
             );
