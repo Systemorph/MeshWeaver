@@ -1,10 +1,7 @@
 ﻿using MeshWeaver.Connection.Orleans;
-using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
 using MeshWeaver.Portal.Shared.Web;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
 

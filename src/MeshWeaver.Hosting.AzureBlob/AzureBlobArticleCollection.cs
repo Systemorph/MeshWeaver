@@ -1,0 +1,109 @@
+﻿using System.Reactive.Linq;
+using Azure.Storage.Blobs;
+using MeshWeaver.Articles;
+using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Azure;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MeshWeaver.Hosting.AzureBlob;
+
+public class AzureBlobArticleCollection : ArticleCollection
+{
+    private readonly BlobContainerClient containerClient;
+    private readonly ISynchronizationStream<InstanceCollection> articleStream;
+
+    public AzureBlobArticleCollection(
+        ArticleSourceConfig config,
+        IMessageHub hub) : base(config, hub)
+    {
+        var containerName = config.BasePath;
+        var blobClientFactory = hub.ServiceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
+        var blobServiceClient = blobClientFactory.CreateClient(StorageProviders.MeshCatalog);
+        containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        articleStream = CreateStream(containerName);
+    }
+
+    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) =>
+        articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
+
+    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
+    {
+        if (path is null)
+            return null;
+
+        var blobClient = containerClient.GetBlobClient(path);
+        if (!await blobClient.ExistsAsync(ct))
+            return null;
+
+        using var memoryStream = new MemoryStream();
+        await blobClient.DownloadToAsync(memoryStream, ct);
+        return memoryStream.ToArray();
+    }
+
+    private ISynchronizationStream<InstanceCollection> CreateStream(string containerName)
+    {
+        var ret = new SynchronizationStream<InstanceCollection>(
+            new(Collection, containerName),
+            Hub,
+            new EntityReference(Collection, containerName),
+            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
+            x => x);
+        ret.Initialize(InitializeAsync);
+        return ret;
+    }
+
+    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null) =>
+        articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article)x?.Value);
+
+    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
+    {
+        await containerClient.CreateIfNotExistsAsync(cancellationToken: ct);
+        var ret = new InstanceCollection(
+            await GetAllFromContainer()
+                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
+        );
+        return ret;
+    }
+
+    private async IAsyncEnumerable<Article> GetAllFromContainer()
+    {
+        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: ""))
+        {
+            if (blobItem.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            {
+                var article = await LoadArticle(blobItem.Name, CancellationToken.None);
+                if (article != null)
+                {
+                    yield return article;
+                }
+            }
+        }
+    }
+
+    private async Task<Article> LoadArticle(string blobPath, CancellationToken ct)
+    {
+        var blobClient = containerClient.GetBlobClient(blobPath);
+        if (!await blobClient.ExistsAsync(ct))
+            return null;
+
+        using var stream = await blobClient.OpenReadAsync(cancellationToken: ct);
+        using var reader = new StreamReader(stream);
+        var content = await reader.ReadToEndAsync(ct);
+        var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
+
+        return ArticleExtensions.ParseArticle(
+            Collection,
+            blobPath,
+            properties.Value.LastModified.DateTime,
+            content);
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        articleStream.Dispose();
+    }
+}

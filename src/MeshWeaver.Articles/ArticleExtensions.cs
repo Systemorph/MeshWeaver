@@ -28,18 +28,13 @@ public static class ArticleExtensions
     internal static IArticleService GetArticleService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IArticleService>();
 
-    public static MeshBuilder AddArticles(this MeshBuilder builder, Func<ArticleConfiguration, ArticleConfiguration> articles)
+    public static MeshBuilder AddArticles(this MeshBuilder builder)
         => builder
-            .ConfigureMesh(config =>
-                config
-                    .Set(config.GetListOfLambdas().Add(articles))
-            )
-            .ConfigureServices(services => services.AddSingleton<IArticleService, ArticleService>());
+            .ConfigureServices(services => services
+                .AddSingleton<IArticleService, ArticleService>()
+                .AddKeyedSingleton<IArticleCollectionFactory, FileSystemArticleCollectionFactory>(FileSystemArticleCollectionFactory.SourceType)
+            );
    
-
-
-    internal static ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>> GetListOfLambdas(this MeshConfiguration configuration)
-        => configuration.Get<ImmutableList<Func<ArticleConfiguration, ArticleConfiguration>>>() ?? [];
 
 
     public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content)

@@ -2,6 +2,8 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+        <PackageReference Include="TestContainers" />
+        <PackageReference Include="Testcontainers.PostgreSql" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="Markdown\**">

@@ -26,6 +26,15 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
 
 }
 
+public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
+{
+    public const string SourceType = "FileSystem";
+    public ArticleCollection Create(ArticleSourceConfig config)
+    {
+        return new FileSystemArticleCollection(config, hub);
+    }
+}
+
 public class FileSystemArticleCollection : ArticleCollection
 {
     public string BasePath { get; }
