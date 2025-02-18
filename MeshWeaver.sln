@@ -162,8 +162,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Markdown", "src\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Northwind.Test", "test\MeshWeaver.Northwind.Test\MeshWeaver.Northwind.Test.csproj", "{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith.Test", "test\MeshWeaver.Mesh.Monolith.Test\MeshWeaver.Hosting.Monolith.Test.csproj", "{0E987CDD-A150-4815-95DC-238DC7942E32}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Connection.Notebook", "src\MeshWeaver.Connection.Notebook\MeshWeaver.Connection.Notebook.csproj", "{5FD70491-0E5F-9E97-4230-881374468C53}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Connection.Orleans", "src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj", "{D5AD6EF8-68A3-CA10-AA76-227186EFB012}"
@@ -212,6 +210,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Shared.Mesh", "portal\MeshWeaver.Portal.Shared.Mesh\MeshWeaver.Portal.Shared.Mesh.csproj", "{45ED3033-79B9-DD93-1652-A1762DB2C4B9}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Orleans.Test", "test\MeshWeaver.Hosting.Orleans.Test\MeshWeaver.Hosting.Orleans.Test.csproj", "{78893B93-FE41-4514-9F1E-B648B690C126}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith.Test", "test\MeshWeaver.Hosting.Monolith.Test\MeshWeaver.Hosting.Monolith.Test.csproj", "{9E5180EA-81FB-94D0-C23B-BF152057A8BA}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -491,10 +491,6 @@ Global
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0E987CDD-A150-4815-95DC-238DC7942E32}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0E987CDD-A150-4815-95DC-238DC7942E32}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0E987CDD-A150-4815-95DC-238DC7942E32}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0E987CDD-A150-4815-95DC-238DC7942E32}.Release|Any CPU.Build.0 = Release|Any CPU
 		{5FD70491-0E5F-9E97-4230-881374468C53}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{5FD70491-0E5F-9E97-4230-881374468C53}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5FD70491-0E5F-9E97-4230-881374468C53}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -563,6 +559,10 @@ Global
 		{78893B93-FE41-4514-9F1E-B648B690C126}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{78893B93-FE41-4514-9F1E-B648B690C126}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{78893B93-FE41-4514-9F1E-B648B690C126}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E5180EA-81FB-94D0-C23B-BF152057A8BA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E5180EA-81FB-94D0-C23B-BF152057A8BA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E5180EA-81FB-94D0-C23B-BF152057A8BA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E5180EA-81FB-94D0-C23B-BF152057A8BA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -637,7 +637,6 @@ Global
 		{9DA84ED3-8A35-43E7-81B0-7522E5DDCBBA} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{C785F115-8F58-4112-8B10-B3381FC74E73} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{DF5BDE1B-F8B6-26C1-5677-8F39BB3FD4CA} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
-		{0E987CDD-A150-4815-95DC-238DC7942E32} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{5FD70491-0E5F-9E97-4230-881374468C53} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{D5AD6EF8-68A3-CA10-AA76-227186EFB012} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{ACCB6DE5-121D-B44B-9BFB-FF291B3E0751} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
@@ -658,6 +657,7 @@ Global
 		{7D9C2B3C-27B2-503B-C4A2-9AD0E8784D11} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
 		{45ED3033-79B9-DD93-1652-A1762DB2C4B9} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
 		{78893B93-FE41-4514-9F1E-B648B690C126} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
+		{9E5180EA-81FB-94D0-C23B-BF152057A8BA} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}
