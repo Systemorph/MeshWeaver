@@ -1,24 +1,37 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Articles;
 
 public class ArticleService : IArticleService
 {
-    public ArticleService(IMeshCatalog meshCatalog, IMessageHub hub)
+    private readonly IMessageHub hub;
+
+    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub)
     {
-        Configuration = meshCatalog.Configuration.GetListOfLambdas().Aggregate(new ArticleConfiguration(hub), (l,c) => c.Invoke(l));
+        this.hub = hub;
+        var configs = serviceProvider.GetRequiredService<IOptions<List<ArticleSourceConfig>>>();
+        collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
     }
 
-    public ArticleConfiguration Configuration { get; }
+    private ArticleCollection CreateCollection(ArticleSourceConfig config)
+    {
+        var factory = hub.ServiceProvider.GetKeyedService<IArticleCollectionFactory>(config.SourceType);
+        if(factory is null)
+            throw new ArgumentException($"Unknown source type {config.SourceType}");
+        return factory.Create(config);
+    }
+
+    private readonly IReadOnlyDictionary<string, ArticleCollection> collections;
 
     public ArticleCollection GetCollection(string collection)
-        => Configuration.Collections.GetValueOrDefault(collection);
+        => collections.GetValueOrDefault(collection);
 
     public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions)
     {
-        return Configuration.Collections.Values.Select(c => c.GetArticles(catalogOptions))
+        return collections.Values.Select(c => c.GetArticles(catalogOptions))
             .CombineLatest()
             .Select(x => x
                 .SelectMany(y => y)

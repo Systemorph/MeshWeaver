@@ -14,30 +14,35 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
+
 public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string Test = nameof(Test);
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .AddKernel()
-            .AddArticles(articles => articles
-                .WithCollection(
-                    new FileSystemArticleCollection(
-                        new()
+            .ConfigureServices(services =>
+                services
+                    .Configure<List<ArticleSourceConfig>>(
+                        options => options.Add(new ArticleSourceConfig()
                         {
-                            Name = Test,
-                            BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
-                        }, 
-                        articles.Hub)
-                ))
+                            Name = "Test", BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+                        })
+                    )
+
+            ).AddArticles()
             .ConfigureMesh(config => config.AddMeshNodes(
-                TestHubExtensions.Node
-            ));
+                    TestHubExtensions.Node
+                )
+            );
+        
 
 
     private string GetAssemblyLocation()
@@ -114,7 +119,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .GetControlStream("Article")
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;

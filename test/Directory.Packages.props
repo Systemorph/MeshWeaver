@@ -8,6 +8,8 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="9.0.1" />
+    <PackageVersion Include="TestContainers" Version="4.2.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.2.0" />
     <PackageVersion Include="Verify.Xunit" Version="28.3.1" />
     <PackageVersion Include="xunit" Version="2.9.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />

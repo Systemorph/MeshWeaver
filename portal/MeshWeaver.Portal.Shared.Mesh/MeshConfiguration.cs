@@ -20,8 +20,6 @@ public static  class SharedMeshConfiguration
 
     public static MeshBuilder ConfigureArticles(this MeshBuilder builder)
     {
-        return builder.AddArticles(articles
-            => articles.FromAppSettings()
-        );
+        return builder.AddArticles();
     }
 }

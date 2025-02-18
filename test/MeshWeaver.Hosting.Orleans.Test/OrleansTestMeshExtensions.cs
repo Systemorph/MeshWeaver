@@ -13,9 +13,7 @@ public static class OrleansTestMeshExtensions
                 .InstallAssemblies(typeof(OrleansTestMeshExtensions).Assembly.Location)
             )
             .AddKernel()
-            .AddArticles(articles
-                => articles.FromAppSettings()
-            );
+            .AddArticles();
 
     }
 
