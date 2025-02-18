@@ -5,7 +5,6 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <IsAspireHost>true</IsAspireHost>
         <UserSecretsId>fddddaf5-8e88-4362-a2ad-5b0f3c75c51f</UserSecretsId>
-        <TargetFrameworks>net9.0</TargetFrameworks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,8 +14,10 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Azure.PostgreSQL" />
     <PackageReference Include="Aspire.Hosting.Orleans" />
     <PackageReference Include="Aspire.Hosting.Azure.Storage" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" />
     <PackageReference Include="Aspire.Hosting.Redis" />
     <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
   </ItemGroup>
