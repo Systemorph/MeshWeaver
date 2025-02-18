@@ -24,10 +24,8 @@ var postgresdb = postgres.AddDatabase("postgresdb");
 //}
 //var fileShare = fileStorage.WithBindMount<AzureStorageResource>("//smb-server/share", "/mnt/smb-share");
 var redis = builder.AddRedis("orleans-redis");
-var addressRegistry = builder.AddRedis("address-registry");
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(redis)
-    .WithGrainStorage(addressRegistry)
     .WithGrainStorage("mesh-catalog", appStorage.AddTables("mesh-catalog"))
     .WithGrainStorage("activity", appStorage.AddTables("activity"));
 
