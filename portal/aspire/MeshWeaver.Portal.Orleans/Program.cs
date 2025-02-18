@@ -1,12 +1,10 @@
-﻿using MeshWeaver.Connection.Orleans;
-using MeshWeaver.Hosting.Orleans;
+﻿using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
-using Microsoft.Extensions.Hosting;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 builder.AddAspireServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
@@ -23,5 +21,5 @@ builder.
     ;
 
 var app = builder.Build();
-
+app.MapDefaultEndpoints();
 app.Run();
