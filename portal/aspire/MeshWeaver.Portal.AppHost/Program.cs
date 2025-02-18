@@ -26,6 +26,7 @@ var postgresdb = postgres.AddDatabase("postgresdb");
 var redis = builder.AddRedis("orleans-redis");
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(redis)
+    .WithGrainStorage(redis)
     .WithGrainStorage("mesh-catalog", appStorage.AddTables("mesh-catalog"))
     .WithGrainStorage("activity", appStorage.AddTables("activity"));
 
