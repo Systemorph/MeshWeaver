@@ -29,7 +29,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         base.ConfigureMesh(builder)
             .AddKernel()
             .ConfigureServices(ConfigureArticles)
-            .AddArticles()
+            .ConfigureServices(services => services.AddArticles())
             .ConfigureMesh(config => config.AddMeshNodes(
                     TestHubExtensions.Node
                 )

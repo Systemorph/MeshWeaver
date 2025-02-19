@@ -14,12 +14,7 @@ public static  class SharedMeshConfiguration
                 .InstallAssemblies(typeof(DocumentationViewModels).Assembly.Location)
                 .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
             )
-            .AddKernel()
-            .ConfigureArticles();
+            .AddKernel();
     }
 
-    public static MeshBuilder ConfigureArticles(this MeshBuilder builder)
-    {
-        return builder.AddArticles();
-    }
 }

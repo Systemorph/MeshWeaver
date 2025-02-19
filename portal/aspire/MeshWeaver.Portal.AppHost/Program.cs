@@ -7,7 +7,12 @@ var builder = DistributedApplication.CreateBuilder(args);
 var appStorage = builder.AddAzureStorage("meshweaverblobs");
 if (builder.Environment.IsDevelopment())
 {
-    appStorage.RunAsEmulator();
+    appStorage = appStorage.RunAsEmulator(
+        azurite =>
+        {
+            azurite.WithDataBindMount("../Azurite/Data");
+        });
+
 }
 
 var postgres = builder
@@ -16,17 +21,10 @@ var postgres = builder
 
 var postgresdb = postgres.AddDatabase("postgresdb");
 
-// File share storage (for blog content)
-//var fileStorage = builder.AddAzureStorage("meshweaverfiles");
-//if (builder.Environment.IsDevelopment())
-//{
-//    fileStorage.RunAsEmulator();
-//}
-//var fileShare = fileStorage.WithBindMount<AzureStorageResource>("//smb-server/share", "/mnt/smb-share");
 var redis = builder.AddRedis("orleans-redis");
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(redis)
-    .WithGrainStorage(redis)
+    .WithGrainStorage("address-registry", redis)
     .WithGrainStorage("mesh-catalog", appStorage.AddTables("mesh-catalog"))
     .WithGrainStorage("activity", appStorage.AddTables("activity"));
 
@@ -37,6 +35,7 @@ builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
 builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
     .WithExternalHttpEndpoints()
     .WithReference(orleans.AsClient())
+    .WithReference(appStorage.AddBlobs("articles"))
     .WithReference(postgresdb);
 
 builder.Build().Run();
