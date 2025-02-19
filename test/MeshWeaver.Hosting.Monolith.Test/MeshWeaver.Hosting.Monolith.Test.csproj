@@ -2,8 +2,10 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
-        <PackageReference Include="TestContainers" />
+        <PackageReference Include="Testcontainers" />
         <PackageReference Include="Testcontainers.PostgreSql" />
+        <PackageReference Include="Microsoft.Extensions.Azure" />
+        <PackageReference Include="Azure.Storage.Blobs" />
     </ItemGroup>
     <ItemGroup>
         <Content Include="Markdown\**">
@@ -18,17 +20,11 @@
         </ProjectReference>
         <ProjectReference Include="..\..\src\MeshWeaver.Connection.SignalR\MeshWeaver.Connection.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.SignalR\MeshWeaver.Hosting.SignalR.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
-    </ItemGroup>
-    <ItemGroup>
-        <PackageReference Include="Roslynator.Analyzers" />
-        <PackageReference Include="Roslynator.Formatting.Analyzers" />
-        <PackageReference Include="Roslynator.CodeFixes" />
-        <PackageReference Include="Roslynator.CodeAnalysis.Analyzers" />
-        <PackageReference Include="Roslynator.Refactorings" />
     </ItemGroup>
 
 </Project>

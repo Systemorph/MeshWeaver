@@ -1,29 +1,35 @@
 ﻿// In an appropriate extensions class (e.g., ArticleConfigurationExtensions.cs)
 
-using Microsoft.Extensions.DependencyInjection;
+using Azure.Storage.Blobs;
 using MeshWeaver.Articles;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Azure;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
 public static class ArticleConfigurationExtensions
 {
-    public static MeshBuilder AddAzureBlobArticleSource(
-        this MeshBuilder builder)
+    public static IServiceCollection AddAzureBlobArticleSource(
+        this IServiceCollection services)
     {
-        return builder.ConfigureServices(s => s
+        return services
             .AddKeyedSingleton<IArticleCollectionFactory, AzureBlobArticleCollectionFactory>(
-                AzureBlobArticleCollectionFactory.SourceType));
+                AzureBlobArticleCollectionFactory.SourceType);
     }
 }
 
-public class AzureBlobArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
+public class AzureBlobArticleCollectionFactory(IMessageHub hub, IServiceProvider serviceProvider) : IArticleCollectionFactory
 {
     public const string SourceType = "AzureBlob";
 
     public ArticleCollection Create(ArticleSourceConfig config)
     {
-        return new AzureBlobArticleCollection(config, hub);
+
+        var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
+        var blobServiceClient = factory.CreateClient(StorageProviders.Articles);
+
+        return new AzureBlobArticleCollection(config, hub, blobServiceClient);
     }
 }

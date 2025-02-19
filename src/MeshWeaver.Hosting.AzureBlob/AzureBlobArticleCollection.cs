@@ -17,12 +17,11 @@ public class AzureBlobArticleCollection : ArticleCollection
 
     public AzureBlobArticleCollection(
         ArticleSourceConfig config,
-        IMessageHub hub) : base(config, hub)
+        IMessageHub hub,
+        BlobServiceClient client) : base(config, hub)
     {
         var containerName = config.BasePath;
-        var blobClientFactory = hub.ServiceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
-        var blobServiceClient = blobClientFactory.CreateClient(StorageProviders.MeshCatalog);
-        containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        containerClient = client.GetBlobContainerClient(containerName);
         articleStream = CreateStream(containerName);
     }
 
