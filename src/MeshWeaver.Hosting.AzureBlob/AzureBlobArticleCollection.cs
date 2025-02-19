@@ -3,10 +3,7 @@ using Azure.Storage.Blobs;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Azure;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 

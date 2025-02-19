@@ -70,7 +70,7 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
             clientBuilder.AddBlobServiceClient(ContainerExtensions.AzuriteConnectionString).WithName(StorageProviders.Articles); 
         });
         return services
-            .AddAzureBlobArticleSource()
+            .AddAzureBlobArticles()
             .Configure<List<ArticleSourceConfig>>(
                 options => options.Add(new ArticleSourceConfig()
                 {

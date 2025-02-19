@@ -11,10 +11,11 @@ namespace MeshWeaver.Hosting.AzureBlob;
 
 public static class ArticleConfigurationExtensions
 {
-    public static IServiceCollection AddAzureBlobArticleSource(
+    public static IServiceCollection AddAzureBlobArticles(
         this IServiceCollection services)
     {
         return services
+            .AddArticles()
             .AddKeyedSingleton<IArticleCollectionFactory, AzureBlobArticleCollectionFactory>(
                 AzureBlobArticleCollectionFactory.SourceType);
     }

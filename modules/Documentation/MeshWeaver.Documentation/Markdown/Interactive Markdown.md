@@ -4,6 +4,8 @@ Abstract: >
   Executable markdown is the future of software engineering. With the introduction of AI in software engineering, 
   the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process
 Thumbnail: "images/InteractiveMarkdown.png"
+VideoUrl: "https://www.youtube.com/embed/6J16W9qcZFY?si=HYe9Oh1wEveqAsJK"
+VideoDuration: "00:14:42"
 Published: "2025-01-26"
 Authors:
   - "Roland Bürgi"

@@ -28,12 +28,11 @@ public static class ArticleExtensions
     internal static IArticleService GetArticleService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IArticleService>();
 
-    public static MeshBuilder AddArticles(this MeshBuilder builder)
-        => builder
-            .ConfigureServices(services => services
+    public static IServiceCollection AddArticles(this IServiceCollection services)
+        => services
                 .AddSingleton<IArticleService, ArticleService>()
                 .AddKeyedSingleton<IArticleCollectionFactory, FileSystemArticleCollectionFactory>(FileSystemArticleCollectionFactory.SourceType)
-            );
+            ;
    
 
 

@@ -7,6 +7,8 @@ Abstract: >
   the path from specification to implementation.    
 Thumbnail: "images/Specification to Implementation.jpeg"
 Published: "2025-02-04"
+VideoUrl: "https://www.youtube.com/embed/soujo5VBE00?si=XDLP2Bik8pg1DqBp"
+VideoDuration: "00:15:11"
 Authors:
   - "Roland Bürgi"
 Tags:
