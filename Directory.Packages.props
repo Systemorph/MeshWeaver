@@ -15,7 +15,7 @@
     <PackageVersion Include="Azure.Data.Tables" Version="12.10.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.0.0" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.22.2" />
     <PackageVersion Include="Azure.Storage.Files.Shares" Version="12.21.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.2.0" />

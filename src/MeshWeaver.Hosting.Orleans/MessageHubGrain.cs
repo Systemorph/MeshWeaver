@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.Orleans;
 
 [StorageProvider(ProviderName = StorageProviders.Activity)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
-    : Grain<StreamActivity>, IMessageHubGrain
+    : Grain, IMessageHubGrain
 {
 
     private ModulesAssemblyLoadContext loadContext;
@@ -41,9 +41,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         //var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
         //Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
-        State = State with { IsDeactivated = false };
-
-        await this.WriteStateAsync();
     }
 
     private IMessageHub InstantiateFromHubConfiguration(Address address, MeshNode node)
@@ -68,7 +65,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
 
-    public async Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
+    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery)
     {
         logger.LogDebug("Received: {request}", delivery);
         if (Hub == null)
@@ -76,23 +73,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             var address = this.GetPrimaryKeyString();
             logger.LogError("Hub not started for {address}", this.GetPrimaryKeyString());
             DeactivateOnIdle();
-            return delivery.Failed($"Hub not started for {address}");
+            return Task.FromResult(delivery.Failed($"Hub not started for {address}"));
         }
-
-
-        var messageType = delivery.Message.GetType().FullName;
-        this.State = State with
-        {
-            EventCounter =
-            State.EventCounter.SetItem(messageType, State.EventCounter.GetValueOrDefault(messageType) + 1),
-        };
 
         Hub.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
         var ret = Hub.DeliverMessage(delivery);
-        await this.WriteStateAsync();
-        return ret;
+        return Task.FromResult(ret);
     }
 
 
@@ -108,17 +96,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (loadContext != null)
             loadContext.Unload();
         loadContext = null;
-        State = State with { IsDeactivated = true };
-        try
-        {
-            await WriteStateAsync();
-            await base.OnDeactivateAsync(reason, cancellationToken);
-        }
-        catch(Exception e)
-        {
-            logger.LogError(e, "Error during deactivation of {address}", this.GetPrimaryKeyString());
-            throw;
-        }
+        await base.OnDeactivateAsync(reason, cancellationToken);
     }
 }
 

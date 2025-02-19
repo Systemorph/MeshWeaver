@@ -1,6 +1,4 @@
-﻿using System.Net.Http;
-using System.Threading.Tasks;
-using Microsoft.FluentUI.AspNetCore.Components.Utilities;
+﻿using Microsoft.FluentUI.AspNetCore.Components.Utilities;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Portal.Shared.Web.Infrastructure
