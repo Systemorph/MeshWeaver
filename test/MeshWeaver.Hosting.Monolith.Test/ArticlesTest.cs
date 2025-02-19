@@ -47,7 +47,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 
 
-    private string GetAssemblyLocation()
+    protected string GetAssemblyLocation()
     {
         var location = GetType().Assembly.Location;
         return Path.GetDirectoryName(location);

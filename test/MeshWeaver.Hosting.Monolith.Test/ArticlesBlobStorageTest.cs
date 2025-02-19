@@ -1,5 +1,7 @@
 ﻿using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
+using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
 using MeshWeaver.Articles;
 using MeshWeaver.Hosting.AzureBlob;
@@ -11,7 +13,7 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class ArticlesInStorageTest(ITestOutputHelper output) : ArticlesTest(output)
+public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(output)
 {
 
     private readonly IContainer azuriteContainer = ContainerExtensions.Azurite();
@@ -22,6 +24,31 @@ public class ArticlesInStorageTest(ITestOutputHelper output) : ArticlesTest(outp
 
         // Start containers
         await azuriteContainer.StartAsync();
+        await UploadMarkdownFiles();
+
+    }
+
+    private async Task UploadMarkdownFiles()
+    {
+        var markdownPath = Path.Combine(GetAssemblyLocation(), "Markdown");
+        var files = Directory.GetFiles(markdownPath, "*", SearchOption.AllDirectories);
+
+        // Get blob service client
+        var blobServiceClient = new BlobServiceClient(ContainerExtensions.AzuriteConnectionString);
+
+        // Get or create container
+        var containerClient = blobServiceClient.GetBlobContainerClient(StorageProviders.Articles);
+        await containerClient.CreateIfNotExistsAsync();
+
+        foreach (var file in files)
+        {
+            var fileName = Path.GetFileName(file);
+            var blobClient = containerClient.GetBlobClient(fileName);
+
+            // Upload file content
+            await using var fileStream = File.OpenRead(file);
+            await blobClient.UploadAsync(fileStream, overwrite: true);
+        }
     }
 
     public override async Task DisposeAsync()
