@@ -10,7 +10,8 @@ if (builder.Environment.IsDevelopment())
     appStorage = appStorage.RunAsEmulator(
         azurite =>
         {
-            azurite.WithDataBindMount("../Azurite/Data");
+            azurite.WithDataBindMount("../Azurite/Data")
+                .WithExternalHttpEndpoints();
         });
 
 }
