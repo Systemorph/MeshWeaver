@@ -28,21 +28,23 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .AddKernel()
-            .ConfigureServices(services =>
-                services
-                    .Configure<List<ArticleSourceConfig>>(
-                        options => options.Add(new ArticleSourceConfig()
-                        {
-                            Name = "Test", BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
-                        })
-                    )
-
-            ).AddArticles()
+            .ConfigureServices(ConfigureArticles)
+            .AddArticles()
             .ConfigureMesh(config => config.AddMeshNodes(
                     TestHubExtensions.Node
                 )
             );
-        
+
+    protected virtual IServiceCollection ConfigureArticles(IServiceCollection services)
+    {
+        return services
+            .Configure<List<ArticleSourceConfig>>(
+                options => options.Add(new ArticleSourceConfig()
+                {
+                    Name = "Test", BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+                })
+            );
+    }
 
 
     private string GetAssemblyLocation()
@@ -53,7 +55,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
 
     [Fact]
-    public async Task BasicArticle()
+    public virtual async Task BasicArticle()
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetStream(
@@ -70,7 +72,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         articleControl.Html.Should().NotBe(null);
     }
     [Fact]
-    public async Task NotFound()
+    public virtual async Task NotFound()
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetStream(
@@ -84,7 +86,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         control.Should().BeOfType<MarkdownControl>();
     }
     [Fact]
-    public async Task Catalog()
+    public virtual async Task Catalog()
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetStream(
@@ -110,7 +112,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 
     [Fact]
-    public async Task CalculatorThroughArticle()
+    public virtual async Task CalculatorThroughArticle()
     {
 
         var client = GetClient();
