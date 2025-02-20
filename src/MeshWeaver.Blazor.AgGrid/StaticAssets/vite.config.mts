@@ -1,6 +1,18 @@
 ﻿import { defineConfig } from 'vite';
+import { viteStaticCopy } from 'vite-plugin-static-copy';
 
 export default defineConfig({
+    plugins: [
+        viteStaticCopy({
+            targets: [
+                {
+                    src: 'node_modules/ag-grid-community/styles/*.min.css',
+                    dest: './css/'
+                }
+            ],
+            structured: true
+        })
+    ],
     build: {
         emptyOutDir: true,
         minify: false,
@@ -11,9 +23,8 @@ export default defineConfig({
                         return 'vendor';
                     }
                 },
-                entryFileNames: 'index.mjs', // Ensure the output file is named index.mjs
-                format: 'es' // Ensure the format is ES module
-
+                entryFileNames: 'index.mjs',
+                format: 'es'
             }
         },
         lib: {
