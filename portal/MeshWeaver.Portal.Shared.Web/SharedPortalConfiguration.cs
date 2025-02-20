@@ -31,6 +31,7 @@ public static class SharedPortalConfiguration
         builder.ConfigureServices(services =>
             {
                 services.AddRazorComponents().AddInteractiveServerComponents();
+                services.AddSingleton<CacheStorageAccessor>();
                 return services;
             })
             .AddBlazor(layoutClient => layoutClient

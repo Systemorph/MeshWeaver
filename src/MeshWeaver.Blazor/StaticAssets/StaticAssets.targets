@@ -1,36 +1,37 @@
 ﻿<Project>
-  <Target Name="NpmInstall" 
+  <Target Name="NpmInstall"
           Inputs="$(MSBuildThisFileDirectory)package.json"
           Outputs="$(BaseIntermediateOutputPath)package-lock.json"
-          >
-      <Message Importance="high" Text="Running npm install..." />
-      <Exec Command="npm install" 
-            WorkingDirectory="$(MSBuildThisFileDirectory)" 
-            />
-      <Copy SourceFiles="$(MSBuildThisFileDirectory)package-lock.json"
-            DestinationFolder="$(BaseIntermediateOutputPath)" 
-            />
+  >
+    <Message Importance="high" Text="Running npm install..." />
+    <Exec Command="npm install"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+    />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)package-lock.json"
+          DestinationFolder="$(BaseIntermediateOutputPath)"
+    />
   </Target>
 
   <ItemGroup>
-    <ViteBuildInputs Include="$(MSBuildThisFileDirectory)**" 
-                     Exclude="$(MSBuildThisFileDirectory)node_modules\**" 
-                     />
+    <ViteBuildInputs Include="$(MSBuildThisFileDirectory)**"
+                     Exclude="$(MSBuildThisFileDirectory)node_modules\**"
+    />
     <UpToDateCheckInput Include="@(ViteBuildInputs)"
-                     />
+    />
   </ItemGroup>
 
-  <Target Name="ViteBuild" 
-          DependsOnTargets="NpmInstall" 
+  <Target Name="ViteBuild"
+          DependsOnTargets="NpmInstall"
           BeforeTargets="CoreBuild"
           Inputs="@(ViteBuildInputs)"
           Outputs="$(MSBuildThisFileDirectory)..\wwwroot\index.mjs"
-          >
-
+  >
     <Message Importance="high" Text="Running vite build..." />
-
-    <Exec Command="npm run build:$(Configuration)" 
-          WorkingDirectory="$(MSBuildThisFileDirectory)" 
-          />
+    <Exec Command="npm run build:$(Configuration)"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+    />
+    <!-- Validate output -->
+    <Error Text="Vite build failed to generate wwwroot content"
+           Condition="!Exists('$(MSBuildThisFileDirectory)..\wwwroot')" />
   </Target>
 </Project>

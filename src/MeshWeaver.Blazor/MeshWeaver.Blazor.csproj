@@ -12,6 +12,7 @@
     <ItemGroup>
         <SupportedPlatform Include="browser" />
         <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
+        <Content Update="wwwroot\**" Pack="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
     </ItemGroup>
 
     <ItemGroup>
