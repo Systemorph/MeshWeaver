@@ -18,6 +18,7 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Aspire.Azure.Storage.Blobs" />
+        <PackageReference Include="Aspire.Npgsql" />
         <PackageReference Include="Microsoft.Orleans.Client" />
         <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
         <PackageReference Include="Aspire.StackExchange.Redis" />

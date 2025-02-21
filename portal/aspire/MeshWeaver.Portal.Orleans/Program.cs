@@ -14,10 +14,9 @@ var address = new MeshAddress();
 
 
 
-builder.
-    UseOrleansMeshServer(address)
-                .ConfigurePortalMesh()
-
+builder.UseOrleansMeshServer(address)
+    .ConfigurePortalMesh()
+    .AddPostgresSerilog()
     ;
 
 var app = builder.Build();

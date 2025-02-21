@@ -205,7 +205,7 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public async Task<IMessageDelivery> HandleMessageAsync(
+    private async Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
@@ -235,7 +235,6 @@ public sealed class MessageHub : IMessageHub
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
-        // TODO V10: Add logging for failed messages, not found, etc. (31.01.2024, Roland Bürgi)
         return delivery.State == MessageDeliveryState.Submitted ? delivery.Ignored() : delivery;
     }
 
