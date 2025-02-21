@@ -58,18 +58,32 @@
 }
 
 .media {
-    width: 75%;
-    aspect-ratio: 16/9; /* Maintains standard video aspect ratio */
-    text-align: center;
-    margin: auto auto;
     position: relative;
+    width: 100%;
+    padding-top: 56.25%; /* 16:9 Aspect Ratio */
 }
 
-    .media img.thumbnail {
-        width: 100%;
-        object-fit: cover; /* Ensure the image covers the container and is truncated if necessary */
-    }
+.youtube-embed {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+}
 
+.thumbnail {
+    width: 100%;
+    height: auto;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+@media (forced-colors: active) {
+    .youtube-embed {
+        border: 1px solid currentColor;
+    }
+}
 .article-content {
     width: 75%; /* Decrease the width to 75% */
     margin: 16px auto; /* Center the article content and add margin */

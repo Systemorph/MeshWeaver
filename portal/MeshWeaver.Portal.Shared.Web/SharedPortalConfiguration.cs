@@ -1,6 +1,4 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics;
-using MeshWeaver.Activities;
+﻿using System.Diagnostics;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
@@ -27,8 +25,10 @@ public static class SharedPortalConfiguration
             builder.Configuration.GetSection("Styles"));
     }
 
-    public static MeshBuilder ConfigureWebPortalMesh(this MeshBuilder builder) =>
-        builder.ConfigureServices(services =>
+    public static TBuilder ConfigureWebPortalMesh<TBuilder>(this TBuilder builder)
+        where TBuilder:MeshBuilder
+        =>
+        (TBuilder)builder.ConfigureServices(services =>
             {
                 services.AddRazorComponents().AddInteractiveServerComponents();
                 services.AddSingleton<CacheStorageAccessor>();

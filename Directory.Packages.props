@@ -10,6 +10,7 @@
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="9.0.0" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.0.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="9.0.0" />
+    <PackageVersion Include="Aspire.Npgsql" Version="9.0.0" />
     <PackageVersion Include="Autofac" Version="8.2.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.10.0" />
@@ -51,6 +52,8 @@
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="9.0.1" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
     <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
+    <PackageVersion Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageVersion Include="Serilog.Sinks.PostgreSQL" Version="2.3.0" />
     <PackageVersion Include="System.Collections.Immutable" Version="9.0.0" />
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.CommandLine.NamingConventionBinder" Version="2.0.0-beta4.22272.1" />

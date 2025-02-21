@@ -1,5 +1,4 @@
-﻿using Aspire.Hosting.Azure;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -18,9 +17,10 @@ if (builder.Environment.IsDevelopment())
 
 var postgres = builder
     .AddPostgres("postgres")
-    .WithPgAdmin();
-
-var postgresdb = postgres.AddDatabase("postgresdb");
+    .WithPgAdmin()
+    .WithDataVolume()
+;
+var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
 var redis = builder.AddRedis("orleans-redis");
 var orleans = builder.AddOrleans("mesh")
@@ -31,12 +31,14 @@ var orleans = builder.AddOrleans("mesh")
 
 builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
+    .WithReference(meshweaverdb)
     .WithReplicas(1);
 
 builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
     .WithExternalHttpEndpoints()
     .WithReference(orleans.AsClient())
     .WithReference(appStorage.AddBlobs("articles"))
-    .WithReference(postgresdb);
+    .WithReference(meshweaverdb)
+    ;
 
 builder.Build().Run();

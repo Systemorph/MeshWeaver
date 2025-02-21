@@ -54,7 +54,7 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
-        logger.LogInformation("An exception occurred processing {message} from {sender} in {address}: {exception}", delivery.Message, delivery.Sender, Address, delivery.Message);
+        logger.LogInformation("An exception occurred processing {@Delivery} in {Address}", delivery, Address);
         Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
         return delivery;
     }
@@ -72,7 +72,7 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("Buffering message {message} from sender {sender} in message service {address}", delivery.Message, delivery.Sender, delivery.Target);
+        logger.LogDebug("Buffering message {@Delivery} in {Address}", delivery, Address);
 
         lock (locker)
         {
@@ -102,7 +102,7 @@ public class MessageService : IMessageService
         delivery = UnpackIfNecessary(delivery);
         executionBuffer.Post(async _ =>
         {
-            logger.LogDebug("Start processing {message} from {sender} in {address}", delivery.Message, delivery.Sender,
+            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery.Message, delivery.Sender,
                 Address);
             try
             {
@@ -110,12 +110,11 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                logger.LogError("An exception occurred during the processing of errors. Exception: {Exception}. Address: {Address}.", e, Address);
+                logger.LogError("An exception occurred during the processing of {@Delivery}. Exception: {Exception}. Address: {Address}.", delivery, e, Address);
                 ReportFailure(delivery.Failed(e.ToString()));
             }
 
-            logger.LogDebug("Finished processing {message} from {sender} in {address}", delivery.Message,
-                delivery.Sender, Address); 
+            logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address); 
 
         });
         return delivery.Forwarded(hub.Address);
@@ -127,8 +126,9 @@ public class MessageService : IMessageService
         {
             if (isDisposing)
                 return null;
-            logger.LogDebug("Posting message {Message} from {Sender} to {Target}", message, Address, opt.Target);
-            return PostImpl(message, opt);
+            var ret = PostImpl(message, opt);
+            logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
+            return ret;
         }
     }
     private IMessageDelivery UnpackIfNecessary(IMessageDelivery delivery)
@@ -139,7 +139,7 @@ public class MessageService : IMessageService
         }
         catch
         {
-            logger.LogWarning("Failed to deserialize delivery {PackedDelivery}", delivery);
+            logger.LogWarning("Failed to deserialize delivery {@Delivery} in {Address}", delivery, Address);
             // failed unpack delivery, returning original delivery with message type RawJson
         }
 
@@ -150,7 +150,7 @@ public class MessageService : IMessageService
     {
         if (delivery.Message is not RawJson rawJson)
             return delivery;
-        logger.LogDebug("Deserializing message {id} from sender {sender} to target {target}", delivery.Id, delivery.Sender, delivery.Target);
+        logger.LogDebug("Deserializing {@Delivery} in {Address}", delivery, Address);
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
         return delivery.WithMessage(deserializedMessage);
     }
@@ -164,7 +164,9 @@ public class MessageService : IMessageService
     private IMessageDelivery<TMessage> PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
     {
         if (typeof(TMessage) != message.GetType())
-            return (IMessageDelivery<TMessage>)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new object[] { message, opt });
+            return (IMessageDelivery<TMessage>)PostImplMethod
+                .MakeGenericMethod(message.GetType())
+                .Invoke(this, [message, opt]);
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
 
@@ -174,7 +176,7 @@ public class MessageService : IMessageService
     }
 
     
-    private readonly object locker = new();
+    private readonly Lock locker = new();
 
     public async ValueTask DisposeAsync()
     {
