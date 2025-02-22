@@ -14,6 +14,7 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Views;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
 
@@ -190,13 +191,19 @@ public static class LayoutExtensions
         stream.Update(s =>
             stream.ApplyChanges(
                 s.MergeWithUpdates(
-                    WorkspaceOperations.Update(s, LayoutAreaReference.Data,
+                    s.Update(LayoutAreaReference.Data,
                         c => c.SetItem(id, value)
                     ),
                     changedBy
                 )
-            )
+            ),
+            stream.FailRendering
         );
+    }
+
+    private static void FailRendering(this ISynchronizationStream stream, Exception exception)
+    {
+        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception,"Rendering failed");
     }
 
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)

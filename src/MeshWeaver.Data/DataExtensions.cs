@@ -110,7 +110,7 @@ public static class DataExtensions
             .WithHandler<DataChangeRequest>((hub, request) =>
             {
                 var activity = new Activity(ActivityCategory.DataUpdate, hub);
-                hub.GetWorkspace().RequestChange(request.Message with{ChangedBy = request.Message.ChangedBy}, activity);
+                hub.GetWorkspace().RequestChange(request.Message with{ChangedBy = request.Message.ChangedBy}, activity, request);
                 activity.Complete(log =>
                     hub.Post(new DataChangeResponse(hub.Version, log), o => o.ResponseFor(request))
                 );

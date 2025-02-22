@@ -1,5 +1,7 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data.Serialization;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
@@ -50,11 +52,18 @@ public static class WorkspaceStreams
 c => c
             );
 
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         ret.Initialize(async ct => await streams.ToAsyncEnumerable().SelectAwait(async x => await x.FirstAsync()).AggregateAsync(new EntityStore(), (x, y) =>
-            x.Merge(y.Value), cancellationToken: ct));
+            x.Merge(y.Value), cancellationToken: ct), ex => logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address));
 
         foreach (var stream in streams)
-            ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => ret.Update(current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)))));
+            ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => 
+                ret.Update(
+                    current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)),
+                    ex => logger.LogError(ex, "cannot apply changes to stream for {Address}", workspace.Hub.Address)
+                    )
+                )
+            );
 
         return ret.Reduce(reference, configuration);
     }

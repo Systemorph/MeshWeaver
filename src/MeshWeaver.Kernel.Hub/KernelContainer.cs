@@ -72,7 +72,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => a.Value.GetValueOrDefault(ctx.Area) ?? new MarkdownControl("Waiting to start execution."))
+                        .Select(a => a.Value.GetValueOrDefault(ctx.Area))
                 )
             )
             .AddMeshTypes()
@@ -207,7 +207,7 @@ public class KernelContainer : IDisposable
                 {
                     Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
                 }
-        );
+        , null);
     }
 
     private void HandleNotebookEvent(KernelEvent @event)
@@ -313,7 +313,7 @@ public class KernelContainer : IDisposable
             if(!string.IsNullOrEmpty(request.Message.IFrameUrl))
                 submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
         }
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command)); 
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), null); 
         return request.Processed();
     }
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
@@ -325,7 +325,7 @@ public class KernelContainer : IDisposable
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command));
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), null);
         return request.Processed();
     }
 

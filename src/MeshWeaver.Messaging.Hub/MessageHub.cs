@@ -15,8 +15,8 @@ public sealed class MessageHub : IMessageHub
 {
     public Address Address => Configuration.Address;
 
-    public void InvokeAsync(Func<CancellationToken, Task> action) =>
-        Post(new ExecutionRequest(action));
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback) =>
+        Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
     private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
@@ -409,6 +409,7 @@ public sealed class MessageHub : IMessageHub
 
         return tcs.Task;
     }
+
 
     private async Task<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,

@@ -54,7 +54,7 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
-        logger.LogInformation("An exception occurred processing {@Delivery} in {Address}", delivery, Address);
+        logger.LogWarning("An exception occurred processing {@Delivery} in {Address}", delivery, Address);
         Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
         return delivery;
     }
@@ -110,11 +110,17 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                logger.LogError("An exception occurred during the processing of {@Delivery}. Exception: {Exception}. Address: {Address}.", delivery, e, Address);
-                ReportFailure(delivery.Failed(e.ToString()));
+                if(delivery.Message is ExecutionRequest er)
+                    er.ExceptionCallback?.Invoke(e);
+                else
+                {
+                    logger.LogError("An exception occurred during the processing of {@Delivery}. Exception: {Exception}. Address: {Address}.", delivery, e, Address);
+                    ReportFailure(delivery.Failed(e.ToString()));
+                }
             }
 
-            logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address); 
+            if(delivery.Message is not ExecutionRequest)
+                logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address); 
 
         });
         return delivery.Forwarded(hub.Address);

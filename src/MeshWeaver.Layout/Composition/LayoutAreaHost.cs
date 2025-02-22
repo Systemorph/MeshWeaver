@@ -70,8 +70,14 @@ public record LayoutAreaHost : IDisposable
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
             InvokeAsync(() => control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload, Hub, this)
-            ));
+            ), ex => FailRequest(ex, request));
         return request.Processed();
+    }
+
+    private void FailRequest(Exception exception, IMessageDelivery request)
+    {
+        logger.LogWarning(exception, "Request failed");
+        Hub.Post(new DeliveryFailure(request, exception?.Message), o => o.ResponseFor(request));
     }
 
     public object GetControl(string area) =>
@@ -127,7 +133,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             ) ;
-        });
+        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
     }
 
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
@@ -136,7 +142,8 @@ public record LayoutAreaHost : IDisposable
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId))
+            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId)),
+            ex => logger.LogWarning(ex, "Cannot update {Collection}", collection)
         );
     }
 
@@ -225,17 +232,17 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.Clear();
     }
 
-    public void InvokeAsync(Func<CancellationToken, Task> action)
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback)
     {
-        executionHub.InvokeAsync(action);
+        executionHub.InvokeAsync(action, exceptionCallback);
     }
 
-    public void InvokeAsync(Action action) =>
+    public void InvokeAsync(Action action, Action<Exception> exceptionCallback) =>
         InvokeAsync(_ =>
         {
             action();
             return Task.CompletedTask;
-        });
+        }, exceptionCallback);
 
     private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
@@ -270,9 +277,14 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
-                .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
+                .Subscribe(c => InvokeAsync(() => UpdateArea(context, c), FailRendering))
         );
         return ret;
+    }
+
+    private void FailRendering(Exception ex)
+    {
+        logger.LogWarning(ex, "Rendering failed");
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
@@ -288,7 +300,7 @@ public record LayoutAreaHost : IDisposable
 
             UpdateArea(context, view);
             logger.LogDebug("End rendering of {area}", context.Area);
-        });
+        }, FailRendering);
         return DisposeExistingAreas(store, context);
     }
     internal EntityStoreAndUpdates RenderArea(
@@ -301,7 +313,7 @@ public record LayoutAreaHost : IDisposable
                 {
                     var view = await vd.Invoke(this, context, ct);
                     UpdateArea(context, view);
-                })
+                }, FailRendering)
             )
         );
 
@@ -316,7 +328,7 @@ public record LayoutAreaHost : IDisposable
         RegisterForDisposal(
             context.Area,
             generator.Subscribe(view =>
-                InvokeAsync(() => UpdateArea(context, view))
+                InvokeAsync(() => UpdateArea(context, view), FailRendering)
             )
         );
         return ret;
@@ -338,9 +350,9 @@ public record LayoutAreaHost : IDisposable
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
                         ))
-                        .Store);
+                        .Store, FailRendering);
             logger.LogDebug("End re-rendering");
-        });
+        }, FailRendering);
         return Stream;
     }
 

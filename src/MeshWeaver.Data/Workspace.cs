@@ -76,21 +76,21 @@ public class Workspace : IWorkspace
 
 
 
-    public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity) =>
+    public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity, IMessageDelivery request) =>
         RequestChange(
             new DataChangeRequest()
             {
                 Updates = instances.ToImmutableList(),
                 Options = updateOptions,
                 ChangedBy = null
-            }, activity
+            }, activity,request
         );
 
 
 
-    public void Delete(IReadOnlyCollection<object> instances, Activity activity) =>
+    public void Delete(IReadOnlyCollection<object> instances, Activity activity, IMessageDelivery request) =>
         RequestChange(
-            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, activity
+            new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, activity, request
         );
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
@@ -127,9 +127,9 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangeRequest change, Activity activity)
+    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery request)
     {
-        this.Change(change, activity);
+        this.Change(change, activity, request);
     }
 
     private bool isDisposing;
