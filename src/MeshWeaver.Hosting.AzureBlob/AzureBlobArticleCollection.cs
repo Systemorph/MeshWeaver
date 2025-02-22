@@ -4,6 +4,8 @@ using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
@@ -11,13 +13,14 @@ public class AzureBlobArticleCollection : ArticleCollection
 {
     private readonly BlobContainerClient containerClient;
     private readonly ISynchronizationStream<InstanceCollection> articleStream;
-
+    private readonly ILogger<AzureBlobArticleCollection> logger;
     public AzureBlobArticleCollection(
         ArticleSourceConfig config,
         IMessageHub hub,
         BlobServiceClient client) : base(config, hub)
     {
         var containerName = config.BasePath;
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobArticleCollection>>();
         containerClient = client.GetBlobContainerClient(containerName);
         articleStream = CreateStream(containerName);
     }
@@ -47,7 +50,7 @@ public class AzureBlobArticleCollection : ArticleCollection
             new EntityReference(Collection, containerName),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
             x => x);
-        ret.Initialize(InitializeAsync);
+        ret.Initialize(InitializeAsync, ex => logger.LogError(ex, "Unable to load collection {Collection}", containerName));
         return ret;
     }
 

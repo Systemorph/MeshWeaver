@@ -9,14 +9,14 @@ public interface IWorkspace : IAsyncDisposable
     IMessageHub Hub { get; }
     DataContext DataContext { get; }
     IReadOnlyCollection<Type> MappedTypes { get; }
-    void Update(IReadOnlyCollection<object> instances, Activity activity) => Update(instances, new(), activity);
-    void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity);
-    void Update(object instance, Activity activity) => Update([instance], activity);
+    void Update(IReadOnlyCollection<object> instances, Activity activity, IMessageDelivery request) => Update(instances, new(), activity, request);
+    void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity, IMessageDelivery request);
+    void Update(object instance, Activity activity, IMessageDelivery request) => Update([instance], activity, request);
 
-    void Delete(IReadOnlyCollection<object> instances, Activity activity);
-    void Delete(object instance, Activity activity) => Delete([instance], activity);
+    void Delete(IReadOnlyCollection<object> instances, Activity activity, IMessageDelivery request);
+    void Delete(object instance, Activity activity, IMessageDelivery request) => Delete([instance], activity, request);
 
-    public void RequestChange(DataChangeRequest change, Activity activity);
+    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery request);
 
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }

@@ -202,7 +202,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        });
+        }, null);
 
         var updatedControls = await stream
             .GetControlStream(reportArea)
@@ -432,7 +432,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        });
+        }, null);
 
         resultsControl = await stream
             .GetControlStream(resultsArea)

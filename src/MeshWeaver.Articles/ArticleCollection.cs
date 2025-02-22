@@ -71,7 +71,7 @@ public class FileSystemArticleCollection : ArticleCollection
             new EntityReference(Collection, path),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
             x => x);
-        ret.Initialize(InitializeAsync);
+        ret.Initialize(InitializeAsync, null);
         return ret;
     }
 
@@ -107,7 +107,7 @@ public class FileSystemArticleCollection : ArticleCollection
         {
             var article = await LoadArticle(path, ct);
             return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
-        });
+        }, null);
     }
 
     public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)

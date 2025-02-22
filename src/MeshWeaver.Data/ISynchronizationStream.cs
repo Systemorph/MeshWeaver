@@ -39,15 +39,15 @@ public interface ISynchronizationStream<TStream>
         IObserver<ChangeItem<TStream>>
 {
     ChangeItem<TStream> Current { get; }
-    void Update(Func<TStream, ChangeItem<TStream>> update);
-    void UpdateAsync(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update);
-    void Initialize(Func<CancellationToken, Task<TStream>> init);
-    void Initialize(Func<TStream> init) => Initialize(_ => Task.FromResult(init()));
+    void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback);
+    void UpdateAsync(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback);
+    void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback);
+    void Initialize(Func<TStream> init, Action<Exception> exceptionCallback) => Initialize(_ => Task.FromResult(init()), exceptionCallback);
     void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
-    void RequestChange(Func<TStream, ChangeItem<TStream>> update);
-    void InvokeAsync(Action action);
-    void InvokeAsync(Func<CancellationToken, Task> action);
+    void RequestChange(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback);
+    void InvokeAsync(Action action, Action<Exception> exceptionCallback);
+    void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback);
 
 }
 

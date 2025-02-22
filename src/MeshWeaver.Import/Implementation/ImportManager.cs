@@ -30,8 +30,21 @@ public class ImportManager
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
     {
-        importHub.InvokeAsync(ct => DoImport(request, ct));
+        importHub.InvokeAsync(ct => DoImport(request, ct), ex => FailImport(ex, request));
         return request.Processed();
+    }
+
+    private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
+    {
+        var message = new StringBuilder(exception.Message);
+        while (exception.InnerException != null)
+        {
+            message.AppendLine(exception.InnerException.Message);
+            exception = exception.InnerException;
+        }
+        var activity = new Activity(ActivityCategory.Import, Hub);
+        activity.LogError(message.ToString());
+        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
     private async Task<IMessageDelivery> DoImport(
@@ -45,7 +58,7 @@ public class ImportManager
 
         try
         {
-            await ImportImpl(request.Message, activity, cancellationToken);
+            await ImportImpl(request, activity, cancellationToken);
             await activity.Complete(log =>
             {
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
@@ -55,27 +68,33 @@ public class ImportManager
         }
         catch (Exception e)
         {
-            var message = new StringBuilder(e.Message);
-            while (e.InnerException != null)
-            {
-                message.AppendLine(e.InnerException.Message);
-                e = e.InnerException;
-            }
-
-            activity.LogError(message.ToString());
-            await activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)), cancellationToken: cancellationToken);
+            await FinishWithException(request,  e, activity);
         }
 
         return request.Processed();
     }
 
+    private async Task FinishWithException(IMessageDelivery request, Exception e,
+        Activity activity)
+    {
+        var message = new StringBuilder(e.Message);
+        while (e.InnerException != null)
+        {
+            message.AppendLine(e.InnerException.Message);
+            e = e.InnerException;
+        }
 
-    private async Task ImportImpl(ImportRequest request, Activity activity, CancellationToken cancellationToken)
+        activity.LogError(message.ToString());
+        await activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+    }
+
+
+    private async Task ImportImpl(IMessageDelivery<ImportRequest> request, Activity activity, CancellationToken cancellationToken)
     {
         try
 
         {
-            var imported = await ImportInstancesAsync(request, activity, cancellationToken);
+            var imported = await ImportInstancesAsync(request.Message, activity, cancellationToken);
             if (activity.HasErrors())
                 return;
 
@@ -83,8 +102,10 @@ public class ImportManager
                 DataChangeRequest.Update(
                     imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), 
                     null, 
-                    request.UpdateOptions),
-                activity);
+                    request.Message.UpdateOptions),
+                activity, 
+                request
+                );
         }
         catch (Exception e)
         {

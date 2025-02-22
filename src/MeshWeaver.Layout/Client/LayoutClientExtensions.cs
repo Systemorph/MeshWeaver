@@ -7,13 +7,15 @@ using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
-    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, T value,
+    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, 
+        T value,
         string dataContext,
         JsonPointerReference reference, ModelParameter model = null)
     {
@@ -33,7 +35,8 @@ public static class LayoutClientExtensions
                     var updated = patch?.Apply(ci) ?? ci;
 
                     return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-                });
+                },
+                    ex => stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout"));
 
         }
     }

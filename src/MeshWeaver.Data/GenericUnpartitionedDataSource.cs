@@ -5,6 +5,8 @@ using System.Reflection;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
@@ -84,7 +86,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 {
     protected virtual TDataSource This => (TDataSource)this;
     protected IMessageHub Hub => Workspace.Hub;
-
+    protected ILogger Logger => Workspace.Hub.ServiceProvider.GetRequiredService<ILogger<TDataSource>>();
     IEnumerable<ITypeSource> IDataSource.TypeSources => TypeSources.Values.Cast<ITypeSource>();
 
     protected ImmutableDictionary<Type, TTypeSource> TypeSources { get; init; } =
@@ -255,7 +257,9 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
-        stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken));
+        stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
+            ex => Logger.LogWarning(ex, "An error occurred initializing data source {DataSource}", Id)
+        );
         stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }
@@ -321,7 +325,10 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
-        stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken));
+        stream.Initialize(
+            cancellationToken => GetInitialValue(stream, cancellationToken),
+            ex => Logger.LogWarning(ex, "An error occurred updating data source {DataSource}", Id)
+        );
         stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }
