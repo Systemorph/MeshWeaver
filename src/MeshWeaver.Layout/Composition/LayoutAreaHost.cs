@@ -277,7 +277,7 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
-                .Subscribe(c => InvokeAsync(() => UpdateArea(context, c), FailRendering))
+                .Subscribe(c => UpdateArea(context, c), FailRendering)
         );
         return ret;
     }
@@ -327,9 +327,7 @@ public record LayoutAreaHost : IDisposable
 
         RegisterForDisposal(
             context.Area,
-            generator.Subscribe(view =>
-                InvokeAsync(() => UpdateArea(context, view), FailRendering)
-            )
+            generator.DistinctUntilChanged().Subscribe(view => UpdateArea(context, view))
         );
         return ret;
     }
