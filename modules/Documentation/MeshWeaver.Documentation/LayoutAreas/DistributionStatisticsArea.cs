@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Diagnostics;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -30,7 +31,7 @@ public static class DistributionStatisticsArea
     /// </summary>
     /// <param name="Mu"></param>
     /// <param name="Sigma"></param>
-    public record LogNormal(double Mu = 10, double Sigma = 1) : Distribution;
+    public record LogNormal(double Mu = 1, double Sigma = 1) : Distribution;
 
     /// <summary>
     /// Basic input section for the simulation
@@ -76,17 +77,20 @@ public static class DistributionStatisticsArea
     /// <param name="basicInput">Basic Inputs for the simulation</param>
     /// <param name="distribution">Distribution to simulate</param>
     /// <returns></returns>
-    private static double[] Simulate(BasicInput basicInput, Distribution distribution)
+    private static (double[] Samples, TimeSpan Time) Simulate(BasicInput basicInput, Distribution distribution)
     {
-        var rng = new Random(22022025);
-        return distribution switch
+        var rng = new Random();
+        var sw = Stopwatch.StartNew();
+        var samples = distribution switch
         {
             Pareto pareto => Enumerable.Range(0, basicInput.Samples)
-                .Select(_ => pareto.Alpha * Math.Pow(pareto.X0, pareto.Alpha) / Math.Pow(rng.NextDouble(), pareto.Alpha)).ToArray(),
+                .Select(_ => pareto.X0 / Math.Pow(1 - rng.NextDouble(), 1.0 / pareto.Alpha)).ToArray(),
             LogNormal logNormal => Enumerable.Range(0, basicInput.Samples)
                 .Select(_ => rng.SampleLogNormal(logNormal.Mu, logNormal.Sigma)).ToArray(),
             _ => throw new NotSupportedException($"Unknown distribution type {distribution.GetType().Name}")
         };
+
+        return (samples, sw.Elapsed);
     }
 
     /// <summary>
@@ -116,13 +120,20 @@ public static class DistributionStatisticsArea
     /// <summary>
     /// This method calculates the mean and variance of a sample.
     /// </summary>
-    /// <param name="samples"></param>
+    /// <param name="tuple"></param>
     /// <returns></returns>
-    public static MarkdownControl Statistics(this double[] samples)
+    public static MarkdownControl Statistics(this (double[] Samples, TimeSpan Time) tuple)
     {
+        var samples = tuple.Samples;
         var mean = samples.Average();
         var variance = samples.Select(x => Math.Pow(x - mean, 2)).Average();
-        return Controls.Markdown($"Mean: {mean}\nVariance: {variance}");
+        return Controls.Markdown(
+            @$"### Key Statistics
+| Mean | Variance |
+|------|----------|
+| {mean:F1} | {variance:F1} |
+
+Execution Time: {tuple.Time}" );
     }
 
     #endregion
@@ -138,18 +149,19 @@ public static class DistributionStatisticsArea
     public static object DistributionStatistics(LayoutAreaHost host, RenderingContext context)
     {
         host.UpdateData(nameof(DistributionTypes), DistributionTypes);
-        var subject = new Subject<double[]>();
+        var subject = new Subject<(double[] Samples, TimeSpan Time)>();
 
 
         host.RegisterForDisposal(host.GetDataStream<BasicInput>(nameof(BasicInput))
             .Select(x => x.DistributionType)
             .DistinctUntilChanged()
-            .Skip(1)
             .Subscribe(t => host.UpdateData(nameof(Distribution), Distributions[t])));
 
          return Controls.Stack
             .WithView(host.Edit(new BasicInput(), nameof(BasicInput)), nameof(BasicInput))
-            .WithView(host.Edit(new Pareto(), nameof(Distribution)), nameof(Distribution))
+            .WithView(host.GetDataStream<Distribution>(nameof(Distribution)).Select(x => x.GetType())
+                .DistinctUntilChanged()
+                .Select(t => host.Edit(t, nameof(Distribution))))
             .WithView(Controls.Button("Run Simulation")
                 .WithClickAction(
                     async _ =>
@@ -158,7 +170,7 @@ public static class DistributionStatisticsArea
                         var distribution = await host.Stream.GetDataAsync<Distribution>(nameof(Distribution));
                         subject.OnNext(Simulate(input, distribution));
                     }))
-            .WithView(subject.Select(x => x.Statistics()).StartWith(Controls.Markdown("## Click to run simulation")));
+            .WithView(subject.Select(x => x.Statistics()).StartWith(Controls.Markdown("### Click to run simulation")));
     }
 
 

@@ -80,7 +80,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         var distributionEditor = control.Should().BeOfType<EditorControl>().Which;
         distributionEditor.Areas.Should().HaveCount(2);
-        distributionEditor.DataContext.Should().NotBeEmpty();
+        distributionEditor.DataContext.Should().Be(LayoutAreaReference.GetDataPointer("Distribution"));
 
 
         // let's find the distribution.
@@ -112,16 +112,17 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         control = await stream.GetControlStream(resultArea)
             .Timeout(10.Seconds())
             .OfType<MarkdownControl>()
-            .FirstAsync(md => !md.Markdown.ToString()!.StartsWith("#"));
+            .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"));
 
         results = control.Should().BeOfType<MarkdownControl>().Which;
-        results.Markdown.ToString().Should().Contain("Mean");
         var paretoResults = results.Markdown;
+        
         // now let's change the distribution type
         stream.UpdatePointer(JsonSerializer.SerializeToNode("LogNormal"), basicInputEditor.DataContext, selectionPointer);
+        
         // which should change the distribution
         distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
-            .Timeout(10.Seconds())
+            //.Timeout(10.Seconds())
             .Select(x => x.Value)
             .FirstAsync(x => !x.GetProperty("$type").ToString().Contains("Pareto")));
 

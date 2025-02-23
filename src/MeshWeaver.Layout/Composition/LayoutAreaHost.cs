@@ -268,7 +268,7 @@ public record LayoutAreaHost : IDisposable
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Stream.StreamId);
+            new EntityUpdate(LayoutAreaReference.Areas, i.Key, null) { OldValue = i.Value }), Stream.StreamId);
     }
 
 
