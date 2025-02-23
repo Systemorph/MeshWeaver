@@ -2,6 +2,7 @@
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;

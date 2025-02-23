@@ -18,10 +18,6 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// The constant string for areas.
     /// </summary>
     public const string Areas = "areas";
-    /// <summary>
-    /// The constant string for properties.
-    /// </summary>
-    public const string Properties = "properties";
 
     /// <summary>
     /// Gets the data pointer for the specified ID and extra segments.

@@ -21,6 +21,7 @@ public static class DocumentationViewModels
         => config.AddLayout(layout => layout
             .AddCounter()
             .AddCalculator()
+            .AddDistributionStatistics()
         );
 
 }

@@ -165,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => 
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress($"{Hub.Address}/{StreamId}"), config => 
             Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config),(c,cc) => cc.Invoke(c)));
 
         if(synchronizationHub == null)

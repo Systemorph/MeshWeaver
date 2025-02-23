@@ -215,6 +215,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.AzureBlob", "src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj", "{055BD65A-969A-4517-A650-7E83FC071CEB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith.TestBase", "test\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj", "{2B23A10C-3C56-404C-A72A-C9BAE13DACDF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -569,6 +571,10 @@ Global
 		{055BD65A-969A-4517-A650-7E83FC071CEB}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{055BD65A-969A-4517-A650-7E83FC071CEB}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{055BD65A-969A-4517-A650-7E83FC071CEB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -665,6 +671,7 @@ Global
 		{78893B93-FE41-4514-9F1E-B648B690C126} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{9E5180EA-81FB-94D0-C23B-BF152057A8BA} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{055BD65A-969A-4517-A650-7E83FC071CEB} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

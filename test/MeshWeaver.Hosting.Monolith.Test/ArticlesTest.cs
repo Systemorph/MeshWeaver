@@ -9,6 +9,7 @@ using FluentAssertions.Extensions;
 using HtmlAgilityPack;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Views;
@@ -41,7 +42,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Configure<List<ArticleSourceConfig>>(
                 options => options.Add(new ArticleSourceConfig()
                 {
-                    Name = "Test", BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+                    Name = Test, BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
                 })
             );
     }
@@ -111,40 +112,6 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Which.Name.Should().Be("ReadMe");
     }
 
-    [Fact]
-    public virtual async Task CalculatorThroughArticle()
-    {
-
-        var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(
-            new LayoutAreaReference("Article") { Id = "Test/Calculator" });
-
-        var control = await articleStream
-            .GetControlStream("Article")
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
-
-        var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
-        articleControl.Name.Should().Be("Calculator");
-        articleControl.Content.Should().BeNull();
-        articleControl.Html.Should().NotBe(null);
-        var (addressString, area) = HtmlParser
-            .ExtractDataAddressAttributes(articleControl.Html.ToString())
-            .Single();
-        var address = client.GetAddress(addressString);
-        var calcStream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(address, new(area));
-        control = await calcStream.GetControlStream(area)
-            .Timeout(20.Seconds())
-            .FirstAsync(x => x is not null);
-
-        var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await calcStream.GetControlStream(stack.Areas.Last().Area.ToString())
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
-
-        control.Should().BeOfType<MarkdownControl>()
-            .Which.Markdown.ToString().Should().Contain("3");
-    }
 
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -154,16 +121,3 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     }
 }
 
-public static class HtmlParser
-{
-    public static List<(string Address, string Area)> ExtractDataAddressAttributes(string htmlContent)
-    {
-        var doc = new HtmlDocument();
-        doc.LoadHtml(htmlContent);
-
-        var nodes = doc.DocumentNode.SelectNodes("//*[@data-address]");
-        return nodes?.Select(node => 
-            (node.GetAttributeValue("data-address", string.Empty), node.GetAttributeValue("data-area", string.Empty))
-            ).ToList() ?? new();
-    }
-}

@@ -21,6 +21,8 @@ public static class EditorExtensions
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, object> result)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
+        => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, IObservable<object>> result)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));

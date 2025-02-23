@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -153,35 +154,34 @@ public record LayoutAreaHost : IDisposable
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
+
     public void RegisterForDisposal(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
     }
 
+    public void RegisterForDisposal(IDisposable disposable)
+    {
+        disposablesByArea.GetOrAdd(string.Empty, _ => new()).Add(disposable);
+    }
+
     public IObservable<T> GetDataStream<T>(string id)
         where T : class
-        => GetStream<T>(LayoutAreaReference.Data, id);
-    public IObservable<T> GetPropertiesStream<T>(string id)
-        where T : class
-        => GetStream<T>(LayoutAreaReference.Properties, id);
-    public IObservable<T> GetStream<T>(string collection, string id)
-        where T : class
-    {
-        var reference = new EntityReference(collection, id);
-        return GetStream<T>(reference);
-    }
+        => GetStream<T>(new EntityReference(LayoutAreaReference.Data, id));
+
 
     private IObservable<T> GetStream<T>(EntityReference reference) where T : class
     {
         return Stream
+            .Reduce(reference)
             .Select(ci => Convert<T>(ci, reference))
-            .Where(x => x != null)
+            .Where(x => x is not null)
             .DistinctUntilChanged();
     }
 
-    private static T Convert<T>(ChangeItem<EntityStore> ci, EntityReference reference) where T : class
+    private static T Convert<T>(ChangeItem<object> ci, EntityReference reference) where T : class
     {
-        var result = ci.Value.Reduce(reference);
+        var result = ci.Value;
         if (result is null)
             return null;
 
@@ -327,7 +327,9 @@ public record LayoutAreaHost : IDisposable
 
         RegisterForDisposal(
             context.Area,
-            generator.DistinctUntilChanged().Subscribe(view => UpdateArea(context, view))
+            generator
+                .DistinctUntilChanged()
+                .Subscribe(view => UpdateArea(context, view))
         );
         return ret;
     }
