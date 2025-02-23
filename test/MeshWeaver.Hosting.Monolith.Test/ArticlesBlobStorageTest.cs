@@ -86,11 +86,6 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         return base.BasicArticle();
     }
 
-    [Fact]
-    public override Task CalculatorThroughArticle()
-    {
-        return base.CalculatorThroughArticle();
-    }
 
     [Fact]
     public override Task NotFound()

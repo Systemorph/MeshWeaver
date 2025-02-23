@@ -2,10 +2,8 @@
 using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Markdig;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Fixture;
-using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Xunit.Abstractions;
 
@@ -15,7 +13,7 @@ namespace MeshWeaver.Documentation.Test;
 /// The main class for testing documentation
 /// </summary>
 /// <param name="output"></param>
-public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
+public class DocumentsTest(ITestOutputHelper output) : HubTestBase(output)
 {
     /// <summary>
     /// Configure the documentation service
@@ -53,8 +51,8 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
         var type = GetType();
         var sourceByType = (PdbDocumentationSource)documentationService.GetSource(PdbDocumentationSource.Pdb, type.Assembly.GetName().Name);
         sourceByType.Should().NotBeNull();
-        var fileName = sourceByType.FilesByType.GetValueOrDefault(typeof(DocumentationTest).FullName);
-        fileName.Should().Be($"{nameof(DocumentationTest)}.cs");
+        var fileName = sourceByType.FilesByType.GetValueOrDefault(typeof(DocumentsTest).FullName);
+        fileName.Should().Be($"{nameof(DocumentsTest)}.cs");
         await using var stream = sourceByType.GetStream(fileName);
         stream.Should().NotBeNull();
         var content = await new StreamReader(stream).ReadToEndAsync();
@@ -68,7 +66,7 @@ public class DocumentationTest(ITestOutputHelper output) : HubTestBase(output)
     [HubFact]
     public void TestDebugInfo()
     {
-        var points = PdbDocumentationSource.ReadMethodSourceInfo(typeof(DocumentationTest).Assembly.Location, nameof(TestDebugInfo));
+        var points = PdbDocumentationSource.ReadMethodSourceInfo(typeof(DocumentsTest).Assembly.Location, nameof(TestDebugInfo));
         points.Should().NotBeNull();
         points.Should().HaveCountGreaterThan(0);
     }

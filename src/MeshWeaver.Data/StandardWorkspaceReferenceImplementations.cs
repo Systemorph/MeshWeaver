@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
@@ -62,9 +63,15 @@ public static class StandardWorkspaceReferenceImplementations
             return new(current.Value.ReduceImpl(reference), current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
-        if (change == null)
-            return null;
-        return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+        if (change is not null)
+            return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+
+        return new(
+            current.Value.ReduceImpl(reference), 
+            null,
+            ChangeType.Full,
+            current.Version,
+            ImmutableArray<EntityUpdate>.Empty);
     }
     private static ChangeItem<JsonElement> ReduceEntityStoreTo(ChangeItem<EntityStore> current,
         JsonPointerReference reference, JsonSerializerOptions options)
