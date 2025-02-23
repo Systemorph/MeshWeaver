@@ -21,6 +21,8 @@ public static class EditorExtensions
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
         Func<T, object> result)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
+    public static UiControl Edit(this LayoutAreaHost host, Type type, string id)
+        => host.Hub.ServiceProvider.Edit(type, id);
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
@@ -49,6 +51,10 @@ public static class EditorExtensions
         this IServiceProvider serviceProvider, T instance,
         string id = null)
         => serviceProvider.Edit(Observable.Return(instance), id);
+    public static UiControl Edit(
+        this IMessageHub hub, Type type,
+        string id)
+        => hub.ServiceProvider.Edit(type, id);
     public static UiControl Edit<T>(
         this IMessageHub hub, T instance,
         string id = null)
@@ -68,6 +74,10 @@ public static class EditorExtensions
                     .Aggregate(new EditorControl(),
                         serviceProvider.MapToControl<EditorControl, EditorSkin>),
             id);
+    public static EditorControl Edit(this IServiceProvider serviceProvider, Type type, string id)
+        => type.GetProperties()
+                    .Aggregate(new EditorControl(),
+                        serviceProvider.MapToControl<EditorControl, EditorSkin>) with{DataContext = LayoutAreaReference.GetDataPointer(id)};
 
 
 
