@@ -48,9 +48,11 @@ public partial class MarkdownView
         if (mermaid is not null)
             await mermaid.InvokeVoidAsync("contentLoaded", Mode is DesignThemeModes.Dark);
         if (mathjax is not null)
+        {
+            var mathJaxReady = await mathjax.InvokeAsync<bool>("waitForMathJax");
             await mathjax.InvokeVoidAsync("typeset");
+        }
     }
-
     private void RenderHtml(RenderTreeBuilder builder)
     {
         if (Html is null)

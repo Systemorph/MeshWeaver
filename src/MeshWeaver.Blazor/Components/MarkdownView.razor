@@ -6,6 +6,7 @@
                    StorageName="theme" />
 
 <HeadContent>
+    <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
     @if (Mode == DesignThemeModes.Light)
     {
         <link href="_content/MeshWeaver.Blazor/css/github.min.css" rel="stylesheet" />
@@ -15,18 +16,6 @@
         <link href="_content/MeshWeaver.Blazor/css/github-dark.min.css" rel="stylesheet" />
     }
 
-    <link href="_content/MeshWeaver.Blazor/css/markdown.css" rel="stylesheet" />
-    <script>
-    MathJax = {
-        tex: {
-            packages: ['base', 'ams', 'noundefined', 'newcommand', 'boldsymbol']
-        },
-        startup: {
-            typeset: false
-        }
-    };
-</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
 </HeadContent>
 <article @ref="Element" class="markdown-body" data-theme="@Mode.ToString().ToLower()">
     @((RenderFragment)RenderHtml)
