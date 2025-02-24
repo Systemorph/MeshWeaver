@@ -13,7 +13,7 @@ public static class ViewModelExtensions
         icon.Provider switch
         {
             FluentIcons.Provider =>
-                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size }.GetInstance(),
+                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant}.GetInstance(),
             _ => null
         };
 

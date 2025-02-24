@@ -87,6 +87,9 @@ public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(M
         Func<NavGroupControl, NavGroupControl> config) =>
         WithNavGroup(config(new NavGroupControl(title)));
 
+    public NavMenuControl Collapse(bool expanded = false)
+    => WithSkin(s => s.Collapse(expanded));
+
 }
 
 public interface IMenuItem : IUiControl

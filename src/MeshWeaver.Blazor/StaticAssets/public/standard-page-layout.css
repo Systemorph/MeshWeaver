@@ -220,11 +220,22 @@ code {
     nav.sitenav.collapsed {
         width: 120px; /* Adjust value for the collapsed state */
     }
+
+    .navmenu .fluent-icon svg {
+        width: 48px !important;
+        height: 48px !important;
+    }
 }
 @media (max-width: 600px) {
     .header-gutters {
         margin: 0.5rem 3rem 0.5rem 1.5rem !important;
     }
+
+    /* Adjust the collapsed width if desired */
+    nav.sitenav.collapsed {
+        display: none; /* Adjust value for the collapsed state */
+    }
+
 
     [dir="rtl"] .header-gutters {
         margin: 0.5rem 1.5rem 0.5rem 3rem !important;

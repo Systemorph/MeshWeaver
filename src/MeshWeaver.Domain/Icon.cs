@@ -11,10 +11,7 @@ public record Icon(string Provider, string Id)
 {
     public IconSize Size { get; init; } = IconSize.Size24;
 
-    public Icon WithSize(IconSize size) => this with { Size = size };
-
     public IconVariant Variant { get; init; } = IconVariant.Regular;
-    public Icon WithVariant(IconVariant variant) => this with { Variant = variant };
 
 }
 
