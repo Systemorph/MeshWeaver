@@ -1,6 +1,5 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
-using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
@@ -101,7 +100,7 @@ public static class AnnualReportSummaryArea
     private static object Customers(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Customers",
-            FluentIcons.Person,
+            FluentIcons.Person(),
             current.Customers.ToSuffixFormat(),
             previous is not null ? GrowthPercentage(current.Customers, previous.Customers) : null
         );
@@ -109,7 +108,7 @@ public static class AnnualReportSummaryArea
     private static object Sales(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Sales",
-            FluentIcons.WalletCreditCard,
+            FluentIcons.WalletCreditCard(),
             "$" + current.Sales.ToSuffixFormat(),
             previous is not null ? GrowthPercentage(current.Sales, previous.Sales) : null
         );
@@ -117,7 +116,7 @@ public static class AnnualReportSummaryArea
     private static object Products(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Products",
-            FluentIcons.Box,
+            FluentIcons.Box(),
             current.Products.ToSuffixFormat(),
             previous is not null ? GrowthPercentage(current.Products, previous.Products) : null
         );
@@ -125,7 +124,7 @@ public static class AnnualReportSummaryArea
     private static object Orders(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Orders",
-            FluentIcons.Checkmark,
+            FluentIcons.Checkmark(),
             current.Orders.ToSuffixFormat(),
             previous is not null ? GrowthPercentage(current.Orders, previous.Orders) : null
         );
