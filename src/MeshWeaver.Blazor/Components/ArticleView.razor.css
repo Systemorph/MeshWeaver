@@ -17,6 +17,10 @@
     margin: 0 auto; /* Center the page content */
 }
 
+.title:focus {
+    outline: none;
+}
+
 .header-content {
     width: 100%;
     text-align: left; /* Left-align text */
