@@ -52,16 +52,16 @@ public static class AnnualReportConfiguration
 
     private static readonly IReadOnlyDictionary<string, (Icon, int)> DocumentIcons = new Dictionary<string, (Icon, int)>()
     {
-        { "SalesAnalysis.md", (FluentIcons.Money, 10) },
-        { "TopSalesRepresentatives.md", (FluentIcons.PersonAccounts, 20) },
-        { "TopProductsOverview.md", (FluentIcons.ShoppingBag, 30) },
-        { "DiscountsAnalysis.md", (FluentIcons.ShoppingBagPercent, 40) },
-        { "OrdersReview.md", (FluentIcons.BoxCheckmark, 50) },
-        { "TopClientsOverview.md", (FluentIcons.CreditCardPerson, 60) },
+        { "SalesAnalysis.md", (FluentIcons.Money(), 10) },
+        { "TopSalesRepresentatives.md", (FluentIcons.PersonAccounts(), 20) },
+        { "TopProductsOverview.md", (FluentIcons.ShoppingBag(), 30) },
+        { "DiscountsAnalysis.md", (FluentIcons.ShoppingBagPercent(), 40) },
+        { "OrdersReview.md", (FluentIcons.BoxCheckmark(), 50) },
+        { "TopClientsOverview.md", (FluentIcons.CreditCardPerson(), 60) },
     };
 
     private static (Icon Icon, int Order) GetIconAndOrder(string documentName)
-        => DocumentIcons.TryGetValue(documentName, out var icon) ? icon : (FluentIcons.Document, int.MaxValue);
+        => DocumentIcons.TryGetValue(documentName, out var icon) ? icon : (FluentIcons.Document(), int.MaxValue);
 
     private static System.Reflection.Assembly ThisAssembly
         => typeof(AnnualReportConfiguration).Assembly;
