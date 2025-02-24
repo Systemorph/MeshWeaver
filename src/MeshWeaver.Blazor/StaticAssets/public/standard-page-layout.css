@@ -235,13 +235,13 @@ code {
         appearance: none;
     }
 
-        #navmenu-toggle ~ nav {
-            display: none;
-        }
+    #navmenu-toggle ~ nav {
+        display: none;
+    }
 
-        #navmenu-toggle:checked ~ nav {
-            display: block;
-        }
+    #navmenu-toggle:checked ~ nav {
+        display: block;
+    }
 
     .navmenu-icon {
         cursor: pointer;
