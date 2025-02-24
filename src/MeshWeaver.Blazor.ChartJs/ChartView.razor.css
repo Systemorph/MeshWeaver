@@ -1,6 +1,26 @@
-﻿.my-component {
-    border: 2px dashed red;
-    padding: 1em;
-    margin: 1em 0;
-    background-image: url('background.png');
+﻿:root {
+    --chart-background: #ffffff;
+    --chart-text-color: #666666;
+    --chart-grid-color: rgba(0, 0, 0, 0.1);
+    --chart-border-color: rgba(0, 0, 0, 0.1);
+}
+
+    :root[data-theme="dark"] {
+        --chart-background: #1e1e1e; /* Darker background */
+        --chart-text-color: #e0e0e0;
+        --chart-grid-color: rgba(255, 255, 255, 0.1);
+        --chart-border-color: rgba(255, 255, 255, 0.1);
+    }
+
+.chart-container {
+    position: relative;
+    background-color: var(--chart-background);
+    padding: 1rem;
+    border-radius: 8px;
+    min-height: 300px;
+}
+
+canvas {
+    width: 100% !important;
+    height: 100% !important;
 }

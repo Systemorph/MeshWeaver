@@ -1,12 +1,13 @@
 ﻿@using Microsoft.JSInterop
 @inherits BlazorView<MeshWeaver.Charting.ChartControl, ChartView>
 
-<canvas @ref="Element" class="@Class"></canvas>
+<div class="chart-container">
+    <canvas @ref="Element" class="@Class"></canvas>
+</div>
 
 @code
 {
     ElementReference Element;
-
     private object Options;
 
     [Inject] private IJSRuntime JsRuntime { get; set; }
@@ -17,9 +18,8 @@
         if (firstRender)
         {
             JsModule = await JsRuntime.Import("index.mjs");
-
-
         }
+
         if (JsModule is not null)
         {
             await JsModule.InvokeVoidAsync("renderChart", Element, Options);
@@ -31,8 +31,6 @@
         base.BindData();
         DataBind(ViewModel.Data, o => o.Options);
     }
-
-
 
     public override async ValueTask DisposeAsync()
     {
