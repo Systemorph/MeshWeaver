@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using MeshWeaver.Application.Styles;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
@@ -12,9 +13,9 @@ public static class PortalLayoutExtensions
 
 
     private static NavMenuControl NavMenu(this NavMenuControl menu) =>
-        menu.WithNavLink("Articles", "articles")
-            .WithNavLink("Documentation Areas", $"app/Documentation/{LayoutAreaCatalogArea.LayoutAreas}")
-            .WithNavLink("Northwind Areas", $"app/Northwind/{LayoutAreaCatalogArea.LayoutAreas}")
+        menu.WithNavLink("Articles", "articles", FluentIcons.News())
+            .WithNavLink("Documentation Areas", $"app/Documentation/{LayoutAreaCatalogArea.LayoutAreas}", FluentIcons.SlideLayout())
+            .WithNavLink("Northwind Areas", $"app/Northwind/{LayoutAreaCatalogArea.LayoutAreas}", FluentIcons.BuildingShop())
     ;
 
 }

@@ -1,19 +1,30 @@
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
-@inherits SkinnedView<NavMenuControl, NavMenuSkin,NavMenuView>
+@inherits SkinnedView<NavMenuControl, NavMenuSkin, NavMenuView>
+
 <div class="navmenu">
-    <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon" />
-    <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" /></label>
-    <nav class="sitenav" aria-labelledby="main-menu" >
-        <FluentNavMenu Id="main-menu" Title="Main menu" CustomToggle="true" @bind-Expanded="@Expanded">
-            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
+    <div class="navmenu-toggle-container">
+        <!-- Bind the checkbox's checked state to Expanded -->
+        <input type="checkbox"
+               title="Menu expand/collapse toggle"
+               id="navmenu-toggle"
+               class="navmenu-icon"
+               @bind="Expanded" />
+        <label for="navmenu-toggle" class="navmenu-icon">
+            <FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" />
+        </label>
+    </div>
+    <nav class="sitenav @(Expanded ? "expanded" : "collapsed")" aria-labelledby="main-menu">
+        <FluentNavMenu Id="main-menu"
+                       Title="Main menu"
+                       CustomToggle="true"
+                       @bind-Expanded="Expanded">
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
         </FluentNavMenu>
     </nav>
 </div>
 
-
 @code {
     private bool Expanded = true;
-
     private int? Width { get; set; }
     public bool Collapsible { get; set; }
 
@@ -24,5 +35,4 @@
         DataBind(Skin.Collapsible, x => x.Collapsible);
         DataBind(Skin.Expanded, x => x.Expanded);
     }
-
 }
