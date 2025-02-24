@@ -4,7 +4,7 @@
     <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon" />
     <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" /></label>
     <nav class="sitenav" aria-labelledby="main-menu" >
-        <FluentNavMenu Id="main-menu" Title="Main menu" CustomToggle="true" >
+        <FluentNavMenu Id="main-menu" Title="Main menu" CustomToggle="true" @bind-Expanded="@Expanded">
             <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
         </FluentNavMenu>
     </nav>
@@ -12,7 +12,7 @@
 
 
 @code {
-    private bool expanded = true;
+    private bool Expanded = true;
 
     private int? Width { get; set; }
     public bool Collapsible { get; set; }
@@ -22,6 +22,7 @@
         base.BindData();
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Collapsible, x => x.Collapsible);
+        DataBind(Skin.Expanded, x => x.Expanded);
     }
 
 }
