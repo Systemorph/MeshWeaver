@@ -1,7 +1,7 @@
 ﻿@using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Portal.Shared.Web.Infrastructure
 @inherits LayoutComponentBase
-@inject PortalApplication PortalApplication;
+
 <FluentLayout>
     <FluentHeader>
         <FluentNavLink href="/">Mesh Weaver</FluentNavLink>
@@ -39,11 +39,12 @@
             </div>
         </FluentBodyContent>
     </FluentStack>
+
     <FluentFooter>
         <a href="https://meshweaver.cloud" target="_blank">Mesh Weaver</a>
-        <FluentSpacer/>
+        <FluentSpacer />
         <span>© 2024 - @DateTime.UtcNow.Year Systemorph</span>
-        <FluentSpacer/>
+        <FluentSpacer />
         <a href="https://meshweaver.cloud" target="_blank">About Mesh Weaver</a>
     </FluentFooter>
 </FluentLayout>
