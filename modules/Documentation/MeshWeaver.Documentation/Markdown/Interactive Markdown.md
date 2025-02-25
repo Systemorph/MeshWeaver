@@ -1,7 +1,7 @@
 ﻿---
 Title: "Interactive Markdown: The Next Generation Development"
 Abstract: >
-  Executable markdown is the future of software engineering. With the introduction of AI in software engineering, 
+  Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, 
   the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process
 Thumbnail: "images/InteractiveMarkdown.png"
 VideoUrl: "https://www.youtube.com/embed/6J16W9qcZFY?si=HYe9Oh1wEveqAsJK"
