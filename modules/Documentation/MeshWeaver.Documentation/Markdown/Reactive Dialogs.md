@@ -5,7 +5,7 @@ Abstract: >
     complex business logic. We need to react on user interaction, switch parts depending
     on certain settings, compute results and display them. Reactive design is a low-
     complexity way of achieving this. It is robust, simpler to think about and easier to write.
-Thumbnail: "images/InteractiveMarkdown.png"
+Thumbnail: "images/Reactive Dialogs.jpeg"
 Published: "2025-02-20"
 Authors:
   - "Roland Bürgi"
@@ -18,7 +18,8 @@ Tags:
 Reactive programming was made popular in the early 2010s, on the one hand by the publication
 of the [Reactive Manifesto](https://reactivemanifesto.org/) and by the publication of 
 various reactive libraries such as
-[Reactive Extensions](http://reactivex.io/) and the, probably still most popular UI framework in 2025, [React](https://react.dev/) . 
+[Reactive Extensions](http://reactivex.io/) and the, probably still most popular UI framework in 2025, 
+[React](https://react.dev/) . 
 
 The basic idea is to model applications as a stream of events. These events can be user interactions,
 network messages, timer events, etc. The application reacts to these events by executing certain
