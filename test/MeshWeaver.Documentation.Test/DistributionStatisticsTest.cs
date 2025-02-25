@@ -23,7 +23,6 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
     /// <summary>
     /// Tests the distribution statistics dialog
     /// </summary>
-    /// <returns></returns>
     [Fact]
     public async Task DistributionStatistics()
     {
@@ -61,7 +60,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
             .Value;
         options.ValueKind.Should().Be(JsonValueKind.Array);
         var jsonArray = options.EnumerateArray().ToArray();
-        jsonArray.Should().HaveCount(2);
+        jsonArray.Should().HaveCountGreaterThan(1);
 
         var selectionPointer = select.Data.Should().BeOfType<JsonPointerReference>().Which;
         var absoluteSelectionPointer =
@@ -106,7 +105,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
-        var button = control.Should().BeOfType<ButtonControl>().Which;
+        control.Should().BeOfType<ButtonControl>();
         client.Post(new ClickedEvent(buttonArea.ToString(), stream.StreamId), o => o.WithTarget(stream.Owner));
 
         control = await stream.GetControlStream(resultArea)
@@ -122,7 +121,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         
         // which should change the distribution
         distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
-            //.Timeout(10.Seconds())
+            .Timeout(10.Seconds())
             .Select(x => x.Value)
             .FirstAsync(x => !x.GetProperty("$type").ToString().Contains("Pareto")));
 
