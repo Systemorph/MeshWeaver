@@ -17,7 +17,7 @@ public static class DevCertHostingExtensions
     /// Use <see cref="ResourceBuilderExtensions.WithHttpsEndpoint{TResource}"/> to configure an HTTPS endpoint.
     /// </remarks>
     public static IResourceBuilder<TResource> RunWithHttpsDevCertificate<TResource>(
-        this IResourceBuilder<TResource> builder, string certFileEnv, string certKeyFileEnv, Action<string, string>? onSuccessfulExport = null)
+        this IResourceBuilder<TResource> builder, string certFileEnv, string certKeyFileEnv, Action<string, string> onSuccessfulExport = null)
         where TResource : IResourceWithEnvironment
     {
         if (builder.ApplicationBuilder.ExecutionContext.IsRunMode && builder.ApplicationBuilder.Environment.IsDevelopment())
@@ -123,8 +123,8 @@ public static class DevCertHostingExtensions
 
         var exportProcess = new Process { StartInfo = exportStartInfo };
 
-        Task? stdOutTask = null;
-        Task? stdErrTask = null;
+        Task stdOutTask = null;
+        Task stdErrTask = null;
 
         try
         {
