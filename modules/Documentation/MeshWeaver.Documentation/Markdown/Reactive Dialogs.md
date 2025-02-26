@@ -56,6 +56,7 @@ public record Pareto(double Alpha = 2, double X0 = 1) : Distribution;
 /// LogNormal distribution <see ref="https://en.wikipedia.org/wiki/Log-normal_distribution"/>
 /// </summary>
 public record LogNormal(double Mu = 1, double Sigma = 1) : Distribution;
+ss
 ```
 
 As you notice, we also document very closely to the data model. In this case, the most useful kind of

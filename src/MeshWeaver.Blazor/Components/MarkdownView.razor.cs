@@ -16,6 +16,10 @@ public partial class MarkdownView
     private string Html { get; set; }
     private string Markdown { get; set; }
 
+    private List<string> highlightNodeIds = new();
+    private List<string> mermaidNodeIds = new();
+    private List<string> mathjaxNodeIds = new();
+
     protected override void BindData()
     {
         base.BindData();
@@ -30,7 +34,6 @@ public partial class MarkdownView
         }
     }
 
-
     private IJSObjectReference highlight;
     private IJSObjectReference mermaid;
     private IJSObjectReference mathjax;
@@ -43,16 +46,24 @@ public partial class MarkdownView
             mermaid ??= await JsRuntime.Import("mermaid.js");
             mathjax ??= await JsRuntime.Import("mathjax.js");
         }
-        if (highlight is not null)
-            await highlight.InvokeVoidAsync("highlightCode", Element);
-        if (mermaid is not null)
-            await mermaid.InvokeVoidAsync("contentLoaded", Mode is DesignThemeModes.Dark);
-        if (mathjax is not null)
+
+        if (highlight is not null && highlightNodeIds.Any())
+        {
+            await highlight.InvokeVoidAsync("highlightCode", highlightNodeIds);
+        }
+
+        if (mermaid is not null && mermaidNodeIds.Any())
+        {
+            await mermaid.InvokeVoidAsync("contentLoaded", Mode is DesignThemeModes.Dark, mermaidNodeIds);
+        }
+
+        if (mathjax is not null && mathjaxNodeIds.Any())
         {
             var mathJaxReady = await mathjax.InvokeAsync<bool>("waitForMathJax");
-            await mathjax.InvokeVoidAsync("typeset");
+            await mathjax.InvokeVoidAsync("typeset", mathjaxNodeIds);
         }
     }
+
     private void RenderHtml(RenderTreeBuilder builder)
     {
         if (Html is null)
@@ -61,9 +72,14 @@ public partial class MarkdownView
         var doc = new HtmlDocument();
         doc.LoadHtml(Html);
 
+        highlightNodeIds.Clear();
+        mermaidNodeIds.Clear();
+        mathjaxNodeIds.Clear();
+
         var sequence = 0;
         RenderNodes(builder, doc.DocumentNode.ChildNodes, ref sequence);
     }
+
     private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes, ref int sequence)
     {
         // Handle code blocks
@@ -82,24 +98,46 @@ public partial class MarkdownView
                     RenderLayoutArea(builder, address, area, areaId, ref sequence);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
+                    var mermaidId = Guid.NewGuid().ToString();
+                    mermaidNodeIds.Add(mermaidId);
                     builder.OpenElement(sequence++, node.Name);
+                    builder.AddAttribute(sequence++, "id", mermaidId);
                     foreach (var attribute in node.Attributes)
                         builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
                     builder.AddContent(sequence++, string.Join('\n', node.ChildNodes.OfType<HtmlTextNode>().Select(t => t.Text)));
                     builder.CloseElement();
                     break;
-
+                case { Name: "pre" } when node.ChildNodes.Any(n => n.Name == "code"):
+                    var highlightId = Guid.NewGuid().ToString();
+                    highlightNodeIds.Add(highlightId);
+                    builder.OpenElement(sequence++, node.Name);
+                    builder.AddAttribute(sequence++, "id", highlightId);
+                    foreach (var attribute in node.Attributes)
+                        builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
+                    RenderNodes(builder, node.ChildNodes, ref sequence);
+                    builder.CloseElement();
+                    break;
+                case { Name: "span" } when node.GetAttributeValue("class", "").Contains("math"):
+                    var mathjaxId = Guid.NewGuid().ToString();
+                    mathjaxNodeIds.Add(mathjaxId);
+                    builder.OpenElement(sequence++, node.Name);
+                    builder.AddAttribute(sequence++, "id", mathjaxId);
+                    foreach (var attribute in node.Attributes)
+                        builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
+                    RenderNodes(builder, node.ChildNodes, ref sequence);
+                    builder.CloseElement();
+                    break;
                 default:
                     builder.OpenElement(sequence++, node.Name);
                     foreach (var attribute in node.Attributes)
                         builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
-
                     RenderNodes(builder, node.ChildNodes, ref sequence);
                     builder.CloseElement();
                     break;
             }
         }
     }
+
     private void RenderLayoutArea(
         RenderTreeBuilder builder,
         string address,
@@ -128,5 +166,4 @@ public partial class MarkdownView
     }
 
     private string ComponentContainerId(string id) => $"component-container-{id}";
-
 }

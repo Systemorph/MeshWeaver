@@ -1,15 +1,11 @@
 import hljs from 'highlight.js';
 
-export function highlightCode(element: HTMLElement) {
-    if (!element) return;
-
-    const preElements = element.getElementsByTagName('pre');
-    if (!preElements) return;
+export function highlightCode(ids: string[]) {
+    if (!ids || ids.length === 0) return;
 
     try {
-        for (const preElement of preElements) {
-            const codeElement = preElement.getElementsByTagName('code')[0];
-
+        for (const id of ids) {
+            const codeElement = document.getElementById(id)?.getElementsByTagName('code')[0];
             if (codeElement) {
                 hljs.highlightElement(codeElement);
 
@@ -19,10 +15,10 @@ export function highlightCode(element: HTMLElement) {
                     'click',
                     () => navigator.clipboard.writeText(codeElement.innerText)
                 );
-                preElement.appendChild(copyButton);
+                codeElement.parentElement?.appendChild(copyButton);
             }
         }
     } catch (error) {
-        console.error('Error highlighting code:', error);
+        console.warn('Error highlighting code:', error);
     }
 }

@@ -1,6 +1,6 @@
 declare const MathJax: any;
 
-function typeset() {
+function typeset(ids: string[]) {
     if (typeof MathJax === "undefined") {
         console.warn("MathJax not loaded");
         return Promise.resolve();
@@ -9,7 +9,14 @@ function typeset() {
         console.warn("MathJax.typesetPromise is not a function");
         return Promise.resolve();
     }
-    return MathJax.typesetPromise();
+
+    try {
+        const elements = ids.map(id => document.getElementById(id)).filter(el => el !== null);
+        return MathJax.typesetPromise(elements);
+    } catch (error) {
+        console.warn('Error typesetting MathJax elements:', error);
+        return Promise.resolve();
+    }
 }
 
 function waitForMathJax() {
