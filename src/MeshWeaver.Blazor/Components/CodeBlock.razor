@@ -1,0 +1,32 @@
+﻿@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime
+
+<div @ref="CodeBlockElement">
+    @((MarkupString)Html)
+    <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
+</div>
+
+@code {
+    [Parameter] public string Html { get; set; }
+    private IJSObjectReference Highlight;
+    private ElementReference CodeBlockElement;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Highlight ??= await JsRuntime.Import("highlight.js");
+        }
+
+        if (Highlight is not null)
+        {
+            await Highlight.InvokeVoidAsync("highlightCode", CodeBlockElement);
+        }
+    }
+
+    private async Task CopyToClipboard()
+    {
+        var codeElement = await JsRuntime.InvokeAsync<string>("eval", "document.querySelector('[ref=CodeBlockElement] code').innerText");
+        await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", codeElement);
+    }
+}
