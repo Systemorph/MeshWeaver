@@ -2,7 +2,6 @@
 @inject IJSRuntime JsRuntime
 
 <div @ref="Element" @attributes="AdditionalAttributes" class="mermaid">
-    @Diagram
 </div>
 
 @code {
@@ -21,7 +20,8 @@
 
         if (MermaidJs is not null)
         {
-            await MermaidJs.InvokeVoidAsync("contentLoaded", IsDark, Element, Diagram);
+            await MermaidJs.InvokeVoidAsync("renderMermaid", IsDark, Element, Diagram);
         }
     }
+
 }
