@@ -1,0 +1,74 @@
+Roland: Hey Stefan. 
+
+Stefan: Hallo Roland. 
+
+Roland: Today's topic is from specification to implementation, and I think this is one of the key differentiators of MeshWeaver from other competitive products. So we have looked at R Markdown before. And R Markdown, as we saw, it's something very similar to what we do. But R obviously is something very contained.
+
+So it's just in this notebook or in this Markdown document. And I think you would have quite a lot of problems to come from this kind of level to something more productive. And in Meshweaver, we actually want to Get to production. So we also noticed it's nice to use notebooks or use our interactive markdown for very quick results and getting ideas up quickly.
+
+But you also tried to work with notebooks, right? And you told me for production you, didn't like them either. Maybe you can describe a bit your experience. 
+
+I think the notebooks are very good if you want to quickly test some pieces of code, if you want to put together very quickly a chart or something.
+
+then this is very helpful. Or if you want to create a small document where you describe, explain certain things and then you implement. And so this is good. But to create an application, I don't know how you could do it with a notebook. it's more for demonstration purpose or for, prototyping, but at some point you need them to have make sure that you have a, another platform where you can implement your, your product or your project or whatever you want to accomplish.
+
+Yes, it's not just the practical aspects, but also there are governance aspects that you want to control the build and you don't want that people can just manipulate code. So today we will explore this a bit more in detail. So let's dive in. Actually, I took the example that we have done in one of the previous videos.
+
+So maybe. You remember this, we will put the link into the description to this video. But we have programmed a little bit of a calculator before. And it's actually a very primitive thing. that actually my daughter inspired me to do this because she programmed this in her programming language. And so she inspired me to do this calculator and I had then thought how to do it in, MeshWeaver technology.
+
+And again, maybe just to outline a bit, so let's ignore the using statements, they are not so interesting. So we, created a record called calculator and it has just two summons, summon one, summon two. And then we used in the notebook, we used this command mesh. edit. and we could just instantiate the calculator and we, displayed the sum, the business logic we displayed as a markdown.
+
+I put this one to one here, so it's very condensed. Last time we brought it across multiple cells. So actually I just copy pasted the code together that it's compact. And you see it, it displays below. That's again the point of our interactive markdown and it perfectly works. So I can. Switch the summons up and down and, actually the sum updates.
+
+So, far, we were there, but again, I have to say, doing it in Interactive Markdown, it was considerably easier, than, doing it in the notebook. So already here I was super happy I had this. And as you see, it even looks better. So it's also much better readable now as a blog. But the question still is, what if we want to make this more maintainable?
+
+What if we want to do it, to put it in production code? Actually, what I did was, I put this into Visual Studio. I usually recommend to create one static class, so we typically always work with static classes, because, the state, we don't want to have things which store state and keep state, we want to take the state in, and then, actually, A lot of it is functional programming.
+
+So we want to have a very deterministic situation where we get things in, and then we do operations on this. We give things out again. And, the way of achieving this usually is in static classes. And it also gives us a nice way of structuring, because then we have, we know our one layout area is always one static class.
+
+You could theoretically put many layout areas in one class, but I think it's, really not, well readable. Then one thing we see is that we have added comments. This is also, in my opinion, a part of becoming production ready. Actually, Copilot helps a lot. Copilot puts already suggestions for comments and we can just go and modify them a bit.
+
+So this helps so much and it takes person years of work away. this was always very tedious. So we used to employ several technical writers before to write this. And now it's just co pilot doing all of this. 
+
+Stefan: Can I ask a question here? You mentioned the aerostatic classes. since I started with C sharp only recently, and I'm still about to learn when to use what.
+
+And in this case, what is the difference between a static class and a record, or is it the same? Is there any relevant difference in this situation? 
+
+Roland: Yes, so static classes are not instantiatable. So I, yeah, a static class is literally just a collection of methods grouped together. Because there is no notion, in C there is a notion of free floating function.
+
+In, C Sharp there is no notion of free floating function. So actually you need to, create everything inside a class. but essentially a static class is a collection of static members, and it's not instantiatable. A record type is, first of all it's non static, and secondly it's a special type of class.
+
+Maybe we save this topic for another video, because it has a lot of implications on identity of things and how to work with things. So record types are typically very good to deal with identity. with data content. So I use almost exclusively record for data content. but again, so here it's not data content, it's layout areas.
+
+That's why we use classes and static classes. So then I have actually put also our calculator So I just reformatted it a bit, so let's remember when I had the, example here, I, this is this classical record notation where we just define a primary constructor, which is super compact, but I still think maybe it's just because I'm old and I'm used to this.
+
+But I still think it's, for me, it's better readable, and I can then also, add comments to, every, individual property, even though in this case it would not, necessarily be needed. but it's just something I appreciate more to read, data models in this way. By the way, since this is a data model, it is a record type, right?
+
+So this is actually the data model behind our, our calculator and we see it can be even private in this instance because we are not communicating this out of this layout area. Obviously normally we work with public records and normally they are stored somewhere on the database and we will have many videos where we see how to hook everything up.
+
+In this particular instance this calculator will never leave our data. Our layout area just lives inside. Then we have the actual calculator area. Now, Typical layout areas, they have two arguments that, are shipped here. One is this layout area host. And as the name implies, this is the host that is responsible to span this layout area.
+
+A layout area is a bit like, like an island. It's a, sometimes I use this analog on of kitchens, right? So a layout area is like a small kitchen that, that I can install now. And once it's up and running, and when it's installed, I can host data there. I can interact with the user can Change the data, I feed the sum back, and then once the display is gone, so if I click away in the GUI, the layout area garbage collects and it's gone.
+
+And the rendering context would give me additional information, but we don't even need this here. So we saw, again, comparison to this. Here we had this global mesh variable, and the mesh, since here we are inside a kernel, right? So the mesh is actually the kernel. kernel instance. it's a communication port of the kernel, and it's the only thing I have available in a kernel, because I cannot actually span layouts and stuff.
+
+however, here, we, actually don't need to use such a template variable, because here we are actually in the proper layout area, and, we have a proper host. consequently, we have also overloads of this edit method. That will directly interact with the host. So I, don't actually need to bother and find out, who belongs to me.
+
+I just get this host in and I can say host. edit. The rest is, actually very straightforward. It's the same as we had before. I have again this calculator sum, which is again just yet another static method. And, given the static method, I produce this, sum, so this is again this business logic we had and, this sum is again kept in, in, in the business logic on the server, right?
+
+so one more is up here. We have one more method and this is just a method to add this to a layout. So typically, we include this also in the layout area, so this is not the layout area itself. But it's the plug where I can plug it in. And then when I go to my documentation host, so I can actually just follow this reference here.
+
+so this is a new domain we are building it up. I added already another layout area which is a counter, which we don't look at today. But, so here I can then compose my hubs. So the hubs, they are like these small kitchenettes that we can, install everywhere, and this is a kitchenette which runs all this stuff which we put in, layout and documentation, and so here I can just say which views go to the documentation.
+
+So I added here my counter, and I added my calculator, and in the calculator we just say layout with view, and then typically we just expose. This method here, so if I click here, this is again just this method that we have already looked at with host. edit, right? So this is this layout area. Now if I do this, and if I start the application with this, so you see here for convenience, I have also linked all this code into the article, and I have linked out the article here, and I have said we, you have So I already anticipated that we will have many more layout areas at some point.
+
+but so I just said you have to expose it in your, main hub configuration. And when you do this, then first of all, it gets into the catalog. So we could now again, Look at, our catalog, so let's go here in documentation areas, and you already see here it actually, again, this is, temporary, this will go away, we will put, nice pictures for all the layout areas, so here, hopefully, the next time, in the next video, you will actually see our calculator here.
+
+But this is, and you see already it takes over this text, so this text I never really defined it. So where can we find this text? It's actually what I put here as the summary. so it did, already this goes again into this area of literate programming. because we give so many such texts everywhere that we need to see that the texts are reused and that, when we see this, we can just take over the text we put already in the comment.
+
+And it's, drawn in the layout area. I can now say go to area. I will actually get out our tiny little calculator and I can start operating it and it still perfectly works. We see now that I can, include it now like a normal layout area. So I did it now from code here. We could also use again this at sign notation that we learned in the, dedicated video to, where we discussed layout areas, but I have now in my application called documentation, I have now this calculator area.
+
+And when I launched this, I get my calculator again in line, it again works, but this time it's as simple as just linking a preexisting area, that we have defined in code. So I hope that this shows the way how we can. start from something like a notebook or interactive markdown, but then we can gradually take it to production readiness.
+
+We can write unit tests and then again, we can use it back in the markdown again. So this was a full, cycle of several levels of interacting. If you made it this far into the video, please hit the like button, subscribe to the channel for more videos just like this and happy weaving.
+

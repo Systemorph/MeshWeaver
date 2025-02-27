@@ -1,0 +1,70 @@
+Roland: Hey Stefan. 
+
+Stefan: Hi Roland. 
+
+Roland: Today's topic is user interface specification. So it has always been a difficult topic and it has been following me all my life. And when I look back at the good old times when we had to really draw UI specs on paper and we didn't even know how the application would behave, and I recall our mutual frustration when sometimes we saw what came back from.
+
+Programming and then we thought, geez, that's not what we thought we would get. And then when we said something, they came back, yeah, but you should have told us this in the very first place and now we can't change anymore. rings a bell, doesn't it? 
+
+Stefan: Yeah, of course. the, there's always the challenge.
+
+We are. We are used to thinking the business logic and what's basically for me, like inside of a sphere. So basically you do all the, then you expose it to the surface, and the other side of the surface in the outside is then the user who interacts with it. And it's quite difficult to. Understand from one side what's happening, the other and the end.
+
+You need to make the user interface of both sides are in sync and this is the challenge which you just mentioned. Yes. 
+
+Roland: It's also what I observe when I look at the majority of the YouTube videos, so I would say 90% programming videos are about programming ui and what they teach you is how to write CSS and people like you and I, we just don't want to write CSS.
+
+It's not my world. And so I thought, let's create something which is much more efficient and it does a job in less time, and we can do it interactive. So let's dive in. So again, I have connected the mesh weaver. We've seen this in the previous episode. I. that we can actually connect to the mesh and then we can start interacting with the mesh.
+
+So what we are going to do today, it's something, actually, I did this with my daughter over the weekend. So she, my daughter wrote, she's eight years old and she wrote her first program and I made her write a program, which is a calculator, and it takes two numbers. And, then it adds up the two numbers.
+
+And she was super proud she could do it. And then I said, can you now do it with three numbers? And then she went away for an hour and then she came back. Now I did it for three numbers. I. So we will do this very thing today, and let's now first, do this step by step. essentially I like to think very much data centric.
+
+I created already this, record clause called calculator, and it's just some container that holds both numbers. So I called them summon one and summon two. And then I also programmed this very sophisticated business logic to sum up the two numbers. So here, so you see already I, in, I anticipate a little bit, that we will render it with markdown at the end.
+
+So I put already this double star, which is a bold phase in marked out. So let me execute this now. It defined the numbers, so let's execute what we have programmed, and it can actually brilliantly sum up one and two, and the sum is three. now the question is how can we build a GUI for this? And actually my daughter did it in scratch.
+
+I don't know if you know the language. It's an in, it's like block, like so you can drag and drop blocks and do it. And it was actually half a page of text to do it. And then I thought. I can do better than scratch, again, I thought, how can I, easiest do it? the mesh, this is our magic variable.
+
+So this is our connection to the mesh. And then I said, the easiest I can think of is if I, if we can just do mesh dot edit right? And then, let's just do this. So the width style, it just gives it the height because otherwise it would be too big. and it just, but essentially it's this command here.
+
+It's mesh edit new calculator, and I get the dialogue. It has two numbers. And look, I can start editing them, or I could now. Go up and down, of course, I can also manually enter a, value. And now, it's there, but it doesn't do anything. But even this, even in a mockup tool, normally you wouldn't get it so quickly.
+
+So normally, it would take me at least 10 minutes to drag and drop some text boxes in there and whatever. So now, currently it even emits. Data changed events, so it emits events. So if I write three in there, it'll emit an event and it'll send the event to the backend. But there is no one doing anything with it.
+
+But we can really think of it like, we have, telepathy invented or teleporting, and we have the state in two locations, and I can pop it here both. Locations and when I pop it, your location one, it synchronizes with location two, and when I pop it, your location two, it'll synchronize with location one, and this synchronization is already happening even though we don't do anything with it.
+
+Then I thought, what's the easiest way to now do something with this? And then I thought, Wouldn't it be very handy to just have some function here that we could call inside the set it And you see the function is, defined up here. And actually all it does is it takes this function I had up here, this sum function, and it, wraps it into some markdown control that it looks a bit more fancy.
+
+But that's all it does. So let's execute this and here we go and we have our calculator. And first trial, my alter would say it's correct. So it's one plus two is three. Now we can start editing this. And now it happens exactly what I said. So it will sync back to the cloud and it will bring me the new number back.
+
+for. People who are not doing this all day long. this may look trivial. However, I think when I think of all the YouTube tutorials that I have seen this year who teach me how to do this and how to do it without pressing any buttons and. how to do it so seamlessly. I think everyone spent more time than I did, now programming this, and so I think this is already quite marvelous.
+
+You can do it in one line. now let's see where it, where we actually hide this. this is us in the notebook here. So actually what happens when we edit the numbers is that the notebook submits the state to the mesh. So the, this is. And the mesh is actually, it doesn't really exist.
+
+So the me mesh is only something logical and it just directs us, right? So I, it's a, we can think of the mesh, like DHL for instance, or TNT or one of these services. and the only thing I do with the mesh is I say, Hey, I have a parcel for Stefan, and then I give it to DHL and DHL doesn't know what the parcel is or anything.
+
+And the only thing they do is, they, route it to you. And this is exactly what's being done here. It's, all the routing. So it binds the root to the mesh, and then the mesh forwards it to a kernel. And the kernel is the thing that can actually then interpret it. And then the kernel will actually compute the sum.
+
+It will send back the sum here, it will send it to the mesh. And the mesh. Because we have gotten our address, it'll find me the notebook and it will submit the change to me. Now again, this may look trivial. However, this is very key because if we want to have an efficient way of, spreading the business logic, we know that the business logic must never go to the client.
+
+And it's, on the one hand, it's just a matter of speed. And we see this in all these JavaScript frameworks. They download code for one minute until they start executing. You don't want this, you want the thing to start immediately. the second thing is also a security concern because I don't want to expose my business logic.
+
+I don't want to show what everything is doing. And the third thing is a maintainability issue because I want to be able to change the business logic in the background without the client noticing. And this is actually exactly the setup that we have, even though I wrote actually the code here. But where it's executed is it's executed on the mesh, right?
+
+So in this particular instance, I happen to know the code because I entered it here, but of course I could now have the code somewhere in the background and it could be executed. And then all I see is this UI here and I see nothing more, nothing left less as Last thing here. I 
+
+Stefan: just the wrong question Roland.
+
+Just to explain also to the audience, you've now shown the end. But it's a very simple calculator. But this is basically the business logic, right? And it's disconnected from the, from the, rest. You have basically three parts. But how do these things know that, how to interact with each other.
+
+Roland: This is exactly what the mesh is doing. So the mesh administers, it's a bit, so my, big inspiration and. You also grew up in times before internet and learned how all the internet came about. So my inspiration was the internet and, just how routers work. I, got inspired a lot by TCP routing, and it's essentially, it's, the same as TCP routing.
+
+So I, I know all the addresses and I know how to reach players and sometimes I need to. Reach players across several hops. I could actually now, just see what it does behind the scenes. So if I do to display string and then I can actually, put a lot of mime formats behind it. So in, in our case, we will just choose text, HTML.
+
+So this is this, and then you see actually it returns an iframe, which is an HTML element. And it has, some ear, and if I click the ear, I get my calculator deployed. Now it's deployed. So if this, were not running on local host, but if this were running somewhere on the internet, you, could just access my calculator even though the program actually was launched from here.
+
+And, so I can prove that it works. So we can also change here. The calculator works and, if I disconnect now, the notebook here, then the, calculator simply stops working, so this also shows us how. Virtual. This is, a mesh. Is it's not something materialized. It's really a collection of players that want to exchange information and when new players come, they can join in, then they can exchange messages with us.
+
+When they are done, they can go away. So it can also be temporary. It can of course be something permanent. So if it's a business application, it would be there permanently. But my calculator, it will disappear as soon as I stop my notebook. And with this, I think we are done for today. so please subscribe, and join us again for the next video and happy weaving.
+

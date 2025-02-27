@@ -9,6 +9,9 @@ Thumbnail: "images/Specification to Implementation.jpeg"
 Published: "2025-02-04"
 VideoUrl: "https://www.youtube.com/embed/soujo5VBE00?si=XDLP2Bik8pg1DqBp"
 VideoDuration: "00:15:11"
+VideoTitle: "Transform Your Prototypes into Production-Ready Code!"
+VideoTagLine: "From Ideas to Reality"
+VideoTranscript: "transcripts/From Specification to Implementation.txt"
 Authors:
   - "Roland Bürgi"
 Tags:
@@ -17,20 +20,12 @@ Tags:
   - "Layout Area"
   - "Markdown"
 ---
-Whilst Interactive Markdown is a great tool to work 
-interacively on specification and make fast progress, 
-it is less useful to write production code. In production, 
-we need to have a clear separation of concerns between data, 
-business logic, and presentation. In this article, 
-we show the path from specification to implementation.
 
-In this article, we will show how to transform a specification 
-into a production-ready implementation. We will use the example 
-of the simple calculator layout area as elaborated in the 
-previous article.
+Whilst Interactive Markdown is a great tool to work interactively on specification and make fast progress, it is less useful to write production code. In production, we need to have a clear separation of concerns between data, business logic, and presentation. In this article, we show the path from specification to implementation.
 
-Let us start by porting the example to this markdown document. 
+In this article, we will show how to transform a specification into a production-ready implementation. We will use the example of the simple calculator layout area as elaborated in the previous article.
 
+Let us start by porting the example to this markdown document.
 ```csharp --render Calculator --show-code
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
