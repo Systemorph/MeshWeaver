@@ -63,12 +63,16 @@
 
 .media {
     position: relative;
-    width: 100%;
+    width: 75%;
+    padding-top: 56.25%; /* 16:9 Aspect Ratio */
+    margin: 0 auto; /* Center the media */
 }
 
-    .media.video {
-        padding-top: 56.25%; /* 16:9 Aspect Ratio */
+@media (max-width: 600px) {
+    .media {
+        width: 100%; /* Make the width 100% for small devices */
     }
+}
 
 .youtube-embed {
     position: absolute;
@@ -91,6 +95,7 @@
         border: 1px solid currentColor;
     }
 }
+
 .article-content {
     width: 75%; /* Decrease the width to 75% */
     margin: 16px auto; /* Center the article content and add margin */
@@ -99,4 +104,11 @@
     background-color: var(--color-canvas-default);
     color: var(--color-fg-default);
     font-size: 16pt; /* Increase the font size */
+}
+
+@media (max-width: 600px) {
+    .article-header,
+    .article-content {
+        width: 90%; /* Increase the width to 90% for small devices */
+    }
 }
