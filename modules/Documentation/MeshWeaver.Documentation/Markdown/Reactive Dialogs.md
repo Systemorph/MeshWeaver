@@ -15,6 +15,7 @@ Tags:
   - "Reactive"
   - "Dialogs"
 ---
+
 Reactive programming was made popular in the early 2010s, on the one hand by the publication
 of the [Reactive Manifesto](https://reactivemanifesto.org/) and by the publication of 
 various reactive libraries such as
