@@ -29,11 +29,11 @@ In Interactive Markdown, we have a simple syntax for including layout areas. In 
 one of the reports of Northwind:
 
 ```
-@("app/Northwind/SupplierSummary")
+@("app/Northwind/AnnualReportSummary?Year=2023")
 ```
 resulting in 
 
-@("app/Northwind/SupplierSummary")
+@("app/Northwind/AnnualReportSummary?Year=2023")
 
 The pattern for referencing layout areas is simple. It consists of 
 
