@@ -10,8 +10,11 @@ namespace MeshWeaver.Articles;
 
 public record Article
 {
-    public TimeSpan VideoDuration { get; set; } //= TimeSpan.FromMinutes(13.2345);
-    public string VideoUrl { get; set; } //= "https://www.youtube.com/embed/31paehqV3_w?si=1NvlztiGCQY0Lrcz";
+    public TimeSpan VideoDuration { get; set; }
+    public string VideoUrl { get; set; }
+    public string VideoTitle { get; set; }
+    public string VideoTagLine { get; set; }
+    public string VideoTranscript { get; set; }
     public string Extension { get; init; }
     public string Name { get; init; }
     public string Title { get; set; }
