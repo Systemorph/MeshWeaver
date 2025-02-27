@@ -68,6 +68,7 @@ public partial class MarkdownView
                     builder.CloseComponent();
                     break;
                 case { Name: "span" } when node.GetAttributeValue("class", "").Contains("math"):
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("math"):
                     builder.OpenComponent<MathBlock>(sequence++);
                     builder.AddAttribute(sequence++, nameof(MathBlock.Html), node.OuterHtml);
                     builder.CloseComponent();
