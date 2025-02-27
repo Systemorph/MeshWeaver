@@ -1,0 +1,70 @@
+Roland: Hey Stefan. Hi Roland. We have gone already through quite some journey. So in the first go, we have shown how we can work in notebooks. We used polyglot notebooks from Visual Studio Code. And we have also shown that we could connect to the data mesh and we could work in there. So what was your take? How was it for you to work in this environment?
+
+Stefan: Okay. So the notebooks have one advantage, it's very easy if you want to do something small very quickly, then you can just code it and test and run it and so on. Where I was struggling, but maybe it's just because I don't have enough experience with the system, was to basically link it to some libraries and so on.
+
+So I could use external libraries, but to link to my own, this I didn't manage. So this I was a little bit of a challenge and I didn't find out how to do. And then I switched, and so I use, I go back to the to the notebooks if I need to test something more, but really to produce something, it's for me not the right environment.
+
+Roland: Yes. So I was struggling mostly with the display, I have to say. We did manage to get views interactive, but for me it was always a little bit of a struggle because we had to render in iframes, and so we always had to manually size, and this was really disturbing me. So actually what I did was I contacted the people from NET Interactive, the ones who built the whole backend and who also built The Polyglot Notebooks plugin in Visual Studio Code.
+
+And I asked them, what are the possibilities? Could I just, use interactive notebooks in my application? And they, essentially, they said that it's it's not planned to use polyglot notebooks outside the environment. So we could actually create our own notebooks. We did this before, so in, in the previous product in System of Cloud we used to have our own notebooks, but this was very heavy to program and I didn't want to go down this route.
+
+But they actually gave me a very good idea. And this idea was, it's called R Markdown. Let me just find the resource here. So this is a link that the guys from the NET Interactive team gave to me. And this was, I found this very intriguing. The whole conversation with NET Interactive team is, was extremely good.
+
+So thanks to both John Sequeiro and Diego Colombo for the discussion. And thanks also for this inspiration here. Because I saw that in R, they had actually done something very similar to what I thought could be done. And I made the idea, and then they gave me this link and I started studying it.
+
+So the key idea is actually that Markdown, it's quite a good language. We saw this before, so it was easy to typeset and create texts with it. And then my idea was, oh I just want to write a code block and then it should just execute, so this is the purest form of this literate writing that was promoted by Donald Knuth.
+
+And I was really looking for this. The other thing is that we with with the notebook technology, since system of cloud was based on this technology, we had quite a bit of experience to do projects with the client with this. And I really didn't think it was such a good tool overall.
+
+It was good at the beginning, but it didn't as you said, it's difficult to advance. After a certain point, so then what I did was I created what I call executable markdown or interactive markdown and this is what I'm going to present in today's session. So let's dive in. You see already here.
+
+This is our new documentation facility. We are also going to put this online. And when it comes online, then instead of this picture, we will have actually this very video coming here. So it's self referencing on multiple levels in the sense that currently I still have the template picture here.
+
+But the video where I'm speaking will actually be linked in this in this document below. And then we see again it's very normal markdown, so I tried to actually also write down, so here you find this link from, to our markdown, what we said. You find also another link to literate programming to read up again on Knuth, and a link to Knuth himself, who was the inventor of literate programming.
+
+And then let's see how we can do it. So this is now my addition. I deviated a bit from the syntax they had in in R Markdown because I didn't find it very convenient. They had a lot with curly braces and stuff and I didn't like the syntax they had. So I thought actually the most natural is similar to command line because we try, similar to command line, we try to assemble.
+
+a couple of commands on a single line. So actually I said, okay, let's just put something like minus render. So this will then render it. And then after the render here we can specify actually the name of the layout area. So we will see in a later video, we will Make a deep dive on layout areas, but actually what we do here is we create a layout area in line and Then you see here.
+
+This is just for us to Who do this didactic material that we can say Show the code. So one, one symbol is show code and the other one is show header and show header actually even brings this heading here Because in this very example, so normally we will rather put show code But in this very example, I also wanted to show how to actually write the header so that it will render So this is the entire header.
+
+Again, this is normal fencing. So till this point here, it's normal markdown syntax. You will put always the three back quotes and then you say in markdown which language it is. In our case, it's C sharp. And you see this is the easiest hello world I could think of. Even easier is just hello world.
+
+But in order to show that it actually executes this. I have actually also added just date time now, so we can now see that we record this on the 4th of February at 2pm and it's even formatted in my locale with kind of German date time settings rather than US ones. So that's nice. And this is then the output of the area.
+
+So it's this code that produces this. And it's actually the only thing that I was writing is literally this code up here. So I literally didn't write any more code and it just ended up here. Question, yeah. So 
+
+Stefan: just to understand correctly, so you don't have to open a new cell to put the code.
+
+Part of the markdown. So there is no, not in contrast to the notebooks. I have to separate the, your commands and your input from the code where you have to open different cells here. It's all in the same. 
+
+Roland: Yes. So let's just have a quick look at the markdown source. It's actually starts with some heading here.
+
+This is called a YAML heading so this is a, again, it's a Markdown feature. So all the Markdown dialects, they are, there are many dialects, same as Ruman GDMs. So there are many a bit different ones and but they all have similar things. We have here the three dashes that show that the YAML starts, and then we can put here the title of the And of the blog entry, we can put the abstract, we can link the thumbnail, later when we have actually the video link, we can put the video link in here etc.
+
+Then I also gave it a few tags, just that we, we have it, we put the author name here. And then the text starts and so here we, we see that this was when I just introduced the render command and then here just in line comes this section. And it's this very article that when I render it it will look like this and here below as you see it, it will execute the code and it will show.
+
+This was quite a hassle to implement and to maybe just to give a little bit. background how this all works. Let's look at this diagram. By the way, this is another nice markdown feature. So these are mermaid diagrams. And I have actually even included the source code for this diagram up here, below here, just to highlight how this can be done.
+
+And if you ask me, do you have to learn mermaid? No, Copilot does it for me. Actually I never bothered to learn mermaid. So what I do is I just describe to Copilot in clear text what I want on the diagram. And Copilot can really spit out this in one go or less. And then if things don't match, you can iterate a bit or you can manually correct stuff.
+
+But so this is a sequence diagram. So Mermaid, it's very powerful. It has a lot of different features. But one of them is the sequence diagram, which is actually useful now to discuss what happens. So here, obviously, we start on the view. We always say we want to see something. We see here in the URL that we want to to show an article.
+
+It's from the documentation collection, so we will show in later videos what these collections are and how to use them. And then this is the document that we look at right now, which is called Interactive Markdown. And here this, when I go to this URL, it will start actually requesting the content, and where it requests it is it requests from the article, so it will contact actually the collection here.
+
+And it will request this article, and the article will then be downloaded. And then the article, it does two things. On the one hand, it will start submitting code to a kernel. So we have here, we see we have three players, right? We have the view. We have the article and we have the kernel. So the article will already know, Oh, I have interactive markdown, I have code.
+
+And it will almost immediately start executing the commands. This is also for performance reasons, because eventually when we get the HTML back here we will already have most of the views rendered already in the meantime. And at the same time, the article gives back the pre rendered HTML to the view.
+
+So this is this HTML actually my brother works in web publishing and he always says that it's mostly the loading speed that's decisive for how many users you get and what's the click away rate, etc. So when I designed Meshweaver I really always had the words from my brother in my ears. And I noticed that whatever I do, I have to be hyper performant.
+
+So the HTML is actually pre rendered at the time of uploading the article. Then it just gets pre rendered HTML back. And in the HTML, what it does is it has a link. It's like a small TV window, so we can always think the kernel is a bit like a studio where they play the show of these views now, and I install a tiny little TV here and I just say, hey, play the movie from this layout area on my screen, and then it gets the view back, and then eventually it renders the view.
+
+So the whole thing is actually very convenient to work. So I literally wrote this text in about five minutes, and the way I do it is I use here VS Code. And VS Code actually even auto completes me the text, so it helps me write. And so the further I go, the more it knows already what I want to write, so it looks actually at the content of my entire project.
+
+So once we have a few articles here, it it will almost write itself then at some point. We can now put the Windows even sidebar. by site. So this is how I edited certain parts of this file. And then you can literally just edit the text in here. So you see already that it starts auto completing the entire sentences.
+
+I just hit save. And that it already inserted me a whole paragraph of text. That's what I have to show if you made it that far into the video. And if you like the content of this channel, please give us a like on the video, hit subscribe, and you will get more videos just like this. See you in the next one.
+
+Happy weaving!
+
