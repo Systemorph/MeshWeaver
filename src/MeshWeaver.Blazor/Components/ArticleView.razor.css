@@ -64,8 +64,10 @@
 .media {
     position: relative;
     width: 75%;
+    height: 0;
     padding-top: 56.25%; /* 16:9 Aspect Ratio */
     margin: 0 auto; /* Center the media */
+    overflow: hidden; /* Hide overflow to ensure the image is cut */
 }
 
 @media (max-width: 600px) {
@@ -84,10 +86,12 @@
 }
 
 .thumbnail {
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
-    height: auto;
-    max-height: 100%;
-    object-fit: contain;
+    height: 100%;
+    object-fit: cover; /* Ensure the image covers the media area */
 }
 
 @media (forced-colors: active) {
