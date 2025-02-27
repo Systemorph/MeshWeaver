@@ -26,6 +26,7 @@ Whilst Interactive Markdown is a great tool to work interactively on specificati
 In this article, we will show how to transform a specification into a production-ready implementation. We will use the example of the simple calculator layout area as elaborated in the previous article.
 
 Let us start by porting the example to this markdown document.
+
 ```csharp --render Calculator --show-code
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -38,6 +39,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
 Now we will transform the specification into a production-ready implementation. We recommend to create a single static class for every layout area. This class should contain the data structure, the business logic, and the presentation logic. The data structure can be shared with other components, if they are global data models, or they can just be local view models private to the layout area. The business logic should be properly factored out, however, in this example, it is simple enough to just be included in the static class as well. 
 
 The resulting code looks like this:
+
 ```csharp
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -87,7 +89,8 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="calculator">The calculator instance</param>
     /// <returns>A Markdown Control with the sum.</returns>
-    static object CalculatorSum(Calculator calculator) => Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
+    static object CalculatorSum(Calculator calculator) => 
+        Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
 }
 ```
 
@@ -118,6 +121,7 @@ public static class DocumentationViewModels
 ```
 
 The calculator will be automatically added to the [Layout Area Catalog](/app/Documentation/LayoutAreas). Eventually, we can include the calculator as a normal layout area:
+
 ```csharp --render Calculator-Area --show-code
 LayoutArea(new ApplicationAddress("Documentation"), "Calculator")
 ```
