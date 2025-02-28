@@ -2,6 +2,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
+using System.Runtime.Serialization;
 using System.Text.Json;
 using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
@@ -107,14 +108,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
-    public void Update(Func<TStream, ChangeItem<TStream>> update) =>
-        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)));
-    public void UpdateAsync(Func<TStream,CancellationToken, Task<ChangeItem<TStream>>> update) =>
-        InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)));
+    public void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback) =>
+        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)), exceptionCallback);
+    public void UpdateAsync(Func<TStream,CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback) =>
+        InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)), exceptionCallback);
 
-    public void Initialize(Func<CancellationToken, Task<TStream>> init)
+    public void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback)
     {
-        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), Hub.Version)));
+        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), Hub.Version)), exceptionCallback);
     }
 
     public void Initialize(TStream startWith)
@@ -143,13 +144,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        InvokeAsync(() => SetCurrent(value));
+        InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
     }
 
-    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update)
+    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
-        Update(update);
+        Update(update, exceptionCallback);
     }
 
     public SynchronizationStream(
@@ -164,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress(StreamId), config => 
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress($"{Hub.Address}/{StreamId}"), config => 
             Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config),(c,cc) => cc.Invoke(c)));
 
         if(synchronizationHub == null)
@@ -187,14 +188,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public string ClientId => Configuration.ClientId;
 
 
-    private StreamConfiguration<TStream> Configuration { get; }
+    internal StreamConfiguration<TStream> Configuration { get; }
 
     private readonly IMessageHub synchronizationHub;
-    public void InvokeAsync(Action action)
-        => synchronizationHub.InvokeAsync(action);
+    public void InvokeAsync(Action action, Action<Exception> exceptionCallback)
+        => synchronizationHub.InvokeAsync(action, exceptionCallback);
 
-    public void InvokeAsync(Func<CancellationToken, Task> action)
-        => synchronizationHub.InvokeAsync(action);
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback)
+        => synchronizationHub.InvokeAsync(action, exceptionCallback);
 
 
 
@@ -245,5 +246,9 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     public StreamConfiguration<TStream> ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
         this with { HubConfigurations = HubConfigurations.Add(configuration) };
 
-}
+    internal bool NullReturn { get; init; }
 
+    public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
+        => this with{NullReturn = true};
+
+}

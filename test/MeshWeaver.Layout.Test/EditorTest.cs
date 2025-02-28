@@ -21,7 +21,6 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
-
 public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
@@ -29,9 +28,20 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
+    #region Calculator Domain
+    public record Calculator
+    {
+        [Description("This is the X value")]
+        public double X { get; init; }
+        [Description("This is the Y value")]
+        public double Y { get; init; }
 
+    }
+
+
+    private record MyDimension([property: Key] int Code, string DisplayName) : INamed;
     private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
-        host.Hub.Edit(new Calculator());
+        host.Hub.Edit(new Calculator(), "calc");
     private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new Calculator(), c => Controls.Markdown($"{c.X + c.Y}"));
     private UiControl EditorWithDelayedResult(LayoutAreaHost host, RenderingContext ctx) =>
@@ -40,6 +50,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             Thread.Sleep(100);
             return Controls.Markdown($"{c.X + c.Y} @ {DateTime.UtcNow.Second}:{DateTime.UtcNow.Millisecond}");
         });
+    #endregion
+
     private UiControl EditorWithListFormProperties
     (LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new ListForms());
@@ -179,6 +191,54 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         controls.Should().HaveCountLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }
+    private record ListForms
+    {
+        [Dimension<MyDimension>()]
+        public string Dimension { get; init; }
+        [Dimension<MyDimension>(Options = "stream")]
+        public string DimensionWithStream { get; init; }
+        [UiControl<RadioGroupControl>(Options = new[] { "chart", "table" })]
+        public string Display { get; init; }
+    }
+
+    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
+
+    private static readonly object[] ListPropertyBenchmarks =
+    [
+        new ListPropertyBenchmark<SelectControl>("dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray()),
+        new ListPropertyBenchmark<SelectControl>("dimensionWithStream", null, LayoutAreaReference.GetDataPointer("stream")),
+        new ListPropertyBenchmark<RadioGroupControl>("display", [new Option<string>("chart", "chart"), new Option<string>("table", "table")])
+    ];
+    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
+    private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
+        where TControl : ListControlBase<TControl>
+    {
+        control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
+
+        var options = control.Options as IReadOnlyCollection<Option>;
+
+
+        if (control.Options is JsonPointerReference pointer)
+        {
+            if (benchmark.OptionPointer != null)
+                pointer.Pointer.Should().Be(benchmark.OptionPointer);
+            else
+                pointer.Pointer.Should().StartWith("/data/");
+            if (benchmark.Options is not null)
+                options = await stream.Reduce(pointer)
+                    .Select(p =>
+                        JsonNode.Parse(p.Value.ToString())
+                            .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
+                    .Where(x => x is not null)
+                    .Timeout(10.Seconds())
+                    .FirstAsync();
+        }
+
+        if (benchmark.Options is null)
+            options.Should().BeNull();
+        else
+            options.Should().BeEquivalentTo(benchmark.Options);
+    }
 
     [Fact]
     public async Task TestEditorWithListFormProperties()
@@ -210,19 +270,6 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
-    #region Domain
-    public record Calculator
-    {
-        [Description("This is the X value")]
-        public double X { get; init; }
-        [Description("This is the Y value")]
-        public double Y { get; init; }
-
-    }
-
-
-    private record MyDimension([property: Key] int Code, string DisplayName) : INamed;
-    #endregion
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration).AddLayout(layout => layout
@@ -235,54 +282,5 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 source.WithType<MyDimension>(type => type.WithInitialData(Dimensions))));
     }
 
-    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
-
-    private static readonly object[] ListPropertyBenchmarks = 
-        [
-            new ListPropertyBenchmark<SelectControl>("dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray()),
-            new ListPropertyBenchmark<SelectControl>("dimensionWithStream", null, LayoutAreaReference.GetDataPointer("stream")),
-            new ListPropertyBenchmark<RadioGroupControl>("display", [new Option<string>("chart", "chart"), new Option<string>("table", "table")])
-        ];
-    private record ListForms
-    {
-        [Dimension<MyDimension>()]
-        public string Dimension { get; init; }
-        [Dimension<MyDimension>(Options = "stream")]
-        public string DimensionWithStream { get; init; }
-        [UiControl<RadioGroupControl>(Options = new[]{ "chart", "table" })]
-        public string Display { get; init; }
-    }
-
-    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
-    private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
-        where TControl : ListControlBase<TControl>
-    {
-        control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
-
-        var options = control.Options as IReadOnlyCollection<Option>;
-
-
-        if (control.Options is JsonPointerReference pointer)
-        {
-            if (benchmark.OptionPointer != null)
-                pointer.Pointer.Should().Be(benchmark.OptionPointer);
-            else
-                pointer.Pointer.Should().StartWith("/data/");
-            if(benchmark.Options is not null)
-                options = await stream.Reduce(pointer)
-                    .Where(x => x.Value is not null)
-                    .Select(p =>
-                        JsonNode.Parse(p.Value.ToString())
-                            .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
-                    .Where(x => x is not null)
-                    .Timeout(10.Seconds())
-                    .FirstAsync();
-        }
-
-        if (benchmark.Options is null)
-            options.Should().BeNull();
-        else 
-            options.Should().BeEquivalentTo(benchmark.Options);
-    }
 
 }

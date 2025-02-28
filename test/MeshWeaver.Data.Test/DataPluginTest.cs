@@ -178,7 +178,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client));
+        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client), null);
 
         var hostWorkspace = GetHost().GetWorkspace();
 

@@ -8,15 +8,14 @@ namespace MeshWeaver.Portal.Shared.Mesh;
 
 public static  class SharedMeshConfiguration
 {
-    public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder)
+    public static TBuilder ConfigurePortalMesh<TBuilder>(this TBuilder builder)
+    where TBuilder:MeshBuilder
     {
-        return builder.ConfigureMesh(mesh => mesh
+        return (TBuilder)builder.ConfigureMesh(mesh => mesh
                 .InstallAssemblies(typeof(DocumentationViewModels).Assembly.Location)
                 .InstallAssemblies(typeof(NorthwindViewModels).Assembly.Location)
             )
-            .AddKernel()
-            .AddArticles(articles
-                => articles.FromAppSettings()
-            );
+            .AddKernel();
     }
+
 }

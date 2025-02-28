@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "ag-grid-enterprise": "^31.3.2",
-    "lodash-es": "^4.17.21"
+    "lodash-es": "^4.17.21",
+    "vite-plugin-static-copy": "^2.2.0"
   },
   "devDependencies": {
     "@types/lodash-es": "^4.14.202",

@@ -10,7 +10,6 @@ public interface IMeshCatalog
 
     Task UpdateAsync(MeshNode node);
 
-
 }
 
 

@@ -70,8 +70,11 @@ public partial class LayoutAreaView
             AreaStream.Dispose();
         }
         Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address, ViewModel.Reference);
-        AreaStream = Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
+        AreaStream = Address.Equals(Workspace.Hub.Address)
+            ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
+            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
     }
+
 
     protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
 

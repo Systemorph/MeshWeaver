@@ -28,6 +28,19 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     /// <param name="width">The width to set.</param>
     /// <returns>A new <see cref="NavMenuSkin"/> instance with the specified width.</returns>
     public NavMenuSkin WithWidth(int width) => this with { Width = width };
+
+    /// <summary>
+    /// Sets whether the menu is expanded.
+    /// </summary>
+    public object Expanded { get; init; } = true;
+
+    /// <summary>
+    /// Collapse the menu
+    /// </summary>
+    /// <param name="expanded"></param>
+    /// <returns></returns>
+    public NavMenuSkin Collapse(bool expanded = false) =>
+        this with { Expanded = expanded };
 }
 
 /// <summary>
@@ -73,6 +86,9 @@ public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(M
         object title,
         Func<NavGroupControl, NavGroupControl> config) =>
         WithNavGroup(config(new NavGroupControl(title)));
+
+    public NavMenuControl Collapse(bool expanded = false)
+    => WithSkin(s => s.Collapse(expanded));
 
 }
 

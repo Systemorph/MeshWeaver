@@ -48,13 +48,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
-    public void InvokeAsync(Func<CancellationToken, Task> action);
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback);
 
-    public void InvokeAsync(Action action) => InvokeAsync(_ =>
+    public void InvokeAsync(Action action, Action<Exception> exceptionCallback) => InvokeAsync(_ =>
     {
         action();
         return Task.CompletedTask;
-    });
+    }, exceptionCallback);
 
     IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default) 
         where TAddress : Address;

@@ -3,6 +3,8 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
@@ -12,10 +14,11 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
     private readonly IMessageHub persistence;
-
+    private readonly ILogger<MeshCatalogBase> logger;
     protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration)
     {
         Configuration = configuration;
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
         persistence = hub.GetHostedHub(new PersistenceAddress());
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
@@ -48,7 +51,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private MeshNode UpdateNode(MeshNode node)
     {
         cache.Set(node.Key, node, cacheOptions);
-        persistence.InvokeAsync(_ => UpdateNodeAsync(node));
+        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex => logger.LogError(ex, "unable to update mesh catalog"));
         return node;
     }
 

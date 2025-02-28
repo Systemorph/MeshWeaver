@@ -34,6 +34,14 @@ public interface IRoutingService
         => RegisterStreamAsync(address, (d, _) => Task.FromResult(callback(d)));
 
     /// <summary>
+    /// Easy access overload to register message hubs.
+    /// </summary>
+    /// <param name="hub">Hub to be exposed to the web.</param>
+    /// <returns></returns>
+    Task<IAsyncDisposable> RegisterStreamAsync(IMessageHub hub)
+        => RegisterStreamAsync(hub.Address, hub.DeliverMessage);
+
+    /// <summary>
     /// Stream Namespace for incoming messages
     /// </summary>
     public const string MessageIn = nameof(MessageIn);

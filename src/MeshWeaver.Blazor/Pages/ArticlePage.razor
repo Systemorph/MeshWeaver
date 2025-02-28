@@ -1,11 +1,16 @@
 @page "/article/{Collection}/{**Path}"
-@using MeshWeaver.Mesh
+@using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Messaging
+@inject PortalApplication PortalApplication
 
-<LayoutArea Address="@Address" Area="Article" Id="@Path" />
+<LayoutArea Address="@Address" Area="Article" Id="@Id" />
+
 @code
 {
-    private ArticlesAddress Address => new(Collection);
+    private Address Address => PortalApplication.Hub.Address;
     [Parameter] public string Collection { get; set; }
     [Parameter] public string Path { get; set; }
+
+    private string Id => $"{Collection}/{Path}";
 }
 

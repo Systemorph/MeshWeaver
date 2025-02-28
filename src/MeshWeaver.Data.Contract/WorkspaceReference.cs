@@ -14,14 +14,14 @@ public abstract record WorkspaceReference
 // ReSharper disable once UnusedTypeParameter
 public abstract record WorkspaceReference<TReference> : WorkspaceReference;
 
-public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement?>
+public record JsonPointerReference(string Pointer) : WorkspaceReference<JsonElement>
 {
     public override string ToString() => Pointer;
 }
 
 public record InstanceReference(object Id) : WorkspaceReference<object>
 {
-    public virtual string Pointer => $"$.['{Id}']";
+    public virtual string Pointer => $"/'{Id}'";
 
     public override string ToString() => Pointer;
 }

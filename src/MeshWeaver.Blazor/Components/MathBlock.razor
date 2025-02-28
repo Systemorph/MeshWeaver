@@ -1,0 +1,41 @@
+﻿@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime
+
+<HeadContent>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+    <script>
+        MathJax = {
+            tex: {
+                packages: ['base', 'ams', 'noundefined', 'newcommand', 'boldsymbol']
+            },
+            startup: {
+                typeset: false
+            }
+        };
+    </script>
+</HeadContent>
+
+<div @ref="MathBlockElement" @attributes="AdditionalAttributes">
+    @((MarkupString)Html)
+</div>
+
+@code {
+    [Parameter] public string Html { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
+    private IJSObjectReference Mathjax;
+    private ElementReference MathBlockElement;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Mathjax ??= await JsRuntime.Import("mathjax.js");
+            await Mathjax.InvokeAsync<bool>("waitForMathJax");
+        }
+
+        if (Mathjax is not null)
+        {
+            await Mathjax.InvokeVoidAsync("typeset", MathBlockElement);
+        }
+    }
+}

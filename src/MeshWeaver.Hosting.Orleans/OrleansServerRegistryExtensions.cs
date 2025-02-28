@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Orleans;
 public static class OrleansServerRegistryExtensions
 {
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
-        this HostApplicationBuilder hostBuilder,
+        this IHostApplicationBuilder hostBuilder,
         Address address)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
@@ -75,7 +75,7 @@ public static class OrleansServerRegistryExtensions
     public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
         services
             .AddSingleton<IRoutingService, OrleansRoutingService>()
-            .AddSingleton<IMeshCatalog, OrleansMeshCatalog>();
+            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>();
 
 
 }

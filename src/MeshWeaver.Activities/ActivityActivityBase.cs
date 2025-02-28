@@ -65,18 +65,27 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
     protected ActivityBase(string category, IMessageHub hub) : base(category, hub)
     {
         current = (TActivity)this;
-        Update(x => x);
+        Update(x => x, FailActivity);
+    }
+
+    protected void FailActivity(Exception ex)
+    { 
+        Update(x =>
+        {
+            Logger.LogWarning(ex, "An exception occurred in {Activity}", x);
+            return x with { Log = Log.Fail($"An exception occurred: {ex}") };
+        }, _ => { });
     }
 
     private TActivity current;
 
-    public void Update(Func<TActivity, TActivity> update)
+    public void Update(Func<TActivity, TActivity> update, Action<Exception> exceptionCallback)
     {
         SyncHub.InvokeAsync(() =>
         {
             current = update.Invoke(current);
             Stream.OnNext(current);
-        });
+        }, exceptionCallback);
     }
 
     void ILogger.Log<TState>(
@@ -105,7 +114,7 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
                     Version = log.Version + 1
                 }
 
-            )
+            ), FailActivity
         );
     }
 
@@ -118,11 +127,11 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
     public Activity StartSubActivity(string category)
     {
         var subActivity = new Activity(category, Hub);
-        Update(x => x.WithLog(l => l with{SubActivities = l.SubActivities.SetItem(subActivity.Id, subActivity.Log)}));
+        Update(x => x.WithLog(l => l with{SubActivities = l.SubActivities.SetItem(subActivity.Id, subActivity.Log)}), FailActivity);
         subActivity.Stream.Skip(1).Subscribe(sa =>
             Update(x => x.WithLog(
                 log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
-            )
+            , FailActivity)
         );
         return subActivity;
     }
@@ -161,7 +170,7 @@ public record Activity(string category, IMessageHub hub) : ActivityBase<Activity
             }
 
             return a;
-        });
+        },FailActivity);
     }
 
     private readonly List<Action<ActivityLog>> completedActions = new();

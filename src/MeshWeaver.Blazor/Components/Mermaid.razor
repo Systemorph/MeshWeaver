@@ -1,0 +1,27 @@
+﻿@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime
+
+<div @ref="Element" @attributes="AdditionalAttributes" class="mermaid">
+</div>
+
+@code {
+    [Parameter] public string Diagram { get; set; }
+    [Parameter] public bool IsDark { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
+    private IJSObjectReference MermaidJs;
+    private ElementReference Element;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            MermaidJs ??= await JsRuntime.Import("mermaid.js");
+        }
+
+        if (MermaidJs is not null)
+        {
+            await MermaidJs.InvokeVoidAsync("renderMermaid", IsDark, Element, Diagram);
+        }
+    }
+
+}

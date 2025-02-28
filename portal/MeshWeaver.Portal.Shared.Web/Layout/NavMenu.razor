@@ -1,18 +1,9 @@
 ﻿@using MeshWeaver.Layout
 @using MeshWeaver.Blazor.Components
-@using MeshWeaver.Messaging
-@inject IMessageHub Hub
-<div class="navmenu" >
-    <LayoutArea 
-        Area="@NavMenuExtensions.NavMenu" 
-        Address="@LayoutHubAddress" 
-        ShowProgress="false"
-    />
-</div>
-
-@code
-{
-    // TODO V10: This is a bit hacky but will guarantee that the hosted hub is instantiated. Still need a better concept. (28.01.2025, Roland Bürgi)
-    Address LayoutHubAddress
-        => Hub.GetHostedHub(Hub.Address.GetPortalLayoutAddress(), c => c.ConfigurePortalLayout()).Address;
-}
+@using MeshWeaver.Blazor.Infrastructure
+@inject PortalApplication PortalApplication
+<LayoutArea 
+    Area="@NavMenuExtensions.NavMenu"
+    Address="@PortalApplication.Hub.Address"
+    ShowProgress="false"
+/>

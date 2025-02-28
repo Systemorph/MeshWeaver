@@ -15,8 +15,8 @@ public sealed class MessageHub : IMessageHub
 {
     public Address Address => Configuration.Address;
 
-    public void InvokeAsync(Func<CancellationToken, Task> action) =>
-        Post(new ExecutionRequest(action));
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback) =>
+        Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
     private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
@@ -29,7 +29,7 @@ public sealed class MessageHub : IMessageHub
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
-    private readonly LinkedList<AsyncDelivery> Rules = new();
+    private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
     private ILogger Logger { get; }
 
@@ -205,7 +205,7 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public async Task<IMessageDelivery> HandleMessageAsync(
+    private async Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
@@ -235,7 +235,6 @@ public sealed class MessageHub : IMessageHub
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
-        // TODO V10: Add logging for failed messages, not found, etc. (31.01.2024, Roland Bürgi)
         return delivery.State == MessageDeliveryState.Submitted ? delivery.Ignored() : delivery;
     }
 
@@ -410,6 +409,7 @@ public sealed class MessageHub : IMessageHub
 
         return tcs.Task;
     }
+
 
     private async Task<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,
@@ -674,12 +674,14 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(AsyncDelivery action, DeliveryFilter filter)
     {
-        AsyncDelivery rule = (delivery, cancellationToken) =>
-            WrapFilter(delivery, action, filter, cancellationToken);
-        Rules.AddFirst(rule);
+        Task<IMessageDelivery> Rule
+            (IMessageDelivery delivery, CancellationToken cancellationToken)
+            => WrapFilter(delivery, action, filter, cancellationToken);
+        var node = new LinkedListNode<AsyncDelivery>(Rule);
+        Rules.AddFirst(node);
         return new AnonymousDisposable(() =>
         {
-            if (Rules.Contains(rule)) Rules.Remove(rule);
+            Rules.Remove(node);
         });
     }
 

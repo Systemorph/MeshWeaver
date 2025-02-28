@@ -1,23 +1,24 @@
-﻿using MeshWeaver.Connection.Orleans;
-using MeshWeaver.Hosting.Orleans;
+﻿using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
-using Microsoft.Extensions.Hosting;
+using MeshWeaver.Portal.Shared.Mesh;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 builder.AddAspireServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
+builder.AddKeyedRedisClient("orleans-redis");
 builder.AddKeyedRedisClient(StorageProviders.AddressRegistry);
 var address = new MeshAddress();
 
 
 
-builder.
-    UseOrleansMeshServer(address)
+builder.UseOrleansMeshServer(address)
+    .ConfigurePortalMesh()
+    .AddPostgresSerilog()
     ;
 
 var app = builder.Build();
-
+app.MapDefaultEndpoints();
 app.Run();

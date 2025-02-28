@@ -19,7 +19,6 @@ namespace MeshWeaver.Blazor;
 
 public static class BlazorViewRegistry
 {
-
     internal static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null

@@ -2,10 +2,11 @@
 using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
+public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
@@ -36,7 +37,10 @@ public class MonolithRoutingService(IMessageHub hub) : RoutingServiceBase(hub)
             return await stream.Invoke(delivery, cancellationToken);
 
         if (node == null)
-            throw new MeshException($"No Mesh node was found for {address}");
+        {
+            logger.LogWarning("No node found for address {Address}", address);
+            return delivery.Failed($"No node found for address {address}");
+        }
 
         var hub = CreateHub(node, address);
         if (hub is null)

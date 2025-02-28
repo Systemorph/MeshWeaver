@@ -4,7 +4,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
-using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
@@ -16,7 +15,7 @@ public sealed record DataContext : IDisposable
     {
         Hub = workspace.Hub;
         Workspace = workspace;
-        ReduceManager = StandardWorkspaceReferenceImplementations.CreateReduceManager(Hub);
+        ReduceManager = Hub.CreateReduceManager();
 
         TypeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         TypeRegistry.WithKeyFunctionProvider(type =>

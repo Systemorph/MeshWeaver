@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
@@ -9,7 +10,7 @@ namespace MeshWeaver.Data;
 public static class StandardWorkspaceReferenceImplementations
 {
 
-    internal static ReduceManager<EntityStore> CreateReduceManager(IMessageHub hub)
+    public static ReduceManager<EntityStore> CreateReduceManager(this IMessageHub hub)
     {
         return new ReduceManager<EntityStore>(hub)
             .AddWorkspaceReference<EntityReference, object>(ReduceEntityStoreTo)
@@ -19,21 +20,23 @@ public static class StandardWorkspaceReferenceImplementations
             .AddWorkspaceReference<PartitionedWorkspaceReference<InstanceCollection>, InstanceCollection>(
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
+            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci,r) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
+                    .AddWorkspaceReference<InstanceReference, object>(ReduceInstanceCollectionTo)
             )
             .ForReducedStream<JsonElement>(reduced =>
                 reduced.AddPatchFunction(PatchJsonElement)
-                    .AddWorkspaceReference<JsonPointerReference, JsonElement?>(ReduceJsonElementTo)
+                    .AddWorkspaceReference<JsonPointerReference, JsonElement>(ReduceJsonElementTo)
                 );
 
     }
 
-    private static ChangeItem<JsonElement?> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
+    private static ChangeItem<JsonElement> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
-        return new(pointer.Evaluate(current.Value), current.ChangedBy, current.ChangeType, current.Version, current.Updates
+        return new(pointer.Evaluate(current.Value) ?? default, current.ChangedBy, current.ChangeType, current.Version, current.Updates
             .Where(u => u.Collection == pointer.First()
                         && pointer.Skip(1).Equals(u.Id)).ToArray());
     }
@@ -43,12 +46,12 @@ public static class StandardWorkspaceReferenceImplementations
         return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions));
     }
 
-    private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, EntityReference reference)
+    private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference)
     {
         if (current.ChangeType != ChangeType.Patch)
-            return new(current.Value.Get<object>(reference), current.Version);
+            return new(current.Value.Get<object>(reference.Id), current.Version);
         var change =
-            current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && x.Id == reference.Id);
+            current.Updates.FirstOrDefault(x => x.Id == reference.Id);
         if (change == null)
             return null;
         return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
@@ -60,9 +63,24 @@ public static class StandardWorkspaceReferenceImplementations
             return new(current.Value.ReduceImpl(reference), current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
-        if (change == null)
-            return null;
-        return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+        if (change is not null)
+            return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+
+        return new(
+            current.Value.ReduceImpl(reference), 
+            null,
+            ChangeType.Full,
+            current.Version,
+            ImmutableArray<EntityUpdate>.Empty);
+    }
+    private static ChangeItem<JsonElement> ReduceEntityStoreTo(ChangeItem<EntityStore> current,
+        JsonPointerReference reference, JsonSerializerOptions options)
+    {
+        var serialized = JsonSerializer.SerializeToElement(current.Value, options);
+        if (!string.IsNullOrWhiteSpace(reference.Pointer) && reference.Pointer != "/")
+            serialized = JsonPointer.Parse(reference.Pointer).Evaluate(serialized)!.Value;
+
+        return new(serialized, current.ChangedBy, ChangeType.Patch, current.Version, current.Updates);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference)
     {

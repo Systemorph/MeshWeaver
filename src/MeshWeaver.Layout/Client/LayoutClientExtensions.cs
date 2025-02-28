@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Runtime.Serialization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -7,19 +8,21 @@ using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
-    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, T value,
+    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, 
+        T value,
         string dataContext,
         JsonPointerReference reference, ModelParameter model = null)
     {
-        if (reference != null)
+        if (reference is not null)
         {
-            if (model != null)
+            if (model is not null)
             {
                 var patch = stream.GetPatch(value, reference, string.Empty, model.Element);
                 if (patch != null)
@@ -33,7 +36,8 @@ public static class LayoutClientExtensions
                     var updated = patch?.Apply(ci) ?? ci;
 
                     return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-                });
+                },
+                    ex => stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout"));
 
         }
     }
@@ -113,7 +117,11 @@ public static class LayoutClientExtensions
 
     private static string GetPointer(string pointer, string dataContext)
     {
-        return pointer.StartsWith('/')? pointer.TrimEnd('/') : $"{dataContext}/{pointer.TrimEnd('/')}";
+        if (pointer.StartsWith('/'))
+            return pointer.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(dataContext))
+            throw new SerializationException($"Invalid pointer submitted. Pointer {pointer} does not start with a / and no data context specified.");
+        return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
     public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T> conversion)

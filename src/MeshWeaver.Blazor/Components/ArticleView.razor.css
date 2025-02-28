@@ -17,6 +17,10 @@
     margin: 0 auto; /* Center the page content */
 }
 
+.title:focus {
+    outline: none;
+}
+
 .header-content {
     width: 100%;
     text-align: left; /* Left-align text */
@@ -58,22 +62,43 @@
 }
 
 .media {
-    width: 75%; /* Decrease the width to 75% */
-    text-align: center; /* Center the media content */
-    margin: 0 auto; /* Center the media container */
     position: relative;
+    width: 75%;
+    height: 0;
+    padding-top: 56.25%; /* 16:9 Aspect Ratio */
+    margin: 0 auto; /* Center the media */
+    overflow: hidden; /* Hide overflow to ensure the image is cut */
 }
 
-    .media iframe {
-        width: 100%;
-        height: 315px; /* Set a fixed height for the iframe */
+@media (max-width: 600px) {
+    .media {
+        width: 100%; /* Make the width 100% for small devices */
     }
+}
 
-    .media img.thumbnail {
-        width: 100%;
-        height: 315px; /* Set a fixed height for the image */
-        object-fit: cover; /* Ensure the image covers the container and is truncated if necessary */
+.youtube-embed {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+}
+
+.thumbnail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover; /* Ensure the image covers the media area */
+}
+
+@media (forced-colors: active) {
+    .youtube-embed {
+        border: 1px solid currentColor;
     }
+}
 
 .article-content {
     width: 75%; /* Decrease the width to 75% */
@@ -83,4 +108,11 @@
     background-color: var(--color-canvas-default);
     color: var(--color-fg-default);
     font-size: 16pt; /* Increase the font size */
+}
+
+@media (max-width: 600px) {
+    .article-header,
+    .article-content {
+        width: 90%; /* Increase the width to 90% for small devices */
+    }
 }

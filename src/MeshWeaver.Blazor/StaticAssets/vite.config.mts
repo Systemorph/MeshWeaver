@@ -8,11 +8,13 @@ export default defineConfig({
             targets: [
                 {
                     src: 'node_modules/highlight.js/styles/*.min.css',
-                    dest: './'
+                    dest: './css/',
+                    rename: (name, extension) => `${name}.${extension}`  // Preserve the full filename
                 },
                 {
                     src: 'node_modules/@primer/css/dist/markdown.css',
-                    dest: './'
+                    dest: './css/',
+                    rename: (name, extension) => `${name}.${extension}`  // Preserve the full filename
                 },
                 {
                     src: 'node_modules/mermaid/dist/mermaid.min.js',
@@ -23,7 +25,7 @@ export default defineConfig({
                     dest: './mathjax/'
                 }
             ],
-            structured: true
+            structured: false  // This will prevent maintaining folder structure
         }),
         commonjs({
             include: [/mathjax-full/],

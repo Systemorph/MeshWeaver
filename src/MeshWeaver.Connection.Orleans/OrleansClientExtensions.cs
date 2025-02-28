@@ -12,7 +12,7 @@ namespace MeshWeaver.Connection.Orleans;
 public static class OrleansClientExtensions
 {
     public static MeshHostApplicationBuilder UseOrleansMeshClient(this IHostApplicationBuilder hostBuilder,
-        Address address,
+        Address address = null,
         Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
@@ -46,14 +46,3 @@ public static class OrleansClientExtensions
     }
 }
 
-//public class InitializationHostedService(IMessageHub hub, IMeshCatalog catalog, ILogger<InitializationHostedService> logger) : IHostedService
-//{
-//    public virtual async Task StartAsync(CancellationToken cancellationToken)
-//    {
-//        logger.LogInformation("Starting initialization of {Address}", hub.Address);
-//        await catalog.InitializeAsync(cancellationToken);
-//    }
-
-//    public virtual Task StopAsync(CancellationToken cancellationToken)
-//        => Task.CompletedTask;
-//}

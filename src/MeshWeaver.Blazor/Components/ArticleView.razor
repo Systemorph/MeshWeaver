@@ -26,7 +26,16 @@
         <div class="media">
             @if (!string.IsNullOrEmpty(VideoUrl))
             {
-                <iframe width="560" height="315" src="@GetEmbedUrl(VideoUrl)" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+                <div class="video">                
+                    <iframe class="youtube-embed"
+                                                           src="@GetEmbedUrl(VideoUrl)"
+                                                           title="YouTube video player"
+                                                           loading="lazy"
+                                                           allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                                           allowfullscreen>
+                    </iframe>
+                </div>
+
             }
             else
             {

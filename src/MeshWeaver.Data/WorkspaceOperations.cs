@@ -3,13 +3,14 @@ using System.ComponentModel.DataAnnotations;
 using Json.Patch;
 using MeshWeaver.Activities;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity)
+    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery request)
     {
         if (change.Creations.Any())
         {
@@ -47,18 +48,26 @@ public static class WorkspaceOperations
         }
 
 
-        activity.Update(a => a.HasErrors() ? a with{Log = a.Log} : StartUpdate(a, workspace, change));
+        activity.Update(a => a.HasErrors() ? a with{Log = a.Log} : StartUpdate(a, workspace, change, request), 
+            ex => UpdateFailed(workspace, request, ex)
+            );
     }
 
-    private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change)
+    private static void UpdateFailed(IWorkspace workspace, IMessageDelivery delivery, Exception exception)
+    {
+        if(delivery is not null)
+            workspace.Hub.Post(new DeliveryFailure(delivery, exception?.ToString()), o => o.ResponseFor(delivery));
+    }
+
+    private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery request)
     {
         activity.LogInformation("Starting Update");
-        workspace.UpdateStreams(change, activity);
+        workspace.UpdateStreams(change, activity, request);
         return activity;
     }
 
 
-    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity)
+    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery request)
     {
         foreach (var group in
                  change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
@@ -140,7 +149,9 @@ public static class WorkspaceOperations
                     return null;
                 }
 
-            });
+            },
+            ex => UpdateFailed(workspace, request, ex)
+                );
         }
     }
 

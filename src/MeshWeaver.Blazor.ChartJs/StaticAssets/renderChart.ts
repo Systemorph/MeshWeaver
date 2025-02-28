@@ -16,6 +16,9 @@ Chart.defaults.plugins.tooltip.enabled = false;
 Chart.defaults.font.family = "roboto, \"sans-serif\"";
 Chart.defaults.font.size = 12;
 
+// Use the standard Fluent UI text color
+Chart.defaults.color = getComputedStyle(document.documentElement).getPropertyValue('--neutral-foreground-rest');
+
 Chart.defaults.plugins.datalabels.formatter = (value, context) =>
     typeof (value) == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
 
