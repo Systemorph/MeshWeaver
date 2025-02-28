@@ -100,13 +100,13 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        stack.Areas.Should().HaveCount(3);
+        stack.Areas.Should().HaveCount(2);
 
         var articles = await stack.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()).FirstAsync())
             .ToArrayAsync();
 
-        articles.Should().HaveCount(3);
+        articles.Should().HaveCount(2);
         articles.First().Should().BeOfType<ArticleCatalogItemControl>()
             .Which.Article.Should().BeOfType<Article>()
             .Which.Name.Should().Be("ReadMe");
