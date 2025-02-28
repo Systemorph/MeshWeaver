@@ -1,4 +1,6 @@
-﻿@using MeshWeaver.Blazor.Layouts;
+﻿@using Microsoft.Extensions.Configuration
+@using MeshWeaver.Blazor.Components
+@inject IConfiguration Configuration
 
 <!DOCTYPE html>
 <html lang="en">
@@ -7,11 +9,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
-    <link href="MeshWeaver.Portal.styles.css" rel="stylesheet" />
+    <link href="@(Configuration["Styles:StylesheetName"]).styles.css" rel="stylesheet" />
+    <link href="_content/MeshWeaver.Blazor/css/markdown.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
     <ImportMap />
-    <link rel="icon" type="image/png" href="favicon.png" />
+    <link rel="icon" type="image/png" href="favicon.ico" />
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
 </head>
 
@@ -19,6 +22,7 @@
     <Routes @rendermode="RenderMode.InteractiveServer"/>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
     <script src="_framework/blazor.web.js"></script>
+    <script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
 </body>
 
 </html>

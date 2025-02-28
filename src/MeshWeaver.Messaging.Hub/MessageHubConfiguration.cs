@@ -80,17 +80,20 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub,IMessageDelivery, bool> filter = null) => 
         WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)), filter);
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool> filter = null) => 
-        this with
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool> filter = null)
+    {
+        TypeRegistry.GetOrAddType(typeof(TMessage));
+        return this with
         {
             MessageHandlers = MessageHandlers.Add(
-                new(typeof(TMessage), 
-                (h,m,c) => 
-                    m is IMessageDelivery<TMessage> mdTyped &&
-                        (filter ?? DefaultFilter).Invoke(h, m) ?
-                        delivery.Invoke(h,mdTyped,c)
-                : Task.FromResult(m)))
+                new(typeof(TMessage),
+                    (h, m, c) =>
+                        m is IMessageDelivery<TMessage> mdTyped &&
+                        (filter ?? DefaultFilter).Invoke(h, m)
+                            ? delivery.Invoke(h, mdTyped, c)
+                            : Task.FromResult(m)))
         };
+    }
 
     private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery) => delivery.Target == null || delivery.Target.Equals(hub.Address);
 
@@ -126,9 +129,9 @@ public record MessageHubConfiguration
 
 
 
-    internal ImmutableDictionary<Type, object> Properties { get; init; } = ImmutableDictionary<Type, object>.Empty;
-    public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
-    public MessageHubConfiguration Set<T>(T value) => this with { Properties = Properties.SetItem(typeof(T), value) };
+    internal ImmutableDictionary<(Type, string), object> Properties { get; init; } = ImmutableDictionary<(Type, string), object>.Empty;
+    public T Get<T>(string context = null) => (T)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
+    public MessageHubConfiguration Set<T>(T value, string context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value) };
 
 
     public MessageHubConfiguration WithType<T>(string name = null)

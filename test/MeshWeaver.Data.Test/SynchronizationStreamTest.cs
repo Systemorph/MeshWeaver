@@ -57,7 +57,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                         [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
                         stream.StreamId)
                 );
-            });
+            }, null);
             return true;
         }).ToArray();
         await Task.Delay(10);

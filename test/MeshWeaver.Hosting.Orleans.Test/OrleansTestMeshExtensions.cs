@@ -12,10 +12,7 @@ public static class OrleansTestMeshExtensions
         return builder.ConfigureMesh(mesh => mesh
                 .InstallAssemblies(typeof(OrleansTestMeshExtensions).Assembly.Location)
             )
-            .AddKernel()
-            .AddArticles(articles
-                => articles.FromAppSettings()
-            );
+            .AddKernel();
 
     }
 

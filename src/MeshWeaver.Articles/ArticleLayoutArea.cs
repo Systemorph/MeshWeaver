@@ -1,5 +1,5 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
+using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
@@ -39,15 +39,13 @@ public static class ArticleLayoutArea
 
     public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
     {
-        var collectionName = host.Hub.Address.GetCollectionName();
-        var collection = host.Hub.GetCollection(collectionName);
-        if (collection is null)
-            return Observable.Return(new MarkdownControl($"No collection {collectionName} is configured. "));
-        var stream = collection.GetArticle(host.Reference.Id.ToString());
-        if(stream is null)
-            return Observable.Return(new MarkdownControl($"No article {host.Reference.Id} found in collection {collectionName}"));
+        var articleService = host.Hub.GetArticleService();
+        var split = host.Reference.Id?.ToString()!.Split("/");
+        if(split is null || split.Length < 2)
+            return Observable.Return(new MarkdownControl("Path must be specified in the form of /collection/article"));
+        var stream = articleService.GetArticle(split[0], string.Join('/', split.Skip(1)));
         return stream
-            .Select(host.Hub.RenderArticle);
+            .Select(a => a is null ? (object)new MarkdownControl($"No article {host.Reference.Id} found in collection") : host.Hub.RenderArticle(a));
     }
 
 

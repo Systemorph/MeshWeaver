@@ -1,0 +1,170 @@
+Roland: Hey Stefan. 
+
+Stefan: Hello Roland. 
+
+Roland: what have you been doing all these years? 
+
+Stefan: I went into early retirement almost 10 years ago, and then I went back to university where I did, Bachelor in philosophy and with a minor in astronomy and astrobiology. So something completely different. And then I was in different projects and then by coincidence, we ended up to run into each other again a couple of months ago.
+
+Roland: So maybe also for people who don't know you at all, so maybe we should say how we met. the very first time. we both worked at Swiss Re and our key topic there was, I think we were like the first generation to create these global tools. And, you are of course the OG of reinsurance pricing.
+
+most of what is still in use today was probably written by you.
+
+So you work in federated environments where, it's quite difficult for the group to, to collect information. 
+
+Stefan: Swiss Re went through an interesting transition at the time, before it was a corporate structure where there was a holding company with different independent legal entities all over the world.
+
+And suddenly then management said, we want to have divisions, business divisions. And we don't care about the legal entities anymore. We want to, business oriented towards different lines of business, Life and Health, PNC and the like. We had, of course, new divisions like Corporate Solutions or, and so on, which were created at the time.
+
+And in this transition phase, there was a lot of room for improvements. And I think this innovation phase also from the whole company where they went to transition, this is probably not the case anymore, or we don't see it. And this is also enabled a lot, on our level then to implement. new concepts and new technology and, to support this transition of the company.
+
+Roland: And so after your retirement, you started programming again, you told me. 
+
+Stefan: in philosophy, I didn't have to program already a little, but as a minor, I did astronomy and astrobiology. And this one was computation, astrophysics, for instance. And there was also part of it was the program.
+
+And what, Most of the students were using was Python. I was not familiar with Python at the time. So I tried and then I realized, so to do my homework, I would spend much more time learning to program. Then, so I went back to what I knew, this was Visual Basic for Applications. So I implemented my, things in VBA.
+
+But then later I said, yes, Python sounds, like interesting. So I started to, engage myself in learning to program in Python, but as you also know, if you want to do this, you need to have something tangible and say, okay, now I want to implement something. And then there was an old idea I had from my Swiss retire.
+
+So I said, this is one. area where I would, be great if we could find a solution there. So I had this in, the back of my mind. So as I started to implement reinsurance or pricing related modules. And this was for me a learning path, and then I started to use Python also for other things. And then eventually, I ended up developing this idea to a level where I was able to write the paper and to publish it, and this is how we then came together again.
+
+Roland: Let's maybe give a quick glimpse of this to the audience. this is the paper and actually you, pick not an easy topic, to program, but you, this is you all over. You started with the most complicated and, with, topics that were never solved. So can, you tell just in two, three sentences, what is this about?
+
+Stefan: Okay. Yeah. In, let's talk about PNC, let's leave life intelligence aside. There is basically two approaches for pricing. One is you take the loss experience. So this experience based rating, and then you take data from, let's say, The last 10, 20 years, depending what, how much submission data you get, you take these past claims, which are no longer relevant or no longer representative for the future, but somehow you project all this to the future.
+
+And then you put the model around it and this model is then used for pricing the future. So that's one approach. another approach is to say, okay, we want to use exposure. Let's say, how many risks do we have in our portfolio? How many property, how many buildings do we have? How big are these buildings?
+
+What is the insurance? What kind of buildings do we have? So you take the exposure If you take credit and shorty, you want to know which, risks do I have? And then what is the default probability of these risks? you take the exposure and then you try to model the future by, projecting first exposure to the cover period, which is in the future.
+
+And then you have, models behind which you use, so exposure based models. And then you come up with all the statistics you need for pricing your contracts. But these two approaches are independent. And what I try to do is to combine them into one integrated, consistent framework. So this is basically what the paper is about.
+
+Roland: I think it's already interesting to understand what brought us together the second time.
+
+So not this time, but the second time, because it was a system, it was called RDS, a reference data system. And, similarly to this name, it was not a very loved tool. I would say before it never really had a proper owner or it was always a bit done at the site. even though it was a very difficult system to do, objectively.
+
+But I know it from when I was there because people like me, we love to work in the rocket science mathematics and we didn't want to do these, mundane things like, administering, say, a list of lines of business, right? And it took me a few years to understand that actually this was almost more difficult than designing all this mathematics, even though the mathematics looked more like rocket science.
+
+And I was proud that I could say I develop mathematical models. But then I understood that the actual complexity is in, in, in administering all these thousands of small things. And maybe just also illustrate the problem set, when you take a parameter, which depends on, say, line of business country and currency And, then you just see the sheer amount of combinations it's multiplicative, and then you get into millions of different combinations. when we started the thing,I was heavily involved when we started it. Then we just multiplied out the whole table, got a million entries, and patched over single lines, and no one knew anymore what we were doing, right?
+
+And we understood we need a better system. so when we met, in 2011 you told me, hey, Roland, can you help improve the situation with this, and this problem intrigued me because it's enormously complex.
+
+And I think in the first go, we really tried to completely centralize the whole thing. So we, managed it from your department and we really collected all the data and we built this monolithical system. And then we just noticed this is unmaintainable. We cannot do it centrally. We have to decentralize.
+
+when you want to decentralize, we need the technology. And this was the technology we built in this. and then we were, the first five years, we were really in startup phase. when we did this RDS plus the successor project. At the beginning, it was reallyvery difficult, but it was then a success and I remember we could turn off the old RDS classic, in around 2016.
+
+I still remember the party we had. and then, we came into, transition phase. so you differentiate normally three phases of a company, startup phase, transition phase, and large phase. And, transition phase we entered around 2016 and, so we started doing accounting projects.
+
+We needed to get ISO certified, ISAE accredited, and we got more and more. We, had to hire staff like chief information security officer and, all these large corporate things. then, in 2020 COVID came with COVID, since we had a lot of insurance customers, they just, stopped all their projects.
+
+And so essentially our whole sales pipeline broke down. we could always work very well. in terms of, over the internet, we had a decentral company. We were used to this. But what I couldn't do is I couldn't sell over the internet.
+
+This was impossible. And so then we had, two and a half year sales gap when, after COVID, we could have lunch again with people and we could physically meet people. And then we really tried very hard to generate the sales pipeline. I would say around, fall last year, I was very confident that managed turnover, that we could, generate enough pipeline and that could go back to our old business.
+
+so in, in these times when everything is very tight, actually something small that happens can cause the whole thing to collapse. And so this, something happened last year, and then we understood we have to let go and, around this time of the year, we had to then,Do many, business plans to hope to save the company And then by Christmas last year, we decided we, we can't do it. And, we released all the staff, which was a big tragedy. So it was very sad at the time. But, it was unavoidable and sometimes in life you have to let go. then we had, of course, till March we had the notice period and, so as of April.
+
+We are now gradually starting to ramp down everything we had before the company still exists. I'm still the CEO, but, currently we have to really start over. So we, have to, we are again in, in startup phase. 
+
+Stefan: I came from a different angle. So you mentioned when we first were interacting, whereI came back from the U. S. where I was for an assignment for two years. And then I came back and then your team also wasn't part of my department. as you said, for me, it was difficult to understand why it takes so long to implement a certain application, because when I developed tools, I was basically a one man show, so I could do everything.
+
+Together. So if I had an idea implemented and 10 minutes later, I could give it to the users and say, you have a new version with this feature in it. this was the way I was used to work when I was basically myself responsible for the software then suddenly. we had these bigger projects and people are telling me, it takes, a couple of years, or at least a couple of months to do more or less the same of course, not at the same level, but the functionality was comparable.
+
+So this was for me a big, hurdle to start to understand how these models or how this approach is working. And if I look now what you are doing, so basically we're almost back at the time when I started, when I was able to implement the entire application myself, right?
+
+Yes. so this, yeah, side of, course it's on a very different scale. Now I can do a project which require maybe 10 people before you, as you say, you can do it yourself within a much shorter period of time without needing to coordinate, and I think this is the big advantage of this technology.
+
+Roland: we actually had this project. Maybe you remember it was when I worked for you, there was a group project called role based access management, right? And, my big learning from this project was whatever they did, it didn't fit.
+
+It was like the shoe with Cinderella. Everyone had to cut off a toe or a heel and at the end, like literally everyone was unhappy with the thing. So in my opinion, if you try to centralize this, even in, we already said at the beginning Swiss Re was a very centralized organization. 
+
+primary insurance, they are much more federated, right? in a primary insurance, you don't even have a centralized directory, so you can completely forget even the user accounts are not known at the global, level, in my opinion, you have to forcibly, decentralize even the notion of access management because who knows best who should see the data, the department that produces the data, 
+
+And in my opinion, us being Swiss, we had Duttweiler with the Migros idea to cut out all the intermediary and just say, okay, at the end of the day, we produce the food. And then we have the people to buy the food and we provide the stores to do it, right? And in my opinion, this is very much also the idea of data mesh.
+
+It's my data. I know who has access. I need to technically do it, but technically it's never, so as soon as I'm, we could say we have access rights, whoever wears a red shirt, whoever wears a blue shirt. As soon as I can implement groups for whoever has a red shirt, whoever has a blue shirt. I'm fine, but and this is again the mesh idea because I don't need to go to this central team and say, hey, you need to build me groups with blue shirt and red shirt, but I can just do it myself.
+
+And then I can say, okay, and this data is visible by group with red shirt, right? Decentralization, it's the big idea and the centralization always leads to this kind of boiling the ocean project. 
+
+Stefan: How far away are we from a CFO saying, okay, I want to know what is the state of my company today? He presses a button and then within, let's say a few minutes or maybe an hour, he gets an annual statement.
+
+at this point in time, which in principle should be possible. If all the information is there, it's just about aggregating and bringing into one final report, isn't it? Or do you think there are still many places where people have to manually interact to produce this annual report? It shouldn't be necessary.
+
+Roland: It depends what, right? So this, as well from our previous work, I think every piece of data has a life cycle, right? And for instance, we had at Swiss Re we had the capital allocation. and this we did, I don't know, once a year or twice a year, but it was infrequent, right?
+
+And then during the rest, you just leave it stable, but it doesn't matter. You just have to know, and same goes, in the close in IFRS. you have to create a cash flow model till infinity, right?and so essentially you have all the projections inlined and we had built this.
+
+So if you give me cash flows from today till infinity, of course I can produce you any future balance sheet with this. And in our software you could do this on the fly. So you could say, I want the balance sheet from 2035 and we gave it to you. Obviously you had no more notion of risk in there, right?
+
+Because you just compute the expected and, it's difficult to say what actually materializes, but you could put the Monte Carlo on top. it's all doable, right? And so I, would claim that we were there even, but how many are there? I don't know. So I see a lot of,especially IFRS.
+
+I see a lot of implementations that were not well done, they bought some system that was very expensive and then all the money was used up many companies have some form of excel battle now and then they feed like ready made results in the system and of course in This system, you are miles away from push of a button, but we always try to, create it, in a way that you can just, even for scenario computation, you could just say, okay, now I upload you way higher interest rates and you saw what your balance sheet would be.
+
+At Swiss Re we did it with, as if renewals, right? Maybe you can. You can describe how this process worked. 
+
+Stefan: a company like Swiss Re doesn't have millions of policies, it's maybe a few ten thousand. If we take individual risks, contracts, treaties, it's a few thousand, so it's not too big.
+
+the big advantage was that we had all the treaty business of almost, let's say 98%, maybe not a hundred percent, but most of the treaty business was in one application, which was the one we built. So you had one, one place where all the information was stored. And then whatever we could do is two things.
+
+We could say, okay, now let's, when we have a new version of the application, let's rerun the new version and check the results against the old results to see if the tool is working correctly. So it was a quality assurance for the tool itself, but the same technology could also be used, as you mentioned, to do as if reports.
+
+So let's say if the parameters are changing, if you have new internal expense parameters, you have new exchange rates, you have new. capital cost parameters and the like. What is the impact on the portfolio? What is the impact then on the pricing? But also what is the impact for the group? If you said now we grow certain parts of the business, we maybe shrink other parts.
+
+what does it mean for the group risk model where everything comes together? So this is exactly the kind of scenarios you're mentioning, which were possible once we had these this framework in place, which before was even not, people didn't even think about it. when I started the whole,underwriting was basically done and then the company was flying blind until maybe one year or maybe even later, there was accounting came with, the results and then the annual statements were produced with a huge delay.
+
+So basically in the meantime, wherever the next renewal before, even knowing what happened in the previous one. And this, of course, this, the gap between, taking decisions and steering the business This was of course, much shorter. So there was a much closer loop, which is, I think, a big benefit of the companies who have these kinds of capabilities so they can continuously monitor where are we and what does mean what would happen if we do this or this.
+
+So this is the. Exactly, kind of scenario, or as if calculations, which we implemented, yes. 
+
+Roland: And I, still see very few players who have it. I think there are a handful of players maybe who have this kind of thing and, but I see, I still see the majority, for the majority, it's still a lot of handwork. So let's maybe come to the last piece of this conversation.
+
+So what are we going to do with this channel? 
+
+so what we said is, obviously we need to do something with what we know, and, where we have obviously a lot of knowledge is in this reinsurance pricing area. So we will also start something there. When I look what's out there in terms of tools, there is not much. There are a couple of tools available commercially.
+
+but they are all in, in the style of, the stuff we had written 25 years ago. And I, think also this doesn't fit anymore in today's age. So I, for my part, I'm looking very much forward, now to building such a tool. So we said we want to build such a tool. And we want to even open source it.and, I think this is, this will be the main thing, the main format we will do here. So we will have two formats. One is this, communication. So this, conversational format that we are doing now, the other one will be that both Stefan and I, we will program for you guys. So we will try to do it as live as we can.so if you want to program, you have to learn to program on like real life patients, so we, You will not come to our channel and learn how to do a to do app.
+
+But there are a few channels where you learn how to approach a complicated problem. And, I'm very much looking forward to this. I'm looking forward to how do you do this in the age of AI?
+
+For me, I want to really relearn how to do stuff in the age of AI. I think what we have today, it's already worth a lot. And, I'm very keen on this data mesh idea. for me, pricing is more, just, I need some kind of content, and it's better content than Northwind, right?
+
+for me, it's a replacement of Northwind by some more intelligent content. But for me, clearly, the key ideas are how do you design user interfaces? In my opinion, we don't know how this works today, right? And you see there, I experience again this pioneering, like when I started at Swiss Re when the internet was new and we were the first generation to see what can we do with this internet.
+
+Now the AI is new and we are like first generation to try, okay, so what do we do now with all this AI? when I look at the data situation in almost any company I know, they have. Tons of data on shared drives, on SharePoints, in files, PDFs, Excels, you name it. in my opinion, there will be a huge race now, because machine learning, it became a commodity.
+
+you can take almost any problem, quickly with Copilot attach it to some machine learning stuff and boom. you have to have the data and you cannot necessarily work on data you have in a PDF, right? I see that the AI also helps us now to structure the data.
+
+what I before, if you had told me even a year ago, how long does it take to build a warehouse for a big company, I would have said, decades, centuries. I don't know. Nowadays, it's very interesting because I think there are a few things that LLMs really excel in doing.
+
+for me, LLMs are the new search. I never use Google anymore. I almost exclusively search in AI. So for me, it's clearly the successor of search and, I want to also search my own data with it. On the other hand, It can very well classify and pre structure stuff. I'm very keen to start projects where we can ingest terabytes of PDFs, Excels, you name it, anywhere.
+
+And where we can try to use LLMs to extract out structured data from it. My claim is LLMs, do an 80 percent accurate job, right? So you have no chance to know which 80%, so it's just about trying it out. But in my opinion, already, to have something which is then searchable, and to say, for instance, I want, all the deals, which had a premium higher than XYZ, and I just get a list, I think This is valuable information, right?
+
+And so I'm very much looking forward also to start such projects. So I want to work very much with AI, bring very much, all the state of the AI in, and also to this pricing tool from the very beginning. 
+
+Stefan: Because what will be necessary in this framework, which I, if it is right in my papers, you need to go and take submission date for the last 10, 20 years, depending how long you want to go back.
+
+So you have to somehow do exactly what you mentioned. You have to go into your files, find out all the old Excel's maybe have another repository and to extract all this information for the, let's say.
+
+Not only the last two or three years, but maybe the last 20 years. And then once you have this, then you can basically then apply this technology. So this is, I think, where if we really manage to combine these two things, then I think we'll have very strong. system in which we can basically present to the world, right?
+
+Roland: Yes. And in my opinion, when you have these tech revolutions, there are also always marketing versions.there is a good book, Inside the Tornado. and the title suggests already that inside the tornado, you have different physics, it's not, the gravity we know, right?tech revolutions trigger this tornado effect, which changes physics. And before iPhone was invented, we had telecom companies called AT&amp; T and Nokia and. they were market leads and then boom, the iPhone came and the new telecom companies were called Google and Apple, 
+
+in my opinion, these revolutions will take place everywhere in every industry during AI and it will be a huge race. And the first one who wins a race will, have the market monopoly. my fear is that many of the traditional insurance companies will just be too slow. they will wait forever.
+
+And this is where the mesh helps, Because, if you now start this, central warehousing project to, collect all your data, and it takes 10 years. Someone will have overtaken you. You don't even need to start. So you need something which you can more or less start today.
+
+You can more or less deploy it in your entire organization. you see there is a bit of a random element about it, right? So it could be that you would like this and that department to be faster in terms of creating this content, and then this other department is faster. there is a bit of a random notion, but I think at least stuff grow.
+
+And you can hope that you can, manage your garden in a way that, that the right things grow in, the right speed, right? Which is not easy. But I give this approach much more probability than a centralized approach where you do first, two years of tech evaluation, so what, whatever we know from before we would have had to do first, five years of tech evaluation and only then we could start.
+
+I think if you do this today, because these data stores, they come all over the place. There is something new every day. You never know. Is this the right? Is that the right? I think at the moment it's like skiing in the fog. The only thing you can do is keep your knees very soft and, you don't see the hills and whenever you notice, oh, this was a bad direction, you have to go back and take another direction.
+
+But you have to be very nimble if you want to stay on top of the wave. And if you don't stay on top of the wave will come and it will take you down.
+
+Yes. I'm very happy we can do this together. it's a lot of pleasure for me. 
+
+Stefan: So we had two successes so far. Let's make the third one. 
+
+Roland: Yeah, let's make the third. Yes. It looks like you are probably even the collaboration of my life, right?
+
+All right. So with this, thanks all, staying so far into the video if you want to support this channel, please and subscribe, write in the comments, what you would like to see from us for how we can, bring the topics that you want and keep weaving.
+

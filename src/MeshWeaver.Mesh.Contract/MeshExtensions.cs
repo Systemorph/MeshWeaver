@@ -15,7 +15,8 @@ public static class MeshExtensions
         { SignalRAddress.TypeName, typeof(SignalRAddress) },
         { UiAddress.TypeName, typeof(UiAddress) },
         { ArticlesAddress.TypeName, typeof(ArticlesAddress) },
-        { HostedAddress.TypeName, typeof(HostedAddress)}
+        { HostedAddress.TypeName, typeof(HostedAddress)},
+        { PortalAddress.TypeName, typeof(PortalAddress)},
     };
 
 

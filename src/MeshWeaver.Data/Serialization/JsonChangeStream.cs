@@ -37,7 +37,9 @@ public static class JsonSynchronizationStream
                 config => GetJsonConfig(config)
                     .WithClientId(config.Stream.StreamId)
             );
-        reduced.Initialize(ct => (tcs2 = new(ct)).Task);
+        reduced.Initialize(ct => (tcs2 = new(ct)).Task,
+            ex => logger.LogWarning(ex, "An error occurred updating data source {Stream}", reduced.StreamId)
+        );
         reduced.RegisterForDisposal(
                 reduced
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
@@ -164,7 +166,7 @@ public static class JsonSynchronizationStream
                 {
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
                     var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
-                    reduced.Hub.GetWorkspace().RequestChange(e, activity);
+                    reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
                     activity.Complete(_ =>
                     {
                         /*TODO: Where to save?*/
@@ -188,7 +190,8 @@ public static class JsonSynchronizationStream
                         stream.Stream.Update(
                             _ => new ChangeItem<TStream>(
                                 currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions),
-                                stream.Stream.Hub.Version));
+                                stream.Stream.Hub.Version), ex => SyncFailed(delivery, stream.Stream, ex)
+                            );
 
                     }
                     else
@@ -199,7 +202,8 @@ public static class JsonSynchronizationStream
                                 stream.Stream.ToChangeItem(state,
                                     currentJson.Value,
                                     patch,
-                                    delivery.Message.ChangedBy ?? stream.ClientId)
+                                    delivery.Message.ChangedBy ?? stream.ClientId),
+                            ex => SyncFailed(delivery, stream.Stream, ex)
                         );
 
                     }
@@ -213,6 +217,12 @@ public static class JsonSynchronizationStream
                     return delivery.Processed();
                 })
         );
+
+    private static void SyncFailed<TStream>(IMessageDelivery delivery, ISynchronizationStream<TStream> stream, Exception exception)
+    {
+        stream.Hub.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
+    }
+
 
     private static IObservable<DataChangedEvent> ToDataChanged<TReduced>(
         this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) =>

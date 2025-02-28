@@ -3,14 +3,13 @@
     <PropertyGroup>
         <Description>Blazor component for AG Grid integration.</Description>
         <PackageReadmeFile>README.md</PackageReadmeFile>
-        <TargetFrameworks>net9.0</TargetFrameworks>
     </PropertyGroup>
 
     <Import Project="StaticAssets\StaticAssets.targets" />
 
     <ItemGroup>
         <SupportedPlatform Include="browser" />
-        <Content Update="StaticAssets\**" Pack="false" />
+        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
         <None Include="README.md" Pack="true" PackagePath="" />
     </ItemGroup>
 

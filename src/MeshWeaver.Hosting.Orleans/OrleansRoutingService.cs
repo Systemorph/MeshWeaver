@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Disposables;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -9,54 +8,33 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans
 {
-    public class OrleansRoutingService(IGrainFactory grainFactory, IMessageHub hub, ILogger<OrleansRoutingService> logger) : RoutingServiceBase(hub)
+    public class OrleansRoutingService(
+        IGrainFactory grainFactory, 
+        IMessageHub hub, 
+        ILogger<OrleansRoutingService> logger,
+        IServiceProvider serviceProvider
+        ) : RoutingServiceBase(hub)
     {
 
-        public override async Task UnregisterStreamAsync(Address address)
+        public override Task UnregisterStreamAsync(Address address)
         {
-            await GetMeshNodeGrain(address)
-                .Delete();
+            return grainFactory.GetGrain<IStreamRegistryGrain>(address.ToString()).Unregister();
         }
 
-        private IMeshNodeGrain GetMeshNodeGrain(Address address)
-            => GetMeshNodeGrain(address.Type, address.Id);
-        private IMeshNodeGrain GetMeshNodeGrain(string addressType, string id)
-        {
-            return Mesh.ServiceProvider
-                .GetRequiredService<IGrainFactory>()
-                .GetGrain<IMeshNodeGrain>($"{addressType}/{id}");
-        }
 
 
         public override async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
         {
             TypeRegistry.WithType(address.GetType(), address.Type);
-            var info = new MeshNode(address.Type, address.Id, address.ToString())
-            {
-                StreamProvider = StreamProviders.Mesh,
-                Namespace = address
-            };
-            await GetMeshNodeGrain(address)
-                .Update(info);
-
-            var streamProvider = Mesh.ServiceProvider
-                .GetKeyedService<IStreamProvider>(info.StreamProvider);
-            logger.LogInformation("Subscribing to {StreamProvider} {Namespace} {TargetId}", info.StreamProvider, info.Namespace, info.Name);
-
-            var subscription = await streamProvider
-                .GetStream<IMessageDelivery>(info.Namespace, info.Name)
-                .SubscribeAsync((d, _) =>
-                {
-                    logger.LogDebug("Received {Delivery} for {Id}", d, info.Name);
-                    return callback(d, default);
-                });
-
-
-
+            await grainFactory.GetGrain<IStreamRegistryGrain>(address).Register(new(address.Type, address.Id, StreamProviders.Mesh, address.ToString()));
+            var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(StreamProviders.Mesh)
+                .GetStream<IMessageDelivery>(address.ToString());
+            var subscription = await stream.SubscribeAsync((v, e) =>
+                callback.Invoke(v, CancellationToken.None));
             return new AnonymousAsyncDisposable(async () =>
             {
-                await UnregisterStreamAsync(address);
                 await subscription.UnsubscribeAsync();
+                await UnregisterStreamAsync(address);
             });
 
         }
@@ -70,27 +48,43 @@ namespace MeshWeaver.Hosting.Orleans
             if(address is HostedAddress hosted && Mesh.Address.Equals(hosted.Host))
                 address = hosted.Address;
 
+            var streamInfo = await grainFactory.GetGrain<IStreamRegistryGrain>(address.ToString()).Get();
+            if (streamInfo is { StreamProvider: not null })
+            {
+                logger.LogDebug("Routing {Message} to {Provider} {Namespace}", delivery, streamInfo.StreamProvider, streamInfo.Namespace);
+                return await SendToStream(delivery, address, streamInfo.StreamProvider, streamInfo.Namespace);
+
+            }
+
             // TODO V10: Consider caching locally. (09.02.2025, Roland Bürgi)
             var meshNode =
                 await MeshCatalog.GetNodeAsync(address);
             if (meshNode is null)
-                return delivery.Failed($"No mesh node found for {address.ToString()}");
-            if (string.IsNullOrWhiteSpace(meshNode.StreamProvider))
+            {
+                logger.LogWarning("No route found to {Target}", delivery.Target);
+                return delivery.Failed($"Don't find any way to deliver messages to {delivery.Target}");
+            }
+            var providerName = meshNode.StreamProvider;
+            if (string.IsNullOrWhiteSpace(providerName))
             {
                 await grainFactory.GetGrain<IMessageHubGrain>(address.ToString()).DeliverMessage(delivery);
                 return delivery.Forwarded();
             }
-            var streamProvider = Mesh.ServiceProvider
-                .GetKeyedService<IStreamProvider>(meshNode.StreamProvider);
-
-            logger.LogInformation("No stream provider found for {address}", address);
-            if (streamProvider == null)
-                return delivery.Failed($"No stream provider found with key {meshNode.StreamProvider}");
-
-            await streamProvider.GetStream<IMessageDelivery>(meshNode.Namespace).OnNextAsync(delivery);
-            return delivery.Forwarded();
+            var @namespace = meshNode.Namespace;
+            return await SendToStream(delivery, address, providerName, @namespace);
         }
 
+        private async Task<IMessageDelivery> SendToStream(IMessageDelivery delivery, Address address, string providerName, string @namespace)
+        {
+            var streamProvider = Mesh.ServiceProvider
+                .GetKeyedService<IStreamProvider>(providerName);
 
+            logger.LogWarning("No stream provider found for {address}", address);
+            if (streamProvider == null)
+                return delivery.Failed($"No stream provider found with key {providerName}");
+
+            await streamProvider.GetStream<IMessageDelivery>(@namespace).OnNextAsync(delivery);
+            return delivery.Forwarded();
+        }
     }
 }

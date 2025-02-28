@@ -33,7 +33,10 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
 
     protected override void Synchronize(ChangeItem<EntityStore> item)
     {
-        persistenceHub.InvokeAsync(ct => UpdateAsync(item, ct));
+        persistenceHub.InvokeAsync(ct => UpdateAsync(item, ct), ex =>
+        {
+            logger.LogWarning(ex,"Updating {DataSource} failed", Id);
+        });
     }
 
     protected virtual async Task UpdateAsync(

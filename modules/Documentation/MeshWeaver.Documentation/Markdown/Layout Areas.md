@@ -5,6 +5,8 @@ Abstract: >
   This is also true for data reports: Very often, the same data is presented in different ways to different audiences.
   This article shows how to use layout areas to personalize data reports.
 Thumbnail: "images/Layout Areas.jpeg"
+VideoUrl: "https://www.youtube.com/embed/1TY8p0cEX9M?si=9ZrvNVqXRw2noQg5"
+VideoDuration: "00:15:00"
 Published: "2025-02-02"
 Authors:
   - "Roland Bürgi"
@@ -27,11 +29,11 @@ In Interactive Markdown, we have a simple syntax for including layout areas. In 
 one of the reports of Northwind:
 
 ```
-@("app/Northwind/SupplierSummary")
+@("app/Northwind/AnnualReportSummary?Year=2023")
 ```
 resulting in 
 
-@("app/Northwind/SupplierSummary")
+@("app/Northwind/AnnualReportSummary?Year=2023")
 
 The pattern for referencing layout areas is simple. It consists of 
 

@@ -1,67 +1,56 @@
-﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
-using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
-public abstract record ArticleCollection(string Collection) : IDisposable
+public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub hub) : IDisposable
 {
-    public string DisplayName { get; init; } = Collection.Wordify();
-    public Icon Icon { get; init; }
+    protected IMessageHub Hub { get; } = hub;
+    public string Collection { get; } = config.Name;
+    public string DisplayName { get;  } = config.DisplayName ?? config.Name.Wordify();
 
     public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
 
     public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
 
-    public abstract void Initialize(IMessageHub hub);
 
     public abstract Task<byte[]> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
     }
-}
-public abstract record ArticleCollection<TCollection>(string Collection) : ArticleCollection(Collection)
-    where TCollection:ArticleCollection<TCollection>
-{
-    protected TCollection This => (TCollection)this;
-    public TCollection WithDisplayName(string displayName)
-        => This with { DisplayName = displayName };
 
-    public TCollection WithIcon(Icon icon)
-        => This with { Icon = icon };
+
 }
 
-public record FileSystemArticleCollection(string Collection, string BasePath) : ArticleCollection<FileSystemArticleCollection>(Collection)
+public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
 {
-    private readonly ConcurrentDictionary<string, ISynchronizationStream<Article>> articleStreams = new();
-    private FileSystemWatcher watcher;
-    private IMessageHub Hub { get; set; }
-    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions)
-    => articleStreams.Values.Select(x => x.Select(y => y.Value))
-        .CombineLatest()
-        // TODO V10: Consider options here to steer query. (24.01.2025, Roland Bürgi)
-        .Select(x => x.OrderByDescending(a => a.Published))
-        ;
-
-    public override void Initialize(IMessageHub hub)
+    public const string SourceType = "FileSystem";
+    public ArticleCollection Create(ArticleSourceConfig config)
     {
-        if (articleStreams.Count > 0)
-            return;
-        var files = Directory.GetFiles(BasePath, "*.md");
-        foreach (var file in files)
-        {
-            Hub = hub;
-            var name = Path.GetFileNameWithoutExtension(file); // Exclude extension
-            var stream = articleStreams.GetOrAdd(name, CreateStream);
-            LoadAndSet(file, stream);
-        }
-        MonitorFileSystem();
+        return new FileSystemArticleCollection(config, hub);
     }
+}
+
+public class FileSystemArticleCollection : ArticleCollection
+{
+    public string BasePath { get; }
+    private FileSystemWatcher watcher;
+
+    private readonly ISynchronizationStream<InstanceCollection> articleStream;
+
+    public FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub hub) : base(config, hub)
+    {
+        BasePath = config.BasePath;
+        articleStream = CreateStream(BasePath);
+    }
+
+
+    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) => 
+        articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
     public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
     {
@@ -74,29 +63,20 @@ public record FileSystemArticleCollection(string Collection, string BasePath) : 
 
     }
 
-    private ISynchronizationStream<Article> CreateStream(string path)
+    private ISynchronizationStream<InstanceCollection> CreateStream(string path)
     {
-        return new SynchronizationStream<Article>(
-            new(Hub.Address, path), 
+        var ret = new SynchronizationStream<InstanceCollection>(
+            new(Collection, path), 
             Hub, 
             new EntityReference(Collection, path),
-            null,
+            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
             x => x);
+        ret.Initialize(InitializeAsync, null);
+        return ret;
     }
 
-    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null)
-    {
-        var ret = articleStreams.GetValueOrDefault(path);
-        if (ret is null)
-            return null;
-        if (options is not null && (!options.ContentIncluded || !options.PrerenderIncluded))
-            return ret.Select(art => art.Value with
-            {
-                Content = options.ContentIncluded ? art.Value.Content : null,
-                PrerenderedHtml = options.PrerenderIncluded ? art.Value.PrerenderedHtml : null
-            });
-        return ret.Select(x => x.Value);
-    }
+    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null) => 
+        articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article)x?.Value);
 
     public void MonitorFileSystem()
     {
@@ -112,23 +92,43 @@ public record FileSystemArticleCollection(string Collection, string BasePath) : 
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        var path = Path.GetFileNameWithoutExtension(e.FullPath);
-        if (articleStreams.TryGetValue(path, out var s))
-            LoadAndSet(e.FullPath, s);
+        UpdateArticle(e.FullPath);
     }
 
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        var path = Path.GetFileName(e.FullPath);
-        if(articleStreams.TryGetValue(path, out var s))
-            LoadAndSet(e.FullPath, s);
+        UpdateArticle(e.FullPath);
     }
 
-    private void LoadAndSet(string fullPath, ISynchronizationStream<Article> s)
+    private void UpdateArticle(string path)
     {
-        s.UpdateAsync(async (_, ct) => new ChangeItem<Article>(await LoadArticle(fullPath, ct), Hub.Address, ChangeType.Full, Hub.Version, null));
+        articleStream.UpdateAsync(async (x, ct) =>
+        {
+            var article = await LoadArticle(path, ct);
+            return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
+        }, null);
     }
+
+    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
+    {
+        var ret = new InstanceCollection(
+            await GetAllFromPath()
+                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
+        );
+        MonitorFileSystem();
+        return ret;
+    }
+
+    private async IAsyncEnumerable<Article> GetAllFromPath()
+    {
+        var files = Directory.GetFiles(BasePath, "*.md");
+        foreach (var file in files)
+        {
+            yield return await LoadArticle(file, CancellationToken.None);
+        }
+    }
+
 
     private async Task<Article> LoadArticle(string fullPath, CancellationToken ct)
     {
@@ -142,9 +142,7 @@ public record FileSystemArticleCollection(string Collection, string BasePath) : 
     public override void Dispose()
     {
         base.Dispose();
-        foreach (var key in articleStreams.Keys.ToArray())
-            if(articleStreams.TryRemove(key, out var stream))
-               stream.Dispose();
+        articleStream.Dispose();
         watcher?.Dispose();
         watcher = null;
     }

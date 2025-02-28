@@ -2,7 +2,7 @@
 
 public interface IArticleService
 {
-    //IObservable<MeshArticle> GetArticle(string collection, string path, Func<ArticleOptions, ArticleOptions> options = null);
-
     ArticleCollection GetCollection(string collection);
+    IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions options);
+    IObservable<Article> GetArticle(string collection, string article);
 }

@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -70,8 +71,14 @@ public record LayoutAreaHost : IDisposable
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
             InvokeAsync(() => control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload, Hub, this)
-            ));
+            ), ex => FailRequest(ex, request));
         return request.Processed();
+    }
+
+    private void FailRequest(Exception exception, IMessageDelivery request)
+    {
+        logger.LogWarning(exception, "Request failed");
+        Hub.Post(new DeliveryFailure(request, exception?.Message), o => o.ResponseFor(request));
     }
 
     public object GetControl(string area) =>
@@ -127,7 +134,7 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             ) ;
-        });
+        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
     }
 
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
@@ -136,7 +143,8 @@ public record LayoutAreaHost : IDisposable
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId))
+            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId)),
+            ex => logger.LogWarning(ex, "Cannot update {Collection}", collection)
         );
     }
 
@@ -146,35 +154,34 @@ public record LayoutAreaHost : IDisposable
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
 
+
     public void RegisterForDisposal(string area, IDisposable disposable)
     {
         disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
     }
 
+    public void RegisterForDisposal(IDisposable disposable)
+    {
+        disposablesByArea.GetOrAdd(string.Empty, _ => new()).Add(disposable);
+    }
+
     public IObservable<T> GetDataStream<T>(string id)
         where T : class
-        => GetStream<T>(LayoutAreaReference.Data, id);
-    public IObservable<T> GetPropertiesStream<T>(string id)
-        where T : class
-        => GetStream<T>(LayoutAreaReference.Properties, id);
-    public IObservable<T> GetStream<T>(string collection, string id)
-        where T : class
-    {
-        var reference = new EntityReference(collection, id);
-        return GetStream<T>(reference);
-    }
+        => GetStream<T>(new EntityReference(LayoutAreaReference.Data, id));
+
 
     private IObservable<T> GetStream<T>(EntityReference reference) where T : class
     {
         return Stream
+            .Reduce(reference)
             .Select(ci => Convert<T>(ci, reference))
-            .Where(x => x != null)
+            .Where(x => x is not null)
             .DistinctUntilChanged();
     }
 
-    private static T Convert<T>(ChangeItem<EntityStore> ci, EntityReference reference) where T : class
+    private static T Convert<T>(ChangeItem<object> ci, EntityReference reference) where T : class
     {
-        var result = ci.Value.Reduce(reference);
+        var result = ci.Value;
         if (result is null)
             return null;
 
@@ -225,17 +232,17 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.Clear();
     }
 
-    public void InvokeAsync(Func<CancellationToken, Task> action)
+    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback)
     {
-        executionHub.InvokeAsync(action);
+        executionHub.InvokeAsync(action, exceptionCallback);
     }
 
-    public void InvokeAsync(Action action) =>
+    public void InvokeAsync(Action action, Action<Exception> exceptionCallback) =>
         InvokeAsync(_ =>
         {
             action();
             return Task.CompletedTask;
-        });
+        }, exceptionCallback);
 
     private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
@@ -261,7 +268,7 @@ public record LayoutAreaHost : IDisposable
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityUpdate(LayoutAreaReference.Areas, contextArea, null) { OldValue = i.Value }), Stream.StreamId);
+            new EntityUpdate(LayoutAreaReference.Areas, i.Key, null) { OldValue = i.Value }), Stream.StreamId);
     }
 
 
@@ -270,9 +277,14 @@ public record LayoutAreaHost : IDisposable
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
-                .Subscribe(c => InvokeAsync(() => UpdateArea(context, c)))
+                .Subscribe(c => UpdateArea(context, c), FailRendering)
         );
         return ret;
+    }
+
+    private void FailRendering(Exception ex)
+    {
+        logger.LogWarning(ex, "Rendering failed");
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
@@ -288,7 +300,7 @@ public record LayoutAreaHost : IDisposable
 
             UpdateArea(context, view);
             logger.LogDebug("End rendering of {area}", context.Area);
-        });
+        }, FailRendering);
         return DisposeExistingAreas(store, context);
     }
     internal EntityStoreAndUpdates RenderArea(
@@ -301,7 +313,7 @@ public record LayoutAreaHost : IDisposable
                 {
                     var view = await vd.Invoke(this, context, ct);
                     UpdateArea(context, view);
-                })
+                }, FailRendering)
             )
         );
 
@@ -315,9 +327,9 @@ public record LayoutAreaHost : IDisposable
 
         RegisterForDisposal(
             context.Area,
-            generator.Subscribe(view =>
-                InvokeAsync(() => UpdateArea(context, view))
-            )
+            generator
+                .DistinctUntilChanged()
+                .Subscribe(view => UpdateArea(context, view))
         );
         return ret;
     }
@@ -338,9 +350,9 @@ public record LayoutAreaHost : IDisposable
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
                         ))
-                        .Store);
+                        .Store, FailRendering);
             logger.LogDebug("End re-rendering");
-        });
+        }, FailRendering);
         return Stream;
     }
 

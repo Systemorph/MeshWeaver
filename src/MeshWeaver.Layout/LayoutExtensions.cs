@@ -14,6 +14,7 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Views;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
 
@@ -155,6 +156,10 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string id
     ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
+    public static async Task<TData> GetDataAsync<TData>(
+        this ISynchronizationStream<EntityStore> synchronizationItems,
+        string id
+    ) => await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
 
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
@@ -162,7 +167,7 @@ public static class LayoutExtensions
     ) =>
         stream
             .Reduce(reference)
-            .Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
 
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
@@ -190,13 +195,19 @@ public static class LayoutExtensions
         stream.Update(s =>
             stream.ApplyChanges(
                 s.MergeWithUpdates(
-                    WorkspaceOperations.Update(s, LayoutAreaReference.Data,
+                    s.Update(LayoutAreaReference.Data,
                         c => c.SetItem(id, value)
                     ),
                     changedBy
                 )
-            )
+            ),
+            stream.FailRendering
         );
+    }
+
+    private static void FailRendering(this ISynchronizationStream stream, Exception exception)
+    {
+        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception,"Rendering failed");
     }
 
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
@@ -211,7 +222,7 @@ public static class LayoutExtensions
     ) =>
         stream
             .Reduce(reference)
-            .Select(x => x.Value?.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<JsonElement> stream,
@@ -220,9 +231,9 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)
             .Select(x =>
-                x.Value == null
-                    ? default
-                    : x.Value.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
+                x.Value.ValueKind == JsonValueKind.Undefined 
+                    ? default(T) 
+                    : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
             );
 
     public static MessageHubConfiguration AddLayoutClient(
@@ -233,7 +244,7 @@ public static class LayoutExtensions
         return config
             .AddData()
             .AddLayoutTypes()
-            .WithServices(services => services.AddScoped<ILayoutClient, LayoutClient>())
+            .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
             .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
             .WithSerialization(serialization => serialization);
     }

@@ -1,3 +1,5 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using System.Text.Json.Serialization;
 
-public record ExecutionRequest(Func<CancellationToken, Task> Action);
+namespace MeshWeaver.Messaging;
+
+public record ExecutionRequest(Func<CancellationToken, Task> Action, Action<Exception> ExceptionCallback);

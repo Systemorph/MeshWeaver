@@ -1,0 +1,78 @@
+Roland: Hey Stefan.
+
+
+
+Stefan: Hi Roland. 
+
+Roland: Big topic for today is what is a data mesh? So it's a term which is rather new. The main topic is, quite clear. So the main topic is really about how do we get agile not only in the programming, but also in the data. How can we decentralize the data management? How can we best involve the whole organization?
+
+Yeah, so far it looks at an interesting concept and I'm curious to see how this works in practice. So this is, I think, what you're going to show today. 
+
+I thought, first of all, how would I like to consume data? And then, I was reminded of two other people. One of them is, Donald Knuth. And, Donald Knuth, he is one of the OGs of computer programming.
+
+He promoted very much literate programming. So to really not just, write about something or code about something, but really mix it. So write a bit and code a bit. And I think it's also a style that, that, you know, So you have also tried this and. 
+
+Also using notebooks where you basically combine these two approaches where you have a one cell to describe things in the next cell, you then execute.
+
+And yes, this is one way to do it. 
+
+And the other one who has done this very early on was Steven Ra, who, has, done all of it with Mat Marant has, he was one of the first one, to really come with this kind of notebook, technology. Then I thought, for me it's clear. for me, a data message should also be something that I can easily operate.
+
+Let's maybe start with a user interface. so this is the North Wind database. It's a, classical database from Microsoft with some e-commerce, data domain. And so we, have done, the full Monty, including. all, the, all the detailed charts and analysis and everything. and so this, I thought is, a nice way of, getting started.
+
+What is the data mesh? So it's, really to have an appealing way of describing the data. And when I say appealing, I don't only mean, tables and graphs and stuff. But, normally we, both know this, we, have consumed data all our lives and, normally just the numbers don't tell a story.
+
+So you need to have also text with the data. and, so you, you need an explanation. You need guidance, how to read the text. And so I think that's how I would like to consume the views. I guess this is also what you had wished in, the past that you could have consumed, data. 
+
+Stefan: Yeah, of course. It would be ideal if you have a data source and then you have a tool which you can basically access and shape the data in the way you like it.
+
+Roland: Yes. So in the next few episodes, we will now understand how to get from something very pragmatic, like a notebook, to something very sophisticated, such an application. Now, let's get started. So first of all, I'm gonna use Visual Studio Code because here we have, poly Glo notebooks integrated.
+
+It's also, the whole thing works also in Jupiter notebooks. But in Jupiter, I don't think we have copilot integration yet. And this is really something I enjoy a lot in polyglot notebooks that I, cannot just use the notebook environment, but I can also, use copilot and I can have copilot help me write texts or help me write code, et cetera.
+
+We are also going to publish all these articles. We will put a link in the video below. So you will not just have this video version, but you will also have the textual version. And obviously the whole project is open source, so you can always go to GitHub and, so that you will also find a, link in the, video.
+
+So go to GitHub and have a look at GitHub. Read the source code, see everything we do here. so the first thing we need to do now is we need to connect to the mesh, right? So we, we want to now. Consume data from the mesh. So now the first thing to do is really connect to the mesh. And in order to do this, we have to install more packages.
+
+So for the ones who are not so familiar with c and with polyglot notebooks, so hash R this is the command in poly lot notebooks where we can load libraries. so in this case we will load, a library from new get. So this is the, classical library management system of t net. so similarly as JavaScript has NPM and Python has pip. So every language has its package management. The one from T net is nge. So we will load a a, library from Nge. And you see here what we load. So this is from our software mesh weaver. So we say, Hey, we want to connect an notebook to the mesh weaver, so we could also connect another computer or whatever.
+
+But in this particular example, we are going to connect an notebook. So as we see here, we are still using a preview version of, it's already version two. So version one was released last year, and now we have, we are about to release version two, which is currently in preview. So you might also see certain glitches today, but it's what we said we in, when we discussed the channel, we said we want to build in public.
+
+So we will also show unfinished software. We will finish show unfinished products. It'll not just be all the glossy stuff, but sometimes we will also glitch. So please pardon us if we, should glitch today. So now the next thing we need to do is we need to connect, to the mesh weaver. So I have currently an instance running here on my local host.
+
+So this is my own computer. Obviously this could be a UA real URL. So normally if, I connected to the instance of my company, it would just be, for instance, meash.my company.com or. Something similar. And, so now we want to connect to this and we want to connect to a kernel and we will just call this kernel mesh.
+
+So let me, do this. So by. By the way, also by installing the package, you see it will give us these instructions that this is what we are supposed to do. So let me do this. And now I'm successfully connected to the mesh, so I have now successfully connected to the mesh weaver. So I can also here, show how this works.
+
+I'm now getting an address. Let me display it even. So now it reserves me a tiny little bit in, in the space, out there. And, so I, this is now my address that I got, so it's, very similar to connecting a computer to the internet. And if you do this, you would also get some kind of IP address.
+
+In my case, I'm connecting with this address, so this is my address. And, I can now communicate. So I become with this, I become a player in the mesh and I can now start using this address to communicate forth and back. Okay, so now let's find some screen here that we would like to see. So for instance, we could take the, this, thing from the top product overview.
+
+So here you see we, we are North Wind, and here we can see which products sell well. And, what, we have sold, how many we have sold, and how much money we made from, all the products. By the way, you see now the numbers from the nineties here, which were considerably lower than any e-commerce store we would expect to see nowadays.
+
+so now let's see how we can, how we could do this. So I was thinking for a long time, what's the easiest way now to consume this view? Then I thought, the easiest way is if we can just write layout area. Then this is, again, this is the address, so every participant in the mesh gets an address.
+
+So this is the address for North Wind, and this is how we can address this North Wind system. And, from the North Wind system, we would like to now get the view called product overview. So let me execute this. And you see I get precisely this view here. It's interactive, I can browse it, it is paged.
+
+So it, it is actually quite complex. It's not just, a simple table we obtained. And, this is also something I thought, I don't just from a data mesh, I expect that I cannot just, consume raw data. Because if I need to consume raw data and I need to prepare this report myself, it's for me a bit like I want to listen to music.
+
+And then you tell me, okay, buy instruments here, you have sheet music, and you can also take some lessons and then you can play the music yourself. And I, would never be able to do And everyone who worked in, the kind of role as we had them, we know. there is a lot of logic behind these reports.
+
+It's not just taking a couple of numbers and putting them in the table. and this is also logic that normally as a data producer, I want to control this logic. We had the same at Swiss three when we. Said, the, logic must be implemented exactly once and everyone else must consume it from a central place.
+
+And there were times when it was not the case. And, there we had quite a difficult time, didn't we? then, I, similarly, I could, consume other views, So all of them are interactive. All of them react to, my mouse, et cetera, and I, can browse them. in a nutshell, this keeps us the first idea what the data mesh could be.
+
+so you see now I could of course share this notebook. I could, give it to someone else. I could, give it around and whoever gets it can also browse this. And at the same time, these views will never be out of date because as soon as I update the data on the server, will actually push me the new data here and I will automatically, next time I open it, I will see the new data.
+
+So before we close, Stefan, is it any clearer to you what the data mesh is? Do you think we, we approached one step further.
+
+Stefan: I think we have done one step, but I think the interesting question is now, why do we need the data mesh? If we to look at this data, we could go directly to the source and I think this will become clear when we go the next step.
+
+And we want to combine data from different sources, right? 
+
+Roland: Yes. So obviously it only gets more complex from here on. but even this step, I see that many companies don't have it, even big companies. So I would say still state of the art is, that if I as a manager, let's say I'm C-level kind of manager and I want such report, I would say there are only very few companies where you can just go somewhere and consume it.
+
+And in most cases, you have your staff who will create you static PowerPoints. Then we have always this mess with the, with aversions, right? So you, especially when there is close and you get new versions every day or even multiple times a day, and then you never really know what you look at. And I think this is still state of the art.
+
+So I think even this step for, many companies, it would already be quite a good add-on. So in this sense, happy weaving and see you in the next one.
+

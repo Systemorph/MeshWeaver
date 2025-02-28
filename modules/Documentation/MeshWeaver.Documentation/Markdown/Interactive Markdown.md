@@ -1,9 +1,14 @@
 ﻿---
-Title: "Interactive Markdown: The Next Generation Development"
+Title: "Interactive Markdown: The Next Generation Reporting"
 Abstract: >
-  Executable markdown is the future of software engineering. With the introduction of AI in software engineering, 
-  the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process
+  Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, 
+  the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process.
 Thumbnail: "images/InteractiveMarkdown.png"
+VideoUrl: "https://www.youtube.com/embed/6J16W9qcZFY?si=HYe9Oh1wEveqAsJK"
+VideoDuration: "00:14:42"
+VideoTitle: "Interactive Markdown: The Next Generation Reporting"
+VideoTagLine: "Make your Reports Interactive"
+VideoTranscript: "transcripts/Interactive Markdown.txt"
 Published: "2025-01-26"
 Authors:
   - "Roland Bürgi"
@@ -13,30 +18,21 @@ Tags:
   - "Markdown"
 ---
 
-In the previous blog posts, we have shown how to connect to Mesh Weaver 
-using polyglot notebooks. This approach works quite well but has still 
-a number of draw-backs:
+In the previous blog posts, we have shown how to connect to Mesh Weaver using polyglot notebooks. This approach works quite well but has still a number of drawbacks:
 
 - The user interface is not properly integrated.
-- It is possible to integrate interactive views, but they must be rendered in iframes, which makes the difficult to size.
+- It is possible to integrate interactive views, but they must be rendered in iframes, which makes them difficult to size.
 - The notebook API is nice to develop but not necessarily nice to present content.
 
-We had a meeting with the dotnet interactive team, which produces polyglot notebooks, and we discussed opportunities to include
-the notebook user interface into our application. However, the polyglot notebooks are
-a VS Code plugin and not intended to run standalone. However, during
-this call, they showed us another approach: [R Markdown](https://rmarkdown.rstudio.com/). This is a
-normal Markdown dialect which allows to specify executable code. This is very close to the [Literate Programming](https://en.wikipedia.org/wiki/Literate_programming) approach 
-promoted by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth).
+We had a meeting with the .NET Interactive team, which produces polyglot notebooks, and we discussed opportunities to include the notebook user interface into our application. However, the polyglot notebooks are a VS Code plugin and not intended to run standalone. During this call, they showed us another approach: [R Markdown](https://rmarkdown.rstudio.com/). This is a normal Markdown dialect that allows specifying executable code. This is very close to the [Literate Programming](https://en.wikipedia.org/wiki/Literate_programming) approach promoted by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth).
 
-We decided to build on this and develop our own dialect of interactive markdown. The basic idea is very simple: 
-Additional flags can be specified in the heading of the fenced code blocks, analogous to command line arguments.
-Should the output be rendered, we specify
+We decided to build on this and develop our own dialect of interactive markdown. The basic idea is very simple: additional flags can be specified in the heading of the fenced code blocks, analogous to command line arguments. Should the output be rendered, we specify:
 
 ```csharp
 --render <area>
 ```
-Whereby area is the name of the area which is exposed in this article.
-Let's look at a practical example:
+
+Whereby area is the name of the area which is exposed in this article. Let's look at a practical example:
 
 ```csharp --render HelloWorld --show-header
 "Hello World " + DateTime.Now.ToString()
@@ -84,3 +80,8 @@ sequenceDiagram
     Kernel->>View: Returns Layout Area
 ```
 ````
+
+
+Interactive markdown represents a significant step forward in software engineering. By combining the simplicity of markdown with the power of executable code, it allows developers to create rich, interactive documentation that can be directly tested and validated. This approach not only improves the quality of the documentation but also ensures that it remains up-to-date and relevant throughout the development process.
+
+Stay tuned to the Mesh Bros channel for more insights and tutorials on interactive markdown and other cutting-edge software development techniques.

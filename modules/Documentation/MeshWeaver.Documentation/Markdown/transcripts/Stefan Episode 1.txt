@@ -1,0 +1,88 @@
+Stefan: Hi Roland. 
+
+Roland: Hey Stefan 
+
+Stefan: I followed what you've implemented so far, what you demonstrated, and I tried to implement a few things. And I have a certain idea of what I want to accomplish, and I want to demonstrate how far I got so far. So on one hand, I want to render some charts, but I also want to have some tables with statistics and a few things I managed to implement in the layout areas.
+
+And the rest I hopefully will manage in the future. So I just want to demonstrate today what is the problem which I want to solve and how far did I get. So what I have is a couple of probabilities distributions. I added some additional functionality and I want to render them. So this is what I do here.
+
+So I already started the application. So let's enter one. So let's take the log normal. Here's an example. I start it, and I want to open it, so I can continue by pressing F10, and now it's going to be rendered. So what we see here is a different, ways how we can represent the probability distribution.
+
+So on the upper left you see the density, then the vertical bars are some, sampling, so I was drawing a couple of, I think about 20 random numbers, and then I put them into bins, and so the green line is basically the bin, so you see the, binned probability distribution. Then on the upper right, you see the cumulative, distribution function.
+
+And on one hand, you see the dashed line, this is the model. So the actual log normal distribution, then the red is the representation of the individual, random numbers. So you get the step function. And then the green is just, piecewise linear, which you get if you take the integral of the bins.
+
+So these are three ways how you can represent this. Then what we also see below on the lower left, this is maybe less familiar. This is a so called exposure curve, which you can get by taking the integral of the cumulative distribution. And here again I've rendered, underlying model, so this is the dashed blue lines, and then the, simulation, which is then the red.
+
+And on the lower right, I have a different representation of the CTF. I take one minus the CTF, which is the survival function, and here it's a linear log plot. So sometimes you also render this in a log plot, but in this case I did it. So these are the kind of things I want to see when I have a, probability distribution, if I take some samples, so this is the kind of charts, not exactly one to one like here, but the, let's say the layout can be different, but the content should be the one which I want to see.
+
+So this is, what I did. So it's just to give an idea of the kind of things I want to do. render. And of course, maybe sometimes you want to compare two different this probability distributions like we did here, but maybe you want to compare a log normal with a, let's say, a Pareto distribution or this kind of stuff.
+
+Okay, so I click this away. Now, what I did is I took your One of your layout areas and I create a new ones. So here's just an example So I take here again the log normal distribution and then I with some parameters Which we then take from the user interface and then it calculates all this or takes all the statistics Which are part of the model Then it runs a couple of samples, which is also an input, the number is given in the input and it calculates the statistics and then it fits a new log normal distribution, which is basically with the estimate method using the samples.
+
+And then I have a markdown error, so basically I put this into a table. So this is more or less what I'm doing. So let's run it. So here we have the MeshWeaver. And we see now I have done a collection of distributions. So I have, one is the venture class, which is, discrete. distribution. So we have here the mean and the ratio of the variance to the mean and then the sample.
+
+So I can increase the samples and you can see on the bottom it updates the, statistics. Or I can go to the Pareto distribution. Here again we have also the, model, the sampled and the estimate as we have seen before. Of course, the parameters we have available only for the model, but, and for the sample, I just take the statistics of the mean and the coefficient of variation, the variance and the standard deviation, and then we can go and compare the initial model, which is what I have up here.
+
+I can go and change it if I want, and then it should update. You see the parameters and the statistics in the model. So this is basically how far I got in how to use the layout areas in the MeshWeaver framework. And the next step would be what I showed before to I have also some charts in here to be able to render the density or the cumulative distribution or whatever I want inside of this framework.
+
+So this is what I wanted to present to you. And then maybe we can now discuss how we can proceed to basically accomplish the goal which I have in mind. 
+
+Roland: Very nice. So you are the very first person ever to touch this, except me. So how was it for you to, write this? 
+
+Stefan: First I was a little bit lost, but then when I found out in which file you have the layout area, and then when I've seen how you've done it, and then also using the copilot to create some, the markdown.
+
+My first, I just used a few fields, and then I wanted to have a table, so this was a step by step approach, how I got here. And then first I had only one distribution, then I said, okay, let's try to add an additional one, and this was also relatively easy. of course, by interacting and trying there, it was, I could do it without any help from your side, or very little help.
+
+At one point I had to call you for one problem, but basically I managed this myself, so it's relatively easy to use. 
+
+Roland: It's also not an easy application what you did. So there is a Monte Carlo simulation behind, right? And then you actually wrote most of the code we will need for the pricing tool. So it's, you wrote the sampler.
+
+Yeah. You wrote, the whole statistics collector. So it's actually almost half a pricing tool. 
+
+Stefan: This is the, for me, the easy part, just to write the whole, the, statistical part of this. So what I did, I maybe have to make, a remark here. So I'm using the Maslip library with all the distributions.
+
+But then, what I need at some point later down the road is I need to be able to modify these distributions. So I want to scale them or to shift them or to distort them depending what the of course these operations depend on the probability distribution. You cannot do everything with everyone. But this is what I will need down the road to calibrate the models.
+
+So I already wanted to implement this methodology. I also had to program the integral of the cumulative distribution. This is not, we will not find in the library. So I had to add these things. So this was, for me, let's put it this, the easier part. It's just mathematics and statistics. but to do it, I had to go through multiple iterations.
+
+first I took the distributions and I extracted the parameters. I created a new one. And this was a very messy, framework because I had to do this for each and every one. And then I said, I want to give this, functionality. I want to put it into the object or into other. Of course, I cannot go back and change the original library, so what I did is I took them and I built a wrapper around it and allowed them to add additional methods.
+
+And this is basically what is now implemented, so all this is working. But then I had, of course, then at some point in time to take this and to then link it to the MeshWeaver, so this is the steps which I went through with. 
+
+Roland: Yeah, but nevertheless, if we look at absolute time, because we started this project a month ago, maybe, and you are not working a hundred percent on this, right?
+
+How many hours would you guess? Oh, 
+
+Stefan: This is difficult to tell. we started, as it's already, time is flying by Roland. We're already in the beginning of February 25, huh? So I started sometime in, last year, towards the end of last year. And I didn't count the hours, but it's quite a substantial amount of people.
+
+For me, first I have to learn C sharp. This was new to me. So I started with the C sharp with a different project just to learn the syntax. I used first Visual Studio Code, which is great, but at some point I was running into some trouble. And then I was exploring the notebook, so I went see for different branches to see what can happen until I was then really able to implement this.
+
+So really on this project, I think this, what we see here, maybe this is the work of the last months, I would say, after a ramp up phase, yes. 
+
+Roland: But so still I think many people who are much younger than you would love to be this speed, so I think it's an incredibly good speed. I was surely not as fast as you are when, it's, for me, it's an interesting, piece of work because it's exactly the very first thing I did at Swiss Re, which is now the Swiss Re math library.
+
+Swiss Reactario library that I think is still in use from what I know, but this was my first project there and what you do here is more or less identical what I did and I do. I think we even use, you also used Knuth's books, right? Yeah, 
+
+Stefan: I've, yes, so I didn't go through all the books, but yes, I look, I use part of it.
+
+Same here, right? So 
+
+Roland: we go through the same process. And for me, it was clearly more than one month at the time. 
+
+Stefan: It's not the first time I do this. I did this more than 30 years ago, but then I did it in Pascal. So this was my first programs, which I, or the applications which I wrote was in Pascal or Boiler and Pascal.
+
+And then I had already to implement all this methodology. So the, and then I was implemented part of it in. Visual Base or in Python. So I think that once you understand the syntax of the language, then it's relatively easy to go from one to the other because you have the basic understanding. 
+
+Roland: So let's see how we get to the more layout areas.
+
+Very happy to discuss. What I propose is that we do some design sessions today. together and then I can also show you a few tricks because I've been programming professionally now for 30 years. And so I think slowly I'm getting good at it. 
+
+Stefan: I believe so. I had no from the past that you're very good at it.
+
+I programmed very little in the last 30 years, but always a little bit. So I was always interested in the, I like it and I love it. And it's from me now. in my age, a new challenge to keep my brain working. So let's see how far we get. 
+
+Roland: Yes. I'm very much looking forward to this and I'm looking forward to the next episodes.
+
+Stefan: Okay. So also for the audience, I hope you can follow up on this and, thanks to make it to this point. Don't forget to subscribe and to like it and happy weaving.
+

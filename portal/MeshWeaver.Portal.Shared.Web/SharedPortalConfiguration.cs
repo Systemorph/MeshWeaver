@@ -1,12 +1,14 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Portal.Shared.Web.Infrastructure;
+using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,24 +18,32 @@ namespace MeshWeaver.Portal.Shared.Web;
 
 public static class SharedPortalConfiguration
 {
-    public static void ConfigurePortalApplication(this WebApplicationBuilder builder)
+    public static void ConfigureWebPortalServices(this WebApplicationBuilder builder)
     {
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
-
+        builder.Services.Configure<StylesConfiguration>(
+            builder.Configuration.GetSection("Styles"));
     }
 
-    public static MeshBuilder ConfigureWebPortalMesh(this MeshBuilder builder) =>
-        builder.ConfigureServices(services =>
+    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
+        where TBuilder:MeshBuilder
+        =>
+        (TBuilder)builder.ConfigureServices(services =>
             {
                 services.AddRazorComponents().AddInteractiveServerComponents();
+                services.AddSingleton<CacheStorageAccessor>();
+                services.AddSingleton<IAppVersionService, AppVersionService>();
+                services.AddSingleton<DimensionManager>();
                 return services;
             })
             .AddBlazor(layoutClient => layoutClient
                     .AddChartJs()
                     .AddAgGrid()
+                    .WithPortalConfiguration(c => 
+                        c.AddLayout(layout => layout
+                            .AddArticleLayouts()))
             )
-            .ConfigureHub(c => c.ConfigurePortalApplication())
             .AddSignalRHubs();
 
 

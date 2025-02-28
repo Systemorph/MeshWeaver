@@ -1,22 +1,19 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.Documentation;
 
 public record DocumentationContext(IMessageHub Hub)
 {
-    public ImmutableDictionary<(string Type, string Id), DocumentationSource> Sources { get; private set; } = ImmutableDictionary<(string Type, string Id), DocumentationSource>.Empty;
+    public ConcurrentDictionary<(string Type, string Id), DocumentationSource> Sources { get;  } = new();
 
     public DocumentationSource GetSource(string type, string id)
     {
         var key = (type, id);
-        if (Sources.TryGetValue(key, out var source))
-            return source;
         try
         {
-            var ret = TryCreateSource(type, id);
-            Sources = Sources.Add(key, ret);
-            return ret;
+            return Sources.GetOrAdd(key, _ => TryCreateSource(type, id));
         }
         catch(Exception)
         {
