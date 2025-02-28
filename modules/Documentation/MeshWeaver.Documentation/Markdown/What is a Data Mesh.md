@@ -5,7 +5,7 @@ Abstract: >
   We show that not just data should be shared but entire layout areas. 
   In an age of hyper-personalization, we believe that reporting should be personalized 
   for each receiving party.
-Published: "2025-01-03"
+Published: "2024-12-20"
 VideoUrl: "https://www.youtube.com/embed/a7sARIKDpXg?si=j-WE7F7qr-mVTq8z"
 VideoDuration: "00:12:47"
 VideoTitle: "Data Mesh Explained: The Future of Agile Data Management"
