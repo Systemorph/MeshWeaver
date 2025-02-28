@@ -17,7 +17,7 @@ builder.AddServiceDefaults();
 builder.UseMeshWeaver(
     new MeshAddress(),
     config => config
-        .ConfigureWebPortalMesh()
+        .ConfigureWebPortal()
         .ConfigurePortalMesh()
         .UseMonolithMesh()
         .ConfigureServices(services => services.AddArticles())

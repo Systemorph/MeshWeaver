@@ -1,5 +1,4 @@
-﻿@using MeshWeaver.Blazor.Infrastructure
-@using MeshWeaver.Portal.Shared.Web.Infrastructure
+﻿@using MeshWeaver.Portal.Shared.Web.Infrastructure
 @inherits LayoutComponentBase
 
 <FluentLayout>
@@ -24,18 +23,40 @@
         <div class="settings">
             <SiteSettings />
         </div>
+        @if (!ViewportInformation.IsDesktop)
+        {
+            <FluentButton
+                Title="Menu"
+                Appearance="Appearance.Stealth"
+                BackgroundColor="transparent"
+                OnClick="@(() => isNavMenuOpen = !isNavMenuOpen)"
+                Class="navigation-button">
+                <FluentIcon Value="@(new Icons.Regular.Size24.Navigation())" Color="Color.FillInverse" />
+            </FluentButton>
+        }
+
     </FluentHeader>
     <FluentStack Class="main" Orientation="Orientation.Horizontal" Width="100%">
-        <NavMenu />
+        @if (ViewportInformation.IsDesktop)
+        {
+            <DesktopNavMenu />
+        }
+        else
+        {
+            <MobileNavMenu
+                IsNavMenuOpen="isNavMenuOpen"
+                CloseNavMenu="@CloseMobileNavMenu"
+            />
+        }
         <FluentBodyContent Class="body-content" Style="height: calc(100dvh - 90px);">
             <div class="main">
                 @Body
-                <FluentMessageBarProvider Section="TOP" ClearAfterNavigation="true" />
-                <FluentToastProvider MaxToastCount="10" />
-                <FluentDialogProvider />
-                <FluentTooltipProvider />
-                <FluentKeyCodeProvider />
-                <FluentMenuProvider />
+                <FluentMessageBarProvider Section="TOP" ClearAfterNavigation="true"/>
+                <FluentToastProvider MaxToastCount="10"/>
+                <FluentDialogProvider/>
+                <FluentTooltipProvider/>
+                <FluentKeyCodeProvider/>
+                <FluentMenuProvider/>
             </div>
         </FluentBodyContent>
     </FluentStack>
