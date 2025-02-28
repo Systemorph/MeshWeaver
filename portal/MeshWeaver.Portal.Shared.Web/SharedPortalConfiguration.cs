@@ -8,6 +8,7 @@ using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
+using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -25,7 +26,7 @@ public static class SharedPortalConfiguration
             builder.Configuration.GetSection("Styles"));
     }
 
-    public static TBuilder ConfigureWebPortalMesh<TBuilder>(this TBuilder builder)
+    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
         where TBuilder:MeshBuilder
         =>
         (TBuilder)builder.ConfigureServices(services =>
@@ -33,6 +34,7 @@ public static class SharedPortalConfiguration
                 services.AddRazorComponents().AddInteractiveServerComponents();
                 services.AddSingleton<CacheStorageAccessor>();
                 services.AddSingleton<IAppVersionService, AppVersionService>();
+                services.AddSingleton<DimensionManager>();
                 return services;
             })
             .AddBlazor(layoutClient => layoutClient
@@ -40,7 +42,6 @@ public static class SharedPortalConfiguration
                     .AddAgGrid()
                     .WithPortalConfiguration(c => 
                         c.AddLayout(layout => layout
-                            .AddNavMenu()
                             .AddArticleLayouts()))
             )
             .AddSignalRHubs();

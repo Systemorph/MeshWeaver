@@ -39,10 +39,6 @@ body {
     margin: 0;
 }
 
-.navmenu-icon {
-    display: none;
-}
-
 .main {
     height: calc(100dvh - 86px);
     color: var(--neutral-foreground-rest);
@@ -199,41 +195,9 @@ code {
     --code-block-border-color: #444c56 !important; /* GitHub dark theme border color */
     --code-block-background-color: #2d333b !important; /* GitHub dark theme background color */
 }
-@media (min-width: 601px) {
-    /* Ensure the hamburger is visible and placed in its container */
-    /* Override any rule that hides it */
-    .navmenu-icon {
-        display: inline-block;
-        position: relative;
-        margin: 0.5rem;
-    }
-    #navmenu-toggle {
-        display: none;
-    }
-
-    /* Widen the navigation menu when expanded */
-    nav.sitenav.expanded {
-        width: 250px; /* Adjust value as needed for a wider menu */
-    }
-
-    /* Adjust the collapsed width if desired */
-    nav.sitenav.collapsed {
-        width: 120px; /* Adjust value for the collapsed state */
-    }
-
-    .navmenu .fluent-icon svg {
-        width: 48px !important;
-        height: 48px !important;
-    }
-}
 @media (max-width: 600px) {
     .header-gutters {
         margin: 0.5rem 3rem 0.5rem 1.5rem !important;
-    }
-
-    /* Adjust the collapsed width if desired */
-    nav.sitenav.collapsed {
-        display: none; /* Adjust value for the collapsed state */
     }
 
 
@@ -246,10 +210,6 @@ code {
         row-gap: 0 !important;
     }
 
-    nav.sitenav {
-        width: 100%;
-        height: 100%;
-    }
     #main-menu {
         width: 100% !important;
     }
@@ -258,37 +218,4 @@ code {
             display: none;
         }
 
-    .navmenu {
-        width: 100%;
-    }
-
-    #navmenu-toggle {
-        appearance: none;
-    }
-
-    #navmenu-toggle ~ nav {
-        display: none;
-    }
-
-    #navmenu-toggle:checked ~ nav {
-        display: block;
-    }
-
-    .navmenu-icon {
-        cursor: pointer;
-        z-index: 10;
-        display: block;
-        position: absolute;
-        top: 15px;
-        left: unset;
-        right: 20px;
-        width: 20px;
-        height: 20px;
-        border: none;
-    }
-
-    [dir="rtl"] .navmenu-icon {
-        left: 20px;
-        right: unset;
-    }
 }

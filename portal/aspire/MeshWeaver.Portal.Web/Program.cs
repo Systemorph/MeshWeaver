@@ -14,7 +14,7 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 builder.ConfigureWebPortalServices();
 builder.UseOrleansMeshClient()
             .AddPostgresSerilog()
-            .ConfigureWebPortalMesh()
+            .ConfigureWebPortal()
             .ConfigureServices(services => services.AddAzureBlobArticles())
     ;
 // Add PostgreSQL using the Aspire-managed container
