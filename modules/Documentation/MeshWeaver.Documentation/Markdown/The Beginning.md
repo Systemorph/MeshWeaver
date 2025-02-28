@@ -8,7 +8,7 @@ Abstract: >
     decentralization in reinsurance pricing. 
     Join them as they explore the future of data management and share their 
     expertise through insightful discussions and live programming sessions.
-Published: "2024-12-30"
+Published: "2024-12-10"
 VideoUrl: "https://www.youtube.com/embed/5uqzI9wZ9t0?si=698vQr7Wr5wGkYWU"
 VideoDuration: "00:28:52"
 VideoTitle: "Mesh Bros: Revolutionizing Data Management"
