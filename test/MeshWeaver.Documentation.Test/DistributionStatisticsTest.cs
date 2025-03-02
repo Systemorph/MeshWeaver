@@ -132,7 +132,6 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
             .Timeout(10.Seconds())
             .OfType<MarkdownControl>()
             .FirstAsync(md => md.Markdown != paretoResults);
-
         results = control.Should().BeOfType<MarkdownControl>().Which;
         results.Markdown.ToString().Should().Contain("Mean");
     }
