@@ -21,5 +21,7 @@
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
         <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
     </ItemGroup>
-
+    <ItemGroup>
+        <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
+    </ItemGroup>
 </Project>
