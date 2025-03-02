@@ -349,3 +349,6 @@ ASALocalRun/
 #local redis data
 /.redis/
 *.received.txt
+
+#sdk choice
+*.SdkResolver.*.proj

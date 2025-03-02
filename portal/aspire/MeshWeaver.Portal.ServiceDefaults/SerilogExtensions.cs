@@ -96,6 +96,8 @@ public class DestructuringPolicy : IDestructuringPolicy
 
     LogEventPropertyValue Parse(JsonNode node)
     {
+        if (node is null)
+            return null;
         if (node is JsonObject obj)
             return new StructureValue(obj.Select(x => new LogEventProperty(x.Key, Parse(x.Value))));
         if (node is JsonArray arr)
