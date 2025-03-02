@@ -6,10 +6,10 @@
     <PackageVersion Include="AngleSharp" Version="1.1.2" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="9.0.0" />
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="9.0.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="9.0.0" />
-    <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.0.0" />
-    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="9.0.0" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="9.1.0" />
     <PackageVersion Include="Aspire.Npgsql" Version="9.0.0" />
     <PackageVersion Include="Autofac" Version="8.2.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
@@ -104,13 +104,13 @@
     <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.0" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
-    <PackageVersion Include="Aspire.Hosting.Redis" Version="9.0.0" />
+    <PackageVersion Include="Aspire.Hosting.Redis" Version="9.1.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.Redis" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.Redis" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="8.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="9.0.0" />
     <PackageVersion Include="Aspire.StackExchange.Redis" Version="9.0.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="9.0.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="9.1.0" />
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="9.0.0" />
     <PackageVersion Include="xunit.abstractions" Version="2.0.3" />
     <PackageVersion Include="xunit.extensibility.core" Version="2.9.2" />
