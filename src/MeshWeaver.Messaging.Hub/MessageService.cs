@@ -102,8 +102,7 @@ public class MessageService : IMessageService
         delivery = UnpackIfNecessary(delivery);
         executionBuffer.Post(async _ =>
         {
-            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery.Message, delivery.Sender,
-                Address);
+            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
             try
             {
                 delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
