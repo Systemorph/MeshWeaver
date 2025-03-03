@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.IdentityModel.Tokens.Jwt;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
@@ -10,7 +11,10 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -24,29 +28,26 @@ public static class SharedPortalConfiguration
 {
     public static void ConfigureWebPortalServices(this WebApplicationBuilder builder)
     {
-        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(options =>
-            {
-                builder.Configuration.GetSection("AzureAdB2C").Bind(options);
-                // Increase token handling parameters to avoid 431 errors
-                options.ResponseType = "code";  // Use authorization code flow instead of implicit
-                options.UseTokenLifetime = true;
-            });
+        // This is required to be instantiated before the OpenIdConnectOptions starts getting configured.
+        // By default, the claims mapping will map claim names in the old format to accommodate older SAML applications.
+        // 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role' instead of 'roles'
+        // This flag ensures that the ClaimsIdentity claims collection will be built from the claims in the token.
+        JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
-        // Increase Kestrel limits to handle larger request headers
-        builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options =>
+        var services = builder.Services;
+        // Configuration to sign-in users with Azure AD B2C.
+        services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAdB2C");
+
+        services.AddHttpContextAccessor();
+
+        services.AddControllersWithViews(options =>
         {
-            options.Limits.MaxRequestHeadersTotalSize = 64 * 1024; // Increase from default 32KB to 64KB
-        });
+            var policy = new AuthorizationPolicyBuilder()
+                .RequireAuthenticatedUser()
+                .Build();
+            options.Filters.Add(new AuthorizeFilter(policy));
+        }).AddMicrosoftIdentityUI();
 
-        builder.Services.AddControllersWithViews()
-            .AddMicrosoftIdentityUI();
-
-        builder.Services.AddAuthorization(options =>
-        {
-            //options.FallbackPolicy = options.DefaultPolicy;
-        });
-        
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(
@@ -92,10 +93,11 @@ public static class SharedPortalConfiguration
             app.UseHsts();
         }
         app.UseRouting();
+        app.UseAntiforgery();
+        app.UseCookiePolicy();
         app.UseAuthentication();
         app.UseAuthorization();
 
-        app.UseAntiforgery();
         app.MapMeshWeaverSignalRHubs();
 
         app.MapMeshWeaver();
