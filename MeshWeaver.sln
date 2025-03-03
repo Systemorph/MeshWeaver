@@ -177,6 +177,9 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Kernel.Hub", "src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj", "{CF29AF5E-8BB6-4594-8A8C-65ED5755AF2B}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "portal", "portal", "{91519FF2-7EE5-4A9A-B244-67AB4443E6F7}"
+	ProjectSection(SolutionItems) = preProject
+		portal\Directory.Build.props = portal\Directory.Build.props
+	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "aspire", "aspire", "{4C68D283-B46D-4CC1-B02C-4B212D01B4A6}"
 EndProject
