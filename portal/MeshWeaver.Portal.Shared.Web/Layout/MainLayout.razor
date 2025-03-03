@@ -1,5 +1,9 @@
 ﻿@using MeshWeaver.Portal.Shared.Web.Infrastructure
+@using Microsoft.AspNetCore.Components.Authorization
+@using MeshWeaver.Portal.Shared.Web.Components
 @inherits LayoutComponentBase
+@inject IDialogService DialogService
+<CascadingAuthenticationState>
 
 <FluentLayout>
     <FluentHeader>
@@ -10,20 +14,26 @@
             <SearchBar />
         </div>
 
-        <div class="links">
-            <FluentAnchor Appearance="Appearance.Hypertext"
-            Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
-            title="Mesh Weaver on GitHub" aria-label="Mesh Weaver source on GitHub">
-                <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
-            </FluentAnchor>
-        </div>
-        <div class="notifications">
-            <NotificationCenter />
-        </div>
-        <div class="settings">
-            <SiteSettings />
-        </div>
-        @if (!ViewportInformation.IsDesktop)
+        @if (ViewportInformation.IsDesktop)
+        {
+            <div class="links">
+                <FluentAnchor Appearance="Appearance.Hypertext"
+                              Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
+                              title="Mesh Weaver on GitHub" aria-label="Mesh Weaver source on GitHub">
+                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
+                </FluentAnchor>
+            </div>
+            <div class="notifications">
+                <NotificationCenter />
+            </div>
+            <div class="settings">
+                <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" Title="Site settings" />
+                </FluentButton>
+            </div>
+            <LoginButton />
+        }
+        else
         {
             <FluentButton
                 Title="Menu"
@@ -46,7 +56,7 @@
             <MobileNavMenu
                 IsNavMenuOpen="isNavMenuOpen"
                 CloseNavMenu="@CloseMobileNavMenu"
-            />
+                           LaunchSettingsAsync="@OpenSiteSettingsAsync" />
         }
         <FluentBodyContent Class="body-content" Style="height: calc(100dvh - 90px);">
             <div class="main">
@@ -76,3 +86,4 @@
     <a class="dismiss">🗙</a>
 </div>
 
+</CascadingAuthenticationState>

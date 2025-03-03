@@ -1,0 +1,36 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Options
+@using Microsoft.Identity.Web
+@inject NavigationManager Navigation
+@inject IOptionsMonitor<MicrosoftIdentityOptions> IdentityOptions
+
+<AuthorizeView>
+    <Authorized>
+        <button class="btn btn-link" @onclick="Logout">
+            <span class="oi oi-account-logout"></span> Logout @context.User.Identity?.Name
+        </button>
+    </Authorized>
+    <NotAuthorized>
+        <button class="btn btn-primary" @onclick="Login">
+            <span class="oi oi-account-login"></span> Login
+        </button>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private void Login()
+    {
+        // For Blazor Server, we directly use the ASP.NET Core Identity endpoints
+        var loginPath = "/MicrosoftIdentity/Account/SignIn";
+
+        // Add a redirect URL to return to the current page
+        var returnUrl = Navigation.Uri;
+        Navigation.NavigateTo($"{loginPath}?returnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+    }
+
+    private void Logout()
+    {
+        var logoutPath = "/MicrosoftIdentity/Account/SignOut";
+        Navigation.NavigateTo(logoutPath, forceLoad: true);
+    }
+}

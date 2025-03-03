@@ -13,6 +13,8 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     </ItemGroup>
     <ItemGroup>
+        <PackageReference Include="Microsoft.Identity.Web" />
+        <PackageReference Include="Microsoft.Identity.Web.Ui" />
         <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
         <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
         <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
@@ -22,10 +24,6 @@
         <PackageReference Include="Microsoft.DotNet.Interactive" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <Folder Include="Pages\" />
     </ItemGroup>
 
     <ItemGroup>
