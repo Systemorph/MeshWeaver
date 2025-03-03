@@ -49,16 +49,29 @@ var orleans = builder.AddOrleans("mesh")
 builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
+    .WaitFor(redis)
+    .WaitFor(meshweaverdb)
     .WithReplicas(2)
     .WithEnvironment("GRAFANA_URL", grafana.GetEndpoint("http"));
 
 
-builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
+var frontend = builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
     .WithExternalHttpEndpoints()
     .WithReference(orleans.AsClient())
     .WithReference(appStorage.AddBlobs("articles"))
     .WithReference(meshweaverdb)
-    .WithEnvironment("GRAFANA_URL", grafana.GetEndpoint("http"));
+    .WithEnvironment("GRAFANA_URL", grafana.GetEndpoint("http"))
+    .WaitFor(redis)
+    .WaitFor(meshweaverdb)
+    ;
+
+if (builder.Environment.IsProduction())
+    frontend = frontend
+        .WithEndpoint(targetPort: 443, scheme: "https", name: "https-external")
+        .WithEndpoint(targetPort: 80, scheme: "http", name: "http-external")
+        .WithEnvironment("ASPNETCORE_URLS", "https://+:443;http://+:80")
+        .WithEnvironment("ASPNETCORE_HTTPS_PORT", "443")
+        .WithEnvironment("VIRTUAL_HOST", "portal.meshweaver.cloud");
 
 var app = builder.Build();
 
