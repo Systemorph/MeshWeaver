@@ -5,7 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <IsAspireHost>true</IsAspireHost>
         <UserSecretsId>fddddaf5-8e88-4362-a2ad-5b0f3c75c51f</UserSecretsId>
-  </PropertyGroup>
+    </PropertyGroup>
 
   <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj" />
