@@ -7,6 +7,9 @@
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
     <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="9.0.0" />
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="9.1.0" />
     <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="9.1.0" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.1.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="9.1.0" />
@@ -14,6 +17,7 @@
     <PackageVersion Include="Autofac" Version="8.2.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.10.0" />
+    <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.0.0" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.22.2" />
