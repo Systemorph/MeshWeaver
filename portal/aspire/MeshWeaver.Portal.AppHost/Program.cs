@@ -56,7 +56,7 @@ var frontend = builder
     ;
 
 // Then update your frontend configuration like this:
-if (builder.Environment.IsProduction())
+if (builder.ExecutionContext.IsPublishMode)
 {
     var customDomain = builder.AddParameter("customDomain"); // Value provided at first deployment.
     var certificateName = builder.AddParameter("certificateName"); // Value provided at second and subsequent deployments.
