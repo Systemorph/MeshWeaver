@@ -1,0 +1,63 @@
+﻿/* Ensure transparent background */
+.meshweaver-logo {
+    background-color: transparent !important;
+    display: inline-block;
+}
+
+    .meshweaver-logo svg {
+        background-color: transparent !important;
+    }
+
+/* Ensure the FluentAnchor containing our logo has transparent background */
+.fluent-header fluent-anchor {
+    --neutral-fill-stealth-rest: transparent !important;
+    --neutral-fill-stealth-hover: transparent !important;
+    --neutral-fill-stealth-active: transparent !important;
+    --neutral-fill-stealth-focus: transparent !important;
+    background-color: transparent !important;
+}
+
+    /* Target the specific internal control element */
+    .fluent-header fluent-anchor .control,
+    .fluent-header fluent-anchor:hover .control,
+    .fluent-header fluent-anchor[href]:active .control,
+    .fluent-header fluent-anchor:focus .control {
+        background: transparent !important;
+        background-color: transparent !important;
+    }
+
+    /* Shadow DOM specificity override for the active state */
+    .fluent-header fluent-anchor:host([href]:active) .control {
+        background: transparent !important;
+        background-color: transparent !important;
+    }
+
+/* For use in the header (against the colored toolbar background) */
+.fluent-header .meshweaver-logo .primary-color {
+    fill: white; /* Primary color as pure white */
+}
+
+.fluent-header .meshweaver-logo .secondary-color {
+    fill: black; /* Secondary color as black */
+    opacity: 0.7; /* Slightly transparent to blend with the background */
+}
+
+/* Default colors for when the logo is used elsewhere */
+.meshweaver-logo:not(.fluent-header .meshweaver-logo) .primary-color {
+    fill: white;
+}
+
+.meshweaver-logo:not(.fluent-header .meshweaver-logo) .secondary-color {
+    fill: black;
+    opacity: 0.8;
+}
+
+/* Dark mode adjustments */
+:root[data-theme='dark'] .fluent-header .meshweaver-logo .primary-color {
+    fill: white; /* Keep primary color white in dark mode */
+}
+
+:root[data-theme='dark'] .fluent-header .meshweaver-logo .secondary-color {
+    fill: black; /* Keep secondary color black in dark mode */
+    opacity: 0.5; /* Reduce opacity in dark mode for better contrast */
+}

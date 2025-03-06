@@ -38,6 +38,8 @@
 
 @code {
     private bool IsVisible;
+    private bool IsDevelopment;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -45,18 +47,17 @@
         IsVisible = !IsDevelopment;
     }
 
-    private bool IsDevelopment;
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (firstRender)
         {
             // Check if user has already made a choice
             var consent = await JsRuntime.InvokeAsync<string>("localStorage.getItem", "cookieConsent");
             if (!string.IsNullOrEmpty(consent))
             {
                 IsVisible = false;
+                StateHasChanged();
             }
-
         }
     }
 
