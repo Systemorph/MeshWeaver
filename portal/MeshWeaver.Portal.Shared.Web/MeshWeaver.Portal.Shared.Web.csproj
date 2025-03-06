@@ -26,10 +26,4 @@
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
     </ItemGroup>
 
-    <ItemGroup>
-        <None Update="Layout\NavMenu.razor.css">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
-    </ItemGroup>
-
 </Project>
