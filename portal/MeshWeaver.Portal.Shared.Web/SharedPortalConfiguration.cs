@@ -13,6 +13,7 @@ using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Extensions.Configuration;
@@ -47,6 +48,18 @@ public static class SharedPortalConfiguration
                 .Build();
             options.Filters.Add(new AuthorizeFilter(policy));
         }).AddMicrosoftIdentityUI();
+        // Configure Data Protection
+        builder.Services.AddDataProtection()
+            .PersistKeysToFileSystem(new DirectoryInfo(@"./keys"))
+            .SetApplicationName("MeshWeaver");
+
+        // Configure Antiforgery
+        builder.Services.AddAntiforgery(options =>
+        {
+            options.Cookie.Name = "MeshWeaver.AntiforgeryCookie";
+            options.FormFieldName = "AntiforgeryField";
+            options.HeaderName = "X-CSRF-TOKEN";
+        });
 
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
