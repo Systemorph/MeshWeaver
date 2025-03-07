@@ -29,7 +29,20 @@ var insights = builder.ExecutionContext.IsPublishMode
 
 
 
-var redis = builder.AddRedis("orleans-redis");
+var redis = builder.AddRedis("orleans-redis")
+    .WithDataVolume()  // Add persistent storage
+    .WithPersistence(TimeSpan.FromMinutes(1), 10)  // Save data every minute if 10+ keys changed
+    .WithAnnotation(new CommandLineArgsCallbackAnnotation(context =>
+    {
+        // Configure Redis with command line arguments
+        context.Args.Add("--maxmemory-policy");
+        context.Args.Add("allkeys-lru");
+        context.Args.Add("--tcp-keepalive");
+        context.Args.Add("60");
+        return Task.CompletedTask;
+    })); 
+
+
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(redis)
     .WithGrainStorage("address-registry", redis)
@@ -55,16 +68,19 @@ var frontend = builder
         .WaitFor(meshweaverdb)
     ;
 
+// Register all parameters upfront for both domains
+var meshweaverDomain = builder.AddParameter("meshweaverDomain");
+var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
+
+
 // Then update your frontend configuration like this:
 if (builder.ExecutionContext.IsPublishMode)
 {
-    var customDomain = builder.AddParameter("customDomain"); // Value provided at first deployment.
-    var certificateName = builder.AddParameter("certificateName"); // Value provided at second and subsequent deployments.
-    frontend = frontend
+    frontend
         .PublishAsAzureContainerApp((module, app) =>
         {
 #pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features
-            app.ConfigureCustomDomain(customDomain, certificateName);
+            app.ConfigureCustomDomain(meshweaverDomain, meshweaverCertificate);
 #pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
         });
 }
