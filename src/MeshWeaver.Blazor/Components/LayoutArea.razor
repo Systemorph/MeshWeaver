@@ -1,5 +1,5 @@
 
-<LayoutAreaView ViewModel="@ViewModel" />
+<LayoutAreaView ViewModel="@ViewModel" Top="@Top"/>
 
 @code {
     [Parameter] public string Address { get; set; }
@@ -7,9 +7,10 @@
     [Parameter] public string Id { get; set; }
     [Parameter] public bool ShowProgress { get; set; }
     [Parameter] public string ProgressMessage { get; set; } = "Loading";
+    [Parameter] public bool Top { get; set; }
 
     private LayoutAreaControl ViewModel =>
-        new LayoutAreaControl(
+        new(
             Address,
             new(Area) { Id = Id }
         )

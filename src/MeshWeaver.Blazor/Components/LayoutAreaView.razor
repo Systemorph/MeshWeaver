@@ -3,5 +3,11 @@
 <NamedAreaView 
     Stream="@AreaStream" 
     ViewModel="@NamedArea"
-    Area="@NamedArea.GetArea()" />
+    Area="@NamedArea.GetArea()" 
+    Top="@Top"
+/>
     
+@code
+{    
+    [Parameter] public bool Top { get; set; }
+}
