@@ -7,6 +7,8 @@ namespace MeshWeaver.Portal.Shared.Web.Layout;
 
 public partial class MainLayout
 {
+    private const string MessageBarSection = "MessagesTop";
+
     private bool isNavMenuOpen;
     protected override void OnParametersSet()
     {

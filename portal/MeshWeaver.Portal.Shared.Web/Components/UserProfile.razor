@@ -1,0 +1,38 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<AuthorizeView>
+    <Authorized>
+        <div class="profile-menu-container">
+            <FluentProfileMenu Initials="@initials"
+                               EMail="@username"
+                               FullName="@name"
+                               ButtonSize="@ButtonSize"
+                               FooterLink="">
+                <HeaderTemplate>
+                    <FluentStack VerticalAlignment="VerticalAlignment.Center">
+                        <FluentLabel>Logged in as:</FluentLabel>
+                        <FluentSpacer />
+                        <form @formname="sign-out-form" class="sign-out-form" action="MicrosoftIdentity/Account/SignOut" method="post">
+                            <AntiforgeryToken />
+                            <FluentButton Appearance="Appearance.Stealth" Type="ButtonType.Submit">Sign out</FluentButton>
+                        </form>
+                    </FluentStack>
+                </HeaderTemplate>
+                <ChildContent>
+                    <FluentStack class="inner-persona-container">
+                        <FluentPersona Initials="@initials" ImageSize="@ImageSize" Class="inner-persona">
+                            <div class="full-name">@name</div>
+                            <div class="user-id">@username</div>
+                        </FluentPersona>
+                    </FluentStack>
+                </ChildContent>
+            </FluentProfileMenu>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="login-button-container">
+            <FluentButton Appearance="Appearance.Stealth" OnClick="Login">Login</FluentButton>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>

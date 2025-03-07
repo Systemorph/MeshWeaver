@@ -1,91 +1,81 @@
 ﻿@using MeshWeaver.Portal.Shared.Web.Infrastructure
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
-
-<FluentLayout>
-    <FluentHeader>
-        <FluentAnchor Href="/" Appearance="Appearance.Stealth" style="
-    --neutral-fill-stealth-rest: transparent !important; 
-    --neutral-fill-stealth-hover: transparent !important;
-    --neutral-fill-stealth-active: transparent !important;
-    --neutral-fill-stealth-focus: transparent !important;">
-            <MeshWeaverLogo Width="36px" Height="36px" />
+<div class="layout" style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
+    <div class="meshweaver-icon">
+        <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo"
+                      title="Mesh Weaver"
+                      aria-label="Mesh Weaver">
+            <MeshWeaverLogo></MeshWeaverLogo>
         </FluentAnchor>
-        <FluentSpacer />
+    </div>
 
-        <div class="search">
-            <SearchBar />
-        </div>
-
-        @if (ViewportInformation.IsDesktop)
-        {
+    @if (ViewportInformation.IsDesktop)
+    {
+        <FluentHeader>
+            <FluentAnchor Appearance="Appearance.Stealth" Href="https://www.meshweaver.cloud" Class="logo">
+                MESHWEAVER
+            </FluentAnchor>
+            <FluentSpacer/>
             <div class="links">
                 <FluentAnchor Appearance="Appearance.Hypertext"
                               Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
                               title="Mesh Weaver on GitHub" aria-label="Mesh Weaver source on GitHub">
-                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
+                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse"/>
                 </FluentAnchor>
             </div>
             <div class="notifications">
-                <NotificationCenter />
+                <NotificationCenter/>
             </div>
             <div class="settings">
                 <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" Title="Site settings" />
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" Title="Site settings"/>
                 </FluentButton>
             </div>
-            <LoginButton />
-        }
-        else
-        {
+            <UserProfile/>
+        </FluentHeader>
+
+        <DesktopNavMenu/>
+    }
+    else
+    {
+        <FluentHeader>
+            <div class="flex-filler"></div>
+
+            <UserProfile/>
             <FluentButton
+                IconEnd="@(isNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
                 Title="Menu"
                 Appearance="Appearance.Stealth"
                 BackgroundColor="transparent"
                 OnClick="@(() => isNavMenuOpen = !isNavMenuOpen)"
-                Class="navigation-button">
-                <FluentIcon Value="@(new Icons.Regular.Size24.Navigation())" Color="Color.FillInverse" />
-            </FluentButton>
-        }
+                Class="navigation-button"/>
+        </FluentHeader>
 
-    </FluentHeader>
-    <FluentStack Class="main" Orientation="Orientation.Horizontal" Width="100%">
-        @if (ViewportInformation.IsDesktop)
-        {
-            <DesktopNavMenu />
-        }
-        else
-        {
-            <MobileNavMenu
-                IsNavMenuOpen="isNavMenuOpen"
-                CloseNavMenu="@CloseMobileNavMenu"
-                           LaunchSettingsAsync="@OpenSiteSettingsAsync" />
-        }
-        <FluentBodyContent Class="body-content" Style="height: calc(100dvh - 90px);">
-            <div class="main">
-                @Body
-                <FluentMessageBarProvider Section="TOP" ClearAfterNavigation="true"/>
-                <FluentToastProvider MaxToastCount="10"/>
-                <FluentDialogProvider/>
-                <FluentTooltipProvider/>
-                <FluentKeyCodeProvider/>
-                <FluentMenuProvider/>
-            </div>
-        </FluentBodyContent>
-    </FluentStack>
+        <MobileNavMenu
+            IsNavMenuOpen="isNavMenuOpen"
+            CloseNavMenu="@CloseMobileNavMenu"
+            LaunchSettingsAsync="@OpenSiteSettingsAsync" />
+    }
 
-    <FluentFooter>
-        <a href="https://meshweaver.cloud" target="_blank">Mesh Weaver</a>
-        <FluentSpacer />
-        <span>© 2024 - @DateTime.UtcNow.Year Systemorph</span>
-        <FluentSpacer />
-        <a href="https://meshweaver.cloud" target="_blank">About Mesh Weaver</a>
-    </FluentFooter>
-</FluentLayout>
+    <div class="messagebar-container">
+        <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar"/>
+    </div>
+    <FluentBodyContent Class="custom-body-content body-content">
+        <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+        @Body
+    </FluentBodyContent>
 
-<div id="blazor-error-ui">
-    An unhandled error has occurred.
-    <a href="" class="reload">Reload</a>
-    <a class="dismiss">🗙</a>
+    <FluentDialogProvider/>
+    <FluentTooltipProvider />
+    <FluentMenuProvider />                
+    <FluentToastProvider MaxToastCount="10"/>
+    <FluentKeyCodeProvider/>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Try reloading the page.</a>
+        <a class="dismiss">🗙</a>
+    </div>
 </div>
 
