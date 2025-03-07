@@ -35,6 +35,7 @@
     <PackageVersion Include="JsonPath.Net" Version="1.1.6" />
     <PackageVersion Include="Markdig" Version="0.38.0" />
     <PackageVersion Include="Microsoft.AspNetCore.CookiePolicy" Version="2.3.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="9.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client.Core" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />

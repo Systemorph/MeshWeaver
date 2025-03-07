@@ -10,11 +10,9 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
+using StackExchange.Redis;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
@@ -48,9 +47,11 @@ public static class SharedPortalConfiguration
                 .Build();
             options.Filters.Add(new AuthorizeFilter(policy));
         }).AddMicrosoftIdentityUI();
-        // Configure Data Protection
+
+        // Configure Data Protection to use Redis
+        var redis = ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("orleans-redis"));
         builder.Services.AddDataProtection()
-            .PersistKeysToFileSystem(new DirectoryInfo(@"./keys"))
+            .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys")
             .SetApplicationName("MeshWeaver");
 
         // Configure Antiforgery
@@ -68,26 +69,26 @@ public static class SharedPortalConfiguration
     }
 
     public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
-        where TBuilder:MeshBuilder
-        =>
-        (TBuilder)builder.ConfigureServices(services =>
+            where TBuilder : MeshBuilder
+            =>
+            (TBuilder)builder.ConfigureServices(services =>
             {
                 services.AddRazorPages()
-                    .AddMicrosoftIdentityUI();
+                .AddMicrosoftIdentityUI();
                 services.AddRazorComponents().AddInteractiveServerComponents();
                 services.AddSingleton<CacheStorageAccessor>();
                 services.AddSingleton<IAppVersionService, AppVersionService>();
                 services.AddSingleton<DimensionManager>();
                 return services;
             })
-            .AddBlazor(layoutClient => layoutClient
-                    .AddChartJs()
-                    .AddAgGrid()
-                    .WithPortalConfiguration(c => 
-                        c.AddLayout(layout => layout
-                            .AddArticleLayouts()))
-            )
-            .AddSignalRHubs();
+                .AddBlazor(layoutClient => layoutClient
+                        .AddChartJs()
+                        .AddAgGrid()
+                        .WithPortalConfiguration(c =>
+                            c.AddLayout(layout => layout
+                                .AddArticleLayouts()))
+                )
+                .AddSignalRHubs();
 
 
     public static void StartPortalApplication(this WebApplication app)
@@ -128,6 +129,4 @@ public static class SharedPortalConfiguration
         logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
 #pragma warning restore CA1416
     }
-
-
 }

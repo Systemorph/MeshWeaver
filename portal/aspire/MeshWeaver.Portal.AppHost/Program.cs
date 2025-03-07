@@ -24,8 +24,8 @@ var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 // Add Application Insights
 // Add Application Insights
 var insights = builder.ExecutionContext.IsPublishMode
-    ? builder.AddAzureApplicationInsights("myInsightsResource")
-    : builder.AddConnectionString("myInsightsResource", "APPLICATIONINSIGHTS_CONNECTION_STRING");
+    ? builder.AddAzureApplicationInsights("meshweaverinsights")
+    : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
 
 
 
