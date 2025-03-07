@@ -7,7 +7,18 @@ using MeshWeaver.Portal.Shared.Web;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddAspireServiceDefaults();
-builder.AddKeyedRedisClient("orleans-redis");
+
+// Use the configureOptions parameter to configure StackExchange.Redis options
+builder.AddKeyedRedisClient("orleans-redis",
+    configureOptions: options =>
+    {
+        // Increase timeout values
+        options.ConnectTimeout = 5000;           // 5 seconds
+        options.SyncTimeout = 15000;             // 15 seconds
+        options.ConnectRetry = 3;                // Retry count
+        options.AbortOnConnectFail = false;      // Don't abort on initial connection failure
+        options.KeepAlive = 60;                  // Send keepalive every 60 seconds
+    });
 
 builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 // Add services to the container.
