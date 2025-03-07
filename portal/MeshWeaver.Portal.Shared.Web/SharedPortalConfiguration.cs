@@ -12,15 +12,12 @@ using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Authorization;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
-using StackExchange.Redis;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
@@ -48,11 +45,6 @@ public static class SharedPortalConfiguration
             options.Filters.Add(new AuthorizeFilter(policy));
         }).AddMicrosoftIdentityUI();
 
-        // Configure Data Protection to use Redis
-        var redis = ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("orleans-redis"));
-        builder.Services.AddDataProtection()
-            .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys")
-            .SetApplicationName("MeshWeaver");
 
         // Configure Antiforgery
         builder.Services.AddAntiforgery(options =>

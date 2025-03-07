@@ -23,6 +23,7 @@
         <PackageReference Include="Microsoft.Orleans.Client" />
         <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
         <PackageReference Include="Aspire.StackExchange.Redis" />
-        <PackageReference Include="Microsoft.Orleans.Sdk" />        
+        <PackageReference Include="Microsoft.Orleans.Sdk" />
+        <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" />
     </ItemGroup>
 </Project>
