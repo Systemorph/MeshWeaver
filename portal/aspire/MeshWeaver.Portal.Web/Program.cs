@@ -3,10 +3,18 @@ using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Web;
+using Microsoft.AspNetCore.DataProtection;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddAspireServiceDefaults();
+
+// Configure Data Protection to use Redis
+var redis = ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("orleans-redis"));
+builder.Services.AddDataProtection()
+    .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys")
+    .SetApplicationName("MeshWeaver");
 
 // Use the configureOptions parameter to configure StackExchange.Redis options
 builder.AddKeyedRedisClient("orleans-redis",
