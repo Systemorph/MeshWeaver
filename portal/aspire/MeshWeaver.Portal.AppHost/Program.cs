@@ -21,41 +21,28 @@ var postgres = builder
 ;
 var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
-// Add Application Insights
-// Add Application Insights
-var insights = builder.ExecutionContext.IsPublishMode
-    ? builder.AddAzureApplicationInsights("meshweaverinsights")
-    : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
 
-
-
-var redis = builder.AddRedis("orleans-redis")
-    .WithDataVolume()  // Add persistent storage
-    .WithPersistence(TimeSpan.FromMinutes(1), 10)  // Save data every minute if 10+ keys changed
-    .WithAnnotation(new CommandLineArgsCallbackAnnotation(context =>
-    {
-        // Configure Redis with command line arguments
-        context.Args.Add("--maxmemory-policy");
-        context.Args.Add("allkeys-lru");
-        context.Args.Add("--tcp-keepalive");
-        context.Args.Add("60");
-        return Task.CompletedTask;
-    })); 
-
+// Create Azure Table resources for Orleans clustering and storage
+var orleansTables = appStorage.AddTables("orleans-clustering");
+var addressRegistryTables = appStorage.AddTables("address-registry");
+var meshCatalogTables = appStorage.AddTables("mesh-catalog");
+var activityTables = appStorage.AddTables("activity");
 
 var orleans = builder.AddOrleans("mesh")
-    .WithClustering(redis)
-    .WithGrainStorage("address-registry", redis)
-    .WithGrainStorage("mesh-catalog", appStorage.AddTables("mesh-catalog"))
-    .WithGrainStorage("activity", appStorage.AddTables("activity"));
+    .WithClustering(orleansTables)
+    .WithGrainStorage("address-registry", addressRegistryTables)
+    .WithGrainStorage("mesh-catalog", meshCatalogTables)
+    .WithGrainStorage("activity", activityTables);
 
-builder
+var silo = builder
     .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
-    .WithReference(insights)
-    .WaitFor(redis)
-    .WaitFor(meshweaverdb);
+    .WaitFor(meshweaverdb)
+    .WaitFor(orleansTables)
+    .WaitFor(addressRegistryTables)
+    .WaitFor(meshCatalogTables)
+    .WaitFor(activityTables);
 
 var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
@@ -63,19 +50,29 @@ var frontend = builder
         .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("articles"))
         .WithReference(meshweaverdb)
-        .WithReference(insights)
-        .WaitFor(redis)
         .WaitFor(meshweaverdb)
+        .WaitFor(orleansTables)
     ;
 
-// Register all parameters upfront for both domains
-var meshweaverDomain = builder.AddParameter("meshweaverDomain");
-var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
+if (!builder.Environment.IsDevelopment())
+{
+    // Add Application Insights
+    var insights = builder.ExecutionContext.IsPublishMode
+        ? builder.AddAzureApplicationInsights("meshweaverinsights")
+        : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
+
+    silo.WithReference(insights);
+    frontend.WithReference(insights);
 
 
+
+}
 // Then update your frontend configuration like this:
 if (builder.ExecutionContext.IsPublishMode)
 {
+    // Register all parameters upfront for both domains
+    var meshweaverDomain = builder.AddParameter("meshweaverDomain");
+    var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
     frontend
         .PublishAsAzureContainerApp((module, app) =>
         {
@@ -85,7 +82,7 @@ if (builder.ExecutionContext.IsPublishMode)
         });
 }
 
-var app = builder.Build();
 
+var app = builder.Build();
 
 app.Run();
