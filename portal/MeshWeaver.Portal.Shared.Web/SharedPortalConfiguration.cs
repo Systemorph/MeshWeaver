@@ -33,14 +33,16 @@ public static class SharedPortalConfiguration
         JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
         var services = builder.Services;
-        // Configuration to sign-in users with Azure AD B2C.
-        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAdB2C"));
 
         services.AddHttpContextAccessor();
 
-        services.AddControllersWithViews().AddMicrosoftIdentityUI();
+        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));
 
+        builder.Services.AddControllersWithViews()
+            .AddMicrosoftIdentityUI();
+
+        builder.Services.AddAuthorization();
 
         // Configure Antiforgery
         builder.Services.AddAntiforgery(options =>
@@ -97,10 +99,11 @@ public static class SharedPortalConfiguration
         app.UseRouting();
         app.UseAntiforgery();
         app.UseCookiePolicy();
+
         app.UseAuthentication();
         app.UseAuthorization();
 
-        app.MapMeshWeaverSignalRHubs();
+        //app.MapMeshWeaverSignalRHubs();
 
         app.MapMeshWeaver();
         app.UseHttpsRedirection();
