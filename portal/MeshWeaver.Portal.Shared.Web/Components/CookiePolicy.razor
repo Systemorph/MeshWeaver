@@ -44,7 +44,6 @@
     {
         base.OnInitialized();
         IsDevelopment = Configuration.GetValue<bool>("IsDevelopment");
-        IsVisible = !IsDevelopment;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -53,9 +52,9 @@
         {
             // Check if user has already made a choice
             var consent = await JsRuntime.InvokeAsync<string>("localStorage.getItem", "cookieConsent");
-            if (!string.IsNullOrEmpty(consent))
+            if (string.IsNullOrEmpty(consent) && !IsDevelopment)
             {
-                IsVisible = false;
+                IsVisible = true;
                 StateHasChanged();
             }
         }

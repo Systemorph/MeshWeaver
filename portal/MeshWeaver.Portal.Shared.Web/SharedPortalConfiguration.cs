@@ -10,9 +10,10 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
-using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -33,17 +34,12 @@ public static class SharedPortalConfiguration
 
         var services = builder.Services;
         // Configuration to sign-in users with Azure AD B2C.
-        services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAdB2C");
+        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAdB2C"));
 
         services.AddHttpContextAccessor();
 
-        services.AddControllersWithViews(options =>
-        {
-            var policy = new AuthorizationPolicyBuilder()
-                .RequireAuthenticatedUser()
-                .Build();
-            options.Filters.Add(new AuthorizeFilter(policy));
-        }).AddMicrosoftIdentityUI();
+        services.AddControllersWithViews().AddMicrosoftIdentityUI();
 
 
         // Configure Antiforgery

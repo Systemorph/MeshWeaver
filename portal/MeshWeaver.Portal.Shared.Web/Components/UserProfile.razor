@@ -13,10 +13,7 @@
                     <FluentStack VerticalAlignment="VerticalAlignment.Center">
                         <FluentLabel>Logged in as:</FluentLabel>
                         <FluentSpacer />
-                        <form @formname="sign-out-form" class="sign-out-form" action="MicrosoftIdentity/Account/SignOut" method="post">
-                            <AntiforgeryToken />
-                            <FluentButton Appearance="Appearance.Stealth" Type="ButtonType.Submit">Sign out</FluentButton>
-                        </form>
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="Logout">Sign out</FluentButton>
                     </FluentStack>
                 </HeaderTemplate>
                 <ChildContent>
