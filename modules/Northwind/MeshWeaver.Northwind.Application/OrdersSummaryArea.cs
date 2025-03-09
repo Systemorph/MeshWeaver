@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -7,9 +6,8 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Northwind.Domain;
-using MeshWeaver.Utils;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Defines a static class within the MeshWeaver.Northwind.ViewModel namespace for creating and managing an Orders Summary view. This view aggregates and displays data from various sources in a data grid format, providing a comprehensive overview of orders.

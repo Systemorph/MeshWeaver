@@ -1,13 +1,11 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Application.Styles;
 using MeshWeaver.Charting.Pivot;
-using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Builder;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides methods to add and manage discount percentages areas in the layout.

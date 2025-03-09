@@ -5,7 +5,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Represents a toolbar for product overview with a specific category.

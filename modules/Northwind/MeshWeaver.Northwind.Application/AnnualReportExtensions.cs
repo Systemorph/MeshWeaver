@@ -1,8 +1,7 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using System;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Provides extension methods for the annual report.

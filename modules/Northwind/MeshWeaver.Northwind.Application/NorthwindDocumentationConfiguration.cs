@@ -1,7 +1,6 @@
-﻿using MeshWeaver.Layout;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Provides configuration options for the Northwind documentation.

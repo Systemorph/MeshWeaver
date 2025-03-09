@@ -1,5 +1,5 @@
 ﻿
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Represents a summary item for an order within the Northwind application, encapsulating key information about an order such as the customer, number of products, and purchase date.

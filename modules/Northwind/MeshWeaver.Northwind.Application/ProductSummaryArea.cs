@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Defines a static class within the MeshWeaver.Northwind.ViewModel namespace for creating and managing a Product Summary view. This view provides a comprehensive overview of products, including details such as name, category, and stock levels.

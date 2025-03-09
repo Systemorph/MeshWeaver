@@ -1,6 +1,6 @@
 ﻿using System.Globalization;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Provides extension methods for formatting numbers with suffixes.

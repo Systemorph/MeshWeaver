@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// This is an example of a view which uses local state.

@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Defines a static class for creating and managing the Northwind Dashboard within the MeshWeaver.Northwind.ViewModel namespace. This class provides methods to add the dashboard to a layout and to generate the main dashboard view.

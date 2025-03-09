@@ -2,7 +2,7 @@
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Provides a centralized registration mechanism for all Northwind application views and configurations. This static class facilitates the addition of various Northwind-specific views and documentation to the application's MessageHub configuration.
