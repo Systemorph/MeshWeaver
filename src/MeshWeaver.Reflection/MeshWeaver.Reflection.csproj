@@ -2,7 +2,4 @@
   <ItemGroup>
     <PackageReference Include="System.Interactive" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Collections\MeshWeaver.Collections.csproj" />
-  </ItemGroup>
 </Project>
