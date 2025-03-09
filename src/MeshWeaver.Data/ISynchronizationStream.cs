@@ -40,7 +40,7 @@ public interface ISynchronizationStream<TStream>
 {
     ChangeItem<TStream> Current { get; }
     void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback);
-    void UpdateAsync(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback);
+    void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback);
     void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback);
     void Initialize(Func<TStream> init, Action<Exception> exceptionCallback) => Initialize(_ => Task.FromResult(init()), exceptionCallback);
     void Initialize(TStream init);
