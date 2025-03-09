@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -16,13 +18,27 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
 
     public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
 
-
     public abstract Task<byte[]> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
     }
+    protected ImmutableDictionary<string, Author> Authors = ImmutableDictionary<string, Author>.Empty;
 
+    protected ImmutableDictionary<string, Author> LoadAuthorsAsync(string content)
+    {
+        var ret = JsonSerializer
+            .Deserialize<ImmutableDictionary<string, Author>>(
+                content
+            );
+        return ret.Select(x =>
+            new KeyValuePair<string, Author>(
+                x.Key,
+                x.Value with
+                {
+                    ImageUrl = x.Value.ImageUrl is null ? null : $"static/{Collection}/{x.Value.ImageUrl}"
+                })).ToImmutableDictionary();
+    }
 
 }
 
@@ -51,6 +67,7 @@ public class FileSystemArticleCollection : ArticleCollection
 
     public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) => 
         articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
+
 
     public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
     {
@@ -112,6 +129,10 @@ public class FileSystemArticleCollection : ArticleCollection
 
     public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
+        var authorsFile = Path.Combine(BasePath, "authors.json");
+        if(File.Exists(authorsFile))
+            Authors = LoadAuthorsAsync(await File.ReadAllTextAsync(authorsFile, ct));
+
         var ret = new InstanceCollection(
             await GetAllFromPath()
                 .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
@@ -119,6 +140,7 @@ public class FileSystemArticleCollection : ArticleCollection
         MonitorFileSystem();
         return ret;
     }
+
 
     private async IAsyncEnumerable<Article> GetAllFromPath()
     {
@@ -136,7 +158,7 @@ public class FileSystemArticleCollection : ArticleCollection
            return null;
         await using var stream = File.OpenRead(fullPath);
         var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content);
+        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content, Authors);
     }
 
     public override void Dispose()

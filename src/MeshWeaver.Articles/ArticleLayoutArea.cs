@@ -28,7 +28,7 @@ public static class ArticleLayoutArea
             Collection = article.Collection,
             Title = article.Title,
             Abstract = article.Abstract,
-            Authors = article.Authors,
+            Authors = article.AuthorDetails,
             Published = article.Published,
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
