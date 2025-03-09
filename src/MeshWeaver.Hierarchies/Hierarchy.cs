@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using AngleSharp.Common;
 using AngleSharp.Dom;
-using MeshWeaver.Collections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 

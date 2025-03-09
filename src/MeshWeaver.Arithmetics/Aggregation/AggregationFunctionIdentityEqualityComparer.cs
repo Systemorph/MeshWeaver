@@ -1,6 +1,5 @@
 ﻿using System.Reflection;
-using MeshWeaver.Collections;
-using MeshWeaver.Equality;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Arithmetics.Aggregation
 {

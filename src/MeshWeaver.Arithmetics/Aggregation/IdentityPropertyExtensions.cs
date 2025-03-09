@@ -1,10 +1,10 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
-using MeshWeaver.Collections;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
+using MeshWeaver.Utils;
 
-namespace MeshWeaver.Equality;
+namespace MeshWeaver.Arithmetics.Aggregation;
 
 public static class IdentityPropertyExtensions
 {
@@ -25,9 +25,7 @@ public static class IdentityPropertyExtensions
             {
                 Prop = p,
                 ipAttr = p.GetSingleCustomAttribute<IdentityPropertyAttribute>(),
-                keyAttr = p.HasAttribute<SkipKeyForEqualityAttribute>()
-                    ? null
-                    : p.GetSingleCustomAttribute<KeyAttribute>()
+                keyAttr = p.GetSingleCustomAttribute<KeyAttribute>()
             })
             .Where(x => x.ipAttr != null || x.keyAttr != null)
             .ToLookup(x => x.ipAttr?.GetType() ?? x.keyAttr?.GetType(), x => x.Prop);

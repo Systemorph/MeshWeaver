@@ -1,7 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
 
-namespace MeshWeaver.Collections
+namespace MeshWeaver.Utils
 {
     /// <summary>
     /// Represents a thread-safe collection of keys and values.

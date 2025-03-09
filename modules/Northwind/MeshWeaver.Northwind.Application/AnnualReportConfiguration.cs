@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Application.Styles;
-using MeshWeaver.Collections;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Northwind.Application;
 

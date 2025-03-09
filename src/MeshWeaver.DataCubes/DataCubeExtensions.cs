@@ -1,6 +1,4 @@
 ﻿using MeshWeaver.Arithmetics.Aggregation;
-using MeshWeaver.Arithmetics.Aggregation.Implementation;
-using MeshWeaver.Arithmetics.MapOver;
 using MeshWeaver.DataCubes.Operations;
 using MeshWeaver.Reflection;
 
