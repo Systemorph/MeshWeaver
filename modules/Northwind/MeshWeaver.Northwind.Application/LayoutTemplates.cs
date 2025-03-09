@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides layout templates for the Northwind view model.

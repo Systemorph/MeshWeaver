@@ -1,11 +1,9 @@
 ﻿using MeshWeaver.Application.Styles;
 using MeshWeaver.Collections;
 using MeshWeaver.Domain;
-using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Utils;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides configuration methods for the annual report layout.

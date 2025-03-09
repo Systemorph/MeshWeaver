@@ -1,13 +1,13 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Charting.Models.Options;
+using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides methods to add and manage discount summary areas in the layout.

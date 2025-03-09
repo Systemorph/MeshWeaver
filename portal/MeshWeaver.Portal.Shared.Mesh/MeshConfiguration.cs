@@ -2,7 +2,7 @@
 using MeshWeaver.Documentation;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
-using MeshWeaver.Northwind.ViewModel;
+using MeshWeaver.Northwind.Application;
 
 namespace MeshWeaver.Portal.Shared.Mesh;
 

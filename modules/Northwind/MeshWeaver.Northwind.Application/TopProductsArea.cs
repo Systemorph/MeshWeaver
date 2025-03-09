@@ -7,7 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Provides extension methods for adding top products to a layout definition.

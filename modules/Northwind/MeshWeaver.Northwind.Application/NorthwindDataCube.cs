@@ -2,7 +2,7 @@
 using MeshWeaver.Domain;
 using MeshWeaver.Northwind.Domain;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
     /// Defines a data structure for aggregating and analyzing data across multiple dimensions within the Northwind trading application. This record encapsulates detailed information about orders, their details, and associated products.

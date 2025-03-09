@@ -7,7 +7,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides methods to add and manage the orders overview area in the layout.

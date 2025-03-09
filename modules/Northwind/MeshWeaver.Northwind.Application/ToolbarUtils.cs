@@ -1,11 +1,10 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 
-namespace MeshWeaver.Northwind.ViewModel
+namespace MeshWeaver.Northwind.Application
 {
 
     /// <summary>

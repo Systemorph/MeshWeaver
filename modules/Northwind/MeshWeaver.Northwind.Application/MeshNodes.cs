@@ -1,8 +1,9 @@
 ﻿using MeshWeaver.Mesh;
-using MeshWeaver.Northwind.ViewModel;
+using MeshWeaver.Northwind.Application;
+
 [assembly: NorthwindApplication]
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 
 /// <summary>

@@ -2,9 +2,9 @@
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using static MeshWeaver.Northwind.ViewModel.LayoutTemplates;
+using static MeshWeaver.Northwind.Application.LayoutTemplates;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Provides methods to add and render the annual report summary area.

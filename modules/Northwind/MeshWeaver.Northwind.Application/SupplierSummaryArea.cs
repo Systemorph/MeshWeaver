@@ -10,7 +10,7 @@ using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
 using MeshWeaver.Reporting.Models;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Defines a static class within the MeshWeaver.Northwind.ViewModel namespace for creating and managing a Supplier Summary view. This view provides a comprehensive overview of suppliers, including details such as name, contact information, and products supplied.

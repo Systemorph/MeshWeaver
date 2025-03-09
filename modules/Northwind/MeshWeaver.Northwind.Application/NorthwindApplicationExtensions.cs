@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Model;
 
-namespace MeshWeaver.Northwind.ViewModel;
+namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
 /// Extensions for creating the northwind application
