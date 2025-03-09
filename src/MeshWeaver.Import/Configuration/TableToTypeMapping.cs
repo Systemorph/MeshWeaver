@@ -3,12 +3,12 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using Autofac.Core.Activators.Reflection;
-using MeshWeaver.Collections;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Import.Configuration;
 

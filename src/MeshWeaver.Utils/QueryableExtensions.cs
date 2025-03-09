@@ -1,6 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
-namespace MeshWeaver.Collections
+namespace MeshWeaver.Utils
 {
     /// <summary>
     /// Useful extension methods for use with Entity Framework LINQ queries.

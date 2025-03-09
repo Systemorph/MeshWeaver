@@ -1,11 +1,11 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
-using MeshWeaver.Collections;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
+using MeshWeaver.Utils;
 
-namespace MeshWeaver.Equality
+namespace MeshWeaver.Arithmetics.Aggregation
 {
     /// <summary>
     /// The <see cref="IdentityEqualityComparer{T, TEntity}"/> class is a generic EqualityComparer which tests the equality of two instances of <typeparamref name="T"/>

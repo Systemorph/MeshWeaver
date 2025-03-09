@@ -1,5 +1,5 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Collections;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Data;
 
