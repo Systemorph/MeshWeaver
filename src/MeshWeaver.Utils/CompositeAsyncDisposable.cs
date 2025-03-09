@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Disposables;
+﻿namespace MeshWeaver.Utils;
 
 /// <summary>
 /// Thread unsafe collection of disposable objects. Please use it carefully.
