@@ -4,7 +4,6 @@ using MeshWeaver.Kernel;
 
 namespace MeshWeaver.Articles;
 
-
 public record Article
 {
     public TimeSpan VideoDuration { get; set; }
@@ -42,6 +41,7 @@ public record Article
     public string Source { get; init; }
 
     public List<string> Authors { get; set; } = [];
+    public IReadOnlyCollection<Author> AuthorDetails { get; set; } = [];
     public List<string> Tags { get; set; } = [];
     public float[] VectorRepresentation { get; set; }
     public string AuthorAvatar { get; set; }

@@ -36,7 +36,8 @@ public static class ArticleExtensions
    
 
 
-    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content)
+    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content,
+        IReadOnlyDictionary<string, Author> authors)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -46,13 +47,12 @@ public static class ArticleExtensions
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         var name = Path.GetFileNameWithoutExtension(path);
 
-        return (
-                yamlBlock is null
-                    ? new Article()
-                    : new YamlDotNet.Serialization.DeserializerBuilder().Build()
-                        .Deserialize<Article>(yamlBlock.Lines.ToString())
-            )
-            with
+        var ret = yamlBlock is null
+            ? new Article()
+            : new YamlDotNet.Serialization.DeserializerBuilder().Build()
+                .Deserialize<Article>(yamlBlock.Lines.ToString());
+
+        return ret with
             {
                 Name = name,
                 Path = path,
@@ -62,8 +62,19 @@ public static class ArticleExtensions
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
-                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+                AuthorDetails = ret.Authors.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray()
             };
+    }
+
+    private static Author ConvertToAuthor(string authorName)
+    {
+        var names = authorName.Split(' ');
+        if (names.Length == 1)
+            return new Author(string.Empty, names[0]);
+        if (names.Length == 2)
+            return new Author(names[0], names[1]);
+        return new Author(names[0], names[^1]) { MiddleName = string.Join(' ', names.Skip(1).Take(names.Length - 2)), };
     }
 
 

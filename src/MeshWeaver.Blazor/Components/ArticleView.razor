@@ -1,10 +1,11 @@
 ﻿@using System.Collections
+@using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Infrastructure
+@using Microsoft.DotNet.Interactive.Formatting
 
 @inherits BlazorView<ArticleControl, ArticleView>
 
-<HeadContent>
-    <title>@Title</title>
-</HeadContent>
+<PageTitle>@Title</PageTitle>
 
 <div class="article-container">
     <div class="article-header">
@@ -14,7 +15,7 @@
                     @foreach (var author in Authors)
                     {
                         <div class="author">
-                            <FluentPersona Name="@author" ImageSize="24px" />
+                            <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>
                         </div>
                     }
                 </div>
@@ -56,7 +57,7 @@
     private IReadOnlyCollection<string> Tags;
     private string Thumbnail;
     private string Abstract;
-    private IReadOnlyCollection<string> Authors;
+    private IReadOnlyCollection<Author> Authors;
     private DateTime Published;
     private DateTime LastUpdated;
     private string Html;
@@ -73,7 +74,7 @@
         DataBind(ViewModel.Tags, x => x.Tags, ConvertStringArray);
         DataBind(ViewModel.Thumbnail, x => x.Thumbnail);
         DataBind(ViewModel.Abstract, x => x.Abstract);
-        DataBind(ViewModel.Authors, x => x.Authors, ConvertStringArray);
+        DataBind(ViewModel.Authors, x => x.Authors, ConvertAuthorsArray);
         DataBind(ViewModel.Published, x => x.Published);
         DataBind(ViewModel.LastUpdated, x => x.LastUpdated);
         DataBind(ViewModel.Html, x => x.Html);
@@ -83,6 +84,8 @@
 
     private IReadOnlyCollection<string> ConvertStringArray(object tags)
         => (tags as IEnumerable)?.Cast<string>().ToArray();
+    private IReadOnlyCollection<Author> ConvertAuthorsArray(object tags)
+        => (tags as IEnumerable)?.Cast<Author>().ToArray();
 
     private string GetEmbedUrl(string videoUrl)
     {
@@ -98,4 +101,6 @@
         }
         return videoUrl;
     }
+
+
 }
