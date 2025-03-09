@@ -1,13 +1,8 @@
-﻿namespace MeshWeaver.Disposables;
+﻿namespace MeshWeaver.Utils;
 
-public class AnonymousDisposable : IDisposable
+public class AnonymousDisposable(Action action) : IDisposable
 {
-    private readonly Action action;
-
-    public AnonymousDisposable(Action action)
-    {
-        this.action = action ?? throw new ArgumentNullException(nameof(action));
-    }
+    private readonly Action action = action ?? throw new ArgumentNullException(nameof(action));
 
     public void Dispose()
     {

@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Disposables;
+﻿namespace MeshWeaver.Utils;
 
 public class AnonymousAsyncDisposable : IAsyncDisposable
 {
