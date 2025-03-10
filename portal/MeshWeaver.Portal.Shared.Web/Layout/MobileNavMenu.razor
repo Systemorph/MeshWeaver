@@ -35,6 +35,6 @@
     // [Parameter, EditorRequired]
     // public required Func<Task> LaunchHelpAsync { get; set; }
 
-    // [Parameter, EditorRequired]
-    // public required Func<Task> LaunchSettingsAsync { get; set; }
+    [Parameter, EditorRequired]
+    public required Func<Task> LaunchSettingsAsync { get; set; }
 }

@@ -181,8 +181,9 @@ public class KernelContainer : IDisposable
 
     private void HandleInteractiveMarkdownEvent(KernelEvent @event)
     {
-        if (@event.Command is not SubmitCode submit || 
-            !submit.Parameters.TryGetValue(ViewId, out var viewId))
+        var viewId = GetViewId(@event.Command);
+
+        if (viewId is null)
             return;
 
         var view = @event switch
@@ -194,6 +195,17 @@ public class KernelContainer : IDisposable
         };
         if (view is not null) 
             UpdateView(viewId, view);
+    }
+
+    private string GetViewId(KernelCommand command)
+    {
+        if (command is not SubmitCode submit)
+            return null;
+        
+        if(submit.Parameters.TryGetValue(ViewId, out var ret))
+            return ret;
+
+        return command.Parent is not null ? GetViewId(command.Parent) : null;
     }
 
     private void UpdateView(string viewId, object view)
@@ -265,9 +277,21 @@ public class KernelContainer : IDisposable
 
     private Task OnResolve(CSharpKernel kernel, IReadOnlyList<ResolvedPackageReference> packages)
     {
+        var assemblies = packages.SelectMany(p => p.AssemblyPaths).Distinct().ToArray();
+                try
+                {
+                    // Use the correct method to add assembly references
+                    kernel.AddAssemblyReferences(assemblies);
+                    logger.LogInformation("Added assembly reference: {Assembly}", string.Join(',', assemblies));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("Failed to add assembly reference {Assembly}: {Message}",
+                        string.Join(',', assemblies), ex.Message);
+                }
+
         return Task.CompletedTask;
     }
-
     private string FormatControl(UiControl control, string iframeUrl, string viewId)
     {
 

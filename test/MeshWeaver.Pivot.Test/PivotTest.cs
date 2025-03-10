@@ -6,7 +6,6 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Arithmetics;
-using MeshWeaver.Collections;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Fixture;
@@ -18,6 +17,7 @@ using MeshWeaver.Pivot.Models;
 using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.Cubes;
 using MeshWeaver.TestDomain.SimpleData;
+using MeshWeaver.Utils;
 using Xunit;
 using Xunit.Abstractions;
 

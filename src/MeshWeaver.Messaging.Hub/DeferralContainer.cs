@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Disposables;
+﻿using MeshWeaver.Utils;
 
 namespace MeshWeaver.Messaging;
 

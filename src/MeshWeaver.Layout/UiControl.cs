@@ -68,6 +68,12 @@ public abstract record UiControl : IUiControl
     protected ImmutableList<Action> DisposeActions { get; init; } =
         ImmutableList<Action>.Empty;
 
+    public object PageTitle { get; init; }
+    public object Meta { get; init; }
+
+    public UiControl WithMeta(object meta) => this with { Meta = meta };
+    public UiControl WithPageTitle(object pageTitle) => this with { PageTitle = pageTitle };
+
     public virtual bool Equals(UiControl other)
     {
         if (other is null)

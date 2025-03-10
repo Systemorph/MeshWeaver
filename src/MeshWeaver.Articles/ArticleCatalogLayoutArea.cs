@@ -24,9 +24,8 @@ public static class ArticleCatalogLayoutArea
                     x.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))
                     )
+                    .WithPageTitle("Articles")
                 )
-
-
             ;
     }
 

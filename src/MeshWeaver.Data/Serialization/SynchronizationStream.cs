@@ -4,10 +4,10 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Text.Json;
-using MeshWeaver.Disposables;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
+using MeshWeaver.Utils;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -58,11 +58,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference)
         where TReference2 : WorkspaceReference =>
-        Reduce<TReduced, TReference2>(reference,  x => x);
+        Reduce<TReduced, TReference2>(reference, x => x);
 
 
     public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference)
-        => Reduce(reference,  x => x);
+        => Reduce(reference, x => x);
 
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
@@ -102,7 +102,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
             return;
-        if (current is not null  && Equals(current.Value,value.Value))
+        if (current is not null && Equals(current.Value, value.Value))
             return;
         current = value;
         if (!isDisposed)
@@ -110,7 +110,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
     public void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback) =>
         InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)), exceptionCallback);
-    public void UpdateAsync(Func<TStream,CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback) =>
+    public void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback) =>
         InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)), exceptionCallback);
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback)
@@ -165,11 +165,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress($"{Hub.Address}/{StreamId}"), config => 
-            Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config),(c,cc) => cc.Invoke(c)));
+        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress($"{Hub.Address}/{StreamId}"), config =>
+            Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config), (c, cc) => cc.Invoke(c)));
 
-        if(synchronizationHub == null)
-            if(Hub.IsDisposing)
+        if (synchronizationHub == null)
+            if (Hub.IsDisposing)
                 throw new ObjectDisposedException($"Hub {Hub.Address} is disposing. Cannot create synchronization stream.");
             else
                 throw new InvalidOperationException("Could not create synchronization hub");
@@ -211,7 +211,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         lock (disposeLock)
         {
-            if(isDisposed)
+            if (isDisposed)
                 return;
             isDisposed = true;
         }
@@ -249,6 +249,6 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal bool NullReturn { get; init; }
 
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
-        => this with{NullReturn = true};
+        => this with { NullReturn = true };
 
 }

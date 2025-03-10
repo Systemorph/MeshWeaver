@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Portal.AppHost.OpenTelemetryCollector;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -13,7 +12,6 @@ if (builder.Environment.IsDevelopment())
             azurite.WithDataBindMount("../Azurite/Data")
                 .WithExternalHttpEndpoints();
         });
-
 }
 
 var postgres = builder
@@ -23,44 +21,65 @@ var postgres = builder
 ;
 var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
-var prometheus = builder.AddContainer("prometheus", "prom/prometheus")
-    .WithBindMount("../prometheus", "/etc/prometheus", isReadOnly: true)
-    .WithArgs("--web.enable-otlp-receiver", "--config.file=/etc/prometheus/prometheus.yml")
-    .WithHttpEndpoint(targetPort: 9090, name: "http")
-    .WithExternalHttpEndpoints();
 
-var grafana = builder.AddContainer("grafana", "grafana/grafana")
-    .WithBindMount("../grafana/config", "/etc/grafana", isReadOnly: true)
-    .WithBindMount("../grafana/dashboards", "/var/lib/grafana/dashboards", isReadOnly: true)
-    .WithEnvironment("PROMETHEUS_ENDPOINT", prometheus.GetEndpoint("http"))
-    .WithHttpEndpoint(targetPort: 3000, name: "http")
-    .WithExternalHttpEndpoints();
+// Create Azure Table resources for Orleans clustering and storage
+var orleansTables = appStorage.AddTables("orleans-clustering");
+var addressRegistryTables = appStorage.AddTables("address-registry");
+var meshCatalogTables = appStorage.AddTables("mesh-catalog");
+var activityTables = appStorage.AddTables("activity");
 
-builder.AddOpenTelemetryCollector("otelcollector", "../otelcollector/config.yaml")
-    .WithEnvironment("PROMETHEUS_ENDPOINT", $"{prometheus.GetEndpoint("http")}/api/v1/otlp");
 
-var redis = builder.AddRedis("orleans-redis");
 var orleans = builder.AddOrleans("mesh")
-    .WithClustering(redis)
-    .WithGrainStorage("address-registry", redis)
-    .WithGrainStorage("mesh-catalog", appStorage.AddTables("mesh-catalog"))
-    .WithGrainStorage("activity", appStorage.AddTables("activity"));
+    .WithClustering(orleansTables)
+    .WithGrainStorage("address-registry", addressRegistryTables)
+    .WithGrainStorage("mesh-catalog", meshCatalogTables)
+    .WithGrainStorage("activity", activityTables);
 
-builder.AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
+var silo = builder
+    .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
-    .WithReplicas(2)
-    .WithEnvironment("GRAFANA_URL", grafana.GetEndpoint("http"));
+    .WaitFor(meshweaverdb)
+    .WaitFor(orleansTables)
+    .WaitFor(addressRegistryTables)
+    .WaitFor(meshCatalogTables)
+    .WaitFor(activityTables)
+    .WithEnvironment("ORLEANS_NETWORKING_REUSEADDRESS", "true")
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEENABLED", "true")
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEINTERVAL", "60") // seconds
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVETIMEOUT", "300"); // seconds;
+var frontend = builder
+        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
+        .WithExternalHttpEndpoints()
+        .WithReference(orleans.AsClient())
+        .WithReference(appStorage.AddBlobs("articles"))
+        .WithReference(meshweaverdb)
+        .WaitFor(meshweaverdb)
+        .WaitFor(orleansTables)
+    ;
 
+if (builder.ExecutionContext.IsPublishMode)
+{
+    // Add Application Insights
+    var insights = builder.ExecutionContext.IsPublishMode
+        ? builder.AddAzureApplicationInsights("meshweaverinsights")
+        : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
 
-builder.AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-    .WithExternalHttpEndpoints()
-    .WithReference(orleans.AsClient())
-    .WithReference(appStorage.AddBlobs("articles"))
-    .WithReference(meshweaverdb)
-    .WithEnvironment("GRAFANA_URL", grafana.GetEndpoint("http"));
+    silo.WithReference(insights);
+    frontend.WithReference(insights);
+    // Register all parameters upfront for both domains
+    var meshweaverDomain = builder.AddParameter("meshweaverDomain");
+    var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
+    frontend
+        .PublishAsAzureContainerApp((module, app) =>
+        {
+#pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features
+            app.ConfigureCustomDomain(meshweaverDomain, meshweaverCertificate);
+#pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
+        });
+}
+
 
 var app = builder.Build();
-
 
 app.Run();
