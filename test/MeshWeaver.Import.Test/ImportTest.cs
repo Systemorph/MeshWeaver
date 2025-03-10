@@ -189,7 +189,7 @@ BU1,BU_one
 
 public static class ComputedDataEquivalencyExtensions
 {
-    public static EquivalencyAssertionOptions<ComputedData> WithoutId(
-        this EquivalencyAssertionOptions<ComputedData> options
+    public static EquivalencyOptions<ComputedData> WithoutId(
+        this EquivalencyOptions<ComputedData> options
     ) => options.Excluding(x => x.Id);
 }

@@ -3,20 +3,25 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-#pragma warning disable RS1035 // Do not use APIs banned for analyzers
-
 namespace MeshWeaver.BusinessRules.Generator;
 
 [Generator]
-public class ScopeCodeGenerator : ISourceGenerator
+public class ScopeCodeGenerator : IIncrementalGenerator
 {
-    public void Execute(GeneratorExecutionContext context)
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        context.RegisterSourceOutput(context.CompilationProvider, (context, compilation) =>
+        {
+            Execute(context, compilation);
+        });
+    }
+
+    private void Execute(SourceProductionContext context, Compilation compilation)
     {
         context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
             "SCOPE000", "Generator Execution Started", "ScopeCodeGenerator execution started.",
             "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
 
-        var compilation = context.Compilation;
         var iScopeInterface = compilation.GetTypeByMetadataName("MeshWeaver.BusinessRules.IScope`2");
         if (iScopeInterface == null)
         {
@@ -106,9 +111,5 @@ public class ScopeCodeGenerator : ISourceGenerator
         builder.AppendLine("}");
 
         return (className, builder.ToString());
-    }
-    public void Initialize(GeneratorInitializationContext context)
-    {
-        // Initialization logic if needed
     }
 }
