@@ -21,19 +21,27 @@ public static class ArticleLayoutArea
                 hub.Post(s, o => o.WithTarget(kernel));
             content = article.PrerenderedHtml.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
         }
+
         return new ArticleControl
         {
             Name = article.Name,
             Collection = article.Collection,
             Title = article.Title,
             Abstract = article.Abstract,
-            Authors = article.Authors,
+            Authors = article.AuthorDetails,
             Published = article.Published,
             Tags = article.Tags,
             LastUpdated = article.LastUpdated,
             Thumbnail = article.Thumbnail,
             Html = content,
-            VideoUrl = article.VideoUrl
+            VideoUrl = article.VideoUrl,
+            PageTitle = article.Title,
+            Meta = new Dictionary<string, object>()
+            {
+                ["description"] = article.Abstract, 
+                ["keywords"] = string.Join(',',article.Tags), 
+                ["abstract"] = article.Abstract
+            },
         };
     }
 

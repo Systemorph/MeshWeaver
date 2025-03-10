@@ -1,9 +1,9 @@
 ﻿using System.Collections.Immutable;
-using MeshWeaver.Collections;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Models;
 using MeshWeaver.Pivot.Models.Interfaces;
 using MeshWeaver.Pivot.Processors;
+using MeshWeaver.Utils;
 using static System.String;
 
 namespace MeshWeaver.Pivot.Grouping

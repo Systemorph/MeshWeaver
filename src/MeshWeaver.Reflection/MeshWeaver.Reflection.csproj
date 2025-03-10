@@ -3,6 +3,6 @@
     <PackageReference Include="System.Interactive" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Collections\MeshWeaver.Collections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
   </ItemGroup>
 </Project>

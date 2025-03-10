@@ -23,7 +23,7 @@ public class JsonEquivalency : IEquivalencyStep
     public EquivalencyResult Handle(
         Comparands comparands,
         IEquivalencyValidationContext context,
-        IEquivalencyValidator nestedValidator
+        IValidateChildNodeEquivalency valueChildNodes
     )
     {
         if (!TryGetJToken(comparands.Subject, out var actual))
@@ -42,7 +42,7 @@ public class JsonEquivalency : IEquivalencyStep
                     context.Reason.FormattedMessage,
                     context.Reason.Arguments
                 );
-            return EquivalencyResult.AssertionCompleted;
+            return EquivalencyResult.EquivalencyProven;
         }
 
         var settings = GetSerializerSettings();
@@ -63,9 +63,8 @@ public class JsonEquivalency : IEquivalencyStep
                 context.Reason.FormattedMessage,
                 context.Reason.Arguments
             );
-        return EquivalencyResult.AssertionCompleted;
+        return EquivalencyResult.EquivalencyProven;
     }
-
     private static readonly Dictionary<string, Type> TypeNames = new();
 
     private static Type GetType(string typeName)

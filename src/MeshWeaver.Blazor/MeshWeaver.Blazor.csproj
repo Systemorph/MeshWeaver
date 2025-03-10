@@ -12,7 +12,7 @@
     <ItemGroup>
         <SupportedPlatform Include="browser" />
         <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
-        <Content Update="wwwroot\**" Pack="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/>
+        <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
     </ItemGroup>
 
     <ItemGroup>

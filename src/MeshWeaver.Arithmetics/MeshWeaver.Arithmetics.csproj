@@ -2,8 +2,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Arithmetics.Abstractions\MeshWeaver.Arithmetics.Abstractions.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Equality\MeshWeaver.Equality.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Reflection\MeshWeaver.Reflection.csproj" />
     <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
   </ItemGroup>
 
 </Project>

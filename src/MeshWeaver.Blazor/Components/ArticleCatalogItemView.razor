@@ -1,4 +1,5 @@
 ﻿@using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Infrastructure
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled
 @inherits BlazorView<ArticleCatalogItemControl, ArticleCatalogItemView>
 
@@ -6,10 +7,10 @@
     <article class="article-card">
         <div class="header">
             <div class="author-info">
-                @foreach (var author in Data.Authors)
+                @foreach (var author in Data.AuthorDetails)
                 {
                     <div class="author">
-                        <FluentPersona Name="@author" ImageSize="24px" />
+                        <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>
                     </div>
                 }
             </div>

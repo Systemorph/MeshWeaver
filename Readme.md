@@ -1,58 +1,78 @@
 # MeshWeaver
 
-MeshWeaver is a comprehensive solution for managing and visualizing data layouts, specifically designed for the Northwind dataset. This solution includes various UI controls, layout templates, and data visualization components.
+MeshWeaver is a modular framework for building data-driven applications with real-time updates, interactive visualizations, and powerful data processing capabilities.
 
-## Features
+## Getting Started
 
-- **UI Controls**: A variety of customizable UI controls such as `TextFieldControl`, `NumberFieldControl`, `NavMenuControl`, and more.
-- **Layout Templates**: Predefined layout templates for common use cases.
-- **Data Visualization**: Tools for visualizing data, including bar charts and summary views.
-- **Annual Report Summary**: Components for generating and displaying annual report summaries.
-- **Product Overview**: Detailed product overview with data grids and summary charts.
+You can run MeshWeaver in two modes:
 
-# How to Start Guide the Project
+### Monolithic Setup
+```bash
+cd portal/MeshWeaver.Portal
+dotnet run
+```
 
-By following the steps from this guide, you should be able to set up and start working with MeshWeaver project efficiently.
+This setup is useful for smaller projects which are deployed as monoliths. If you are unsure which approach to pick, pick this one.
 
-> Prerequisites
-> - **.NET SDK**: Ensure you have the .NET SDK installed. You can download it from the [official .NET website](https://dotnet.microsoft.com/download).
-> - **IDE**: Visual Studio or Visual Studio Code is recommended for development.
+### Microservices Setup (with .NET Aspire)
+```bash
+cd portal/aspire/MeshWeaver.Portal.AppHost
+dotnet run
+```
 
-## Step-by-Step Guide
+Please note that this approach requires running docker. Microservices are generally more complex to handle, but they provide big flexibility running in productive setups. 
 
-1. **Clone the Repository**
-    ```sh
-    git clone https://github.com/Systemorph/MeshWeaver.git
-    cd northwind
-    ```
+## Core Components
 
-2. **Build the Solution**
+### Message Hub System
+The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`), which provides:
+- Actor model-based message routing
+- Request-response patterns
+- Hierarchical hub hosting
+- Built-in dependency injection
 
-   - Open the solution in your preferred IDE.
-   - Restore the NuGet packages.
-   - Build the solution.
-   
-     ```sh
-     dotnet build
-     ```
+### Data Processing
+- **Messaging**: Send and received messages between addresses. Route them inside the mesh.
+- **Concurrency**: Fully asynchronous concurrency using the actor model.
+- **Data Synchronization**: Full-fledged data replication for Create Read Update Delete.
+- **Business Rules**: Rule engine with scope-based state management
+- **Import**: Flexible data import system with activity tracking
 
-3. **Run the Application**
+### Computation
+- **Kernel**: Interactive code execution and visualization
+- **Interactive Markdown**: A markdown dialect allowing to include code execution.
 
-   - Start the application.
-   - Alternatively, you can run the application from your IDE by pressing F5.
-   - To run the application using the command line, navigate to the project directory and execute the following command:
+### UI and Visualization
+- **Layout**: Framework-agnostic UI control abstractions
+- **Reporting**: Fexible and interactive reporting
 
-     ```sh
-     dotnet run
-     ```
+### Flexible deployment options
+- **Elasticity**: Create a fully elastic setup using Orleans
+- **Integration**: Integrate with almost any available technology through Aspire. 
 
-4. **Start Developing**
+## Resources
 
-   - Begin by exploring the existing codebase and understanding the structure.
-   - Implement new features or fix bugs as needed.
+- [Portal](https://portal.meshweaver.cloud) - Try out MeshWeaver and read our blog
+- [Website](https://meshweaver.cloud) - Learn more about MeshWeaver
+- [Discord](https://discord.gg/ACSYBWPy) - Join our community
 
-## Additional Resources
+## Architecture
 
-- **Documentation**: Refer to the docs folder for detailed documentation on various components.
-- **Community**: Join the project’s community forums or chat groups for support and collaboration.
 
+### Deployment Options
+
+1. **Monolithic** (`portal/MeshWeaver.Portal`)
+   - Single process deployment
+   - Simplified setup
+   - Suitable for development and smaller deployments
+
+2. **Microservices** (`portal/aspire/MeshWeaver.Portal.AppHost`)
+   - .NET Aspire-based orchestration
+   - Service discovery
+   - Azure integration
+   - PostgreSQL for persistence
+   - Azure Blob Storage for articles
+
+## Contributing
+
+We welcome contributions! Join our [Discord](https://discord.gg/ACSYBWPy) to discuss features, report issues, or get help. 

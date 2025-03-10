@@ -6,6 +6,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.DataCubes.Abstractions\MeshWeaver.DataCubes.Abstractions.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Reflection\MeshWeaver.Reflection.csproj" />
     <ProjectReference Include="..\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
   </ItemGroup>
 

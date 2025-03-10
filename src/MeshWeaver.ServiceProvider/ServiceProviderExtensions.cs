@@ -18,13 +18,6 @@ public static class ServiceProviderExtensions
     {
         services ??= new ServiceCollection();
 
-        LoadedModulesService loadedModulesService = parent?.GetService<LoadedModulesService>();
-        if (loadedModulesService == null)
-        {
-            loadedModulesService = new LoadedModulesService();
-            services.AddSingleton(loadedModulesService);
-        }
-
         IServiceProvider ret;
         if (parent != null)
         {

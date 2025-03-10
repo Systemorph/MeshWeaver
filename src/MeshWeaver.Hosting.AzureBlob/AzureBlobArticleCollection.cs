@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using Azure.Storage.Blobs;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
@@ -61,14 +62,25 @@ public class AzureBlobArticleCollection : ArticleCollection
     {
         await containerClient.CreateIfNotExistsAsync(cancellationToken: ct);
         var ret = new InstanceCollection(
-            await GetAllFromContainer()
+            await GetAllFromContainer(ct)
                 .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
         );
         return ret;
     }
 
-    private async IAsyncEnumerable<Article> GetAllFromContainer()
+    private async IAsyncEnumerable<Article> GetAllFromContainer([EnumeratorCancellation] CancellationToken ct)
     {
+        var authorsClient = containerClient.GetBlobClient("authors.json");
+
+        if (await authorsClient.ExistsAsync(ct))
+        {
+            await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
+            using var reader = new StreamReader(stream);
+            var content = await reader.ReadToEndAsync(ct);
+            Authors = LoadAuthorsAsync(content);
+
+        }
+
         await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: ""))
         {
             if (blobItem.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
@@ -93,11 +105,14 @@ public class AzureBlobArticleCollection : ArticleCollection
         var content = await reader.ReadToEndAsync(ct);
         var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
 
+
         return ArticleExtensions.ParseArticle(
             Collection,
             blobPath,
             properties.Value.LastModified.DateTime,
-            content);
+            content,
+            Authors
+        );
     }
 
     public override void Dispose()

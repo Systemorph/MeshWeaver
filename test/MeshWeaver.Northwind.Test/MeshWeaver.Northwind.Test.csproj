@@ -2,7 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
-    <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.ViewModel\MeshWeaver.Northwind.ViewModel.csproj" />
+    <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
   </ItemGroup>
