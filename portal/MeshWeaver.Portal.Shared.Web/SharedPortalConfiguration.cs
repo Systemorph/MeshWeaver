@@ -42,14 +42,6 @@ public static class SharedPortalConfiguration
 
         builder.Services.AddAuthorization();
 
-        // Configure Antiforgery
-        builder.Services.AddAntiforgery(options =>
-        {
-            options.Cookie.Name = "MeshWeaver.AntiforgeryCookie";
-            options.FormFieldName = "AntiforgeryField";
-            options.HeaderName = "X-CSRF-TOKEN";
-        });
-
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(

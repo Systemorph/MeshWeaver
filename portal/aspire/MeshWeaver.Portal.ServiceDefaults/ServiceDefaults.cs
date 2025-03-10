@@ -1,5 +1,4 @@
-﻿using Azure.Monitor.OpenTelemetry.AspNetCore;
-using Microsoft.AspNetCore.Builder;
+﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -16,9 +15,8 @@ namespace MeshWeaver.Portal.ServiceDefaults
     // To learn more about using this project, see https://aka.ms/dotnet/aspire/service-defaults
     public static class ServiceDefaults
     {
-        public static IHostApplicationBuilder AddAspireServiceDefaults(this IHostApplicationBuilder builder)
+        public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
         {
-            builder.ConfigureLogging();
             builder.ConfigureOpenTelemetry();
 
             builder.AddDefaultHealthChecks();
@@ -34,20 +32,47 @@ namespace MeshWeaver.Portal.ServiceDefaults
                 http.AddServiceDiscovery();
             });
 
-            // Uncomment the following to restrict the allowed schemes for service discovery.
-            // builder.Services.Configure<ServiceDiscoveryOptions>(options =>
-            // {
-            //     options.AllowedSchemes = ["https"];
-            // });
+            return builder;
+        }
+
+        public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
+        {
+            builder.Logging.AddOpenTelemetry(logging =>
+            {
+                logging.IncludeFormattedMessage = true;
+                logging.IncludeScopes = true;
+            });
+
+            builder.Services.AddOpenTelemetry()
+                .WithMetrics(metrics =>
+                {
+                    metrics.AddAspNetCoreInstrumentation()
+                        .AddHttpClientInstrumentation()
+                        .AddMeter("Microsoft.Orleans")
+                        .AddRuntimeInstrumentation();
+                })
+                .WithTracing(tracing =>
+                {
+                    tracing.AddSource("Microsoft.Orleans.Runtime");
+                    tracing.AddSource("Microsoft.Orleans.Application");
+                    tracing.AddSource(builder.Environment.ApplicationName)
+                        .AddAspNetCoreInstrumentation(tracing =>
+                            // Don't trace requests to the health endpoint to avoid filling the dashboard with noise
+                            tracing.Filter = httpContext =>
+                                !(httpContext.Request.Path.StartsWithSegments("/health")
+                                  || httpContext.Request.Path.StartsWithSegments("/alive"))
+                        )
+                        .AddHttpClientInstrumentation();
+                });
+
+            builder.AddOpenTelemetryExporters();
+            builder.AddAppInsights();
 
             return builder;
         }
 
-        public static IHostApplicationBuilder ConfigureLogging(this IHostApplicationBuilder builder)
+        private static void AddAppInsights(this IHostApplicationBuilder builder)
         {
-            builder.Logging.ClearProviders();
-            builder.Logging.AddConsole();
-
             var appInsightsConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
             if (!string.IsNullOrEmpty(appInsightsConnectionString))
             {
@@ -61,41 +86,7 @@ namespace MeshWeaver.Portal.ServiceDefaults
                     options.FlushOnDispose = true;
                 });
             }
-
-            builder.Logging.AddOpenTelemetry(options =>
-            {
-                options.IncludeFormattedMessage = true;
-                options.IncludeScopes = true;
-            });
-
-            return builder;
         }
-
-        public static IHostApplicationBuilder ConfigureOpenTelemetry(this IHostApplicationBuilder builder)
-        {
-            builder.Services.AddOpenTelemetry()
-                .WithMetrics(metrics =>
-                {
-                    metrics.AddAspNetCoreInstrumentation()
-                        .AddHttpClientInstrumentation()
-                        .AddRuntimeInstrumentation()
-                        .AddMeter("Microsoft.Orleans");
-                })
-                .WithTracing(tracing =>
-                {
-                    tracing.AddSource("Microsoft.Orleans.Runtime");
-                    tracing.AddSource("Microsoft.Orleans.Application");
-                    tracing.AddAspNetCoreInstrumentation()
-                        // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
-                        //.AddGrpcClientInstrumentation()
-                        .AddHttpClientInstrumentation();
-                });
-
-            builder.AddOpenTelemetryExporters();
-
-            return builder;
-        }
-
         private static IHostApplicationBuilder AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
         {
             var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
@@ -105,13 +96,6 @@ namespace MeshWeaver.Portal.ServiceDefaults
                 builder.Services.AddOpenTelemetry().UseOtlpExporter();
             }
 
-            // Uncomment the following lines to enable the Azure Monitor exporter (requires the Azure.Monitor.OpenTelemetry.AspNetCore package)
-            if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-            {
-                builder.Services.AddOpenTelemetry()
-                   .UseAzureMonitor();
-            }
-
             return builder;
         }
 
@@ -119,7 +103,7 @@ namespace MeshWeaver.Portal.ServiceDefaults
         {
             builder.Services.AddHealthChecks()
                 // Add a default liveness check to ensure app is responsive
-                .AddCheck("self", () => HealthCheckResult.Healthy(), new[] { "live" });
+                .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
 
             return builder;
         }
