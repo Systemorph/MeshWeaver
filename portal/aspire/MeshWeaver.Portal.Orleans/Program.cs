@@ -5,7 +5,7 @@ using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddAspireServiceDefaults();
+builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
 builder.AddKeyedAzureTableClient(StorageProviders.Activity);
 builder.AddKeyedAzureTableClient(StorageProviders.AddressRegistry);

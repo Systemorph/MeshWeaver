@@ -54,7 +54,8 @@ var frontend = builder
         .WaitFor(orleansTables)
     ;
 
-if (!builder.Environment.IsDevelopment())
+// Then update your frontend configuration like this:
+if (builder.ExecutionContext.IsPublishMode)
 {
     // Add Application Insights
     var insights = builder.ExecutionContext.IsPublishMode
@@ -64,12 +65,6 @@ if (!builder.Environment.IsDevelopment())
     silo.WithReference(insights);
     frontend.WithReference(insights);
 
-
-
-}
-// Then update your frontend configuration like this:
-if (builder.ExecutionContext.IsPublishMode)
-{
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");

@@ -6,7 +6,7 @@ using MeshWeaver.Portal.Shared.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.AddAspireServiceDefaults();
+builder.AddServiceDefaults();
 
 builder.AddKeyedAzureTableClient("orleans-clustering");
 builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
