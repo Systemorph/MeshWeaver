@@ -1,5 +1,4 @@
-﻿using Aspire.Hosting;
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -29,6 +28,7 @@ var addressRegistryTables = appStorage.AddTables("address-registry");
 var meshCatalogTables = appStorage.AddTables("mesh-catalog");
 var activityTables = appStorage.AddTables("activity");
 
+
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables)
     .WithGrainStorage("address-registry", addressRegistryTables)
@@ -43,8 +43,11 @@ var silo = builder
     .WaitFor(orleansTables)
     .WaitFor(addressRegistryTables)
     .WaitFor(meshCatalogTables)
-    .WaitFor(activityTables);
-
+    .WaitFor(activityTables)
+    .WithEnvironment("ORLEANS_NETWORKING_REUSEADDRESS", "true")
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEENABLED", "true")
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEINTERVAL", "60") // seconds
+    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVETIMEOUT", "300"); // seconds;
 var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()
@@ -55,7 +58,6 @@ var frontend = builder
         .WaitFor(orleansTables)
     ;
 
-// Then update your frontend configuration like this:
 if (builder.ExecutionContext.IsPublishMode)
 {
     // Add Application Insights

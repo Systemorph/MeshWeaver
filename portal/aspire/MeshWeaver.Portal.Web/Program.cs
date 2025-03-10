@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Connection.Orleans;
+﻿using Azure.Storage.Blobs;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.ServiceDefaults;
@@ -10,12 +11,18 @@ builder.AddServiceDefaults();
 
 builder.AddKeyedAzureTableClient("orleans-clustering");
 builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
+
 // Add services to the container.
 builder.ConfigureWebPortalServices();
 builder.UseOrleansMeshClient()
     .AddPostgresSerilog()
     .ConfigureWebPortal()
-    .ConfigureServices(services => services.AddAzureBlobArticles());
+    .ConfigureServices(services =>
+    {
+        services.AddDataProtection();
+        return services.AddAzureBlobArticles();
+    });
+
 
 // Add PostgreSQL using the Aspire-managed container
 builder.AddNpgsqlDataSource("meshweaverdb"); // Uses the container reference from AppHost
