@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Builder;
+﻿using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -17,6 +18,8 @@ namespace MeshWeaver.Portal.ServiceDefaults
     {
         public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
         {
+            builder.Logging.AddConsole();
+            builder.AddAppInsights();
             builder.ConfigureOpenTelemetry();
 
             builder.AddDefaultHealthChecks();
@@ -42,7 +45,6 @@ namespace MeshWeaver.Portal.ServiceDefaults
                 logging.IncludeFormattedMessage = true;
                 logging.IncludeScopes = true;
             });
-
             builder.Services.AddOpenTelemetry()
                 .WithMetrics(metrics =>
                 {
@@ -56,9 +58,9 @@ namespace MeshWeaver.Portal.ServiceDefaults
                     tracing.AddSource("Microsoft.Orleans.Runtime");
                     tracing.AddSource("Microsoft.Orleans.Application");
                     tracing.AddSource(builder.Environment.ApplicationName)
-                        .AddAspNetCoreInstrumentation(tracing =>
+                        .AddAspNetCoreInstrumentation(tracing2 =>
                             // Don't trace requests to the health endpoint to avoid filling the dashboard with noise
-                            tracing.Filter = httpContext =>
+                            tracing2.Filter = httpContext =>
                                 !(httpContext.Request.Path.StartsWithSegments("/health")
                                   || httpContext.Request.Path.StartsWithSegments("/alive"))
                         )
@@ -66,7 +68,6 @@ namespace MeshWeaver.Portal.ServiceDefaults
                 });
 
             builder.AddOpenTelemetryExporters();
-            builder.AddAppInsights();
 
             return builder;
         }
@@ -87,16 +88,17 @@ namespace MeshWeaver.Portal.ServiceDefaults
                 });
             }
         }
-        private static IHostApplicationBuilder AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
+        private static void AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
         {
-            var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
-
-            if (useOtlpExporter)
+            if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
             {
                 builder.Services.AddOpenTelemetry().UseOtlpExporter();
             }
-
-            return builder;
+            if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+            {
+                builder.Services.AddOpenTelemetry()
+                    .UseAzureMonitor();
+            }
         }
 
         public static IHostApplicationBuilder AddDefaultHealthChecks(this IHostApplicationBuilder builder)

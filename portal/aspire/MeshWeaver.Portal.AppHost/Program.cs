@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Aspire.Hosting;
+using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -64,7 +65,6 @@ if (builder.ExecutionContext.IsPublishMode)
 
     silo.WithReference(insights);
     frontend.WithReference(insights);
-
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
