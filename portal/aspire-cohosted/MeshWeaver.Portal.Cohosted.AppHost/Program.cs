@@ -26,13 +26,10 @@ var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 var orleansTables = appStorage.AddTables("orleans-clustering");
 
 
-var orleans = builder.AddOrleans("mesh")
-    .WithClustering(orleansTables);
-
 var cohosted = builder
-    .AddProject<Projects.MeshWeaver_Portal_Cohosted>("silo")
-    .WithReference(orleans)
+    .AddProject<Projects.MeshWeaver_Portal_Cohosted>("cohosted")
     .WithReference(meshweaverdb)
+    .WithReference(orleansTables)
     .WaitFor(meshweaverdb)
     .WaitFor(orleansTables)
     .WithReference(appStorage.AddBlobs("articles"))
