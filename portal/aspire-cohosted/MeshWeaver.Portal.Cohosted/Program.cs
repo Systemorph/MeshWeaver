@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Hosting.AzureBlob;
+﻿using Azure.Data.Tables;
+using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -10,12 +11,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-builder.AddKeyedAzureTableClient("orleans-clustering");
 builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();
-builder.UseOrleansMeshServer(new MeshAddress())
+builder.UseOrleansMeshServer(new MeshAddress(), silo => 
+        silo.UseAzureStorageClustering(o =>
+    {
+        o.TableServiceClient = new TableServiceClient(builder.Configuration.GetConnectionString("orleans-clustering"));
+    }))
     .ConfigurePortalMesh()
     .AddPostgresSerilog()
     .ConfigureWebPortal()
