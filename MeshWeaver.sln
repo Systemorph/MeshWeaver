@@ -212,6 +212,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Hosting.Monolith
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Northwind.Application", "modules\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj", "{76523479-F400-6367-90BA-176A886A4357}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "aspire-cohosted", "aspire-cohosted", "{9D40B981-3806-46E9-BA5F-FB8C742F358E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Cohosted", "portal\aspire-cohosted\MeshWeaver.Portal.Cohosted\MeshWeaver.Portal.Cohosted.csproj", "{999BE965-8B55-E1DC-D346-53C227ABB18A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Portal.Cohosted.AppHost", "portal\aspire-cohosted\MeshWeaver.Portal.Cohosted.AppHost\MeshWeaver.Portal.Cohosted.AppHost.csproj", "{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -554,6 +560,14 @@ Global
 		{76523479-F400-6367-90BA-176A886A4357}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{76523479-F400-6367-90BA-176A886A4357}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{76523479-F400-6367-90BA-176A886A4357}.Release|Any CPU.Build.0 = Release|Any CPU
+		{999BE965-8B55-E1DC-D346-53C227ABB18A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{999BE965-8B55-E1DC-D346-53C227ABB18A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{999BE965-8B55-E1DC-D346-53C227ABB18A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{999BE965-8B55-E1DC-D346-53C227ABB18A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -647,6 +661,9 @@ Global
 		{055BD65A-969A-4517-A650-7E83FC071CEB} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{2B23A10C-3C56-404C-A72A-C9BAE13DACDF} = {CE943C7E-66DA-4F21-A97D-7897AA426F34}
 		{76523479-F400-6367-90BA-176A886A4357} = {80489276-45B5-4FCF-ADDF-980A56D4D2E9}
+		{9D40B981-3806-46E9-BA5F-FB8C742F358E} = {91519FF2-7EE5-4A9A-B244-67AB4443E6F7}
+		{999BE965-8B55-E1DC-D346-53C227ABB18A} = {9D40B981-3806-46E9-BA5F-FB8C742F358E}
+		{DBE34DA3-FAD6-1C5D-CCEE-2D67A041D43F} = {9D40B981-3806-46E9-BA5F-FB8C742F358E}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

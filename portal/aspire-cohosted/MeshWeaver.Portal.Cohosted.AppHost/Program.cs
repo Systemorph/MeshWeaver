@@ -35,8 +35,8 @@ var orleans = builder.AddOrleans("mesh")
     .WithGrainStorage("mesh-catalog", meshCatalogTables)
     .WithGrainStorage("activity", activityTables);
 
-var silo = builder
-    .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
+var cohosted = builder
+    .AddProject<Projects.MeshWeaver_Portal_Cohosted>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
     .WaitFor(meshweaverdb)
@@ -44,19 +44,9 @@ var silo = builder
     .WaitFor(addressRegistryTables)
     .WaitFor(meshCatalogTables)
     .WaitFor(activityTables)
-    .WithEnvironment("ORLEANS_NETWORKING_REUSEADDRESS", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEENABLED", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEINTERVAL", "60") // seconds
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVETIMEOUT", "300"); // seconds;
-var frontend = builder
-        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-        .WithExternalHttpEndpoints()
-        .WithReference(orleans.AsClient())
-        .WithReference(appStorage.AddBlobs("articles"))
-        .WithReference(meshweaverdb)
-        .WaitFor(meshweaverdb)
-        .WaitFor(orleansTables)
-    ;
+    .WithReference(appStorage.AddBlobs("articles"))
+    .WithExternalHttpEndpoints()
+; // seconds;
 
 if (builder.ExecutionContext.IsPublishMode)
 {
@@ -65,13 +55,12 @@ if (builder.ExecutionContext.IsPublishMode)
         ? builder.AddAzureApplicationInsights("meshweaverinsights")
         : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
 
-    silo.WithReference(insights);
-    frontend.WithReference(insights);
+    cohosted.WithReference(insights);
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
-    frontend
-        .PublishAsAzureContainerApp((module, app) =>
+    cohosted
+        .PublishAsAzureContainerApp((_, app) =>
         {
 #pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features
             app.ConfigureCustomDomain(meshweaverDomain, meshweaverCertificate);
