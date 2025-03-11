@@ -10,16 +10,16 @@ public interface IMeshCatalog
 
     Task UpdateAsync(MeshNode node);
 
+    Task<StreamInfo> GetStreamInfoAsync(Address address);
 }
 
 
 
 public record StreamInfo(
-    string AddressType, 
-    string Id, 
-    string StreamProvider, 
+    StreamType Type,
+    string Provider, 
     string Namespace);
-
+public enum StreamType{Stream, Channel}
 public record StorageInfo(
     string Id, 
     string BaseDirectory, 

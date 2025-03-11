@@ -6,14 +6,14 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Orleans.Providers;
+using Orleans.BroadcastChannel;
 using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
-[StorageProvider(ProviderName = StorageProviders.Activity)]
+[ImplicitChannelSubscription(ChannelNames.Hub)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
-    : Grain, IMessageHubGrain
+    : Grain, IMessageHubGrain, IOnBroadcastChannelSubscribed
 {
 
     private ModulesAssemblyLoadContext loadContext;
@@ -97,6 +97,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             loadContext.Unload();
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);
+    }
+
+    public Task OnSubscribed(IBroadcastChannelSubscription streamSubscription)
+    {
+        streamSubscription.Attach<IMessageDelivery>(DeliverMessage, ex => OnError(streamSubscription.ChannelId, ex));
+        return Task.CompletedTask;
+    }
+
+    private Task OnError(ChannelId channelId, Exception exception)
+    {
+        logger.LogError(exception, "An exception occurred while processing message in {Address}", channelId);
+        return Task.CompletedTask;
     }
 }
 

@@ -24,16 +24,10 @@ var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
 // Create Azure Table resources for Orleans clustering and storage
 var orleansTables = appStorage.AddTables("orleans-clustering");
-var addressRegistryTables = appStorage.AddTables("address-registry");
-var meshCatalogTables = appStorage.AddTables("mesh-catalog");
-var activityTables = appStorage.AddTables("activity");
 
 
 var orleans = builder.AddOrleans("mesh")
-    .WithClustering(orleansTables)
-    .WithGrainStorage("address-registry", addressRegistryTables)
-    .WithGrainStorage("mesh-catalog", meshCatalogTables)
-    .WithGrainStorage("activity", activityTables);
+    .WithClustering(orleansTables);
 
 var cohosted = builder
     .AddProject<Projects.MeshWeaver_Portal_Cohosted>("silo")
@@ -41,9 +35,6 @@ var cohosted = builder
     .WithReference(meshweaverdb)
     .WaitFor(meshweaverdb)
     .WaitFor(orleansTables)
-    .WaitFor(addressRegistryTables)
-    .WaitFor(meshCatalogTables)
-    .WaitFor(activityTables)
     .WithReference(appStorage.AddBlobs("articles"))
     .WithExternalHttpEndpoints()
 ; // seconds;
