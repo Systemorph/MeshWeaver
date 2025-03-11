@@ -12,9 +12,6 @@ builder.AddServiceDefaults();
 
 builder.AddKeyedAzureTableClient("orleans-clustering");
 builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
-builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
-builder.AddKeyedAzureTableClient(StorageProviders.Activity);
-builder.AddKeyedAzureTableClient(StorageProviders.AddressRegistry);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();

@@ -45,7 +45,7 @@ public static class OrleansServerRegistryExtensions
     public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
         return silo.AddMemoryStreams(StreamProviders.Memory)
-            .AddMemoryStreams(StreamProviders.Mesh)
+            .AddBroadcastChannel(StreamProviders.Hub)
             .AddMemoryGrainStorage("PubSubStore");
 
 

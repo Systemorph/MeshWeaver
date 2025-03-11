@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <ItemGroup>
+    <PackageReference Include="Microsoft.Orleans.BroadcastChannel" />
     <PackageReference Include="Microsoft.Orleans.Core.Abstractions" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Microsoft.Orleans.Streaming" />

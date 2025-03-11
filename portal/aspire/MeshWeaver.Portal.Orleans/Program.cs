@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Hosting.Orleans;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
@@ -7,9 +6,6 @@ using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
-builder.AddKeyedAzureTableClient(StorageProviders.MeshCatalog);
-builder.AddKeyedAzureTableClient(StorageProviders.Activity);
-builder.AddKeyedAzureTableClient(StorageProviders.AddressRegistry);
 builder.AddKeyedAzureTableClient("orleans-clustering");
 
 // Create MeshAddress instance

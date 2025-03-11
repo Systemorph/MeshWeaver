@@ -56,6 +56,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="9.0.2" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="3.8.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="3.8.0" />
+    <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
