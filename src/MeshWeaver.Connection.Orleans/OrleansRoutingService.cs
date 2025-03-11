@@ -1,17 +1,16 @@
 ﻿using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Orleans.BroadcastChannel;
 using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
 
 public class OrleansRoutingService(
     IMeshCatalog meshCatalog,
+    IGrainFactory grainFactory,
     IServiceProvider serviceProvider,
     ILogger<OrleansRoutingService> logger) : IRoutingService
 {
@@ -24,10 +23,8 @@ public class OrleansRoutingService(
         switch (streamInfo?.Type)
         {
             case StreamType.Channel:
-                var channelId = ChannelId.Create(streamInfo.Namespace, target.ToString());
-                var provider = GetBroadcastChannelProvider(streamInfo.Provider);
-                var writer = provider.GetChannelWriter<IMessageDelivery>(channelId);
-                await writer.Publish(delivery);
+                var grain = grainFactory.GetGrain<IMessageHubGrain>(target.ToString());
+                await grain.DeliverMessage(delivery);
                 return delivery.Forwarded();
             case StreamType.Stream:
                 var stream = GetStreamProvider(streamInfo.Provider)
@@ -60,8 +57,6 @@ public class OrleansRoutingService(
 
     private IStreamProvider GetStreamProvider(string streamProvider) =>
         serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamProvider);
-    private IBroadcastChannelProvider GetBroadcastChannelProvider(string streamProvider) =>
-        serviceProvider.GetRequiredKeyedService<IBroadcastChannelProvider>(streamProvider);
 
     public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
     {
