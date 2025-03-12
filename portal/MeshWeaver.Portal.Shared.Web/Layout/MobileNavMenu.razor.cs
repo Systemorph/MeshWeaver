@@ -31,18 +31,6 @@ public partial class MobileNavMenu : ComponentBase
                 LinkMatchRegex: new Regex("^/$")
             );
 
-            yield return new MobileNavMenuEntry(
-                "Documentation Areas",
-                () => NavigateToAsync(DesktopNavMenu.LayoutAreas("Documentation")),
-                DesktopNavMenu.DocumentationLayoutAreaIcon(),
-                LinkMatchRegex: GetNonIndexPageRegex(DesktopNavMenu.LayoutAreas("Documentation"))
-            );
-        yield return new MobileNavMenuEntry(
-            "Northwind Areas",
-            () => NavigateToAsync(""),
-            DesktopNavMenu.NorthwindLayoutAreaIcon(),
-            LinkMatchRegex: GetNonIndexPageRegex(DesktopNavMenu.LayoutAreas("Northwind"))
-        );
         yield return new MobileNavMenuEntry(
             "Settings"                ,
             LaunchSettingsAsync,
