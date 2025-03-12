@@ -18,7 +18,6 @@ namespace MeshWeaver.Portal.ServiceDefaults
     {
         public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
         {
-            builder.Logging.AddConsole();
             builder.AddAppInsights();
             builder.ConfigureOpenTelemetry();
 

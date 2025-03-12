@@ -45,13 +45,14 @@ var frontend = builder
         .WaitFor(orleansTables)
     ;
 
+
+
 if (builder.ExecutionContext.IsPublishMode)
 {
     // Add Application Insights
     var insights = builder.ExecutionContext.IsPublishMode
         ? builder.AddAzureApplicationInsights("meshweaverinsights")
         : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
-
     silo.WithReference(insights);
     frontend.WithReference(insights);
     // Register all parameters upfront for both domains
