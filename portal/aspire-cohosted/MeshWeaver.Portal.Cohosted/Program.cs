@@ -15,11 +15,35 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();
-builder.UseOrleansMeshServer(new MeshAddress(), silo => 
-        silo.UseAzureStorageClustering(o =>
+builder.UseOrleansMeshServer(new MeshAddress(), silo =>
+    silo.UseAzureStorageClustering(o =>
     {
-        o.TableServiceClient = new TableServiceClient(builder.Configuration.GetConnectionString("orleans-clustering"));
-    }))
+        var connectionString = builder.Configuration.GetConnectionString("orleans-clustering")!;
+
+        // If it's a URL-style connection string, convert it to proper format
+        if (connectionString.StartsWith("https://"))
+        {
+            // Extract account name from URL
+            var accountName = connectionString
+                .Replace("https://", "")
+                .Split('.')[0];
+
+            // Use DefaultAzureCredential (managed identity) instead of account key
+            var endpoint = new Uri(connectionString);
+            o.TableServiceClient = new TableServiceClient(
+                endpoint,
+                new Azure.Identity.DefaultAzureCredential());
+        }
+        else
+        {
+            o.TableServiceClient = new TableServiceClient(connectionString);
+        }
+
+    }) // Add this configuration for startup delays
+    // Configure clustering membership options
+    )
+    
+
     .ConfigurePortalMesh()
     .AddPostgresSerilog()
     .ConfigureWebPortal()
@@ -34,4 +58,6 @@ builder.UseOrleansMeshServer(new MeshAddress(), silo =>
 builder.AddNpgsqlDataSource("meshweaverdb"); // Uses the container reference from AppHost
 
 var app = builder.Build();
+app.MapDefaultEndpoints();
+
 app.StartPortalApplication();
