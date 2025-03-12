@@ -4,5 +4,5 @@ name: meshweaver-portal
 services:  
   app:
     language: dotnet
-    project: ./MeshWeaver.Portal.AppHost.csproj
+    project: ./MeshWeaver.Portal.Cohosted.AppHost.csproj
     host: containerapp

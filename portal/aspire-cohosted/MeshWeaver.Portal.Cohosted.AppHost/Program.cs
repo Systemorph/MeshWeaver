@@ -27,7 +27,7 @@ var orleansTables = appStorage.AddTables("orleans-clustering");
 
 
 var cohosted = builder
-    .AddProject<Projects.MeshWeaver_Portal_Cohosted>("cohosted")
+    .AddProject<Projects.MeshWeaver_Portal_Cohosted>("frontend")
     .WithReference(meshweaverdb)
     .WithReference(orleansTables)
     .WaitFor(meshweaverdb)
@@ -45,15 +45,15 @@ if (builder.ExecutionContext.IsPublishMode)
 
     cohosted.WithReference(insights);
     // Register all parameters upfront for both domains
-    var meshweaverDomain = builder.AddParameter("meshweaverDomain");
-    var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
-    cohosted
-        .PublishAsAzureContainerApp((_, app) =>
-        {
-#pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features
-            app.ConfigureCustomDomain(meshweaverDomain, meshweaverCertificate);
-#pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
-        });
+//    var meshweaverDomain = builder.AddParameter("meshweaverDomain");
+//    var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
+//    cohosted
+//        .PublishAsAzureContainerApp((_, app) =>
+//        {
+//#pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features
+//            app.ConfigureCustomDomain(meshweaverDomain, meshweaverCertificate);
+//#pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
+//        });
 }
 
 
