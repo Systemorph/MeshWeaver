@@ -128,10 +128,11 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-    protected void UpdatePointer<T>(T value, JsonPointerReference reference)
+    protected void UpdatePointer(object value, JsonPointerReference reference)
     {
         Stream.UpdatePointer(value, DataContext, reference, Model);
     }
+
 
     protected virtual void BindData()
     {

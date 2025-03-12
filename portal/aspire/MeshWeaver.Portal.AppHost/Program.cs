@@ -24,30 +24,17 @@ var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
 // Create Azure Table resources for Orleans clustering and storage
 var orleansTables = appStorage.AddTables("orleans-clustering");
-var addressRegistryTables = appStorage.AddTables("address-registry");
-var meshCatalogTables = appStorage.AddTables("mesh-catalog");
-var activityTables = appStorage.AddTables("activity");
 
 
 var orleans = builder.AddOrleans("mesh")
-    .WithClustering(orleansTables)
-    .WithGrainStorage("address-registry", addressRegistryTables)
-    .WithGrainStorage("mesh-catalog", meshCatalogTables)
-    .WithGrainStorage("activity", activityTables);
+    .WithClustering(orleansTables);
 
 var silo = builder
     .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
     .WaitFor(meshweaverdb)
-    .WaitFor(orleansTables)
-    .WaitFor(addressRegistryTables)
-    .WaitFor(meshCatalogTables)
-    .WaitFor(activityTables)
-    .WithEnvironment("ORLEANS_NETWORKING_REUSEADDRESS", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEENABLED", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEINTERVAL", "60") // seconds
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVETIMEOUT", "300"); // seconds;
+    .WaitFor(orleansTables); // seconds;
 var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()

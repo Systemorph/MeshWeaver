@@ -25,6 +25,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         );
     }
 
+
     protected override Func<object, Option> ConversionToValue =>
         value =>
         {
