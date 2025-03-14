@@ -1,12 +1,13 @@
 ﻿using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Portal.MigrationService;
 using MeshWeaver.Portal.ServiceDefaults;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 // Add service defaults from your Aspire setup
 builder.AddServiceDefaults();
