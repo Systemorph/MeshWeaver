@@ -1,10 +1,11 @@
-﻿using Azure.Storage.Blobs;
-using MeshWeaver.Connection.Orleans;
+﻿using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Web;
+using Microsoft.AspNetCore.DataProtection;
 using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -25,14 +26,14 @@ builder.UseOrleansMeshClient(new MeshAddress())
         {
             options.OpenConnectionTimeout = TimeSpan.FromMinutes(1); // Try longer timeout
         });
-        services.AddDataProtection();
+        // Configure Data Protection to persist keys to PostgreSQL using MeshWeaverDbContext
+        services.AddPostgreSqlMeshContext("meshweaverdb");
+        services.AddDataProtection().PersistKeysToDbContext<MeshWeaverDbContext>();
         return services.AddAzureBlobArticles();
     });
 
-
 // Add PostgreSQL using the Aspire-managed container
 builder.AddNpgsqlDataSource("meshweaverdb"); // Uses the container reference from AppHost
-
 var app = builder.Build();
 app.MapDefaultEndpoints();
 app.StartPortalApplication();
