@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+    <ProjectGuid>{a4870b50-f204-4fb3-8965-bc9c28a8dcd8}</ProjectGuid>
         <IsAspireSharedProject>true</IsAspireSharedProject>
     </PropertyGroup>
 

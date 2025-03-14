@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{3adad6f7-53ea-4ab9-b403-a85a7f04a850}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FluentAssertions.Json" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />

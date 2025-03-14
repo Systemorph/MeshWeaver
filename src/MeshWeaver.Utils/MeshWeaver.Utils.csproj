@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{08be7077-6432-4d7a-9057-47d080cd739b}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Linq.Async" />
   </ItemGroup>

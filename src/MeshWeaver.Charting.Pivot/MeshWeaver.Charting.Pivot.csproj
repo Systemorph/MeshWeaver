@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{98018312-017d-4ede-be74-2af4b47cd196}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />

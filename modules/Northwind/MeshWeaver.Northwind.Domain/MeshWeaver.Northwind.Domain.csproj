@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+    <ProjectGuid>{49aa9f53-f48a-450d-b204-517c4a5f0ddf}</ProjectGuid>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
     </PropertyGroup>
@@ -17,6 +18,7 @@
         </EmbeddedResource>
 	</ItemGroup>
     <PropertyGroup>
+    <ProjectGuid>{49aa9f53-f48a-450d-b204-517c4a5f0ddf}</ProjectGuid>
         <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
         <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)\Generated</CompilerGeneratedFilesOutputPath>
     </PropertyGroup>

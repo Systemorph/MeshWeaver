@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{9968e67e-1476-4616-b5e2-77d5091f5df1}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.DataCubes.Abstractions\MeshWeaver.DataCubes.Abstractions.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />

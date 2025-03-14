@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{b1dd1cbe-9006-472b-a65a-38293ab8bcc6}</ProjectGuid>
+  </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.TestHost" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />

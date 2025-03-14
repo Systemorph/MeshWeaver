@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{36d41749-90c2-40b9-b339-60b7d78eeb0f}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <Content Include="wwwroot\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

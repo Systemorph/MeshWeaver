@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <ProjectGuid>{d2a32075-a2af-4688-b88a-f68f12a78ddf}</ProjectGuid>
 	  <RootNamespace>MeshWeaver.Activities</RootNamespace>
   </PropertyGroup>
 

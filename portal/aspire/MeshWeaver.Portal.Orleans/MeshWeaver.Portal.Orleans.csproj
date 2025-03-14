@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
     <PropertyGroup>
+    <ProjectGuid>{24d3482c-db99-4995-bdc4-2631a2a0a4e1}</ProjectGuid>
         <OutputType>Exe</OutputType>
         <ServerGarbageCollection>true</ServerGarbageCollection>
         <PublishProfile>DefaultContainer</PublishProfile>
