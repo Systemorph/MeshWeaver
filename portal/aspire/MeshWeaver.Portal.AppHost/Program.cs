@@ -17,7 +17,7 @@ if (builder.Environment.IsDevelopment())
 // PostgreSQL database setup
 var postgres = builder
     .AddPostgres("postgres")
-    .WithPgAdmin()
+    .WithPgWeb()
     .WithDataVolume();
 
 var meshweaverdb = postgres.AddDatabase("meshweaverdb");
@@ -32,7 +32,7 @@ var orleans = builder.AddOrleans("mesh")
 var migrationService = builder
     .AddProject<Projects.MeshWeaver_Portal_MigrationService>("db-migrations")
     .WithReference(meshweaverdb)
-    .WaitFor(meshweaverdb);
+    .WaitFor(meshweaverdb); 
 
 // Configure the silo to wait for database migrations to complete
 var silo = builder
