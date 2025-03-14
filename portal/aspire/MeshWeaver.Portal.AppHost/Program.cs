@@ -14,38 +14,43 @@ if (builder.Environment.IsDevelopment())
         });
 }
 
+// PostgreSQL database setup
 var postgres = builder
     .AddPostgres("postgres")
     .WithPgAdmin()
-    .WithDataVolume()
-;
-var meshweaverdb = postgres.AddDatabase("meshweaverdb");
+    .WithDataVolume();
 
+var meshweaverdb = postgres.AddDatabase("meshweaverdb");
 
 // Create Azure Table resources for Orleans clustering and storage
 var orleansTables = appStorage.AddTables("orleans-clustering");
 
-
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables);
 
+// Add database migration service
+var migrationService = builder
+    .AddProject<Projects.MeshWeaver_Portal_MigrationService>("db-migrations")
+    .WithReference(meshweaverdb)
+    .WaitFor(meshweaverdb);
+
+// Configure the silo to wait for database migrations to complete
 var silo = builder
     .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
     .WithReference(orleans)
     .WithReference(meshweaverdb)
-    .WaitFor(meshweaverdb)
-    .WaitFor(orleansTables); // seconds;
+    .WaitForCompletion(migrationService)
+    .WaitFor(orleansTables);
+
+// Configure the frontend to wait for database migrations to complete
 var frontend = builder
-        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-        .WithExternalHttpEndpoints()
-        .WithReference(orleans.AsClient())
-        .WithReference(appStorage.AddBlobs("articles"))
-        .WithReference(meshweaverdb)
-        .WaitFor(meshweaverdb)
-        .WaitFor(orleansTables)
-    ;
-
-
+    .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
+    .WithExternalHttpEndpoints()
+    .WithReference(orleans.AsClient())
+    .WithReference(appStorage.AddBlobs("articles"))
+    .WithReference(meshweaverdb)
+    .WaitForCompletion(migrationService)
+    .WaitFor(orleansTables);
 
 if (builder.ExecutionContext.IsPublishMode)
 {
@@ -55,6 +60,7 @@ if (builder.ExecutionContext.IsPublishMode)
         : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
     silo.WithReference(insights);
     frontend.WithReference(insights);
+
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
@@ -66,7 +72,6 @@ if (builder.ExecutionContext.IsPublishMode)
 #pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
         });
 }
-
 
 var app = builder.Build();
 

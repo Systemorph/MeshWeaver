@@ -8,6 +8,7 @@
     </PropertyGroup>
 
   <ItemGroup>
+      <ProjectReference Include="..\MeshWeaver.Portal.MigrationService\MeshWeaver.Portal.MigrationService.csproj" />
       <ProjectReference Include="..\MeshWeaver.Portal.Orleans\MeshWeaver.Portal.Orleans.csproj" />
       <ProjectReference Include="..\MeshWeaver.Portal.Web\MeshWeaver.Portal.Web.csproj" />
   </ItemGroup>
