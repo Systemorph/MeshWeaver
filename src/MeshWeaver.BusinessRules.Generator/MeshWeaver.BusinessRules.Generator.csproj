@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <ProjectGuid>{1f725ab9-e815-4601-ac4f-d3a7e4734e57}</ProjectGuid>
       <PackageId>MeshWeaver.BusinessRules.Generator</PackageId>
       <TargetFramework>netstandard2.0</TargetFramework>
       <PackageDescription>Code generation library for MeshWeaver.BusinessRules</PackageDescription>

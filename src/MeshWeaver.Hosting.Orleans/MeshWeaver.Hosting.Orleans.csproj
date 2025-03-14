@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{5c446c1c-a8d8-4c9f-9b48-830f18858704}</ProjectGuid>
+  </PropertyGroup>
 
     <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />

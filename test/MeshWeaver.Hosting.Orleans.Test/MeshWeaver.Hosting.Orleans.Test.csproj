@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{bd553448-e2b5-4e44-8e91-fff0884a0b28}</ProjectGuid>
+  </PropertyGroup>
     <ItemGroup>
         <Content Include="Markdown\**">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

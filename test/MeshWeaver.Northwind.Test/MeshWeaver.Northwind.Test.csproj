@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{8d866f58-f6b2-45d7-a53c-ccf4cf9b8fb2}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />

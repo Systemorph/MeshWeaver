@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{c9869d5c-fde0-4ec5-9191-7ea685f210c3}</ProjectGuid>
+  </PropertyGroup>
 
 	<ItemGroup>
 	    <PackageReference Include="FluentAssertions.Json" />

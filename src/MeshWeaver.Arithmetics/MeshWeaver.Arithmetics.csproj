@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{be81ad17-7c48-4ad0-bf24-a3362b09095e}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Arithmetics.Abstractions\MeshWeaver.Arithmetics.Abstractions.csproj" />

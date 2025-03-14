@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <ProjectGuid>{a5fcd4c2-4a9d-43c0-a65b-a868af8deb27}</ProjectGuid>
     <RootNamespace>MeshWeaver.Import</RootNamespace>
   </PropertyGroup>
   <ItemGroup>

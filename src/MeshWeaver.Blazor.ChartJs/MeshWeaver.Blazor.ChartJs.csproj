@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <ProjectGuid>{0dfd08b8-7fd8-4834-8222-f998a68575b0}</ProjectGuid>
+  </PropertyGroup>
 
   <Import Project="StaticAssets\StaticAssets.targets" />
     

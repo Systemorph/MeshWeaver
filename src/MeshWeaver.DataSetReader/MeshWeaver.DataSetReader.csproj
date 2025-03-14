@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{3b8c0893-4534-46d3-bba2-d68e1b1b78ff}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.DataStructures\MeshWeaver.DataStructures.csproj" />
   </ItemGroup>

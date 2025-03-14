@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <ProjectGuid>{7f36089b-3714-4815-a396-7c24b9f9590d}</ProjectGuid>
     <SkipTypeGeneration>true</SkipTypeGeneration>
   </PropertyGroup>
 

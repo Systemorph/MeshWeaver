@@ -1,2 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{c4d2dd08-d735-421f-bdc3-4bea98aca601}</ProjectGuid>
+  </PropertyGroup>
 </Project>

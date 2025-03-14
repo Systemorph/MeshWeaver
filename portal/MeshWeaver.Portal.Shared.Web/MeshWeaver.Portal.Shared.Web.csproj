@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <ProjectGuid>{926a6084-537f-4fd6-a21e-fe9ee11ba0c4}</ProjectGuid>
+  </PropertyGroup>
     <ItemGroup>
         <SupportedPlatform Include="browser" />
     </ItemGroup>

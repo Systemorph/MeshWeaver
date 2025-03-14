@@ -1,5 +1,8 @@
 ﻿<!-- leave hardcoded references to northwind only if local dev using precompiled vars -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <ProjectGuid>{df164dda-93b7-406c-a7b1-72f449d7fa85}</ProjectGuid>
+  </PropertyGroup>
     <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.Shared.Mesh\MeshWeaver.Portal.Shared.Mesh.csproj" />

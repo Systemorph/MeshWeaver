@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{4af56cca-982c-4774-bee9-0dbbf0025a45}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <Folder Include="Json\" />

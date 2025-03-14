@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
     <PropertyGroup>
+    <ProjectGuid>{9402ddb6-032f-4c1b-af08-ea743209f6f4}</ProjectGuid>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
 

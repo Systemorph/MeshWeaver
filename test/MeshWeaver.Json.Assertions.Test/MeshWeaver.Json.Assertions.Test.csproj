@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{0b562ef2-c833-46b1-a565-f890a088a9e5}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Json.Assertions\MeshWeaver.Json.Assertions.csproj" />

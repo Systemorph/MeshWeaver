@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{30ab17c9-f69a-4457-b620-9b70d7b5187b}</ProjectGuid>
+  </PropertyGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Newtonsoft.Json" />
