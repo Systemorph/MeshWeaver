@@ -17,6 +17,7 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();
+builder.ConfigurePostgreSqlContext();
 builder.UseOrleansMeshClient(new MeshAddress())
     .AddPostgresSerilog()
     .ConfigureWebPortal()
@@ -27,13 +28,10 @@ builder.UseOrleansMeshClient(new MeshAddress())
             options.OpenConnectionTimeout = TimeSpan.FromMinutes(1); // Try longer timeout
         });
         // Configure Data Protection to persist keys to PostgreSQL using MeshWeaverDbContext
-        services.AddPostgreSqlMeshContext("meshweaverdb");
         services.AddDataProtection().PersistKeysToDbContext<MeshWeaverDbContext>();
         return services.AddAzureBlobArticles();
     });
 
-// Add PostgreSQL using the Aspire-managed container
-builder.AddNpgsqlDataSource("meshweaverdb"); // Uses the container reference from AppHost
 var app = builder.Build();
 app.MapDefaultEndpoints();
 app.StartPortalApplication();
