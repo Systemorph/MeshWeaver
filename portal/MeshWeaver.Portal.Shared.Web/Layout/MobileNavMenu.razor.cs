@@ -26,9 +26,9 @@ public partial class MobileNavMenu : ComponentBase
     {
             yield return new MobileNavMenuEntry(
                 "Articles",
-                () => NavigateToAsync("/"),
+                () => NavigateToAsync("/articles"),
                 DesktopNavMenu.ArticlesIcon(),
-                LinkMatchRegex: new Regex("^/$")
+                LinkMatchRegex: new Regex("^/articles$")
             );
 
         yield return new MobileNavMenuEntry(
