@@ -16,4 +16,5 @@ builder.Services.AddHostedService<PostgreSqlMigrationService>();
 builder.ConfigurePostgreSqlContext();
 
 var app = builder.Build();
+app.MapDefaultEndpoints();
 app.Run();
