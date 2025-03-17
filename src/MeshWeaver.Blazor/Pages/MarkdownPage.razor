@@ -1,11 +1,11 @@
-@page "/article/{Collection}/{**Path}"
+@page "/md/{Collection}/{**Path}"
 @using System.Reactive.Linq
 @using MeshWeaver.Articles
 @using MeshWeaver.Blazor.Infrastructure
 @inject PortalApplication PortalApplication
 @implements IDisposable
 
-<DispatchView ViewModel="@RootControl"></DispatchView>
+<MarkdownView ViewModel="@RootControl"></MarkdownView>
 
 @code
 {
@@ -13,7 +13,7 @@
     [Parameter] public string Path { get; set; }
 
     IDisposable ArticleStreamSubscription { get; set; }
-    UiControl RootControl { get; set; }
+    MarkdownControl RootControl { get; set; }
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
@@ -23,12 +23,22 @@
 
         ArticleStreamSubscription = PortalApplication.Hub
             .RenderArticle(Collection, Path)
-            .Cast<UiControl>()
             .Subscribe(a =>
             {
-                RootControl = a;
+                RootControl = ConvertToMarkdown(a);
                 InvokeAsync(StateHasChanged);
             });
+    }
+
+    private MarkdownControl ConvertToMarkdown(object uiControl)
+    {
+        return uiControl switch
+        {
+            MarkdownControl markdownControl => markdownControl,
+            ArticleControl article => new(null){Html = article.Html},
+
+            _ => new MarkdownControl($"Could not convert control: {uiControl}")
+        };
     }
 
     public void Dispose()
