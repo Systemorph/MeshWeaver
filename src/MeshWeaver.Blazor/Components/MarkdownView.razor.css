@@ -10,6 +10,12 @@
     font-size: 1em; /* Adjust this value as needed */
     line-height: 1.6; /* Adjust this value as needed */
 }
+/* And specifically for headers */
+.markdown-body ::deep h1:focus,
+.markdown-body ::deep h2:focus {
+    outline: none;
+}
+
 
 .markdown-body ::deep .code-content {
     position: relative;
@@ -53,4 +59,8 @@
     margin-top: 20px; /* Adjust the value as needed */
     margin-bottom: 20px; /* Adjust the value as needed */
     background-color: var(--neutral-layer-1);
+}
+.markdown-body ::deep ul,
+.markdown-body ::deep ol {
+    margin-bottom: 1.5em; /* Adjust this value to increase or decrease the space */
 }

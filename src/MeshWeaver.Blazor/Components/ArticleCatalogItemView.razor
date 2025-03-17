@@ -44,8 +44,12 @@
 @code
 {
     private Article Data { get; set; }
-    private string PublishedDate => Data.Published.Year == DateTime.Now.Year ? Data.Published.ToString("dd MMM") : Data.Published.ToString("dd MMM yyyy");
-    private bool IsNewArticle => (DateTime.Now - Data.Published).TotalDays <= 7;
+    private string PublishedDate => Data.Published is null 
+        ? "unpublished" 
+        : Data.Published.Value.Year == DateTime.Now.Year 
+            ? Data.Published.Value.ToString("dd MMM") 
+            : Data.Published.Value.ToString("dd MMM yyyy");
+    private bool IsNewArticle => Data.Published is not null && (DateTime.Now - Data.Published.Value).TotalDays <= 7;
     private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
     private string VideoDuration => Data.VideoDuration.ToString(@"hh\:mm\:ss");
 
