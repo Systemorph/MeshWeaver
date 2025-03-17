@@ -1,0 +1,147 @@
+﻿/* New container for the entire page content */
+.page-container {
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* Responsive width adjustment for larger screens */
+@media screen and (min-width: 768px) {
+    .page-container {
+        width: 80%;
+    }
+}
+
+/* Existing styles for main text */
+.main-text {
+    font-size: 1.2rem;
+    line-height: 1.6; /* Increased line spacing */
+}
+
+    /* Add margin before and after ul elements within .main-text */
+    .main-text ul {
+        margin-top: 1rem;
+        margin-bottom: 1rem;
+        padding-left: 1.5rem; /* Optional list indent */
+    }
+
+        /* Increase space between li elements within .main-text */
+        .main-text ul li {
+            margin-bottom: 0.5rem;
+        }
+
+/* Existing info-links and other styles remain unchanged */
+.info-links {
+    display: flex;
+    gap: 20px;
+    margin: 1.5rem 0;
+    flex-wrap: wrap;
+}
+
+.info-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    background-color: var(--neutral-layer-1, #f5f5f5);
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest);
+    transition: all 0.2s ease;
+}
+
+    .info-link:hover {
+        background-color: var(--neutral-layer-2, #e5e5e5);
+        text-decoration: none;
+    }
+
+    .info-link svg {
+        flex-shrink: 0;
+    }
+
+    .info-link span {
+        font-weight: 500;
+    }
+
+/* Theme-aware icon coloring and other rules remain unchanged */
+.fluent-icon-fill {
+    fill: var(--accent-fill-rest);
+}
+
+.youtube-red {
+    fill: #FF0000;
+}
+
+.github-icon {
+    fill: var(--neutral-foreground-rest);
+}
+
+.discord-icon {
+    fill: #5865F2;
+}
+
+.meshweaver-logo {
+    fill: var(--accent-fill-rest);
+}
+
+.info-link .primary-color {
+    fill: #0655bf;
+}
+
+.info-link .secondary-color {
+    fill: #f26363;
+}
+
+.fluent-dark-theme .x-icon {
+    fill: #FFFFFF;
+}
+
+.fluent-dark-theme .threads-icon {
+    fill: #FFFFFF;
+}
+
+.fluent-dark-theme .info-link {
+    background-color: var(--neutral-layer-1);
+    border-color: var(--neutral-stroke-rest);
+    color: var(--neutral-foreground-rest);
+}
+
+    .fluent-dark-theme .info-link:hover {
+        background-color: var(--neutral-layer-2);
+    }
+
+.fluent-dark-theme .fluent-icon-fill {
+    fill: var(--accent-fill-rest);
+}
+
+.fluent-dark-theme .github-icon {
+    fill: var(--neutral-foreground-rest);
+}
+
+.linkedin-icon {
+    fill: #0A66C2;
+}
+
+.x-icon {
+    fill: #000000;
+}
+
+.bluesky-icon {
+    fill: #0085FF;
+}
+
+.threads-icon {
+    fill: #000000;
+}
+
+h1 {
+    font-size: 2.5rem;
+    margin-bottom: 2rem;
+}
+
+    h1:focus {
+        outline: none;
+    }
+.follow-us {
+    margin-bottom: 2rem;
+}
