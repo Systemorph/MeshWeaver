@@ -1,0 +1,13 @@
+using './silo.module.bicep'
+
+param azure_postgres_outputs_connectionstring = '{{ .Env.AZURE_POSTGRES_CONNECTIONSTRING }}'
+param mesh_cluster_id_value = '{{ parameter "mesh_cluster_id" }}'
+param mesh_service_id_value = '{{ parameter "mesh_service_id" }}'
+param meshweaverblobs_outputs_tableendpoint = '{{ .Env.MESHWEAVERBLOBS_TABLEENDPOINT }}'
+param meshweaverinsights_outputs_appinsightsconnectionstring = '{{ .Env.MESHWEAVERINSIGHTS_APPINSIGHTSCONNECTIONSTRING }}'
+param outputs_azure_container_apps_environment_id = '{{ .Env.AZURE_CONTAINER_APPS_ENVIRONMENT_ID }}'
+param outputs_azure_container_registry_endpoint = '{{ .Env.AZURE_CONTAINER_REGISTRY_ENDPOINT }}'
+param outputs_azure_container_registry_managed_identity_id = '{{ .Env.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID }}'
+param outputs_managed_identity_client_id = '{{ .Env.MANAGED_IDENTITY_CLIENT_ID }}'
+param silo_containerimage = '{{ .Image }}'
+param silo_containerport = '{{ targetPortOrDefault 8080 }}'
