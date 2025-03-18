@@ -2,8 +2,6 @@
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
-using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
@@ -13,13 +11,6 @@ public static class ArticleLayoutArea
     private static ArticleControl RenderArticle(this IMessageHub hub, Article article)
     {
         var content = article.PrerenderedHtml;
-        if (article.CodeSubmissions is not null && article.CodeSubmissions.Any())
-        {
-            var kernel = new KernelAddress();
-            foreach (var s in article.CodeSubmissions)
-                hub.Post(s, o => o.WithTarget(kernel));
-            content = article.PrerenderedHtml.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
-        }
 
         return new ArticleControl
         {
@@ -35,6 +26,7 @@ public static class ArticleLayoutArea
             Html = content,
             VideoUrl = article.VideoUrl,
             PageTitle = article.Title,
+            CodeSubmissions = article.CodeSubmissions,
             Meta = new Dictionary<string, object>()
             {
                 ["description"] = article.Abstract, 

@@ -6,3 +6,7 @@
 .meshweaver-logo .secondary-color {
     fill: #f26363;
 }
+:host(:focus) {
+    outline: none !important;
+    box-shadow: none !important;
+}

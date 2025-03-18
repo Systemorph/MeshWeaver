@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Layout.Views;
+﻿using MeshWeaver.Kernel;
+
+namespace MeshWeaver.Layout.Views;
 
 public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
@@ -15,4 +17,5 @@ public record ArticleControl() : UiControl<ArticleControl>(ModuleSetup.ModuleNam
     public object Content { get; init; }
     public object Html { get; init; }
     public object VideoUrl { get; init; }
+    public IReadOnlyCollection<SubmitCodeRequest> CodeSubmissions { get; init; }
 }

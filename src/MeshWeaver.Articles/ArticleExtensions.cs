@@ -14,16 +14,12 @@ namespace MeshWeaver.Articles;
 
 public static class ArticleExtensions
 {
-
     public static LayoutDefinition AddArticleLayouts(this LayoutDefinition layout)
     {
         return layout
             .WithView(nameof(ArticleLayoutArea.RenderArticle), ArticleLayoutArea.Article)
             .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog);
     }
-
-
-
 
     internal static IArticleService GetArticleService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IArticleService>();
