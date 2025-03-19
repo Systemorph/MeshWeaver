@@ -26,8 +26,10 @@ param outputs_azure_container_registry_endpoint string
 param frontend_containerimage string
 
 param meshweaverCertificate string
+param meshweaverCertificate2 string
 
 param meshweaverDomain string
+param meshweaverDomain2 string
 
 resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'frontend'
@@ -39,11 +41,19 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: frontend_containerport
         transport: 'http'
+        stickySessions: {
+          affinity: 'sticky'
+        }
         customDomains: [
           {
             name: meshweaverDomain
             bindingType: (meshweaverCertificate != '') ? 'SniEnabled' : 'Disabled'
             certificateId: (meshweaverCertificate != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate}' : null
+          }
+          {
+            name: meshweaverDomain2
+            bindingType: (meshweaverCertificate2 != '') ? 'SniEnabled' : 'Disabled'
+            certificateId: (meshweaverCertificate2 != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate2}' : null
           }
         ]
       }
