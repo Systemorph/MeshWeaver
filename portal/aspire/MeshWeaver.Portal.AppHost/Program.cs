@@ -28,7 +28,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     // Use containerized PostgreSQL for development
     var postgres = builder
         .AddPostgres("postgres")
-        .WithPgWeb()
+        .WithPgAdmin()
         .WithDataVolume();
 
     var meshweaverdb = postgres.AddDatabase("meshweaverdb");

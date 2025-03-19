@@ -19,7 +19,7 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 builder.ConfigureWebPortalServices();
 builder.ConfigurePostgreSqlContext();
 builder.UseOrleansMeshClient(new MeshAddress())
-    .AddPostgresSerilog()
+    .AddEfCoreSerilog()
     .ConfigureWebPortal()
     .ConfigureServices(services =>
     {

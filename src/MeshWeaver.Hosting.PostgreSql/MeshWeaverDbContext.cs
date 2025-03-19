@@ -33,6 +33,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
     /// </summary>
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; } = null!;
 
+    public DbSet<MessageLog> Messages { get; set; } = null!;
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -112,6 +113,15 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.HasKey(e => e.Id);
             entity.Property(e => e.FriendlyName);
             entity.Property(e => e.Xml).IsRequired();
+        });
+
+        modelBuilder.Entity<MessageLog>(entity =>
+        {
+            entity.HasKey(e => e.Timestamp); // Assuming Timestamp is the primary key
+            entity.Property(e => e.Level).IsRequired();
+            entity.Property(e => e.Properties).HasColumnType("jsonb");
+            entity.Property(e => e.Message); 
+            entity.Property(e => e.Exception); 
         });
     }
 }

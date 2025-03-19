@@ -4,6 +4,13 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
+public record MessageLog(
+    string Level, 
+    DateTimeOffset Timestamp, 
+    string Message, 
+    string Exception, 
+    string Properties
+    );
 public record MeshNode(
     string AddressType,
     string AddressId, 

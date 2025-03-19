@@ -1,55 +1,51 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.PostgreSql;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
-using NpgsqlTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Filters;
-using Serilog.Sinks.PostgreSQL;
 
 namespace MeshWeaver.Portal.ServiceDefaults;
 
 public static class SerilogExtensions
 {
-    public static MeshHostApplicationBuilder AddPostgresSerilog(this MeshHostApplicationBuilder builder)
+    public static MeshHostApplicationBuilder AddEfCoreSerilog(this MeshHostApplicationBuilder builder)
     {
+        var sink = new EfCoreSink();
         var messageDeliveryPolicy = new DestructuringPolicy();
         builder.ConfigureHub(h =>
-            h.WithInitialization(hub => messageDeliveryPolicy.JsonOptions = hub.JsonSerializerOptions));
+            h.WithInitialization(hub =>
+            {
+                messageDeliveryPolicy.JsonOptions = hub.JsonSerializerOptions;
+                sink.Initialize(hub.ServiceProvider);
+            }));
 
-        var deliveryColumns = new Dictionary<string, ColumnWriterBase>
-        {
-            // Timestamp from log event
-            {"timestamp", new TimestampColumnWriter()},
-            {"level", new LevelColumnWriter(true, NpgsqlDbType.Varchar)},
-            {"address", new SinglePropertyColumnWriter("Address", PropertyWriteMethod.Raw)},
-            {"delivery", new SinglePropertyColumnWriter("Delivery", PropertyWriteMethod.Json, NpgsqlDbType.Jsonb)},
-        };
-
-        var logger = new LoggerConfiguration()
+        // Create Serilog logger configuration
+        var loggerConfiguration = new LoggerConfiguration()
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
-            // Add destructuring policies
+            .Enrich.FromLogContext()
+            .WriteTo.Sink(sink)
             .Destructure.With(messageDeliveryPolicy)
             .Destructure.ToMaximumDepth(4)
             .Destructure.ToMaximumStringLength(1000)
             .Destructure.ToMaximumCollectionCount(20)
             // Filter to only include MessageService delivery logs
-            .Filter.ByIncludingOnly(Filter)
-            .WriteTo.PostgreSQL(
-                connectionString: builder.Host.Configuration.GetConnectionString("meshweaverdb"),
-                tableName: "messages",
-                columnOptions: deliveryColumns,
-                needAutoCreateTable: true,
-                schemaName: "public")
-            .Enrich.FromLogContext()
-            .CreateLogger();
+            .Filter.ByIncludingOnly(Filter);
 
+        // Create logger and register
+        var logger = loggerConfiguration.CreateLogger();
+
+
+        // Add Serilog to the logging pipeline
         builder.Host.Logging.AddSerilog(logger);
+
         return builder;
     }
 
@@ -75,7 +71,31 @@ public static class SerilogExtensions
         return true;
     }
 }
+public class EfCoreSink : ILogEventSink
+{
+    private IServiceProvider serviceProvider;
 
+    public void Initialize(IServiceProvider serviceProvider)
+        => this.serviceProvider = serviceProvider;
+ 
+    public void Emit(LogEvent logEvent)
+    {
+        using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
+        if (dbContext is null)
+            return;
+
+        var logEntry = new MessageLog(
+            logEvent.Level.ToString(), 
+            logEvent.Timestamp.UtcDateTime, 
+            logEvent.RenderMessage(), 
+            logEvent.Exception?.ToString(),
+            JsonSerializer.Serialize(logEvent.Properties.ToDictionary(x => x.Key, x => x.Value.ToString()))
+        );
+
+        dbContext.Messages.Add(logEntry);
+        dbContext.SaveChanges();
+    }
+}
 public class DestructuringPolicy : IDestructuringPolicy
 {
     public JsonSerializerOptions JsonOptions { get; set; }
