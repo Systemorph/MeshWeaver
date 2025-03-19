@@ -63,14 +63,6 @@
         font-weight: 500;
     }
 
-/* Theme-aware icon coloring and other rules remain unchanged */
-.fluent-icon-fill {
-    fill: var(--accent-fill-rest);
-}
-
-.youtube-red {
-    fill: #FF0000;
-}
 
 .github-icon {
     fill: var(--neutral-foreground-rest);
@@ -92,47 +84,7 @@
     fill: #f26363;
 }
 
-.fluent-dark-theme .x-icon {
-    fill: #FFFFFF;
-}
 
-.fluent-dark-theme .threads-icon {
-    fill: #FFFFFF;
-}
-
-.fluent-dark-theme .info-link {
-    background-color: var(--neutral-layer-1);
-    border-color: var(--neutral-stroke-rest);
-    color: var(--neutral-foreground-rest);
-}
-
-    .fluent-dark-theme .info-link:hover {
-        background-color: var(--neutral-layer-2);
-    }
-
-.fluent-dark-theme .fluent-icon-fill {
-    fill: var(--accent-fill-rest);
-}
-
-.fluent-dark-theme .github-icon {
-    fill: var(--neutral-foreground-rest);
-}
-
-.linkedin-icon {
-    fill: #0A66C2;
-}
-
-.x-icon {
-    fill: #000000;
-}
-
-.bluesky-icon {
-    fill: #0085FF;
-}
-
-.threads-icon {
-    fill: #000000;
-}
 
 h1 {
     font-size: 2.5rem;

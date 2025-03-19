@@ -8,7 +8,7 @@ namespace MeshWeaver.Articles;
 
 public static class ArticleLayoutArea
 {
-    private static ArticleControl RenderArticle(this IMessageHub hub, Article article)
+    private static ArticleControl RenderArticle(Article article)
     {
         var content = article.PrerenderedHtml;
 
@@ -36,7 +36,7 @@ public static class ArticleLayoutArea
         };
     }
 
-    public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
+    internal static IObservable<object> Article(LayoutAreaHost host, RenderingContext _)
     {
         var split = host.Reference.Id?.ToString()!.Split("/");
         if (split is null || split.Length < 2)
@@ -46,7 +46,7 @@ public static class ArticleLayoutArea
  
     public static IObservable<object> RenderArticle(this IMessageHub hub, string collection, string id) =>
         hub.GetArticle(collection, id)
-            .Select(a => a is null ? (object)new MarkdownControl($"No article {id} found in collection {collection}") : hub.RenderArticle(a));
+            .Select(a => a is null ? (object)new MarkdownControl($"No article {id} found in collection {collection}") : RenderArticle(a));
 
     public static IObservable<Article> GetArticle(this IMessageHub hub, string collection, string id)
         => hub.GetArticleService().GetArticle(collection, id);

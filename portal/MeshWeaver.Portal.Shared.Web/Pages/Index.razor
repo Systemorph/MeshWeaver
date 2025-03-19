@@ -1,4 +1,5 @@
 ﻿@page "/"
+@using MeshWeaver.Portal.Shared.Web.Infrastructure
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 <div class="page-container">
@@ -23,14 +24,11 @@
     </div>
     <div class="info-links @DarkModeClass">
         <a href="/articles" class="info-link" title="Read our Blog">
-            <FluentIcon Icon="@Icons.Regular.Size24.Book"></FluentIcon>
+            <FluentIcon Color="Color.FillInverse" Icon="@Icons.Regular.Size24.Book"></FluentIcon>
             <span>Blog</span>
         </a>
         <a href="https://www.youtube.com/@@meshweaver" class="info-link" title="Visit our YouTube Channel" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="youtube-red" d="M21.582 7.15c-.253-1.073-.997-1.916-1.941-2.087C17.754 4.667 12 4.667 12 4.667s-5.754 0-7.641.396c-.944.171-1.688 1.014-1.941 2.087C2.022 9.186 2.022 12 2.022 12s0 2.814.396 4.85c.253 1.073.997 1.916 1.941 2.087 1.887.396 7.641.396 7.641.396s5.754 0 7.641-.396c.944-.171 1.688-1.014 1.941-2.087.396-2.036.396-4.85.396-4.85s0-2.814-.396-4.85z" />
-                <path fill="#FFFFFF" d="M9.773 15.333V8.667L15.591 12l-5.818 3.333z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.YouTube"></FluentIcon>
             <span>YouTube</span>
         </a>
         <a href="https://meshweaver.cloud" class="info-link" title="Visit our Landing Page" target="_blank">
@@ -38,18 +36,13 @@
             <span>Landing Page</span>
         </a>
         <a href="https://github.com/Systemorph/MeshWeaver" class="info-link" title="Visit our GitHub Repository" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="github-icon" fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.22.66-.48v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0 0 12 2z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.GitHub"></FluentIcon>
             <span>GitHub</span>
         </a>
         <a href="https://discord.gg/YSNEtSHa" class="info-link" title="Join our Discord Community" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="discord-icon" d="M19.952 5.672c-1.904-1.531-4.916-1.79-5.044-1.801-0.201-0.017-0.392 0.097-0.474 0.281-0.006 0.012-0.072 0.163-0.14 0.403-1.126-0.167-2.26-0.167-3.386 0-0.068-0.241-0.134-0.391-0.14-0.403-0.08-0.183-0.272-0.298-0.474-0.281-0.128 0.01-3.139 0.269-5.069 1.822-0.076 0.063-1.878 1.596-2.193 6.417-0.010 0.156 0.046 0.309 0.154 0.417 1.677 1.674 4.422 2.139 5.052 2.186 0.023 0.003 0.046 0.004 0.069 0.004 0.155 0 0.301-0.074 0.394-0.199l0.347-0.463c-1.865-0.467-2.784-1.226-2.851-1.286-0.157-0.141-0.17-0.382-0.031-0.54 0.139-0.158 0.38-0.174 0.538-0.037 0.011 0.009 1.053 0.924 3.831 1.39 0.088 0.015 0.177 0.022 0.265 0.022 0.827 0 1.643-0.132 2.447-0.394 0.017 0.001 0.034 0.002 0.051 0.002 0.15 0 0.272-0.122 0.272-0.272s-0.122-0.272-0.272-0.272c-0.144 0-0.282 0.023-0.411 0.069-1.731 0.601-3.513 0.379-4.225 0.27-1.048-0.161-1.872-0.412-2.472-0.677 0.041-3.917 1.331-5.408 1.843-5.912 1.394-1.184 3.222-1.519 3.925-1.627 0.157 0.286 0.394 0.854 0.394 1.939 0 0.148 0.121 0.269 0.269 0.269s0.269-0.121 0.269-0.269c0-1.192-0.283-1.886-0.453-2.195 0.616 0.085 2.775 0.459 4.392 1.841 0.497 0.489 1.778 1.956 1.836 5.834-0.6 0.263-1.423 0.513-2.469 0.673-1.218 0.186-3.816 0.325-5.223-1.083-0.132-0.132-0.346-0.132-0.478 0-0.132 0.132-0.132 0.346 0 0.478 0.512 0.512 1.155 0.884 1.919 1.106 1.053 0.307 2.23 0.332 3.096 0.332 0.391 0 0.778-0.008 1.146-0.016 0.097 0.187 0.214 0.401 0.347 0.576 0.079 0.103 0.19 0.158 0.306 0.158 0.034 0 0.068-0.004 0.103-0.012 0.603-0.141 3.342-0.729 4.742-2.627 0.068-0.092 0.095-0.208 0.072-0.321-0.323-1.634-0.6-4.346-2.252-6.328zM9.035 13.953c-0.597 0-1.081-0.636-1.081-1.416s0.484-1.417 1.081-1.417c0.597 0 1.081 0.637 1.081 1.417s-0.484 1.416-1.081 1.416zM14.935 13.953c-0.597 0-1.081-0.636-1.081-1.416s0.484-1.417 1.081-1.417c0.597 0 1.081 0.637 1.081 1.417s-0.484 1.416-1.081 1.416z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Discord"></FluentIcon>
             <span>Discord</span>
         </a>
-
     </div>
     <div class="main-text follow-us">
         or follow us on Social Media
@@ -57,44 +50,33 @@
     <h4>Roland Bürgi</h4>
     <div class="info-links @DarkModeClass">
         <a href="https://www.linkedin.com/in/rolandb" class="info-link" title="Follow Roland Bürgi on LinkedIn" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="linkedin-icon" d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
             <span>LinkedIn</span>
         </a>
         <a href="https://x.com/@@swissionary" class="info-link" title="Follow Roland Bürgi on X" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="x-icon" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.X"></FluentIcon>
             <span>X</span>
         </a>
         <a href="https://bsky.app/profile/swissionary.bsky.social" class="info-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="24" height="24">
-                <path class="bluesky-icon" d="M299.75 238.48c-26.326-51.01-97.736-146.28-164.21-193.17-63.677-44.92-88.028-37.19-103.82-29.95-18.428 8.39-21.719 36.69-21.719 53.31s9.05 136.57 15.138 156.48c19.745 66.15 89.674 88.52 154.17 81.28 3.29-0.49 6.58-0.99 10.04-1.32-3.29 0.49-6.75 0.99-10.04 1.32-94.445 13.99-178.52 48.37-68.284 170.96 121.1 125.38 166.02-26.82 189.06-104.15 23.035 77.17 49.526 223.94 186.75 104.15 103.17-104.15 28.301-156.97-66.145-170.96-3.29-0.33-6.75-0.82-10.04-1.32 3.46 0.49 6.75 0.82 10.04 1.32 64.499 7.24 134.59-15.14 154.17-81.28 5.92-20.07 15.14-139.86 15.14-156.48s-3.29-44.92-21.72-53.31c-15.96-7.24-40.15-14.97-103.82 29.95-66.97 47.06-138.38 142.16-164.7 193.17z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
             <span>Bluesky</span>
-        </a>
-        <a href="https://www.threads.net/@@roland.buergi" class="info-link" title="Follow Roland Bürgi on Threads" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 192 192">
-                <path class="threads-icon" d="M141.537 88.9883C140.71 88.5919 139.87 88.2104 139.019 87.8451C137.537 60.5382 122.616 44.905 97.5619 44.745C97.4484 44.7443 97.3355 44.7443 97.222 44.7443C82.2364 44.7443 69.7731 51.1409 62.102 62.7807L75.881 72.2328C81.6116 63.5383 90.6052 61.6848 97.2286 61.6848C97.3051 61.6848 97.3819 61.6848 97.4576 61.6855C105.707 61.7381 111.932 64.1366 115.961 68.814C118.893 72.2193 120.854 76.925 121.825 82.8638C114.511 81.6207 106.601 81.2385 98.145 81.7233C74.3247 83.0954 59.0111 96.9879 60.0396 116.292C60.5615 126.084 65.4397 134.508 73.775 140.011C80.8224 144.663 89.899 146.938 99.3323 146.423C111.79 145.74 121.563 140.987 128.381 132.296C133.559 125.696 136.834 117.143 138.28 106.366C144.217 109.949 148.617 114.664 151.047 120.332C155.179 129.967 155.42 145.8 142.501 158.708C131.182 170.016 117.576 174.908 97.0135 175.059C74.2042 174.89 56.9538 167.575 45.7381 153.317C35.2355 139.966 29.8077 120.682 29.6052 96C29.8077 71.3178 35.2355 52.0336 45.7381 38.6827C56.9538 24.4249 74.2039 17.11 97.0132 16.9405C119.988 17.1113 137.539 24.4614 149.184 38.788C154.894 45.8136 159.199 54.6488 162.037 64.9503L178.184 60.6422C174.744 47.9622 169.331 37.0357 161.965 27.974C147.036 9.60668 125.202 0.195148 97.0695 0H96.9569C68.8816 0.19447 47.2921 9.6418 32.7883 28.0793C19.8819 44.4864 13.2244 67.3157 13.0007 95.9325L13 96L13.0007 96.0675C13.2244 124.684 19.8819 147.514 32.7883 163.921C47.2921 182.358 68.8816 191.806 96.9569 192H97.0695C122.03 191.827 139.624 185.292 154.118 170.811C173.081 151.866 172.51 128.119 166.26 113.541C161.776 103.087 153.227 94.5962 141.537 88.9883ZM98.4405 129.507C88.0005 130.095 77.1544 125.409 76.6196 115.372C76.2232 107.93 81.9158 99.626 99.0812 98.6368C101.047 98.5234 102.976 98.468 104.871 98.468C111.106 98.468 116.939 99.0737 122.242 100.233C120.264 124.935 108.662 128.946 98.4405 129.507Z" />
-            </svg>
-            <span>Threads</span>
         </a>
     </div>
     <h4>Stefan Bernegger</h4>
     <div class="info-links @DarkModeClass">
         <a href="https://www.linkedin.com/in/stefan-bernegger-719a5a39/" class="info-link" title="Follow Stefan Bernegger on LinkedIn" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="linkedin-icon" d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
             <span>LinkedIn</span>
         </a>
         <a href="https://x.com/@@s_bernegger" class="info-link" title="Follow Stefan Bernegger on X" target="_blank">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" width="24" viewBox="0 0 24 24">
-                <path class="x-icon" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-            </svg>
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.X"></FluentIcon>
             <span>X</span>
         </a>
+        <a href="https://bsky.app/profile/steivan.bsky.social" class="info-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
+            <span>Bluesky</span>
+        </a>
+
     </div>
 </div>
 
