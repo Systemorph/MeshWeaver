@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{d170a197-ea1e-4cbe-a7d9-29eb9ab75c77}</ProjectGuid>
+  </PropertyGroup>
 
     <ItemGroup>
 		<Folder Include="Models\Options\Plugins\" />

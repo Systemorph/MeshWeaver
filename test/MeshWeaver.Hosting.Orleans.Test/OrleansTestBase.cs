@@ -82,9 +82,6 @@ public class TestSiloConfigurator : ISiloConfigurator, IHostConfigurator
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorage(StorageProviders.MeshCatalog)
-            .AddMemoryGrainStorage(StorageProviders.Activity)
-            .AddMemoryGrainStorage(StorageProviders.AddressRegistry)
             .AddMemoryGrainStorageAsDefault();
     }
 

@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{92f46d7a-e5fe-4914-9b56-547b9bb1a83d}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Interactive" />
   </ItemGroup>

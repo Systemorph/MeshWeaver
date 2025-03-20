@@ -225,8 +225,8 @@
     ::deep .meshweaver-icon fluent-anchor.logo,
     ::deep .meshweaver-icon fluent-anchor.logo::part(control),
     ::deep .meshweaver-icon fluent-anchor.logo::part(content) {
-        height: 24px;
-        width: 24px;
+        height: 36px;
+        width: 36px;
     }
 
     ::deep.layout > header > .header-gutters {

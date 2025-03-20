@@ -8,11 +8,11 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Mesh;
 using MeshWeaver.Layout.Views;
+using Microsoft.Extensions.DependencyInjection;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
@@ -24,11 +24,14 @@ public static class BlazorViewRegistry
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     ) => config
         .AddData()
-        .AddLayoutClient(c => (configuration ?? (x => x)).Invoke(c.WithView(DefaultFormatting)))
+        .AddLayoutClient(c => 
+            (configuration ?? (x => x))
+            .Invoke(c.WithView((i,s,a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
     ;
     #region Standard Formatting
     private static ViewDescriptor DefaultFormatting(
+        IMessageHub hub,
         object instance,
         ISynchronizationStream<JsonElement> stream,
         string area
@@ -42,7 +45,7 @@ public static class BlazorViewRegistry
         if (skin != null)
             return MapSkinnedView(control, stream, area, skin);
 
-        var typeRegistry = stream.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
         return control switch
         {

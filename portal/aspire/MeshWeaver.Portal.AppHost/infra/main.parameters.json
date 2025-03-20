@@ -1,0 +1,28 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "principalId": {
+        "value": "${AZURE_PRINCIPAL_ID}"
+      },
+      "mesh_cluster_id": {
+        "value": "${AZURE_MESH_CLUSTER_ID}"
+      },
+      "mesh_service_id": {
+        "value": "${AZURE_MESH_SERVICE_ID}"
+      },
+      "meshweaverCertificate": {
+        "value": "${AZURE_MESHWEAVER_CERTIFICATE}"
+      },
+      "meshweaverDomain": {
+        "value": "${AZURE_MESHWEAVER_DOMAIN}"
+      },
+      "environmentName": {
+        "value": "${AZURE_ENV_NAME}"
+      },
+      "location": {
+        "value": "${AZURE_LOCATION}"
+      }
+    }
+  }
+  

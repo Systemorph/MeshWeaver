@@ -1,7 +1,8 @@
 ﻿@using System.Collections
 @using MeshWeaver.Articles
 @using MeshWeaver.Blazor.Infrastructure
-@using Microsoft.DotNet.Interactive.Formatting
+@using MeshWeaver.Markdown
+@using MeshWeaver.Mesh
 
 @inherits BlazorView<ArticleControl, ArticleView>
 
@@ -54,6 +55,7 @@
     private string Name;
     private string Collection;
     private string Title;
+    private KernelAddress KernelAddress = new();
     private IReadOnlyCollection<string> Tags;
     private string Thumbnail;
     private string Abstract;
@@ -77,9 +79,14 @@
         DataBind(ViewModel.Authors, x => x.Authors, ConvertAuthorsArray);
         DataBind(ViewModel.Published, x => x.Published);
         DataBind(ViewModel.LastUpdated, x => x.LastUpdated);
-        DataBind(ViewModel.Html, x => x.Html);
+        DataBind(ViewModel.Html, x => x.Html, ConvertHtml);
         DataBind(ViewModel.VideoUrl, x => x.VideoUrl);
         MarkdownControl = new(null) { Html = Html };
+    }
+
+    private string ConvertHtml(object arg)
+    {
+        return arg?.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
     }
 
     private IReadOnlyCollection<string> ConvertStringArray(object tags)
@@ -102,5 +109,19 @@
         return videoUrl;
     }
 
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+
+        if (firstRender)
+        {
+            if (ViewModel.CodeSubmissions is not null && ViewModel.CodeSubmissions.Any())
+            {
+                foreach (var s in ViewModel.CodeSubmissions)
+                    Hub.Post(s, o => o.WithTarget(KernelAddress));
+            }
+
+        }
+    }
 
 }

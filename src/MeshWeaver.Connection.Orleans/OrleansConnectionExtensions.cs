@@ -1,15 +1,12 @@
-﻿using MeshWeaver.Articles;
+﻿using System.Threading.Channels;
+using MeshWeaver.Articles;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
-using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Orleans.Serialization;
-using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
 
@@ -37,7 +34,7 @@ public static class OrleansConnectionExtensions
     }
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
-        => services.AddSingleton<IRoutingService, OrleansClientRoutingService>();
+        => services.AddSingleton<IRoutingService, OrleansRoutingService>();
 
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
@@ -61,49 +58,4 @@ public static class OrleansConnectionExtensions
         );
     }
 
-}
-
-public class OrleansClientRoutingService(
-    IGrainFactory grainFactory, 
-    IServiceProvider serviceProvider,
-    ILogger<OrleansClientRoutingService> logger) : IRoutingService
-{
-    private readonly string routingGrainId = Guid.NewGuid().AsString();
-    public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
-    {
-        var streamInfo = await grainFactory.GetGrain<IStreamRegistryGrain>(delivery.Target.ToString()).Get();
-        if (streamInfo is { StreamProvider: not null })
-        {
-            logger.LogDebug("routing to {Target} via {Provider}: {Namespace}", delivery.Target, streamInfo.StreamProvider, streamInfo.Namespace);
-            await GetStreamProvider(streamInfo.StreamProvider)
-                .GetStream<IMessageDelivery>(streamInfo.Namespace)
-                .OnNextAsync(delivery);
-            return delivery.Forwarded();
-        }
-
-        await grainFactory.GetGrain<IRoutingGrain>(routingGrainId).DeliverMessage(delivery);
-        return delivery.Forwarded();
-    }
-    private IStreamProvider GetStreamProvider(string streamProvider) =>
-        serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamProvider);
-
-    public async Task<IAsyncDisposable> RegisterStreamAsync(Address address, AsyncDelivery callback)
-    {
-
-        await grainFactory.GetGrain<IStreamRegistryGrain>(address).Register(new(address.Type, address.Id,StreamProviders.Mesh, address.ToString()));
-        var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(StreamProviders.Mesh)
-            .GetStream<IMessageDelivery>(address.ToString());
-        var subscription = await stream.SubscribeAsync((v, e) => 
-            callback.Invoke(v, CancellationToken.None));
-        return new AnonymousAsyncDisposable(async () =>
-        {
-            await subscription.UnsubscribeAsync();
-            await UnregisterStreamAsync(address);
-        });
-    }
-
-    public Task UnregisterStreamAsync(Address address)
-    {
-        return grainFactory.GetGrain<IStreamRegistryGrain>(address.ToString()).Unregister();
-    }
 }

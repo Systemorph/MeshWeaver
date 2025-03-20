@@ -24,7 +24,7 @@ public record Article
     public int Likes { get; init; }
     public int Comments { get; init; }
 
-    public DateTime Published { get; init; }
+    public DateTime? Published { get; init; }
 
     public string Content { get; init; }
 

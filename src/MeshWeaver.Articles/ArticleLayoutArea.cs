@@ -1,26 +1,16 @@
 ﻿using System.Reactive.Linq;
-using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
-using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
 public static class ArticleLayoutArea
 {
-    private static ArticleControl RenderArticle(this IMessageHub hub, Article article)
+    private static ArticleControl RenderArticle(Article article)
     {
         var content = article.PrerenderedHtml;
-        if (article.CodeSubmissions is not null && article.CodeSubmissions.Any())
-        {
-            var kernel = new KernelAddress();
-            foreach (var s in article.CodeSubmissions)
-                hub.Post(s, o => o.WithTarget(kernel));
-            content = article.PrerenderedHtml.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernel.ToString());
-        }
 
         return new ArticleControl
         {
@@ -36,6 +26,7 @@ public static class ArticleLayoutArea
             Html = content,
             VideoUrl = article.VideoUrl,
             PageTitle = article.Title,
+            CodeSubmissions = article.CodeSubmissions,
             Meta = new Dictionary<string, object>()
             {
                 ["description"] = article.Abstract, 
@@ -45,19 +36,19 @@ public static class ArticleLayoutArea
         };
     }
 
-    public static IObservable<object> Article(LayoutAreaHost host, RenderingContext ctx)
+    internal static IObservable<object> Article(LayoutAreaHost host, RenderingContext _)
     {
-        var articleService = host.Hub.GetArticleService();
         var split = host.Reference.Id?.ToString()!.Split("/");
-        if(split is null || split.Length < 2)
+        if (split is null || split.Length < 2)
             return Observable.Return(new MarkdownControl("Path must be specified in the form of /collection/article"));
-        var stream = articleService.GetArticle(split[0], string.Join('/', split.Skip(1)));
-        return stream
-            .Select(a => a is null ? (object)new MarkdownControl($"No article {host.Reference.Id} found in collection") : host.Hub.RenderArticle(a));
+        return host.Hub.RenderArticle(split[0], string.Join('/', split.Skip(1)));
     }
+ 
+    public static IObservable<object> RenderArticle(this IMessageHub hub, string collection, string id) =>
+        hub.GetArticle(collection, id)
+            .Select(a => a is null ? (object)new MarkdownControl($"No article {id} found in collection {collection}") : RenderArticle(a));
 
-
-
-
+    public static IObservable<Article> GetArticle(this IMessageHub hub, string collection, string id)
+        => hub.GetArticleService().GetArticle(collection, id);
 
 }

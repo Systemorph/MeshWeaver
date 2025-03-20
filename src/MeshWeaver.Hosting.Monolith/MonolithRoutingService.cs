@@ -11,7 +11,7 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
-    public override Task UnregisterStreamAsync(Address address)
+    private Task UnregisterStreamAsync(Address address)
     {
         streams.TryRemove(address, out _);
         return Task.FromResult<Address>(null);

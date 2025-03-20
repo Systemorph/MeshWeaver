@@ -15,7 +15,6 @@ public partial class DesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Book()
             : new Icons.Regular.Size24.Book();
 
-    public static string ArticlesLink = "/";
     public static Icon DocumentationLayoutAreaIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.AppGeneric()

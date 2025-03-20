@@ -14,9 +14,11 @@
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="9.1.0" />
     <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="9.1.0" />
     <PackageVersion Include="Aspire.Npgsql" Version="9.1.0" />
+    <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.1.0" />
     <PackageVersion Include="Autofac" Version="8.2.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.10.0" />
+    <PackageVersion Include="Azure.Identity" Version="1.13.2" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.0.0" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
@@ -36,6 +38,7 @@
     <PackageVersion Include="Markdig" Version="0.40.0" />
     <PackageVersion Include="Microsoft.AspNetCore.CookiePolicy" Version="2.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.AzureStorage" Version="3.1.24" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="9.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client.Core" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
@@ -46,19 +49,29 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.3">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageVersion>
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.10.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="9.0.0-preview.9.24556.5" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.CommandLine" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="9.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Logging.ApplicationInsights" Version="2.23.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Configuration" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Identity.Web" Version="3.8.0" />
     <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="3.8.0" />
+    <PackageVersion Include="Microsoft.Orleans.BroadcastChannel" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="9.0.0" />
     <PackageVersion Include="Serilog.Sinks.PostgreSQL" Version="2.3.0" />
@@ -66,8 +79,8 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.CommandLine.NamingConventionBinder" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.Net.Http" Version="4.3.4" />
-    <PackageVersion Include="System.Text.Encodings.Web" Version="9.0.2" />
-    <PackageVersion Include="System.Text.Json" Version="9.0.2" />
+    <PackageVersion Include="System.Text.Encodings.Web" Version="9.0.3" />
+    <PackageVersion Include="System.Text.Json" Version="9.0.3" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.5.0" />
@@ -77,15 +90,15 @@
     <PackageVersion Include="Microsoft.DotNet.Interactive.CSharp" Version="1.0.0-beta.25160.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.Formatting" Version="1.0.0-beta.25160.1" />
     <PackageVersion Include="Microsoft.DotNet.Interactive.PackageManagement" Version="1.0.0-beta.25160.1" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="9.2.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="9.1.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="9.1.2" />

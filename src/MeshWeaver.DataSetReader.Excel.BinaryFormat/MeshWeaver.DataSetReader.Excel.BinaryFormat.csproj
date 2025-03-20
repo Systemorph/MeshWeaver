@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{190f4036-dae4-44c3-8765-ec975fe4c549}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.DataSetReader.Excel.Utils\MeshWeaver.DataSetReader.Excel.Utils.csproj" />
   </ItemGroup>

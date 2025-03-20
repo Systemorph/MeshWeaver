@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{64ea93bd-fe5d-4870-86eb-b6cd9f30ff97}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Markdig" />

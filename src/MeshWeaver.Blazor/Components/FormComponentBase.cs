@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor.Components;
@@ -11,15 +13,15 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
     public const string Edit = nameof(Edit);
     protected string Label { get; set; }
+
+    private Subject<TValue> valueUpdateSubject;
     protected TValue Value
     {
         get => value;
         set
         {
-            var needsUpdate = NeedsUpdate(value);
+            valueUpdateSubject.OnNext(value);
             this.value = value;
-            if (needsUpdate)
-                UpdatePointer(ConvertToData(value), Pointer);
         }
     }
 
@@ -27,16 +29,20 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     {
         base.BindData();
         DataBind(ViewModel.Label, x => x.Label);
+        valueUpdateSubject = new();
+        AddBinding(valueUpdateSubject
+            .Sample(TimeSpan.FromMilliseconds(100))
+            .DistinctUntilChanged()
+            .Skip(1)
+            .Subscribe(x => UpdatePointer(ConvertToData(value), Pointer))
+        );
         DataBind(ViewModel.Data, x => x.Value, ConversionToValue);
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
     protected virtual Func<object, TValue> ConversionToValue => null;
 
-    protected virtual object ConvertToData(TValue v)
-    {
-        return v;
-    }
+    protected virtual object ConvertToData(TValue v) => v;
 
     protected virtual bool NeedsUpdate(TValue v)
     {

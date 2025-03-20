@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{d148869d-2e49-4386-9f88-6a3c1e720a19}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
       <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />

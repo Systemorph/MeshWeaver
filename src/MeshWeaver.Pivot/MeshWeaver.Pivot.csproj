@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{0261bb39-e444-4617-93ae-b6486dc6af6c}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="AspectCore.Extensions.Reflection" />

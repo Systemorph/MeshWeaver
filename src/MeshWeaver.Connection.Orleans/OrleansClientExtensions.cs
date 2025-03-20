@@ -39,7 +39,6 @@ public static class OrleansClientExtensions
     private static void ClientConfiguration(this IClientBuilder client, Func<IClientBuilder, IClientBuilder> orleansConfiguration)
     {
         client.AddMemoryStreams(StreamProviders.Memory);
-        client.AddMemoryStreams(StreamProviders.Mesh);
 
         if (orleansConfiguration != null)
             orleansConfiguration.Invoke(client);

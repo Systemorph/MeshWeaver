@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{fa2f3b03-bdfe-4712-87a1-5d449a7ecda2}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CsvHelper" />
   </ItemGroup>

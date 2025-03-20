@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{ea196052-b9f3-44a0-901e-4449255dc1e4}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Reactive" />
   </ItemGroup>

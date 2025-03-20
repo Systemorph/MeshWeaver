@@ -60,6 +60,16 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
     public abstract Task UpdateAsync(MeshNode node);
 
+    private readonly Dictionary<string, StreamInfo> channelTypes = new()
+    {
+        { ApplicationAddress.TypeName, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) },
+        { KernelAddress.TypeName, new(StreamType.Channel, StreamProviders.Hub, ChannelNames.Hub) }
+    };
+    public Task<StreamInfo> GetStreamInfoAsync(Address address)
+    {
+        return Task.FromResult(channelTypes.GetValueOrDefault(address.Type) ?? new StreamInfo(StreamType.Stream, StreamProviders.Memory, address.ToString()));
+    }
+
 
     protected abstract Task UpdateNodeAsync(MeshNode node);
 }
