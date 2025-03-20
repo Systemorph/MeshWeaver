@@ -4,8 +4,8 @@
 <div class="layout" style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo"
-                      title="Mesh Weaver"
-                      aria-label="Mesh Weaver">
+                      title="MeshWeaver"
+                      aria-label="MeshWeaver">
             <MeshWeaverLogo></MeshWeaverLogo>
         </FluentAnchor>
     </div>
@@ -20,8 +20,13 @@
             <div class="links">
                 <FluentAnchor Appearance="Appearance.Hypertext"
                               Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
-                              title="Mesh Weaver on GitHub" aria-label="Mesh Weaver source on GitHub">
+                              title="MeshWeaver on GitHub" aria-label="MeshWeaver source on GitHub">
                     <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse"/>
+                </FluentAnchor>
+                <FluentAnchor Appearance="Appearance.Hypertext"
+                              Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
+                              title="MeshWeaver on Discord" aria-label="MeshWeaver Discord">
+                    <FluentIcon Value="@(new PortalIcons.Size20.Discord())" Color="Color.FillInverse" />
                 </FluentAnchor>
             </div>
             <div class="notifications">

@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
@@ -28,9 +27,6 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 
     public LayoutClientConfiguration WithView(ViewMap viewMap)
         => this with { ViewMaps = ViewMaps.Insert(0, viewMap) };
-
-    public LayoutClientConfiguration WithView<T>(ViewMap<T> viewMap)
-        => this with { ViewMaps = ViewMaps.Insert(0, (i, s, a) => i is not T t ? default : viewMap.Invoke(t, s, a)) };
 
     public LayoutClientConfiguration WithView<TViewModel, TView>()
     {

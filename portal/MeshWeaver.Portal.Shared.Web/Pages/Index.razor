@@ -1,7 +1,86 @@
 ﻿@page "/"
-@using MeshWeaver.Blazor.Components
-@using MeshWeaver.Blazor.Infrastructure
-@inject PortalApplication Application
+@using MeshWeaver.Portal.Shared.Web.Infrastructure
 
-<LayoutArea Address="@Application.Hub.Address" Area="Catalog"></LayoutArea>
+<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
+<div class="page-container">
+    <h1>Welcome to MeshWeaver</h1>
+    <div class="main-text">
+        MeshWeaver is an advanced distributed application platform that seamlessly connects data analysis,
+        interactive visualization, and real-time collaboration in a unified ecosystem.
+        Designed for modern web applications,
+        MeshWeaver empowers developers and data professionals to create interactive,
+        data-driven experiences with minimal effort.
 
+        Designed as a <a href="https://en.wikipedia.org/wiki/Data_mesh">Data Mesh</a>,
+        MeshWeaver allows users to
+        <ul>
+            <li><b>Publish</b> data including their Service Level Objectives,</li>
+            <li><b>Discover</b> data to be used in their own reporting,</li>
+            <li><b>Collaborate</b> on data using business applications,</li>
+            <li><b>Document</b> your data using <em>Interactive Markdown</em>.</li>
+        </ul>
+
+        For more information, have a look at our resources
+    </div>
+    <div class="info-links @DarkModeClass">
+        <a href="/articles" class="info-link" title="Read our Blog">
+            <FluentIcon Color="Color.FillInverse" Icon="@Icons.Regular.Size24.Book"></FluentIcon>
+            <span>Blog</span>
+        </a>
+        <a href="https://www.youtube.com/@@meshweaver" class="info-link" title="Visit our YouTube Channel" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.YouTube"></FluentIcon>
+            <span>YouTube</span>
+        </a>
+        <a href="https://meshweaver.cloud" class="info-link" title="Visit our Landing Page" target="_blank">
+            <MeshWeaverLogo Height="24px" Width="24px"></MeshWeaverLogo>
+            <span>Landing Page</span>
+        </a>
+        <a href="https://github.com/Systemorph/MeshWeaver" class="info-link" title="Visit our GitHub Repository" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.GitHub"></FluentIcon>
+            <span>GitHub</span>
+        </a>
+        <a href="https://discord.gg/YSNEtSHa" class="info-link" title="Join our Discord Community" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Discord"></FluentIcon>
+            <span>Discord</span>
+        </a>
+    </div>
+    <div class="main-text follow-us">
+        or follow us on Social Media
+    </div>
+    <h4>Roland Bürgi</h4>
+    <div class="info-links @DarkModeClass">
+        <a href="https://www.linkedin.com/in/rolandb" class="info-link" title="Follow Roland Bürgi on LinkedIn" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
+            <span>LinkedIn</span>
+        </a>
+        <a href="https://x.com/@@swissionary" class="info-link" title="Follow Roland Bürgi on X" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.X"></FluentIcon>
+            <span>X</span>
+        </a>
+        <a href="https://bsky.app/profile/swissionary.bsky.social" class="info-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
+            <span>Bluesky</span>
+        </a>
+    </div>
+    <h4>Stefan Bernegger</h4>
+    <div class="info-links @DarkModeClass">
+        <a href="https://www.linkedin.com/in/stefan-bernegger-719a5a39/" class="info-link" title="Follow Stefan Bernegger on LinkedIn" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
+            <span>LinkedIn</span>
+        </a>
+        <a href="https://x.com/@@s_bernegger" class="info-link" title="Follow Stefan Bernegger on X" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.X"></FluentIcon>
+            <span>X</span>
+        </a>
+        <a href="https://bsky.app/profile/steivan.bsky.social" class="info-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
+            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
+            <span>Bluesky</span>
+        </a>
+
+    </div>
+</div>
+
+@code {
+    private DesignThemeModes Mode;
+    private string DarkModeClass => Mode == DesignThemeModes.Dark ? "fluent-dark-theme" : string.Empty;
+}

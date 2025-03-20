@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <ProjectGuid>{8474dc55-89f0-4be1-93ed-4c1ff18377d9}</ProjectGuid>
     <RootNamespace>MeshWeaver.Messaging</RootNamespace>
   </PropertyGroup>
 

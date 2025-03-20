@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{6f6deed4-65c1-4e88-bbea-489f56cd62de}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" />
   </ItemGroup>

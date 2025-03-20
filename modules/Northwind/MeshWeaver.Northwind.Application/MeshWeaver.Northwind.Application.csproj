@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+    <ProjectGuid>{20e4ca31-72d9-4509-8338-f1a6772c7fed}</ProjectGuid>
         <HasMeshNodes>true</HasMeshNodes>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
@@ -26,6 +27,7 @@
     </ItemGroup>
 
     <PropertyGroup>
+    <ProjectGuid>{20e4ca31-72d9-4509-8338-f1a6772c7fed}</ProjectGuid>
         <!-- Generate XML comment files -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>

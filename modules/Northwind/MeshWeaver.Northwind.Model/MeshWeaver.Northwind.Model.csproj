@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{924251bc-d289-4e13-ae25-ff5abe758887}</ProjectGuid>
+  </PropertyGroup>
 
   <ItemGroup>
     <None Remove="Files\categories.csv" />

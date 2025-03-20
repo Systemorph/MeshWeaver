@@ -95,7 +95,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
             host.Stream.GetDataStream<T>(id)
-                .Throttle(TimeSpan.FromMilliseconds(100)) // Throttle the stream to take snapshots every 100ms
+                .Sample(TimeSpan.FromMilliseconds(300)) // Throttle the stream to take snapshots every 100ms
                 .Select(x => result.Invoke(x,host, ctx)));
     }
 
@@ -185,7 +185,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Throttle(TimeSpan.FromMilliseconds(100)) // Throttle the stream to take snapshots every 100ms
+                    .Sample(TimeSpan.FromMilliseconds(200)) // Throttle the stream to take snapshots every 100ms
                     .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 

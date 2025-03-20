@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{e0e724d2-3ba0-49f9-a4fc-3cf8802fa247}</ProjectGuid>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.DotNet.Interactive" />
     <PackageReference Include="Microsoft.DotNet.Interactive.CSharp" />

@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
+    <ProjectGuid>{a4870b50-f204-4fb3-8965-bc9c28a8dcd8}</ProjectGuid>
         <IsAspireSharedProject>true</IsAspireSharedProject>
     </PropertyGroup>
 
@@ -15,10 +16,15 @@
       <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
       <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
       <PackageReference Include="Serilog.AspNetCore" />
+      <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
+      <PackageReference Include="Azure.Identity" />
+      <PackageReference Include="Aspire.Npgsql" />
+      <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
       <PackageReference Include="Serilog.Sinks.PostgreSQL" />
   </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
       <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
       <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     </ItemGroup>

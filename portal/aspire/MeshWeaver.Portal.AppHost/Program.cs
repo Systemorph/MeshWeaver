@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Hosting;
 
+// Add this namespace for Azure resources
+
 var builder = DistributedApplication.CreateBuilder(args);
 
 // Application storage (for tables and blobs)
@@ -9,67 +11,96 @@ if (builder.Environment.IsDevelopment())
     appStorage = appStorage.RunAsEmulator(
         azurite =>
         {
-            azurite.WithDataBindMount("../Azurite/Data")
+            azurite.WithDataBindMount("../../Azurite/Data")
                 .WithExternalHttpEndpoints();
         });
 }
 
-var postgres = builder
-    .AddPostgres("postgres")
-    .WithPgAdmin()
-    .WithDataVolume()
-;
-var meshweaverdb = postgres.AddDatabase("meshweaverdb");
-
-
 // Create Azure Table resources for Orleans clustering and storage
 var orleansTables = appStorage.AddTables("orleans-clustering");
-var addressRegistryTables = appStorage.AddTables("address-registry");
-var meshCatalogTables = appStorage.AddTables("mesh-catalog");
-var activityTables = appStorage.AddTables("activity");
-
 
 var orleans = builder.AddOrleans("mesh")
-    .WithClustering(orleansTables)
-    .WithGrainStorage("address-registry", addressRegistryTables)
-    .WithGrainStorage("mesh-catalog", meshCatalogTables)
-    .WithGrainStorage("activity", activityTables);
+    .WithClustering(orleansTables);
 
-var silo = builder
-    .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
-    .WithReference(orleans)
-    .WithReference(meshweaverdb)
-    .WaitFor(meshweaverdb)
-    .WaitFor(orleansTables)
-    .WaitFor(addressRegistryTables)
-    .WaitFor(meshCatalogTables)
-    .WaitFor(activityTables)
-    .WithEnvironment("ORLEANS_NETWORKING_REUSEADDRESS", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEENABLED", "true")
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVEINTERVAL", "60") // seconds
-    .WithEnvironment("ORLEANS_NETWORKING_KEEPALIVETIMEOUT", "300"); // seconds;
-var frontend = builder
+// PostgreSQL database setup - conditionally use containerized or Azure PostgreSQL
+if (!builder.ExecutionContext.IsPublishMode)
+{
+    // Use containerized PostgreSQL for development
+    var postgres = builder
+        .AddPostgres("postgres")
+        .WithPgAdmin()
+        .WithDataVolume();
+
+    var meshweaverdb = postgres.AddDatabase("meshweaverdb");
+
+    // Add database migration service
+    var migrationService = builder
+        .AddProject<Projects.MeshWeaver_Portal_MigrationService>("db-migrations")
+        .WithReference(meshweaverdb)
+        .WaitFor(meshweaverdb);
+
+    // Configure the silo to wait for database migrations to complete
+    var silo = builder
+        .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
+        .WithReference(orleans)
+        .WithReference(meshweaverdb)
+        .WaitForCompletion(migrationService)
+        .WaitFor(orleansTables);
+
+    // Configure the frontend to wait for database migrations to complete
+    var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()
         .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("articles"))
         .WithReference(meshweaverdb)
-        .WaitFor(meshweaverdb)
-        .WaitFor(orleansTables)
-    ;
-
-if (builder.ExecutionContext.IsPublishMode)
+        .WaitForCompletion(migrationService)
+        .WaitFor(orleansTables);
+}
+else
 {
-    // Add Application Insights
-    var insights = builder.ExecutionContext.IsPublishMode
-        ? builder.AddAzureApplicationInsights("meshweaverinsights")
-        : builder.AddConnectionString("meshweaverinsights", "APPLICATIONINSIGHTS_CONNECTION_STRING");
+    // For production, use Azure PostgreSQL with managed identity
+    var azurePostgres = builder
+        .AddAzurePostgresFlexibleServer("azure-postgres");
 
+
+    var azureMeshweaverdb = azurePostgres.AddDatabase("meshweaverdb");
+
+    // Add database migration service
+    var migrationService = builder
+        .AddProject<Projects.MeshWeaver_Portal_MigrationService>("db-migrations")
+        .WithReference(azureMeshweaverdb)
+        .WaitFor(azureMeshweaverdb);
+
+    // Configure the silo to wait for database migrations to complete
+    var silo = builder
+        .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
+        .WithReplicas(1)
+        .WithReference(orleans)
+        .WithReference(azureMeshweaverdb)
+        .WaitForCompletion(migrationService)
+        .WaitFor(orleansTables);
+
+    // Configure the frontend to wait for database migrations to complete
+    var frontend = builder
+        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
+        .WithExternalHttpEndpoints()
+        .WithReference(orleans.AsClient())
+        .WithReference(appStorage.AddBlobs("articles"))
+        .WithReference(azureMeshweaverdb)
+        .WaitForCompletion(migrationService)
+        .WaitFor(orleansTables);
+
+    // Add Application Insights
+    var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
     silo.WithReference(insights);
     frontend.WithReference(insights);
+
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
+    // Add Azure PostgreSQL connection string parameter for production
+
     frontend
         .PublishAsAzureContainerApp((module, app) =>
         {
@@ -78,7 +109,6 @@ if (builder.ExecutionContext.IsPublishMode)
 #pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
         });
 }
-
 
 var app = builder.Build();
 

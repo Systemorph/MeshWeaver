@@ -13,6 +13,7 @@
         <EmbeddedResource Include="Markdown\**\*.*" />
     </ItemGroup>
     <PropertyGroup>
+    <ProjectGuid>{da3509ce-b75a-49e2-a174-ad01befe124f}</ProjectGuid>
         <!--generate xml comment files -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>

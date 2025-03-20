@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <ProjectGuid>{93cfd3cd-b6f8-4998-8f66-109ad9f75bb6}</ProjectGuid>
     <RootNamespace>MeshWeaver.Arithmetics</RootNamespace>
   </PropertyGroup>
 </Project>

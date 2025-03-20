@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
     <PropertyGroup>
+    <ProjectGuid>{44913a0a-6d4d-4eea-ac8c-15cbfec5c434}</ProjectGuid>
         <Description>Blazor component for AG Grid integration.</Description>
         <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>

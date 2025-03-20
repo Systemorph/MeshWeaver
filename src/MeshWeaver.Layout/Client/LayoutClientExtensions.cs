@@ -15,8 +15,8 @@ namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
-    public static void UpdatePointer<T>(this ISynchronizationStream<JsonElement> stream, 
-        T value,
+    public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
+        object value,
         string dataContext,
         JsonPointerReference reference, ModelParameter model = null)
     {
@@ -69,7 +69,8 @@ public static class LayoutClientExtensions
         string dataContext = null, 
         Func<object, T> conversion = null) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
-            .Select(conversion ?? (x => stream.Hub.ConvertSingle<T>(x, null)));
+            .Select(conversion ?? (x => stream.Hub.ConvertSingle<T>(x, null)))
+            .DistinctUntilChanged();
 
 
     public static JsonElement? GetValueFromModel(this ModelParameter model, JsonPointerReference reference)

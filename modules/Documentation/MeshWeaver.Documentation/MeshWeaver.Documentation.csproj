@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <ProjectGuid>{263ed237-5052-4c87-a14f-07e88bc02e21}</ProjectGuid>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -13,6 +14,7 @@
     </ItemGroup>
 
     <PropertyGroup>
+    <ProjectGuid>{263ed237-5052-4c87-a14f-07e88bc02e21}</ProjectGuid>
         <!-- Generate XML comment files -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>

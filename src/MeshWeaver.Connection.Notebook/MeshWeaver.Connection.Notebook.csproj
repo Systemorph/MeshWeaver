@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
+    <ProjectGuid>{162356d3-bf35-49c7-96ee-053fdde0a891}</ProjectGuid>
         <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
         <NoWarn>NU1604;AD0001</NoWarn>
     </PropertyGroup>

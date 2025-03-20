@@ -53,7 +53,11 @@ public static class SharedPortalConfiguration
             =>
             (TBuilder)builder.ConfigureServices(services =>
             {
-                services.AddRazorPages()
+                services.AddRazorPages(options =>
+                {
+                    options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute());
+                })
+
                 .AddMicrosoftIdentityUI();
                 services.AddRazorComponents().AddInteractiveServerComponents();
                 services.AddSingleton<CacheStorageAccessor>();

@@ -6,12 +6,10 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Orleans.Providers;
 using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
-[StorageProvider(ProviderName = StorageProviders.Activity)]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain, IMessageHubGrain
 {
@@ -98,6 +96,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
+
+
 }
 
 

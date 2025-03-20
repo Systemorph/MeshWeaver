@@ -31,10 +31,12 @@ public class ArticleService : IArticleService
 
     public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions)
     {
+        var now = DateTime.UtcNow;
         return collections.Values.Select(c => c.GetArticles(catalogOptions))
             .CombineLatest()
             .Select(x => x
                 .SelectMany(y => y)
+                .Where(a => a.Published is not null && a.Published <= now)
                 .OrderByDescending(a => a.Published))
                 ;
     }

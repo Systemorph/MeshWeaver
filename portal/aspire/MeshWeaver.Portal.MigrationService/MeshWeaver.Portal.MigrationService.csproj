@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+    <PropertyGroup>
+    <ProjectGuid>{9402ddb6-032f-4c1b-af08-ea743209f6f4}</ProjectGuid>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Portal.ServiceDefaults\MeshWeaver.Portal.ServiceDefaults.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+      <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+      <PackageReference Include="Microsoft.Extensions.Hosting" />
+    </ItemGroup>
+</Project>

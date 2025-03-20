@@ -4,6 +4,13 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
+public record MessageLog(
+    string Level, 
+    DateTimeOffset Timestamp, 
+    string Message, 
+    string Exception, 
+    string Properties
+    );
 public record MeshNode(
     string AddressType,
     string AddressId, 
@@ -18,7 +25,8 @@ public record MeshNode(
     public string AssemblyLocation { get; init; }
     [JsonIgnore]
     public Func<MessageHubConfiguration, MessageHubConfiguration> HubConfiguration { get; init; }
-    public string StartupScript { get; init; }
+    public string StartupScript { get; init; 
+    }
     public RoutingType RoutingType { get; init; }
     public InstantiationType InstantiationType { get; set; }
 

@@ -11,12 +11,16 @@ public static class OrleansServerRegistryExtensions
 {
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
         this IHostApplicationBuilder hostBuilder,
-        Address address)
+        Address address,
+        Func<ISiloBuilder, ISiloBuilder> orleansConfiguration = null
+        )
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
         meshBuilder.Host.UseOrleans(silo =>
         {
             silo.ConfigureMeshWeaverServer();
+            if(orleansConfiguration is not null)
+                orleansConfiguration.Invoke(silo);
         });
         return meshBuilder.UseOrleansMeshServer();
     }
@@ -45,7 +49,6 @@ public static class OrleansServerRegistryExtensions
     public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
         return silo.AddMemoryStreams(StreamProviders.Memory)
-            .AddMemoryStreams(StreamProviders.Mesh)
             .AddMemoryGrainStorage("PubSubStore");
 
 

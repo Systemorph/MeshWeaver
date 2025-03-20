@@ -1,5 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <ProjectGuid>{e0fd003e-3b33-4b0f-922a-563b0b03740d}</ProjectGuid>
     <RootNamespace>MeshWeaver.DataCubes</RootNamespace>
   </PropertyGroup>
 	<ItemGroup>

@@ -1,4 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{99d1ee84-f6ea-448a-bf1b-7f7bfc46e9a1}</ProjectGuid>
+  </PropertyGroup>
     <ItemGroup>
     <PackageReference Include="Microsoft.Orleans.Core.Abstractions" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
