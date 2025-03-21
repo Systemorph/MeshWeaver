@@ -22,7 +22,7 @@
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.0.0" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.24.0" />
     <PackageVersion Include="Azure.Storage.Files.Shares" Version="12.21.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
     <PackageVersion Include="BlazorMonaco" Version="3.2.0" />
@@ -38,8 +38,8 @@
     <PackageVersion Include="Markdig" Version="0.40.0" />
     <PackageVersion Include="Microsoft.AspNetCore.CookiePolicy" Version="2.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.AzureStorage" Version="3.1.24" />
-    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="9.0.2" />
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.3" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client.Core" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.4" />
@@ -54,7 +54,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="9.0.0-preview.9.24556.5" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.CommandLine" Version="9.0.3" />
@@ -96,7 +96,7 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="9.2.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="9.3.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="9.0.0" />
@@ -121,8 +121,8 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.13.1" />
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.13.1" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.13.1" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.11.6" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.6" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.11.7" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.7" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="9.1.2" />
@@ -131,6 +131,6 @@
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="9.1.0" />
     <PackageVersion Include="xunit.abstractions" Version="2.0.3" />
     <PackageVersion Include="xunit.extensibility.core" Version="2.9.3" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="9.0.3" />
   </ItemGroup>
 </Project>
