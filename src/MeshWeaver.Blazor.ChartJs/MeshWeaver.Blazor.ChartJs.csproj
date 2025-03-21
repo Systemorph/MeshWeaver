@@ -1,12 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
   <PropertyGroup>
     <ProjectGuid>{0dfd08b8-7fd8-4834-8222-f998a68575b0}</ProjectGuid>
+      <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.ChartJs</StaticWebAssetBasePath>
   </PropertyGroup>
 
   <Import Project="StaticAssets\StaticAssets.targets" />
     
   <ItemGroup>
-    <SupportedPlatform Include="browser" />
+      <SupportedPlatform Include="browser" />
+      <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
   </ItemGroup>
 
   <ItemGroup>
