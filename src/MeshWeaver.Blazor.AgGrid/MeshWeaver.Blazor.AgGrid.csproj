@@ -1,15 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
     <PropertyGroup>
-    <ProjectGuid>{44913a0a-6d4d-4eea-ac8c-15cbfec5c434}</ProjectGuid>
+        <ProjectGuid>{44913a0a-6d4d-4eea-ac8c-15cbfec5c434}</ProjectGuid>
         <Description>Blazor component for AG Grid integration.</Description>
         <PackageReadmeFile>README.md</PackageReadmeFile>
+        <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.AgGrid</StaticWebAssetBasePath>
     </PropertyGroup>
 
     <Import Project="StaticAssets\StaticAssets.targets" />
 
     <ItemGroup>
         <SupportedPlatform Include="browser" />
+        <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
         <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
         <None Include="README.md" Pack="true" PackagePath="" />
     </ItemGroup>
