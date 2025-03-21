@@ -1,16 +1,16 @@
 <Project>
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Packages.props', '$(MSBuildThisFileDirectory)../'))" />
   <ItemGroup>
-    <PackageVersion Include="FluentAssertions" Version="8.1.1" />
+    <PackageVersion Include="FluentAssertions" Version="8.2.0" />
     <PackageVersion Include="FluentAssertions.Json" Version="8.0.0" />
     <PackageVersion Include="JsonDiffPatch.Net" Version="2.3.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="9.0.3" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
     <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="9.1.2" />
     <PackageVersion Include="Testcontainers" Version="4.3.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.3.0" />
-    <PackageVersion Include="Verify.Xunit" Version="28.13.0" />
+    <PackageVersion Include="Verify.Xunit" Version="28.16.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
   </ItemGroup>

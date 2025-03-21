@@ -3,17 +3,18 @@
     <Import Project="StaticAssets\StaticAssets.targets" />
 
     <PropertyGroup>
-    <ProjectGuid>{ce297aa3-047e-49f5-9b04-e02385772a5b}</ProjectGuid>
+        <ProjectGuid>{ce297aa3-047e-49f5-9b04-e02385772a5b}</ProjectGuid>
         <RazorCompileOnBuild>true</RazorCompileOnBuild>
         <RazorLangVersion>3.0</RazorLangVersion>
+        <StaticWebAssetBasePath>_content/MeshWeaver.Blazor</StaticWebAssetBasePath>
     </PropertyGroup>
 
 
 
     <ItemGroup>
         <SupportedPlatform Include="browser" />
-        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
         <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
+        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
     </ItemGroup>
 
     <ItemGroup>
