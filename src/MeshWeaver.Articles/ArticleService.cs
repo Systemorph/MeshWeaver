@@ -26,8 +26,14 @@ public class ArticleService : IArticleService
 
     private readonly IReadOnlyDictionary<string, ArticleCollection> collections;
 
-    public ArticleCollection GetCollection(string collection)
+    private ArticleCollection GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
+
+    public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
+    {
+        var coll = GetCollection(collection);
+        return coll.GetContentAsync(path, ct);
+    }
 
     public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions)
     {

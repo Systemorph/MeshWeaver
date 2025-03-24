@@ -18,7 +18,7 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
 
     public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
 
-    public abstract Task<byte[]> GetContentAsync(string path, CancellationToken ct = default);
+    public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
@@ -69,15 +69,14 @@ public class FileSystemArticleCollection : ArticleCollection
         articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
 
-    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
+    public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
             return null;
         var fullPath = Path.Combine(BasePath, path);
-        if(!File.Exists(fullPath))
+        if (!File.Exists(fullPath))
             return null;
-        return await File.ReadAllBytesAsync(fullPath, ct);
-
+        return Task.FromResult<Stream>(File.OpenRead(fullPath));
     }
 
     private ISynchronizationStream<InstanceCollection> CreateStream(string path)
