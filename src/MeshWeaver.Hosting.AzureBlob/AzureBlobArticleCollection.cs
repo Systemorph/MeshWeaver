@@ -29,7 +29,7 @@ public class AzureBlobArticleCollection : ArticleCollection
     public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) =>
         articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
-    public override async Task<byte[]> GetContentAsync(string path, CancellationToken ct = default)
+    public override async Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
             return null;
@@ -38,9 +38,9 @@ public class AzureBlobArticleCollection : ArticleCollection
         if (!await blobClient.ExistsAsync(ct))
             return null;
 
-        using var memoryStream = new MemoryStream();
+        var memoryStream = new MemoryStream();
         await blobClient.DownloadToAsync(memoryStream, ct);
-        return memoryStream.ToArray();
+        return memoryStream;
     }
 
     private ISynchronizationStream<InstanceCollection> CreateStream(string containerName)
