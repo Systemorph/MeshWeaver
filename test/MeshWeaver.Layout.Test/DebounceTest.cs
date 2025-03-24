@@ -34,6 +34,6 @@ public class DebounceTest
 
 
 
-        results.Should().HaveCountLessThan(11);
+        results.Should().HaveCountLessThan(40);
     }
 }

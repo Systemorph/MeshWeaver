@@ -4,10 +4,13 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
 using Xunit.Abstractions;
@@ -30,20 +33,24 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
     {
 
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(
-            new LayoutAreaReference("Article") { Id = "Documentation/Calculator" });
+        var articleStream = client.RenderArticle("Documentation","Calculator");
 
         var control = await articleStream
-            .GetControlStream("Article")
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync();
 
-        var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
-        articleControl.Name.Should().Be("Calculator");
-        articleControl.Content.Should().BeNull();
-        articleControl.Html.Should().NotBe(null);
+        var article = control.Should().BeOfType<ArticleControl>().Which;
+        article.Name.Should().Be("Calculator");
+        article.Content.Should().BeNull();
+        article.Html.Should().NotBeNull();
+        var kernelAddress = new KernelAddress();
+        foreach (var s in article.CodeSubmissions)
+            client.Post(s, o => o.WithTarget(kernelAddress));
+
+        var html = article.Html.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
+
         var (addressString, area) = HtmlParser
-            .ExtractDataAddressAttributes(articleControl.Html.ToString())
+            .ExtractDataAddressAttributes(html)
             .Single();
         var address = client.GetAddress(addressString);
         var calcStream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(address, new(area));
