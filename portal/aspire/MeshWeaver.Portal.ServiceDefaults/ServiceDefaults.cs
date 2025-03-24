@@ -138,11 +138,11 @@ public static class ServiceDefaults
         return app;
     }
 
-    public static void ConfigurePostgreSqlContext(this IHostApplicationBuilder builder)
+    public static void ConfigurePostgreSqlContext(this IHostApplicationBuilder builder, string connectionName)
     {
         // First, set up the Npgsql data source with the password provider
         builder.AddNpgsqlDataSource(
-            "meshweaverdb",
+            connectionName,
             configureDataSourceBuilder: (dataSourceBuilder) =>
             {
                 if (string.IsNullOrEmpty(dataSourceBuilder.ConnectionStringBuilder.Password))
