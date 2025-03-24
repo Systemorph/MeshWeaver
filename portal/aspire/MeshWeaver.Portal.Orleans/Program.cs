@@ -9,7 +9,7 @@ builder.AddKeyedAzureTableClient("orleans-clustering");
 
 // Create MeshAddress instance
 var address = new MeshAddress();
-builder.ConfigurePostgreSqlContext();
+builder.ConfigurePostgreSqlContext("meshweaverdb");
 
 // Configure Orleans with Azure Table Storage
 builder.UseOrleansMeshServer(address)

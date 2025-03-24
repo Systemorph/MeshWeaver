@@ -1,27 +1,18 @@
 <Project>
   <PropertyGroup>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <TargetFramework>net9.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <DeployPath>$(SolutionDir)deploy</DeployPath>
-  </PropertyGroup>
-  <PropertyGroup>
     <Authors>Systemorph</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
-  </PropertyGroup>
-  <PropertyGroup>
-    <NoWarn>649;CA2255;$(NoWarn)</NoWarn>
+    <NoWarn>649;CA2255;NU5104;$(NoWarn)</NoWarn>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
   </PropertyGroup>
-  
-  <Target Name="CopyOutputToNuget" AfterTargets="Build" Condition="$(HasMeshNodes) == 'true'">
-    <ItemGroup>
-      <Dlls Include="$(OutputPath)*.dll" />
-      <WwwRoot Include="$(OutputPath)wwwroot\**\*.*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(Dlls)" DestinationFolder="$(DeployPath)\$(MSBuildProjectName)" />
-    <Copy SourceFiles="@(WwwRoot)" DestinationFolder="$(DeployPath)\$(MSBuildProjectName)\wwwroot\%(RecursiveDir)" />
-  </Target>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

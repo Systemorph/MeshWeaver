@@ -29,16 +29,15 @@ public static class BlazorHostingExtensions
     private static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
         => app.MapGet("/static/{collection}/{**path}", async (string collection, string path) =>
         {
-            var articleCollection = articleService.GetCollection(collection);
-            var fileContent = await articleCollection.GetContentAsync(path);
+            var stream = await articleService.GetContentAsync(collection, path);
 
-            if (fileContent is null)
+            if (stream is null)
             {
                 return Results.NotFound("File not found");
             }
 
             var contentType = "application/octet-stream"; // Default content type, you can adjust based on file type
 
-            return Results.File(fileContent, contentType, path);
+            return Results.File(stream, contentType, path);
         });
 }
