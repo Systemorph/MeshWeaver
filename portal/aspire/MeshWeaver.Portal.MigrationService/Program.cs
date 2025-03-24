@@ -13,7 +13,7 @@ builder.AddServiceDefaults();
 // Add the migration service
 builder.Services.AddHostedService<PostgreSqlMigrationService>();
 
-builder.ConfigurePostgreSqlContext();
+builder.ConfigurePostgreSqlContext("meshweaverdb");
 
 var app = builder.Build();
 app.MapDefaultEndpoints();

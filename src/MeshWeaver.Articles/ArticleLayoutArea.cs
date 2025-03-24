@@ -46,7 +46,9 @@ public static class ArticleLayoutArea
  
     public static IObservable<object> RenderArticle(this IMessageHub hub, string collection, string id) =>
         hub.GetArticle(collection, id)
-            .Select(a => a is null ? (object)new MarkdownControl($"No article {id} found in collection {collection}") : RenderArticle(a));
+            .Select(a => a is null ? 
+                (object)new MarkdownControl($"No article {id} found in collection {collection}") 
+                : RenderArticle(a));
 
     public static IObservable<Article> GetArticle(this IMessageHub hub, string collection, string id)
         => hub.GetArticleService().GetArticle(collection, id);

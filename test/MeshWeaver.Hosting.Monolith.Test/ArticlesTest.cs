@@ -2,11 +2,9 @@
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using HtmlAgilityPack;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -59,11 +57,9 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task BasicArticle()
     {
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(
-            new LayoutAreaReference("Article") { Id = "Test/Overview" });
+        var articleStream = client.RenderArticle("Test","Overview");
 
         var control = await articleStream
-            .GetControlStream("Article")
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -76,11 +72,9 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task NotFound()
     {
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(
-            new LayoutAreaReference("Article") { Id = "Test/NotFound" });
+        var articleStream = client.RenderArticle("Test","NotFound");
 
         var control = await articleStream
-            .GetControlStream("Article")
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
 
