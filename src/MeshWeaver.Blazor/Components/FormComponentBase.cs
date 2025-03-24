@@ -2,6 +2,7 @@
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.DataBinding;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -31,7 +32,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataBind(ViewModel.Label, x => x.Label);
         valueUpdateSubject = new();
         AddBinding(valueUpdateSubject
-            .Sample(TimeSpan.FromMilliseconds(100))
+            .Debounce(TimeSpan.FromMilliseconds(100))
             .DistinctUntilChanged()
             .Skip(1)
             .Subscribe(x => UpdatePointer(ConvertToData(value), Pointer))
