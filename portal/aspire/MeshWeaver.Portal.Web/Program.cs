@@ -17,7 +17,7 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();
-builder.ConfigurePostgreSqlContext();
+builder.ConfigurePostgreSqlContext("meshweaverdb");
 builder.UseOrleansMeshClient(new MeshAddress())
     .AddEfCoreSerilog()
     .ConfigureWebPortal()

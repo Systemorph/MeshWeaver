@@ -32,7 +32,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataBind(ViewModel.Label, x => x.Label);
         valueUpdateSubject = new();
         AddBinding(valueUpdateSubject
-            .Debounce(TimeSpan.FromMilliseconds(100))
+            .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
             .Subscribe(x => UpdatePointer(ConvertToData(value), Pointer))

@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
-public class PostgreSqlArticleService(IServiceProvider serviceProvider) : IArticleService
+public class PostgreSqlArticleService() : IArticleService
 {
     public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
