@@ -2,8 +2,8 @@
 Title: "Using external libraries"
 Abstract: >
     In this article we show how to include external libraries.
-Thumbnail: "images/Reactive Dialogs.jpeg"
-Published: "2025-03-02"
+Thumbnail: "images/Libraries.jpg"
+Published: "2025-03-25"
 Authors:
   - "Roland Bürgi"
 Tags:

@@ -75,4 +75,4 @@ The backbone of MeshWeaver is its message hub system (`MeshWeaver.Messaging.Hub`
 
 ## Contributing
 
-We welcome contributions! Join our [Discord](https://discord.gg/YSNEtSHa) to discuss features, report issues, or get help. 
+We welcome contributions! Join our [Discord](https://discord.gg/wMTug8qtvc) to discuss features, report issues, or get help. 

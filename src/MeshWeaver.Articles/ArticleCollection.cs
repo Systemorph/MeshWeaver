@@ -108,13 +108,15 @@ public class FileSystemArticleCollection : ArticleCollection
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        UpdateArticle(e.FullPath);
+        if(Path.GetExtension(e.FullPath) == ".md")
+            UpdateArticle(e.FullPath);
     }
 
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        UpdateArticle(e.FullPath);
+        if (Path.GetExtension(e.FullPath) == ".md")
+            UpdateArticle(e.FullPath);
     }
 
     private void UpdateArticle(string path)
