@@ -83,10 +83,9 @@ public static class ArticleExtensions
 
 public record ArticleCatalogOptions
 {
-    internal ImmutableHashSet<string> Tags { get; init; }= [];
-
-    public ArticleCatalogOptions WithTag(string northwind)
-        => this with { Tags = Tags.Add(northwind) };
+    public string Collection { get; init; }
+    public int Page { get; init; }
+    public int PageSize { get; init; } = 10;
 }
 
 

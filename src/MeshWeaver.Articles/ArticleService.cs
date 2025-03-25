@@ -35,20 +35,34 @@ public class ArticleService : IArticleService
         return coll.GetContentAsync(path, ct);
     }
 
-    public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions)
+    public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
+        CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        return collections.Values.Select(c => c.GetArticles(catalogOptions))
-            .CombineLatest()
-            .Select(x => x
-                .SelectMany(y => y)
-                .Where(a => a.Published is not null && a.Published <= now)
-                .OrderByDescending(a => a.Published))
-                ;
+        var allCollections = 
+            string.IsNullOrEmpty(catalogOptions.Collection)
+            ? collections.Values
+            : [collections[catalogOptions.Collection]];
+        return (await allCollections.Select(c => c.GetArticles(catalogOptions))
+                .CombineLatest()
+                .Select(x => x
+                    .SelectMany(y => y)
+                    .Where(a => a.Published is not null && a.Published <= now)
+                    .OrderByDescending(a => a.Published))
+                .Skip(catalogOptions.Page * catalogOptions.PageSize)
+                .Take(catalogOptions.PageSize)
+                .FirstAsync())
+            .ToArray()
+            ;
     }
 
     public IObservable<Article> GetArticle(string collection, string article)
     {
         return GetCollection(collection)?.GetArticle(article);
+    }
+
+    public Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default)
+    {
+        return Task.FromResult<IReadOnlyCollection<ArticleCollection>>(collections.Values.ToArray());
     }
 }

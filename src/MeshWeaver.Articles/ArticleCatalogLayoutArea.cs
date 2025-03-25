@@ -1,5 +1,4 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
@@ -14,18 +13,16 @@ public static class ArticleCatalogLayoutArea
     /// </summary>
     /// <param name="host"></param>
     /// <param name="ctx">Rendering context</param>
+    /// <param name="ct"></param>
     /// <returns></returns>
-    public static IObservable<object> Catalog(LayoutAreaHost host, RenderingContext ctx)
+    public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
     {
         var collection = host.Hub.GetArticleService();
-        return
-            collection.GetArticleCatalog(ParseToOptions(host.Reference))
-                .Select(x =>
-                    x.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
+        var articles = await collection.GetArticleCatalog(ParseToOptions(host.Reference), ct);
+        return articles.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))
                     )
                     .WithPageTitle("Articles")
-                )
             ;
     }
 
@@ -40,7 +37,10 @@ public static class ArticleCatalogLayoutArea
     private static ArticleCatalogOptions ParseToOptions(LayoutAreaReference reference)
     {
         // TODO V10: Need to create some link from layout area reference id to options ==> url parsing. (24.01.2025, Roland Bürgi)
-        return new();
+        return new()
+        {
+            Collection = reference.Id?.ToString()
+        };
     }
 
     public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection, string displayName = null)
