@@ -1,10 +1,13 @@
-﻿@page "/articles/{**Options}"
+﻿@page "/articles/{**Collection}"
 @using MeshWeaver.Blazor.Infrastructure
 @inject PortalApplication Portal
-
-<LayoutArea Address="@Portal.Hub.Address" Area="Catalog" Id="@Options"/>
+<FluentToolbar>
+    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())">Add</FluentButton>
+    <FluentSelect Placeholder="Collection" bind-value="@collectionFilter" Items="@collections" OptionText="@(a => a.Text)" OptionValue="@(a => a.Value)" ValueChanged="SelectionChanged" />
+</FluentToolbar>
+<LayoutArea Address="@Portal.Hub.Address" Area="Catalog" Id="@collectionFilter" />
 @code
 {
     [Parameter] public string Collection { get; set; }
-    [Parameter] public string Options { get; set; }
+
 }

@@ -9,12 +9,17 @@ public class PostgreSqlArticleService() : IArticleService
         throw new NotImplementedException();
     }
 
-    public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions options)
+    public Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions options, CancellationToken ct)
     {
         throw new NotImplementedException();
     }
 
     public IObservable<Article> GetArticle(string collection, string article)
+    {
+        throw new NotImplementedException();
+    }
+
+    public Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default)
     {
         throw new NotImplementedException();
     }
