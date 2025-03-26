@@ -1,5 +1,5 @@
-﻿using System.Diagnostics;
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
@@ -36,6 +36,33 @@ public static class SharedPortalConfiguration
 
         builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
             .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));
+        // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
+        builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+        {
+
+            // Get role mappings from configuration
+            var roleMappings = builder.Configuration
+                .GetSection("EntraId:Groups:RoleMappings")
+                .GetChildren()
+                .ToDictionary(x => x.Key, x => x.Value);
+
+            options.Events.OnTokenValidated = async context =>
+            {
+                var identity = context.Principal?.Identity as ClaimsIdentity;
+                if (identity?.IsAuthenticated == true)
+                {
+                    var groupClaims = identity.FindAll("groups").ToList();
+                    foreach (var groupClaim in groupClaims)
+                    {
+                        if (roleMappings.TryGetValue(groupClaim.Value, out var roleName))
+                        {
+                            identity.AddClaim(new Claim(ClaimTypes.Role, roleName));
+                        }
+                    }
+                }
+                await Task.CompletedTask;
+            };
+        });
 
         builder.Services.AddControllersWithViews()
             .AddMicrosoftIdentityUI();
@@ -79,7 +106,7 @@ public static class SharedPortalConfiguration
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SharedPortalConfiguration));
 #pragma warning disable CA1416
-        logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+        logger.LogInformation("Starting blazor server on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
 
 
@@ -111,7 +138,7 @@ public static class SharedPortalConfiguration
 
         app.Run();
 #pragma warning disable CA1416
-        logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+        logger.LogInformation("Started blazor server on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
     }
 }
