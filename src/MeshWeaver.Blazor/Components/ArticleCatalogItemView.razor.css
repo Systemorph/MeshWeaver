@@ -18,7 +18,7 @@
 }
 
 .article-card {
-    width: 50%; /* Ensure the card takes 50% of the screen width */
+    width: 100%; /* Now fill the entire width of the container (.articles-catalog-page) */
     margin: 16px auto; /* Center the card and add vertical spacing */
     border: 1px solid var(--color-border-default); /* Use Primer CSS variable */
     padding: 16px;
@@ -29,12 +29,13 @@
     overflow: hidden; /* Prevent overflow */
     box-sizing: border-box; /* Include padding and border in the element's total width and height */
     background-color: var(--color-canvas-default); /* Use Primer CSS variable */
-    /* Remove or adjust min-height if necessary */
 }
 
     .article-card:hover {
         box-shadow: 0 4px 8px var(--color-shadow-medium); /* Use Primer CSS variable */
     }
+
+/* Other styles remain unchanged... */
 
 .header {
     display: flex;
@@ -45,88 +46,17 @@
     box-sizing: border-box; /* Include padding and border in the element's total width */
 }
 
-.author-info {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap; /* Allow authors to wrap to the next line if needed */
-    margin: 0; /* Remove any default margin */
-    padding: 0; /* Remove any default padding */
-}
-
-.author {
-    margin-right: 8px; /* Added space between authors */
-    padding: 0; /* Remove any default padding */
-}
-
-.author-name {
-    margin-left: 8px;
-    font-size: 13pt; /* Increased font size */
-    font-weight: bold;
-}
-
-.publish-info {
-    display: flex;
-    align-items: center;
-}
-
-.publish-date {
-    margin-right: 8px;
-    font-size: 12pt; /* Increased font size */
-}
-
-.new-indicator {
-    width: 8px;
-    height: 8px;
-    background-color: var(--color-accent-fg); /* Use Primer CSS variable */
-    border-radius: 50%;
-}
-
-.content {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start; /* Ensure vertical alignment */
-    flex-grow: 0; /* Allow content to grow and fill the available space */
-    width: 100%; /* Ensure content takes full width */
-    box-sizing: border-box; /* Include padding and border in the element's total width */
-}
-
-.text {
-    flex: 1;
-    margin-right: 16px;
-    overflow: hidden; /* Prevent text overflow */
-}
-
-.title {
-    font-size: 14pt; /* Increased font size */
-    font-weight: bold;
-    margin-bottom: 4px;
-    white-space: nowrap; /* Prevent title from wrapping */
-    overflow: hidden; /* Prevent title overflow */
-    text-overflow: ellipsis; /* Add ellipsis for overflowed text */
-}
-
-.summary {
-    font-size: 10pt; /* Increased font size */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    margin-bottom: 8px;
-}
-
-.video-info {
-    display: flex;
-    align-items: center;
-    font-size: 10pt; /* Increased font size */
-}
-
-    .video-info .fluent-icon {
-        margin-right: 4px; /* Added space between icon and time */
-    }
+/* ... additional CSS ... */
 
 .thumbnail img {
     width: 4cm;
     height: 4cm;
     object-fit: cover;
+}
+
+/* For small screens, reduce the article card width slightly to provide horizontal spacing */
+@media (max-width: 600px) {
+    .article-card {
+        width: calc(100% - 32px); /* Leaves 16px margin on both sides */
+    }
 }

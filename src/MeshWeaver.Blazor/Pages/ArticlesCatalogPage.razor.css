@@ -1,0 +1,14 @@
+﻿/* Wrapper container for overall page layout */
+.articles-catalog-page {
+    max-width: 800px; /* Adjust as needed */
+    margin: 0 auto;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+/* Basic toolbar layout */
+.toolbar {
+    display: flex;
+    align-items: center;
+}
+
