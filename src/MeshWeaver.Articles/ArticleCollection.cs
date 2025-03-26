@@ -40,6 +40,10 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
                 })).ToImmutableDictionary();
     }
 
+    public abstract Task<IReadOnlyCollection<string>> GetFoldersAsync(string path);
+
+    public abstract Task<IReadOnlyCollection<string>> GetFilesAsync(string path);
+    public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
 }
 
 public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
@@ -168,5 +172,25 @@ public class FileSystemArticleCollection : ArticleCollection
         articleStream.Dispose();
         watcher?.Dispose();
         watcher = null;
+    }
+
+    public override async Task<IReadOnlyCollection<string>> GetFoldersAsync(string path)
+    {
+        var fullPath = Path.Combine(BasePath, path);
+        return await Directory.GetDirectories(fullPath).ToAsyncEnumerable().ToArrayAsync();
+    }
+
+    public override async Task<IReadOnlyCollection<string>> GetFilesAsync(string path)
+    {
+        var fullPath = Path.Combine(BasePath, path);
+        return await Directory.GetFiles(fullPath).ToAsyncEnumerable().ToArrayAsync();
+    }
+
+    public override async Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+    {
+        var fullPath = Path.Combine(path, fileName);
+        await using var fileStream =
+            new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.Write);
+        await openReadStream.CopyToAsync(fileStream);
     }
 }

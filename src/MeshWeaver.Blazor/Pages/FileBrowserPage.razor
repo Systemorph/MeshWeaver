@@ -5,16 +5,7 @@
 <Title>Browse @Collection</Title>
 <AuthorizeView Roles="@Roles.PortalAdmin">
     <Authorized>
-
-        <FluentToolbar Class="toolbar">
-            <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
-            <FluentSpacer></FluentSpacer>
-        </FluentToolbar>
-        @if (Collection is not null)
-        {
-            <h2>Browse @Collection</h2>
-            <FileBrowser Collection="@Collection"></FileBrowser>
-        }
+        <FileBrowser CollectionName="@Collection"></FileBrowser>
     </Authorized>
     <NotAuthorized>
         <h3>Access Denied</h3>

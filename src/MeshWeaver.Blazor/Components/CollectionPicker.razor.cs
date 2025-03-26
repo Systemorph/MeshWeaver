@@ -21,9 +21,11 @@ public partial class CollectionPicker
             options = options
                 .Prepend(new Option<string>() { Text = NullLabel });
 
-
-
         collections = options.ToArray();
+        if (NullLabel is null && Collection is null && collections.Any())
+        {
+            await OnValueChanged(collections.First().Value);
+        }
     }
     private Task OnValueChanged(string collection)
     {

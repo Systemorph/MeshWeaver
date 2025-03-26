@@ -19,7 +19,7 @@
             @if (!string.IsNullOrEmpty(selectedStorageAccount))
             {
                 <FileBrowser 
-                    Collection="@selectedStorageAccount"
+                    CollectionName="@selectedStorageAccount"
                     CurrentPath="@currentPath"
                     Folders="@folders"
                     Files="@files"
