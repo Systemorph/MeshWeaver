@@ -27,7 +27,7 @@ public static class BlazorHostingExtensions
         //app.MapRazorComponents<ApplicationPage>();
     }
     private static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
-        => app.MapGet("/static/{collection}/{**path}", async (string collection, string path) =>
+        => app.MapGet("/static/{collection}/{**path}", async (HttpContext context, string collection, string path) =>
         {
             var stream = await articleService.GetContentAsync(collection, path);
 
@@ -36,8 +36,46 @@ public static class BlazorHostingExtensions
                 return Results.NotFound("File not found");
             }
 
-            var contentType = "application/octet-stream"; // Default content type, you can adjust based on file type
+            // Determine content type based on file extension
+            var contentType = GetContentType(path);
 
-            return Results.File(stream, contentType, path);
+            // Configure caching headers
+            var cacheDuration = TimeSpan.FromDays(30);
+            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
+            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+
+            // Add ETag for cache validation (optional)
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            ms.Position = 0;
+            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
+            context.Response.Headers.ETag = $"\"{hash}\"";
+
+            return Results.File(ms.ToArray(), contentType, Path.GetFileName(path));
         });
+
+    private static string GetContentType(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".css" => "text/css",
+            ".js" => "application/javascript",
+            ".html" => "text/html",
+            ".htm" => "text/html",
+            ".json" => "application/json",
+            ".jpg" => "image/jpeg",
+            ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".svg" => "image/svg+xml",
+            ".webp" => "image/webp",
+            ".woff" => "font/woff",
+            ".woff2" => "font/woff2",
+            ".ttf" => "font/ttf",
+            ".eot" => "application/vnd.ms-fontobject",
+            ".otf" => "font/otf",
+            ".ico" => "image/x-icon",
+            _ => "application/octet-stream"
+        };
+    }
 }

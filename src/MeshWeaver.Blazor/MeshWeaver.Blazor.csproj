@@ -22,6 +22,8 @@
         <PackageReference Include="Microsoft.EntityFrameworkCore" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+        <PackageReference Include="Microsoft.Identity.Web" />
+        <PackageReference Include="Microsoft.Identity.Web.Ui" />
     </ItemGroup>
 
     <ItemGroup>

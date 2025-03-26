@@ -1,9 +1,16 @@
 ﻿@page "/articles/{**Collection}"
 @using MeshWeaver.Blazor.Infrastructure
+@using Microsoft.AspNetCore.Components.Authorization
+
 @inject PortalApplication Portal
 <FluentToolbar>
-    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())">Add</FluentButton>
     <FluentSelect Placeholder="Collection" bind-value="@collectionFilter" Items="@collections" OptionText="@(a => a.Text)" OptionValue="@(a => a.Value)" ValueChanged="SelectionChanged" />
+    <FluentSpacer></FluentSpacer>
+    <AuthorizeView Roles="@Roles.PortalAdmin">
+        <Authorized>
+            <FluentButton IconStart="@(new Icons.Regular.Size20.Add())">Add</FluentButton>
+        </Authorized>
+    </AuthorizeView>
 </FluentToolbar>
 <LayoutArea Address="@Portal.Hub.Address" Area="Catalog" Id="@collectionFilter" />
 @code
