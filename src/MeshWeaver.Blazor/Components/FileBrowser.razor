@@ -1,0 +1,106 @@
+﻿@using Microsoft.AspNetCore.Components.Forms
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+
+<div class="file-browser">
+    <!-- Breadcrumb Navigation -->
+    <FluentBreadcrumb>
+        <FluentBreadcrumbItem @onclick="() => NavigateToRoot()">Root</FluentBreadcrumbItem>
+        @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
+        {
+            <FluentBreadcrumbItem @onclick="() => NavigateToPath(folder)">@folder</FluentBreadcrumbItem>
+        }
+    </FluentBreadcrumb>
+
+    <!-- Folder and Files Display -->
+    <div class="content-browser">
+        <div class="folder-list">
+            @foreach (var folder in Folders)
+            {
+                <div class="folder-item" @onclick="() => NavigateToFolder(folder)">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Folder())" />
+                    <span>@folder</span>
+                </div>
+            }
+        </div>
+
+        <div class="file-list">
+            @foreach (var file in Files)
+            {
+                <div class="file-item" @onclick="() => SelectFile(file)">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Document())" />
+                    <span>@file</span>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="10">
+        <FluentButton Appearance="Appearance.Outline"
+                      @onclick="CreateFolderRequested"
+                      IconStart="@(new Icons.Regular.Size20.FolderAdd())">
+            Create Folder
+        </FluentButton>
+
+        <InputFile OnChange="HandleFileUpload" multiple />
+    </FluentStack>
+</div>
+
+@code {
+    [Parameter] public string Collection { get; set; }
+    [Parameter] public string CurrentPath { get; set; } = "/";
+    private List<string> Folders { get; set; } = new();
+    private List<string> Files { get; set; } = new();
+    private EventCallback<string> OnFolderNavigationRequested { get; set; }
+    private EventCallback<string> OnFileSelected { get; set; }
+    private EventCallback OnCreateFolderRequested { get; set; }
+    private EventCallback<InputFileChangeEventArgs> OnFileUploadRequested { get; set; }
+
+    private async Task NavigateToRoot()
+    {
+        await OnFolderNavigationRequested.InvokeAsync("/");
+    }
+
+    private async Task NavigateToPath(string folderName)
+    {
+        string path = "/";
+        string[] parts = CurrentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (parts[i] == folderName)
+            {
+                path += string.Join("/", parts.Take(i + 1));
+                break;
+            }
+            path += parts[i] + "/";
+        }
+
+        await OnFolderNavigationRequested.InvokeAsync(path);
+    }
+
+    private async Task NavigateToFolder(string folderName)
+    {
+        string path = CurrentPath.EndsWith("/")
+            ? $"{CurrentPath}{folderName}"
+            : $"{CurrentPath}/{folderName}";
+
+        await OnFolderNavigationRequested.InvokeAsync(path);
+    }
+
+    private async Task SelectFile(string fileName)
+    {
+        await OnFileSelected.InvokeAsync(fileName);
+    }
+
+    private async Task CreateFolderRequested()
+    {
+        await OnCreateFolderRequested.InvokeAsync();
+    }
+
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+        await OnFileUploadRequested.InvokeAsync(e);
+    }
+}

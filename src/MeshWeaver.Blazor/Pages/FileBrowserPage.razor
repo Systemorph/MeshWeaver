@@ -1,0 +1,28 @@
+﻿@page "/collections/{*Collection}"
+@using MeshWeaver.Blazor.Infrastructure
+@using Microsoft.AspNetCore.Components.Authorization
+
+<Title>Browse @Collection</Title>
+<AuthorizeView Roles="@Roles.PortalAdmin">
+    <Authorized>
+
+        <FluentToolbar Class="toolbar">
+            <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
+            <FluentSpacer></FluentSpacer>
+        </FluentToolbar>
+        @if (Collection is not null)
+        {
+            <h2>Browse @Collection</h2>
+            <FileBrowser Collection="@Collection"></FileBrowser>
+        }
+    </Authorized>
+    <NotAuthorized>
+        <h3>Access Denied</h3>
+        You need to have Portal Administrator role to administer collections. Please contact your system administrator
+    </NotAuthorized>
+</AuthorizeView>
+@code {
+    [Parameter] public string Collection { get; set; }
+
+    
+}
