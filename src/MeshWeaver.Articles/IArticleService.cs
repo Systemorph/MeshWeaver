@@ -7,4 +7,5 @@ public interface IArticleService
     IObservable<Article> GetArticle(string collection, string article);
 
     Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default);
+    ArticleCollection GetCollection(string collectionName);
 }
