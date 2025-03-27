@@ -39,7 +39,7 @@ jobs:
       run: dotnet pack --configuration Release --no-build --output ./nupkgs /p:PackageVersion=${{ env.VERSION }} /bl:msbuild.binlog
 
     - name: Upload binlog
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: msbuild-binlog
         path: msbuild.binlog
