@@ -7,7 +7,7 @@
             <FluentBreadcrumb>
                 @{
                     var accumulatedPath = string.Empty;
-                    <FluentBreadcrumbItem @onclick="NavigateToRoot">Root</FluentBreadcrumbItem>
+                    <FluentBreadcrumbItem @onclick="NavigateToRoot">@Root</FluentBreadcrumbItem>
                     @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
                     {
                         <FluentBreadcrumbItem @onclick="() => NavigateToBreadcrumb(accumulatedPath += '/' + folder)">@folder</FluentBreadcrumbItem>

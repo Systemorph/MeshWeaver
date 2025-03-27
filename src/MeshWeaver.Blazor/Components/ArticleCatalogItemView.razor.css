@@ -31,11 +31,9 @@
     background-color: var(--color-canvas-default); /* Use Primer CSS variable */
 }
 
-    .article-card:hover {
-        box-shadow: 0 4px 8px var(--color-shadow-medium); /* Use Primer CSS variable */
-    }
-
-/* Other styles remain unchanged... */
+.article-card:hover {
+    box-shadow: 0 4px 8px var(--color-shadow-medium); /* Use Primer CSS variable */
+}
 
 .header {
     display: flex;
@@ -46,7 +44,20 @@
     box-sizing: border-box; /* Include padding and border in the element's total width */
 }
 
-/* ... additional CSS ... */
+.content {
+    display: flex;
+    justify-content: space-between; /* Space between text and thumbnail */
+    align-items: flex-start; /* Align items at the start */
+    width: 100%; /* Ensure content takes full width */
+}
+
+.text {
+    flex: 1; /* Take up remaining space */
+}
+
+.thumbnail {
+    margin-left: 16px; /* Add some space between text and thumbnail */
+}
 
 .thumbnail img {
     width: 4cm;
@@ -54,9 +65,31 @@
     object-fit: cover;
 }
 
+.author-info {
+    display: flex;
+    flex-wrap: wrap; /* Allow authors to wrap to the next line if needed */
+    gap: 16px; /* Add more space between authors */
+}
+
+.author {
+    display: flex;
+    align-items: center;
+}
+
 /* For small screens, reduce the article card width slightly to provide horizontal spacing */
 @media (max-width: 600px) {
     .article-card {
-        width: calc(100% - 32px); /* Leaves 16px margin on both sides */
+        width: 100%; /* Take 90% of the width on small screens */
+        flex-direction: column; /* Stack content and thumbnail vertically on small screens */
+    }
+
+    .content {
+        flex-direction: row; /* Ensure content and thumbnail are next to each other */
+        align-items: flex-start; /* Align items at the top */
+    }
+
+    .thumbnail {
+        margin-left: 16px; /* Add some space between text and thumbnail */
+        margin-top: 0; /* Remove top margin for small screens */
     }
 }

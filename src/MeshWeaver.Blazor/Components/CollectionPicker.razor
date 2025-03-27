@@ -1,4 +1,4 @@
-<FluentSelect Width="150px" Placeholder="Collection" bind-value="@Collection" ValueChanged="OnValueChanged" Items="@collections" OptionText="@(a => a.Text)" OptionValue="@(a => a.Value)" />
+<FluentSelect Width="150px" Placeholder="@NullLabel" bind-value="SelectedCollection" ValueChanged="OnValueChanged" Items="@collections" OptionText="@(a => a.Text)" OptionValue="@(a => a.Value)" />
     
 @code
 {

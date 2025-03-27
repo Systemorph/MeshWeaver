@@ -8,10 +8,12 @@ public partial class CollectionPicker
 {
     private IReadOnlyCollection<Option<string>> collections;
     [Inject] private IArticleService ArticleService { get; set; }
-    [Parameter] public string NullLabel { get; set; } 
+    [Parameter] public string NullLabel { get; set; }
+    private string SelectedCollection { get; set; }
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
+        SelectedCollection = Collection;
         var definedCollections = await ArticleService.GetCollectionsAsync();
 
         var options = definedCollections
@@ -22,20 +24,20 @@ public partial class CollectionPicker
                 .Prepend(new Option<string>() { Text = NullLabel });
 
         collections = options.ToArray();
-        if (NullLabel is null && Collection is null && collections.Any())
+        if (NullLabel is null && SelectedCollection is null && collections.Any())
         {
             await OnValueChanged(collections.First().Value);
         }
     }
-    private Task OnValueChanged(string collection)
+    private async Task OnValueChanged(string collection)
     {
-        if (Collection == collection)
-            return Task.CompletedTask;
+        if (SelectedCollection == collection)
+            return;
         if(collection == NullLabel)
             collection = null;
-
-        Collection = collection;
-        return CollectionChanged.InvokeAsync(collection);
+        SelectedCollection = collection;
+        await CollectionChanged.InvokeAsync(collection);
+        await InvokeAsync(StateHasChanged);
     }
 
 }
