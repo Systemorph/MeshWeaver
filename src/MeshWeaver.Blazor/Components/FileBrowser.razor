@@ -1,6 +1,7 @@
 ﻿@using Microsoft.AspNetCore.Components.Forms
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 
 <div class="file-browser">
     <!-- Breadcrumb Navigation -->
@@ -16,38 +17,58 @@
         <FluentSpacer></FluentSpacer>
     </FluentToolbar>
 
-    <!-- Folder and Files Display -->
-    <div class="content-browser">
-        <div class="folder-list">
-            @foreach (var folder in Folders)
-            {
-                <div class="folder-item" @onclick="() => NavigateToFolder(folder)">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Folder())" />
-                    <span>@folder</span>
-                </div>
-            }
-        </div>
+    <!-- DataGrid for Folders -->
+    <FluentDataGrid Items="@FolderItems" 
+                    TGridItem="FolderGridItem"
+                    ShowHover="true"
+                    ResizableColumns="true">
+        <SelectColumn TGridItem="FolderGridItem"
+                      SelectMode="DataGridSelectMode.Multiple"
+                      SelectFromEntireRow="true"
+                      @bind-SelectedItems="@SelectedFolders" />
+        <TemplateColumn TGridItem="FolderGridItem" Title="Folders">
+            <div class="grid-item" @ondblclick="() => NavigateToFolder(context.Name)">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Folder())" />
+                <span>@context.Name</span>
+            </div>
+        </TemplateColumn>
+        <PropertyColumn Title="Items" Property="@(item => item.ItemCount)" />
+    </FluentDataGrid>
 
-        <div class="file-list">
-            @foreach (var file in Files)
-            {
-                <div class="file-item" @onclick="() => SelectFile(file)">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Document())" />
-                    <span>@file</span>
-                </div>
-            }
-        </div>
-    </div>
-
+    <!-- DataGrid for Files -->
+    <FluentDataGrid Items="@FileItems" 
+                    TGridItem="FileGridItem"
+                    ShowHover="true"
+                    ResizableColumns="true">
+        <SelectColumn TGridItem="FileGridItem"
+                      SelectMode="DataGridSelectMode.Multiple"
+                      SelectFromEntireRow="true"
+                      @bind-SelectedItems="@SelectedFiles" />
+        <TemplateColumn TGridItem="FileGridItem" Title="Files">
+            <div class="grid-item">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Document())" />
+                <span>@context.Name</span>
+            </div>
+        </TemplateColumn>
+        <PropertyColumn Title="Last Modified" Property="@(item => item.LastModified)" Format="yyyy-MM-dd HH:mm" />
+    </FluentDataGrid>
     <!-- Actions -->
-    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="10">
+    <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="10" VerticalAlignment="@VerticalAlignment.Center">
         <FluentButton Appearance="Appearance.Outline"
-                      @onclick="CreateFolderRequested"
-                      IconStart="@(new Icons.Regular.Size20.FolderAdd())">
+                     @onclick="CreateFolderRequested"
+                     IconStart="@(new Icons.Regular.Size20.FolderAdd())">
             Create Folder
         </FluentButton>
 
         <InputFile OnChange="HandleFileUpload" multiple />
+        
+        @if (SelectedFolders.Any() || SelectedFiles.Any())
+        {
+            <FluentButton Appearance="Appearance.Accent"
+                         IconStart="@(new Icons.Regular.Size20.Delete())"
+                         @onclick="DeleteSelectedItems">
+                Delete Selected (@(SelectedFolders.Count() + SelectedFiles.Count()))
+            </FluentButton>
+        }
     </FluentStack>
 </div>
-

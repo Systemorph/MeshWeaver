@@ -9,8 +9,27 @@ public partial class FileBrowser
     [Inject] private IArticleService ArticleService { get; set; }
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
-    private IReadOnlyCollection<string> Folders { get; set; } = [];
-    private IReadOnlyCollection<string> Files { get; set; } = [];
+
+    private IReadOnlyCollection<FolderInfo> Folders { get; set; } = [];
+    private IReadOnlyCollection<FileDetails> Files { get; set; } = [];
+
+    private IQueryable<FolderGridItem> FolderItems => Folders
+        .Select(f => new FolderGridItem(f.Path, f.Name, f.ItemCount))
+        .AsQueryable();
+
+    private IQueryable<FileGridItem> FileItems => Files
+        .Select(f => new FileGridItem(f.Path, f.Name, f.LastModified))
+        .AsQueryable();
+
+    private IEnumerable<FolderGridItem> SelectedFolders { get; set; } = [];
+    private IEnumerable<FileGridItem> SelectedFiles { get; set; } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
+        await RefreshContent();
+    }
 
     private Task NavigateToRoot()
     {
@@ -40,12 +59,17 @@ public partial class FileBrowser
     private async Task RefreshContent()
     {
         CurrentPath ??= "/";
-        if(Collection is null)
+        if (Collection is null)
             return;
+
         Folders = await Collection.GetFoldersAsync(CurrentPath);
         Files = await Collection.GetFilesAsync(CurrentPath);
 
+        // Reset selections when navigating
+        SelectedFolders = [];
+        SelectedFiles = [];
     }
+
     private async Task NavigateToFolder(string folderName)
     {
         CurrentPath = CurrentPath.EndsWith("/")
@@ -55,17 +79,11 @@ public partial class FileBrowser
         await RefreshContent();
     }
 
-    private HashSet<string> selectedFiles = new();
-    private void SelectFile(string fileName)
-    {
-        if (!selectedFiles.Add(fileName))
-            selectedFiles.Remove(fileName);
-    }
-
     private async Task CreateFolderRequested()
     {
-        if(Collection is null)
+        if (Collection is null)
             return;
+        // Add implementation for creating a folder
     }
 
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
@@ -78,6 +96,7 @@ public partial class FileBrowser
         }
         await RefreshContent();
     }
+
     private async Task CollectionChanged(string collection)
     {
         if (collection == CollectionName)
@@ -89,5 +108,34 @@ public partial class FileBrowser
         await InvokeAsync(StateHasChanged);
     }
 
+    private async Task DeleteSelectedItems()
+    {
+        if (Collection is null)
+            return;
+
+        // Implementation for deleting selected items would go here
+        // For example:
+        // foreach (var folder in SelectedFolders)
+        // {
+        //     await Collection.DeleteFolderAsync(folder.Path);
+        // }
+
+        // foreach (var file in SelectedFiles)
+        // {
+        //     await Collection.DeleteFileAsync(file.Path);
+        // }
+
+        // Clear selections after deletion
+        SelectedFolders = [];
+        SelectedFiles = [];
+
+        // Refresh the view
+        await RefreshContent();
+    }
+
     private ArticleCollection Collection { get; set; }
+
+    // Grid Item Models
+    public record FolderGridItem(string Path, string Name, int ItemCount);
+    public record FileGridItem(string Path, string Name, DateTime LastModified);
 }

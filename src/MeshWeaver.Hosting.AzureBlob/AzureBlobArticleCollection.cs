@@ -120,4 +120,20 @@ public class AzureBlobArticleCollection : ArticleCollection
         base.Dispose();
         articleStream.Dispose();
     }
+
+
+    public override Task<IReadOnlyCollection<FolderInfo>> GetFoldersAsync(string path)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override Task<IReadOnlyCollection<FileDetails>> GetFilesAsync(string path)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+    {
+        throw new NotImplementedException();
+    }
 }
