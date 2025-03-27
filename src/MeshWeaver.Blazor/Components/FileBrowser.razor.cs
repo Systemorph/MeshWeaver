@@ -10,19 +10,8 @@ public partial class FileBrowser
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
 
-    private IReadOnlyCollection<FolderInfo> Folders { get; set; } = [];
-    private IReadOnlyCollection<FileDetails> Files { get; set; } = [];
+    private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
 
-    private IQueryable<FolderGridItem> FolderItems => Folders
-        .Select(f => new FolderGridItem(f.Path, f.Name, f.ItemCount))
-        .AsQueryable();
-
-    private IQueryable<FileGridItem> FileItems => Files
-        .Select(f => new FileGridItem(f.Path, f.Name, f.LastModified))
-        .AsQueryable();
-
-    private IEnumerable<FolderGridItem> SelectedFolders { get; set; } = [];
-    private IEnumerable<FileGridItem> SelectedFiles { get; set; } = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -62,12 +51,8 @@ public partial class FileBrowser
         if (Collection is null)
             return;
 
-        Folders = await Collection.GetFoldersAsync(CurrentPath);
-        Files = await Collection.GetFilesAsync(CurrentPath);
+        CollectionItems = await Collection.GetCollectionItemsAsync(CurrentPath);
 
-        // Reset selections when navigating
-        SelectedFolders = [];
-        SelectedFiles = [];
     }
 
     private async Task NavigateToFolder(string folderName)
@@ -125,17 +110,17 @@ public partial class FileBrowser
         //     await Collection.DeleteFileAsync(file.Path);
         // }
 
-        // Clear selections after deletion
-        SelectedFolders = [];
-        SelectedFiles = [];
+        
 
         // Refresh the view
         await RefreshContent();
     }
 
     private ArticleCollection Collection { get; set; }
+    private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
-    // Grid Item Models
-    public record FolderGridItem(string Path, string Name, int ItemCount);
-    public record FileGridItem(string Path, string Name, DateTime LastModified);
+    private Task RowClicked()
+    {
+        throw new NotImplementedException();
+    }
 }

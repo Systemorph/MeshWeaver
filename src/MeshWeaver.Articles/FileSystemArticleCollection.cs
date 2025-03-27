@@ -124,15 +124,15 @@ public class FileSystemArticleCollection : ArticleCollection
         watcher = null;
     }
 
-    public override Task<IReadOnlyCollection<FolderInfo>> GetFoldersAsync(string path)
+    public override Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
     {
         var fullPath = Path.Combine(BasePath, path.TrimStart('/'));
 
-        return Task.FromResult<IReadOnlyCollection<FolderInfo>>(Directory.GetDirectories(fullPath)
+        return Task.FromResult<IReadOnlyCollection<FolderItem>>(Directory.GetDirectories(fullPath)
             .Select(dirPath =>
             {
                 var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
-                return new FolderInfo(
+                return new FolderItem(
                     dirPath,
                     Path.GetFileName(dirPath),
                     itemCount
@@ -141,16 +141,16 @@ public class FileSystemArticleCollection : ArticleCollection
             .ToArray());
     }
 
-    public override Task<IReadOnlyCollection<FileDetails>> GetFilesAsync(string path)
+    public override Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
     {
         var fullPath = Path.Combine(BasePath, path.TrimStart('/'));
 
-        return Task.FromResult<IReadOnlyCollection<FileDetails>>(Directory.GetFiles(fullPath)
+        return Task.FromResult<IReadOnlyCollection<FileItem>>(Directory.GetFiles(fullPath)
             .Select(filePath =>
             {
                 var fileInfo = new FileInfo(filePath);
 
-                return new FileDetails(
+                return new FileItem(
                     filePath,
                     Path.GetFileName(filePath),
                     fileInfo.LastWriteTime

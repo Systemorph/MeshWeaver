@@ -122,12 +122,12 @@ public class AzureBlobArticleCollection : ArticleCollection
     }
 
 
-    public override Task<IReadOnlyCollection<FolderInfo>> GetFoldersAsync(string path)
+    public override Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
     {
         throw new NotImplementedException();
     }
 
-    public override Task<IReadOnlyCollection<FileDetails>> GetFilesAsync(string path)
+    public override Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
     {
         throw new NotImplementedException();
     }

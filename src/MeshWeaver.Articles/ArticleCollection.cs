@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
@@ -37,10 +36,20 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
                 })).ToImmutableDictionary();
     }
 
-    public abstract Task<IReadOnlyCollection<FolderInfo>> GetFoldersAsync(string path);
+    public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
 
-    public abstract Task<IReadOnlyCollection<FileDetails>> GetFilesAsync(string path);
+    public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
     public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
+
+    public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
+    {
+        var files = await GetFilesAsync(currentPath);
+        var folders = await GetFoldersAsync(currentPath);
+        return folders
+            .Cast<CollectionItem>()
+            .Concat(files)
+            .ToArray();
+    }
 }
 
 public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
