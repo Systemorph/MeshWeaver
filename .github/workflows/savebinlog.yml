@@ -1,0 +1,31 @@
+name: Pack and Save Binlog
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v2
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Pack with binlog
+      run: dotnet pack --configuration Release /bl:msbuild.binlog
+
+    - name: Upload binlog
+      uses: actions/upload-artifact@v2
+      with:
+        name: msbuild-binlog
+        path: msbuild.binlog
