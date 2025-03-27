@@ -33,10 +33,10 @@ jobs:
       run: dotnet restore
 
     - name: Build solution
-      run: dotnet build --configuration Release --no-restore /p:Version=${{ env.VERSION }}
+      run: dotnet build --configuration Release --no-restore 
 
     - name: Pack NuGet packages
-      run: dotnet pack --configuration Release --no-build --output ./nupkgs /p:PackageVersion=${{ env.VERSION }} /bl:msbuild.binlog
+      run: dotnet pack --configuration Release --no-build --output ./nupkgs  /bl:msbuild.binlog
 
     - name: Upload binlog
       uses: actions/upload-artifact@v4
