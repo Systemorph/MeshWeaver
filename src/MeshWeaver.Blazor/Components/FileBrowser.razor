@@ -1,17 +1,25 @@
 ﻿@using MeshWeaver.Articles
 
 <div class="file-browser">
-    <!-- Breadcrumb Navigation -->
+    <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
     <FluentToolbar Class="toolbar">
-        <FluentBreadcrumb>
-            <FluentBreadcrumbItem @onclick="NavigateToRoot">Root</FluentBreadcrumbItem>
-            @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
-            {
-                <FluentBreadcrumbItem @onclick="() => NavigateToBreadcrumb(folder)">@folder</FluentBreadcrumbItem>
-            }
-        </FluentBreadcrumb>
-        <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
-        <FluentSpacer></FluentSpacer>
+        <div class="toolbar-row">
+            <FluentBreadcrumb>
+                @{
+                    var accumulatedPath = string.Empty;
+                    <FluentBreadcrumbItem @onclick="NavigateToRoot">Root</FluentBreadcrumbItem>
+                    @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
+                    {
+                        <FluentBreadcrumbItem @onclick="() => NavigateToBreadcrumb(accumulatedPath += '/' + folder)">@folder</FluentBreadcrumbItem>
+                    }
+
+                }
+            </FluentBreadcrumb>
+        </div>
+        <div class="toolbar-row">
+            <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
+            <FluentSpacer></FluentSpacer>
+        </div>
     </FluentToolbar>
 
     <!-- Combined DataGrid for Folders and Files -->
@@ -19,17 +27,17 @@
                     TGridItem="CollectionItem"
                     ShowHover="true"
                     ResizableColumns="true"
-                    GridSelectionMode="DataGridSelectionMode.Multiple">
+                    OnRowClick="RowClicked">
         <SelectColumn TGridItem="CollectionItem"
                       SelectMode="DataGridSelectMode.Multiple"
                       SelectFromEntireRow="true"
                       @bind-SelectedItems="SelectedItems"
                       Selectable="@(item => item is FileItem)" />
         <TemplateColumn TGridItem="CollectionItem" Title="Name">
-            <div class="grid-item" @ondblclick="RowClicked">
+            <div class="grid-item">
                 @if (context is FolderItem)
                 {
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Folder())" />
+                    <FluentIcon Value="@(new Icons.Filled.Size20.Folder())" />
                 }
                 else
                 {

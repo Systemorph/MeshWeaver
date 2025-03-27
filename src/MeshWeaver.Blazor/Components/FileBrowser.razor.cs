@@ -1,11 +1,13 @@
 ﻿using MeshWeaver.Articles;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
 public partial class FileBrowser
 {
+    [Inject] private IDialogService DialogService { get; set; }
     [Inject] private IArticleService ArticleService { get; set; }
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
@@ -119,8 +121,13 @@ public partial class FileBrowser
     private ArticleCollection Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
-    private Task RowClicked()
+    private async Task RowClicked(FluentDataGridRow<CollectionItem> row)
     {
-        throw new NotImplementedException();
+        if (row.Item is FolderItem folder)
+            await NavigateToFolder(row.Item.Name);
+        else
+        {
+            //await DialogService.ShowDialogAsync<FilePreviewDialog>(new DialogParameters());
+        }
     }
 }
