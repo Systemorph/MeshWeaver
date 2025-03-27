@@ -3,7 +3,12 @@ name: Pack and Save Binlog
 on:
   push:
     branches:
-      - main
+      - '**' # This will match any branch
+  pull_request:
+    branches:
+      - '**' # This will match any branch
+  workflow_dispatch: # This allows manual triggers
+
 
 jobs:
   pack:
