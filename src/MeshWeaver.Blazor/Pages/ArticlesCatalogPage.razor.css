@@ -12,9 +12,3 @@
     align-items: center;
 }
 
-/* Remove padding on small screens */
-@media (max-width: 600px) {
-    .articles-catalog-page {
-        padding: 0; /* Remove padding on small screens */
-    }
-}

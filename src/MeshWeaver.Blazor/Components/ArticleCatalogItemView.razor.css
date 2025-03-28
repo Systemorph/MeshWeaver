@@ -31,9 +31,10 @@
     background-color: var(--color-canvas-default); /* Use Primer CSS variable */
 }
 
-.article-card:hover {
-    box-shadow: 0 4px 8px var(--color-shadow-medium); /* Use Primer CSS variable */
-}
+    .article-card:hover {
+        box-shadow: 0 4px 8px var(--color-shadow-medium); /* Use Primer CSS variable */
+    }
+
 
 .header {
     display: flex;
@@ -77,19 +78,10 @@
 }
 
 /* For small screens, reduce the article card width slightly to provide horizontal spacing */
-@media (max-width: 600px) {
+@media (max-width: 799px) {
     .article-card {
-        width: 100%; /* Take 90% of the width on small screens */
-        flex-direction: column; /* Stack content and thumbnail vertically on small screens */
-    }
-
-    .content {
-        flex-direction: row; /* Ensure content and thumbnail are next to each other */
-        align-items: flex-start; /* Align items at the top */
-    }
-
-    .thumbnail {
-        margin-left: 16px; /* Add some space between text and thumbnail */
-        margin-top: 0; /* Remove top margin for small screens */
+        width: 90%; /* Use a percentage width instead of calc */
+        max-width: calc(100% - 32px); /* Ensure it doesn't exceed the container width */
+        margin: 8px auto;
     }
 }
