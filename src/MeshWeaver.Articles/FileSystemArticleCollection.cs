@@ -165,4 +165,10 @@ public class FileSystemArticleCollection : ArticleCollection
             new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.Write);
         await openReadStream.CopyToAsync(fileStream);
     }
+
+    public override Task CreateFolderAsync(string path)
+    {
+        Directory.CreateDirectory(Path.Combine(BasePath, path));
+        return Task.CompletedTask;
+    }
 }
