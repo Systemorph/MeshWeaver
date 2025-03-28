@@ -1,19 +1,9 @@
-﻿/* Ensure the container of the cards is properly aligned and has enough width */
-.articles-catalog {
-    display: flex;
-    flex-direction: column;
-    align-items: center; /* Center the cards horizontally */
-    justify-content: flex-start;
-    width: 100%; /* Ensure the container takes full width */
-    box-sizing: border-box; /* Include padding and border in the element's total width */
-    background-color: var(--color-canvas-default); /* Use Primer CSS variable */
-    color: var(--color-fg-default); /* Use Primer CSS variable */
-}
-
+﻿
 .article-card-link {
     width: 100%; /* Ensure the link takes full width */
     text-decoration: none;
     color: inherit;
+    padding-bottom: 32px;
 }
 
 .article-card {
