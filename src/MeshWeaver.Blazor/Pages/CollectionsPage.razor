@@ -1,0 +1,31 @@
+﻿@page "/collections/{**FullPath}"
+@using MeshWeaver.Blazor.Infrastructure
+@using Microsoft.AspNetCore.Components.Authorization
+
+<Title>Browse @Collection</Title>
+<AuthorizeView Roles="@Roles.PortalAdmin">
+    <Authorized>
+        <FileBrowser CollectionName="@Collection" CurrentPath="@Path"></FileBrowser>
+    </Authorized>
+    <NotAuthorized>
+        <h3>Access Denied</h3>
+        You need to have Portal Administrator role to administer collections. Please contact your system administrator
+    </NotAuthorized>
+</AuthorizeView>
+@code {
+    [Parameter] public string FullPath { get; set; }
+    private string Collection { get; set; }
+    private string Path { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (!string.IsNullOrEmpty(FullPath))
+        {
+            var split = FullPath.Split('/');
+            Collection = split[0];
+            Path = string.Join('/', split.Skip(1));
+        }
+    }
+
+}

@@ -3,19 +3,23 @@
 <div class="file-browser">
     <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
     <FluentToolbar Class="toolbar">
-        <div class="toolbar-row">
-            <FluentBreadcrumb>
-                @{
-                    var accumulatedPath = string.Empty;
-                    <FluentBreadcrumbItem @onclick="NavigateToRoot">@Root</FluentBreadcrumbItem>
-                    @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
-                    {
-                        <FluentBreadcrumbItem @onclick="() => NavigateToBreadcrumb(accumulatedPath += '/' + folder)">@folder</FluentBreadcrumbItem>
-                    }
+        @if (Collection != null)
+        {
+            <div class="toolbar-row">
+                <FluentBreadcrumb>
+                    @{
+                        var accumulatedPath = "/collections/" + @Collection.Collection;
+                        <FluentBreadcrumbItem Href="@accumulatedPath">@Root</FluentBreadcrumbItem>
+                        @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
+                        {
+                            accumulatedPath += '/' + folder;
+                            <FluentBreadcrumbItem Href="@accumulatedPath">@folder</FluentBreadcrumbItem>
+                        }
 
-                }
-            </FluentBreadcrumb>
-        </div>
+                    }
+                </FluentBreadcrumb>
+            </div>
+        }
         <div class="toolbar-row">
             <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
             <FluentSpacer></FluentSpacer>

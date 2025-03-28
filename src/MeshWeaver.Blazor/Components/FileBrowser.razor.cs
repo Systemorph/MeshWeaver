@@ -9,43 +9,29 @@ public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; }
     [Inject] private IArticleService ArticleService { get; set; }
+    [Inject] private NavigationManager NavigationManager { get; set; }
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
 
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
 
 
+
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
+    }
+
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
         Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
         await RefreshContent();
     }
 
-    private Task NavigateToRoot()
-    {
-        return NavigateToBreadcrumb("/");
-    }
 
     private const string Root = "/";
-    private async Task NavigateToBreadcrumb(string folderName)
-    {
-        var path = Root;
-        var parts = CurrentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        for (int i = 0; i < parts.Length; i++)
-        {
-            if (parts[i] == folderName)
-            {
-                path += string.Join("/", parts.Take(i + 1));
-                break;
-            }
-            path += parts[i] + "/";
-        }
-
-        CurrentPath = path;
-        await RefreshContent();
-    }
 
     private async Task RefreshContent()
     {
@@ -59,11 +45,11 @@ public partial class FileBrowser
 
     private async Task NavigateToFolder(string folderName)
     {
-        CurrentPath = CurrentPath.EndsWith("/")
+        var newPath = CurrentPath.EndsWith("/")
             ? $"{CurrentPath}{folderName}"
             : $"{CurrentPath}/{folderName}";
 
-        await RefreshContent();
+        NavigationManager.NavigateTo($"/collections/{CollectionName}{newPath}");
     }
 
     private async Task CreateFolderRequested()
