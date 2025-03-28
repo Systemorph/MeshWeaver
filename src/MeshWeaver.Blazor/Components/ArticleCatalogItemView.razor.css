@@ -5,7 +5,6 @@
     align-items: center; /* Center the cards horizontally */
     justify-content: flex-start;
     width: 100%; /* Ensure the container takes full width */
-    padding: 16px; /* Add some padding around the container */
     box-sizing: border-box; /* Include padding and border in the element's total width */
     background-color: var(--color-canvas-default); /* Use Primer CSS variable */
     color: var(--color-fg-default); /* Use Primer CSS variable */
@@ -18,10 +17,8 @@
 }
 
 .article-card {
-    width: 100%; /* Now fill the entire width of the container (.articles-catalog-page) */
-    margin: 16px auto; /* Center the card and add vertical spacing */
+    width: 90%; /* Ensure the link takes full width */
     border: 1px solid var(--color-border-default); /* Use Primer CSS variable */
-    padding: 16px;
     box-shadow: 0 2px 4px var(--color-shadow-small); /* Use Primer CSS variable */
     transition: box-shadow 0.3s ease;
     display: flex;
@@ -76,12 +73,15 @@
     display: flex;
     align-items: center;
 }
-
+/* For small screens, reduce the article card width slightly to provide horizontal spacing */
+@media (min-width: 800px) {
+    .articles-catalog-page {
+        padding: 16px;
+    }
+}
 /* For small screens, reduce the article card width slightly to provide horizontal spacing */
 @media (max-width: 799px) {
-    .article-card {
-        width: 90%; /* Use a percentage width instead of calc */
-        max-width: calc(100% - 32px); /* Ensure it doesn't exceed the container width */
-        margin: 8px auto;
+    .articles-catalog-page {
+        padding: 0; 
     }
 }
