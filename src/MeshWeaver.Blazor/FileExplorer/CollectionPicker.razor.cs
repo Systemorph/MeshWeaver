@@ -2,7 +2,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.FileExplorer;
 
 public partial class CollectionPicker
 {

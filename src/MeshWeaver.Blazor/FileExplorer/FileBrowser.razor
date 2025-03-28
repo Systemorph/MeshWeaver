@@ -1,4 +1,6 @@
 ﻿@using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Components
+
 
 <div class="file-browser">
     <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
@@ -23,6 +25,12 @@
         <div class="toolbar-row">
             <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
             <FluentSpacer></FluentSpacer>
+            @if (Collection is not null)
+            {
+                <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" OnClick="UploadAsync">Upload</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+            }
         </div>
     </FluentToolbar>
 

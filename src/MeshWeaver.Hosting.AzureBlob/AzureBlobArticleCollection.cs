@@ -136,4 +136,9 @@ public class AzureBlobArticleCollection : ArticleCollection
     {
         throw new NotImplementedException();
     }
+
+    public override Task CreateFolderAsync(string returnValue)
+    {
+        throw new NotImplementedException();
+    }
 }

@@ -1,4 +1,5 @@
 ﻿@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.FluentUI.AspNetCore.Components
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 
@@ -33,19 +34,9 @@
         </FluentStack>
 
 <!-- Create Folder Dialog -->
-<FluentDialog @ref="createFolderDialog" Modal="true" Title="Create Folder">
-    <Body>
-        <FluentTextField Value="@newFolderName" ValueChanged="@(v => newFolderName = v)" Placeholder="Enter folder name" />
-    </Body>
-    <Footer>
-        <FluentButton Appearance="Appearance.Accent" @onclick="CreateFolder">Create</FluentButton>
-        <FluentButton Appearance="Appearance.Neutral" @onclick="CloseCreateFolderDialog">Cancel</FluentButton>
-    </Footer>
-</FluentDialog>
 
 @code {
     private FluentDialog dialogReference;
-    private FluentDialog createFolderDialog;
     
     [Parameter] public string Title { get; set; } = "File Browser";
     [Parameter] public string SaveButtonText { get; set; } = "Save";
@@ -58,7 +49,6 @@
     private string currentPath = "/";
     private List<string> folders = new();
     private List<string> files = new();
-    private string newFolderName;
     private string selectedFile;
     
     public class SelectOption
@@ -125,27 +115,8 @@
         selectedFile = fileName;
     }
     
-    private void ShowCreateFolderDialog()
-    {
-        newFolderName = string.Empty;
-        createFolderDialog.Show();
-    }
     
-    private void CloseCreateFolderDialog()
-    {
-        createFolderDialog.Hide();
-    }
     
-    private async Task CreateFolder()
-    {
-        if (!string.IsNullOrWhiteSpace(newFolderName))
-        {
-            // TODO: Implement folder creation logic
-            // Call your storage service to create a folder
-            folders.Add(newFolderName);
-            CloseCreateFolderDialog();
-        }
-    }
     
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
     {

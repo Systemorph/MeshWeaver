@@ -1,9 +1,10 @@
 ﻿using MeshWeaver.Articles;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.FileExplorer;
 
 public partial class FileBrowser
 {
@@ -27,13 +28,13 @@ public partial class FileBrowser
     {
         await base.OnParametersSetAsync();
         Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
-        await RefreshContent();
+        await RefreshContentAsync();
     }
 
 
     private const string Root = "/";
 
-    private async Task RefreshContent()
+    private async Task RefreshContentAsync()
     {
         CurrentPath ??= "/";
         if (Collection is null)
@@ -67,7 +68,7 @@ public partial class FileBrowser
         {
             await Collection.SaveFileAsync(CurrentPath, file.Name, file.OpenReadStream());
         }
-        await RefreshContent();
+        await RefreshContentAsync();
     }
 
     private async Task CollectionChanged(string collection)
@@ -77,7 +78,7 @@ public partial class FileBrowser
         CollectionName = collection;
 
         Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
-        await RefreshContent();
+        await RefreshContentAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -101,7 +102,7 @@ public partial class FileBrowser
         
 
         // Refresh the view
-        await RefreshContent();
+        await RefreshContentAsync();
     }
 
     private ArticleCollection Collection { get; set; }
@@ -116,4 +117,33 @@ public partial class FileBrowser
             //await DialogService.ShowDialogAsync<FilePreviewDialog>(new DialogParameters());
         }
     }
+
+    private async Task AddFolderAsync(MouseEventArgs obj)
+    {
+        DialogParameters<CreateFolderModel> parameters = new()
+        {
+            Title = $"Create Folder",
+            PrimaryAction = "Create",
+            PrimaryActionEnabled = false,
+            SecondaryAction = "Cancel",
+            Width = "500px",
+            TrapFocus = true,
+            Modal = true,
+            PreventScroll = true,
+        };
+        var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection, CollectionItems), parameters);
+        var result = await dialog.Result;
+        if (!result.Cancelled)
+            await RefreshContentAsync();
+    }
+    private Task UploadAsync(MouseEventArgs arg)
+    {
+        throw new NotImplementedException();
+    }
+
+    private Task NewArticleAsync(MouseEventArgs arg)
+    {
+        throw new NotImplementedException();
+    }
+
 }
