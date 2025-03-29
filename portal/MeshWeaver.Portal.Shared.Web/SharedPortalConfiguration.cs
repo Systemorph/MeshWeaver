@@ -31,6 +31,18 @@ public static class SharedPortalConfiguration
         JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
         var services = builder.Services;
+        services.AddRazorPages()
+
+            .AddMicrosoftIdentityUI();
+        services.AddRazorComponents()
+            .AddInteractiveServerComponents()
+            .AddHubOptions(opt =>
+            {
+                opt.DisableImplicitFromServicesParameters = true;
+            });
+        services.AddScoped<CacheStorageAccessor>();
+        services.AddSingleton<IAppVersionService, AppVersionService>();
+        services.AddSingleton<DimensionManager>();
 
         services.AddHttpContextAccessor();
 
@@ -78,17 +90,7 @@ public static class SharedPortalConfiguration
     public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
             where TBuilder : MeshBuilder
             =>
-            (TBuilder)builder.ConfigureServices(services =>
-            {
-                services.AddRazorPages()
-
-                .AddMicrosoftIdentityUI();
-                services.AddRazorComponents().AddInteractiveServerComponents();
-                services.AddSingleton<CacheStorageAccessor>();
-                services.AddSingleton<IAppVersionService, AppVersionService>();
-                services.AddSingleton<DimensionManager>();
-                return services;
-            })
+            (TBuilder)builder
                 .AddBlazor(layoutClient => layoutClient
                         .AddChartJs()
                         .AddAgGrid()
