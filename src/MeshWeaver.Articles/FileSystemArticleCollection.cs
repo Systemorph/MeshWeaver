@@ -160,7 +160,7 @@ public class FileSystemArticleCollection : ArticleCollection
     }
     public override async Task SaveFileAsync(string path, string fileName, Stream openReadStream)
     {
-        var fullPath = Path.Combine(path, fileName);
+        var fullPath = Path.Combine(BasePath, path.TrimStart('/'), fileName);
         await using var fileStream =
             new FileStream(fullPath, FileMode.OpenOrCreate, FileAccess.Write);
         await openReadStream.CopyToAsync(fileStream);
