@@ -80,10 +80,7 @@ public static class SharedPortalConfiguration
             =>
             (TBuilder)builder.ConfigureServices(services =>
             {
-                services.AddRazorPages(options =>
-                {
-                    options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute());
-                })
+                services.AddRazorPages()
 
                 .AddMicrosoftIdentityUI();
                 services.AddRazorComponents().AddInteractiveServerComponents();
