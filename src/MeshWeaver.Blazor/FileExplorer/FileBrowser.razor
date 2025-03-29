@@ -40,6 +40,7 @@
                      Mode="InputFileMode.Stream"
                      Multiple="true"
                      MaximumFileSize="@(20 * 1024 * 1024)"
+                     ProgressPercentChanged="@(p => progressPercent = p)"
                      OnFileUploaded="@OnFileUploadedAsync"
                      OnCompleted="@OnCompleted" />
 
@@ -48,20 +49,6 @@
         @progressTitle
     </FluentLabel>
     
-    @if (uploadMessages.Any())
-    {
-        <div>
-            <h3>File Upload</h3>
-            <ul>
-                @foreach (var message in uploadMessages)
-                {
-                    <li>@message</li>
-                }
-            </ul>
-            <FluentButton OnClick="@(() => uploadMessages.Clear())">OK</FluentButton>
-        </div>
-    }
-
     <!-- Combined DataGrid for Folders and Files -->
     <FluentDataGrid Items="@CollectionItems.AsQueryable()"
                     TGridItem="CollectionItem"

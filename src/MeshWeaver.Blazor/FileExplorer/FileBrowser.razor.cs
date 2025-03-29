@@ -11,6 +11,7 @@ public partial class FileBrowser
     [Inject] private IDialogService DialogService { get; set; }
     [Inject] private IArticleService ArticleService { get; set; }
     [Inject] private NavigationManager NavigationManager { get; set; }
+    [Inject] private IToastService ToastService { get; set; }
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
 
@@ -53,23 +54,7 @@ public partial class FileBrowser
         NavigationManager.NavigateTo($"/collections/{CollectionName}{newPath}");
     }
 
-    private async Task CreateFolderRequested()
-    {
-        if (Collection is null)
-            return;
-        // Add implementation for creating a folder
-    }
 
-    private async Task HandleFileUpload(InputFileChangeEventArgs e)
-    {
-        if (Collection is null)
-            return;
-        foreach (var file in e.GetMultipleFiles())
-        {
-            await Collection.SaveFileAsync(CurrentPath, file.Name, file.OpenReadStream());
-        }
-        await RefreshContentAsync();
-    }
 
     private async Task CollectionChanged(string collection)
     {
@@ -159,39 +144,29 @@ public partial class FileBrowser
     int progressPercent;
     string progressTitle;
 
-    List<string> Files = new();
 
     private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
     {
         progressPercent = file.ProgressPercent;
         progressTitle = file.ProgressTitle;
+        try
+        {
+            await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
+            progressPercent = 100;
+            ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
+        }
+        catch(Exception e)
+        {
+            ToastService.ShowError($"Error uploading {file.Name}: {e.Message}");
+        }
 
-        var localFile = Path.GetTempFileName() + file.Name;
-        Files.Add(localFile);
-
-        // Write to the FileStream
-        // See other samples: https://docs.microsoft.com/en-us/aspnet/core/blazor/file-uploads
-        await using FileStream fs = new(localFile, FileMode.Create);
-
-        await file.Stream!.CopyToAsync(fs);
-        await file.Stream!.DisposeAsync();
     }
 
-    private readonly List<string> uploadMessages = new();
     private async Task OnCompleted(IEnumerable<FluentInputFileEventArgs> files)
     {
-        foreach (var file in files)
-        {
-            try
-            {
-                await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
-                uploadMessages.Add($"File '{file.Name}' uploaded successfully.");
-            }
-            catch (Exception ex)
-            {
-                uploadMessages.Add($"Upload of file '{file.Name}' failed: {ex.Message}");
-            }
-        }
+        progressPercent = 0;
+        progressTitle = null;
+        await RefreshContentAsync();
     }
 
 }
