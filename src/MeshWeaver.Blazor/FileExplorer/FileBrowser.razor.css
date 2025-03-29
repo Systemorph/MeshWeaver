@@ -54,3 +54,12 @@
     margin-bottom: 10px; /* Adjust spacing between rows as needed */
     width: 100%;
 }
+
+.file-browser-link {
+    color: var(--neutral-foreground-rest);
+    text-decoration: none;
+}
+
+    .file-browser-link:hover {
+        text-decoration: underline;
+    }

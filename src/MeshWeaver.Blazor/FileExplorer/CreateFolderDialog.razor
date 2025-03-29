@@ -15,9 +15,8 @@
 
 @code
 {
-    [Parameter]public CreateFolderModel Content { get; set; }
-    [CascadingParameter]
-    public FluentDialog Dialog { get; set; } = default!;
+    [Parameter] public CreateFolderModel Content { get; set; }
+    [CascadingParameter] public FluentDialog Dialog { get; set; }
 
     private async Task SaveAsync()
     {

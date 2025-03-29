@@ -141,4 +141,14 @@ public class AzureBlobArticleCollection : ArticleCollection
     {
         throw new NotImplementedException();
     }
+
+    public override Task DeleteFolderAsync(string folderPath)
+    {
+        throw new NotImplementedException();
+    }
+
+    public override Task DeleteFileAsync(string filePath)
+    {
+        throw new NotImplementedException();
+    }
 }

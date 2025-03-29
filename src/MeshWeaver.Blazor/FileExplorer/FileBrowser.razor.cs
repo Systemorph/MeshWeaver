@@ -118,7 +118,7 @@ public partial class FileBrowser
         }
     }
 
-    private async Task AddFolderAsync(MouseEventArgs obj)
+    private async Task AddFolderAsync()
     {
         DialogParameters<CreateFolderModel> parameters = new()
         {
@@ -146,4 +146,29 @@ public partial class FileBrowser
         throw new NotImplementedException();
     }
 
+    private async Task DeleteAsync()
+    {
+        DialogParameters<DeleteDialog> parameters = new()
+        {
+            Title = $"Create Folder",
+            PrimaryAction = "Create",
+            PrimaryActionEnabled = false,
+            SecondaryAction = "Cancel",
+            Width = "500px",
+            TrapFocus = true,
+            Modal = true,
+            PreventScroll = true,
+        };
+        var dialog = await DialogService.ShowDialogAsync<DeleteDialog, DeleteModel>(new DeleteModel(Collection, SelectedItems), parameters);
+        var result = await dialog.Result;
+        if (!result.Cancelled)
+            await RefreshContentAsync();
+    }
+
+    private string GetLink(CollectionItem item)
+    {
+        return item is FolderItem folder
+            ? $"/collections/{CollectionName}{folder.Path}"
+            : $"/file/{CollectionName}{item.Path}";
+    }
 }

@@ -52,4 +52,8 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
     }
 
     public abstract Task CreateFolderAsync(string returnValue);
+
+    public abstract Task DeleteFolderAsync(string folderPath);
+
+    public abstract Task DeleteFileAsync(string filePath);
 }

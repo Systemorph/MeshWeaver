@@ -133,7 +133,7 @@ public class FileSystemArticleCollection : ArticleCollection
             {
                 var itemCount = Directory.GetFileSystemEntries(dirPath).Length;
                 return new FolderItem(
-                    dirPath,
+                    '/' +Path.GetRelativePath(BasePath,dirPath),
                     Path.GetFileName(dirPath),
                     itemCount
                 );
@@ -151,7 +151,7 @@ public class FileSystemArticleCollection : ArticleCollection
                 var fileInfo = new FileInfo(filePath);
 
                 return new FileItem(
-                    filePath,
+                    '/' + Path.GetRelativePath(BasePath, filePath),
                     Path.GetFileName(filePath),
                     fileInfo.LastWriteTime
                 );
@@ -169,6 +169,65 @@ public class FileSystemArticleCollection : ArticleCollection
     public override Task CreateFolderAsync(string path)
     {
         Directory.CreateDirectory(Path.Combine(BasePath, path));
+        return Task.CompletedTask;
+    }
+
+    public override Task DeleteFolderAsync(string folderPath)
+    {
+        var fullPath = Path.Combine(BasePath, folderPath.TrimStart('/'));
+
+        if (Directory.Exists(fullPath))
+        {
+            try
+            {
+                // Delete the folder and all its contents
+                Directory.Delete(fullPath, recursive: true);
+            }
+            catch (IOException ex)
+            {
+                // Handle the case when files might be in use
+                throw new InvalidOperationException($"Could not delete folder: {folderPath}. The folder or files within it may be in use.", ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Handle permission issues
+                throw new InvalidOperationException($"Permission denied when attempting to delete folder: {folderPath}", ex);
+            }
+        }
+        else
+        {
+            throw new DirectoryNotFoundException($"Folder not found: {folderPath}");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public override Task DeleteFileAsync(string filePath)
+    {
+        var fullPath = Path.Combine(BasePath, filePath.TrimStart('/'));
+
+        if (File.Exists(fullPath))
+        {
+            try
+            {
+                File.Delete(fullPath);
+            }
+            catch (IOException ex)
+            {
+                // Handle the case when the file might be in use
+                throw new InvalidOperationException($"Could not delete file: {filePath}. The file may be in use.", ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // Handle permission issues
+                throw new InvalidOperationException($"Permission denied when attempting to delete file: {filePath}", ex);
+            }
+        }
+        else
+        {
+            throw new FileNotFoundException($"File not found: {filePath}");
+        }
+
         return Task.CompletedTask;
     }
 }
