@@ -41,7 +41,7 @@ public partial class FileBrowser
             return;
 
         CollectionItems = await Collection.GetCollectionItemsAsync(CurrentPath);
-
+        SelectedItems = [];
     }
 
     private async Task NavigateToFolder(string folderName)
@@ -87,19 +87,7 @@ public partial class FileBrowser
         if (Collection is null)
             return;
 
-        // Implementation for deleting selected items would go here
-        // For example:
-        // foreach (var folder in SelectedFolders)
-        // {
-        //     await Collection.DeleteFolderAsync(folder.Path);
-        // }
-
-        // foreach (var file in SelectedFiles)
-        // {
-        //     await Collection.DeleteFileAsync(file.Path);
-        // }
-
-        
+       
 
         // Refresh the view
         await RefreshContentAsync();
@@ -136,11 +124,6 @@ public partial class FileBrowser
         if (!result.Cancelled)
             await RefreshContentAsync();
     }
-    private Task UploadAsync(MouseEventArgs arg)
-    {
-        throw new NotImplementedException();
-    }
-
     private Task NewArticleAsync(MouseEventArgs arg)
     {
         throw new NotImplementedException();
@@ -171,4 +154,44 @@ public partial class FileBrowser
             ? $"/collections/{CollectionName}{folder.Path}"
             : $"/file/{CollectionName}{item.Path}";
     }
+
+    FluentInputFile myFileByStream = default!;
+    int progressPercent;
+    string progressTitle;
+
+    List<string> Files = new();
+
+    private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
+    {
+        progressPercent = file.ProgressPercent;
+        progressTitle = file.ProgressTitle;
+
+        var localFile = Path.GetTempFileName() + file.Name;
+        Files.Add(localFile);
+
+        // Write to the FileStream
+        // See other samples: https://docs.microsoft.com/en-us/aspnet/core/blazor/file-uploads
+        await using FileStream fs = new(localFile, FileMode.Create);
+
+        await file.Stream!.CopyToAsync(fs);
+        await file.Stream!.DisposeAsync();
+    }
+
+    private readonly List<string> uploadMessages = new();
+    private async Task OnCompleted(IEnumerable<FluentInputFileEventArgs> files)
+    {
+        foreach (var file in files)
+        {
+            try
+            {
+                await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
+                uploadMessages.Add($"File '{file.Name}' uploaded successfully.");
+            }
+            catch (Exception ex)
+            {
+                uploadMessages.Add($"Upload of file '{file.Name}' failed: {ex.Message}");
+            }
+        }
+    }
+
 }

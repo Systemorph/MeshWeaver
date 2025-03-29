@@ -1,4 +1,5 @@
 ﻿@using MeshWeaver.Articles
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 
 
 <div class="file-browser">
@@ -28,11 +29,38 @@
             {
                 <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
-                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" OnClick="UploadAsync">Upload</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
             }
         </div>
     </FluentToolbar>
+    <FluentInputFile @ref="@myFileByStream"
+                     AnchorId="MyUploadStream"
+                     DragDropZoneVisible="false"
+                     Mode="InputFileMode.Stream"
+                     Multiple="true"
+                     MaximumFileSize="@(20 * 1024 * 1024)"
+                     OnFileUploaded="@OnFileUploadedAsync"
+                     OnCompleted="@OnCompleted" />
+
+    <FluentProgress Min="0" Max="100" Value="@progressPercent" Visible="@(progressPercent > 0)" />
+    <FluentLabel Alignment="HorizontalAlignment.Center">
+        @progressTitle
+    </FluentLabel>
+    
+    @if (uploadMessages.Any())
+    {
+        <div>
+            <h3>File Upload</h3>
+            <ul>
+                @foreach (var message in uploadMessages)
+                {
+                    <li>@message</li>
+                }
+            </ul>
+            <FluentButton OnClick="@(() => uploadMessages.Clear())">OK</FluentButton>
+        </div>
+    }
 
     <!-- Combined DataGrid for Folders and Files -->
     <FluentDataGrid Items="@CollectionItems.AsQueryable()"
@@ -69,4 +97,4 @@
             }
         </TemplateColumn>
     </FluentDataGrid>
-</div>
+ </div>
