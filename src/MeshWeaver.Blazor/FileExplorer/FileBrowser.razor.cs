@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Articles;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -16,15 +15,7 @@ public partial class FileBrowser
     [Parameter] public string CurrentPath { get; set; } = "/";
 
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
-
-
-
-    protected override async Task OnInitializedAsync()
-    {
-        await base.OnInitializedAsync();
-    }
-
-
+    
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
@@ -45,7 +36,7 @@ public partial class FileBrowser
         SelectedItems = [];
     }
 
-    private async Task NavigateToFolder(string folderName)
+    private void NavigateToFolder(string folderName)
     {
         var newPath = CurrentPath.EndsWith("/")
             ? $"{CurrentPath}{folderName}"
@@ -67,29 +58,10 @@ public partial class FileBrowser
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task DeleteSelectedItems()
-    {
-        if (Collection is null)
-            return;
-
-       
-
-        // Refresh the view
-        await RefreshContentAsync();
-    }
 
     private ArticleCollection Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
-    private async Task RowClicked(FluentDataGridRow<CollectionItem> row)
-    {
-        if (row.Item is FolderItem folder)
-            await NavigateToFolder(row.Item.Name);
-        else
-        {
-            //await DialogService.ShowDialogAsync<FilePreviewDialog>(new DialogParameters());
-        }
-    }
 
     private async Task AddFolderAsync()
     {
@@ -137,7 +109,7 @@ public partial class FileBrowser
     {
         return item is FolderItem folder
             ? $"/collections/{CollectionName}{folder.Path}"
-            : $"/file/{CollectionName}{item.Path}";
+            : $"/content/{CollectionName}{item.Path}";
     }
 
     FluentInputFile myFileByStream = default!;

@@ -1,9 +1,8 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Azure.Storage.Blobs;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,11 +22,8 @@ public class AzureBlobArticleCollection : ArticleCollection
         var containerName = config.BasePath;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobArticleCollection>>();
         containerClient = client.GetBlobContainerClient(containerName);
-        articleStream = CreateStream(containerName);
     }
 
-    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) =>
-        articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
     public override async Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
@@ -43,32 +39,23 @@ public class AzureBlobArticleCollection : ArticleCollection
         return memoryStream;
     }
 
-    private ISynchronizationStream<InstanceCollection> CreateStream(string containerName)
+
+
+    protected override async Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
-        var ret = new SynchronizationStream<InstanceCollection>(
-            new(Collection, containerName),
-            Hub,
-            new EntityReference(Collection, containerName),
-            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x);
-        ret.Initialize(InitializeAsync, ex => logger.LogError(ex, "Unable to load collection {Collection}", containerName));
-        return ret;
+        var blobClient = containerClient.GetBlobClient(path);
+        if (!await blobClient.ExistsAsync(ct))
+            return default;
+        var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
+
+        return (await blobClient.OpenReadAsync(cancellationToken: ct), path, properties.Value.LastModified.DateTime);
     }
 
-    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null) =>
-        articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article)x?.Value);
-
-    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
+    protected override void AttachMonitor()
     {
-        await containerClient.CreateIfNotExistsAsync(cancellationToken: ct);
-        var ret = new InstanceCollection(
-            await GetAllFromContainer(ct)
-                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
-        );
-        return ret;
     }
 
-    private async IAsyncEnumerable<Article> GetAllFromContainer([EnumeratorCancellation] CancellationToken ct)
+    protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
         var authorsClient = containerClient.GetBlobClient("authors.json");
 
@@ -77,43 +64,29 @@ public class AzureBlobArticleCollection : ArticleCollection
             await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
             using var reader = new StreamReader(stream);
             var content = await reader.ReadToEndAsync(ct);
-            Authors = LoadAuthorsAsync(content);
+            return ParseAuthors(content);
 
         }
+        return ImmutableDictionary<string, Author>.Empty;
+    }
 
-        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: ""))
+
+    private async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool> filter = null, string prefix=null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+
+        await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix ?? ""))
         {
-            if (blobItem.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            if(cancellationToken.IsCancellationRequested)
+                yield break;
+            if (filter is null || filter.Invoke(blobItem.Name))
             {
-                var article = await LoadArticle(blobItem.Name, CancellationToken.None);
-                if (article != null)
-                {
-                    yield return article;
-                }
+                var tuple = await GetStreamAsync(blobItem.Name, CancellationToken.None);
+                if (tuple.Stream != null)
+                    yield return tuple;
             }
         }
     }
 
-    private async Task<Article> LoadArticle(string blobPath, CancellationToken ct)
-    {
-        var blobClient = containerClient.GetBlobClient(blobPath);
-        if (!await blobClient.ExistsAsync(ct))
-            return null;
-
-        using var stream = await blobClient.OpenReadAsync(cancellationToken: ct);
-        using var reader = new StreamReader(stream);
-        var content = await reader.ReadToEndAsync(ct);
-        var properties = await blobClient.GetPropertiesAsync(cancellationToken: ct);
-
-
-        return ArticleExtensions.ParseArticle(
-            Collection,
-            blobPath,
-            properties.Value.LastModified.DateTime,
-            content,
-            Authors
-        );
-    }
 
     public override void Dispose()
     {
@@ -150,5 +123,17 @@ public class AzureBlobArticleCollection : ArticleCollection
     public override Task DeleteFileAsync(string filePath)
     {
         throw new NotImplementedException();
+    }
+
+    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        await foreach (var article in GetAllFromContainer(filter, cancellationToken:cancellationToken))
+        {
+            if(cancellationToken.IsCancellationRequested)
+                yield break;
+            yield return article;
+        }
+
     }
 }
