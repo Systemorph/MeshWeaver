@@ -1,26 +1,14 @@
-﻿using System.Reactive.Linq;
-using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
-public class FileSystemArticleCollection : ArticleCollection
+public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub hub) : ArticleCollection(config, hub)
 {
-    public string BasePath { get; }
+    public string BasePath { get; } = config.BasePath;
     private FileSystemWatcher watcher;
 
-    private readonly ISynchronizationStream<InstanceCollection> articleStream;
 
-    public FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub hub) : base(config, hub)
-    {
-        BasePath = config.BasePath;
-        articleStream = CreateStream(BasePath);
-    }
-
-
-    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) =>
-        articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
 
     public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
@@ -33,22 +21,19 @@ public class FileSystemArticleCollection : ArticleCollection
         return Task.FromResult<Stream>(File.OpenRead(fullPath));
     }
 
-    private ISynchronizationStream<InstanceCollection> CreateStream(string path)
+
+
+    protected override Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
-        var ret = new SynchronizationStream<InstanceCollection>(
-            new(Collection, path),
-            Hub,
-            new EntityReference(Collection, path),
-            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x);
-        ret.Initialize(InitializeAsync, null);
-        return ret;
+        if (path is null)
+            return null;
+        var fullPath = Path.Combine(BasePath, path);
+        if (!File.Exists(fullPath))
+            return null;
+        return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>((File.OpenRead(fullPath), path, File.GetLastAccessTime(path)));
     }
 
-    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null) =>
-        articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article)x?.Value);
-
-    public void MonitorFileSystem()
+    protected override void AttachMonitor()
     {
         watcher = new FileSystemWatcher(BasePath)
         {
@@ -73,55 +58,37 @@ public class FileSystemArticleCollection : ArticleCollection
             UpdateArticle(e.FullPath);
     }
 
-    private void UpdateArticle(string path)
+
+
+
+    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, CancellationToken ct)
     {
-        articleStream.Update(async (x, ct) =>
-        {
-            var article = await LoadArticle(path, ct);
-            return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
-        }, null);
-    }
-
-    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
-    {
-        var authorsFile = Path.Combine(BasePath, "authors.json");
-        if (File.Exists(authorsFile))
-            Authors = LoadAuthorsAsync(await File.ReadAllTextAsync(authorsFile, ct));
-
-        var ret = new InstanceCollection(
-            await GetAllFromPath()
-                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
-        );
-        MonitorFileSystem();
-        return ret;
-    }
-
-
-    private async IAsyncEnumerable<Article> GetAllFromPath()
-    {
-        var files = Directory.GetFiles(BasePath, "*.md");
+        var files = filter == MarkdownFilter 
+            ? Directory.GetFiles(BasePath, "*.md")
+            : Directory.GetFiles(BasePath).Where(f => filter is null || filter.Invoke(f));
         foreach (var file in files)
         {
-            yield return await LoadArticle(file, CancellationToken.None);
+            if (!File.Exists(file))
+                continue;
+            
+            yield return (File.OpenRead(file), Path.GetRelativePath(BasePath, file), File.GetLastWriteTime(file));
         }
     }
 
-
-    private async Task<Article> LoadArticle(string fullPath, CancellationToken ct)
+    protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
-        if (!File.Exists(fullPath))
-            return null;
-        await using var stream = File.OpenRead(fullPath);
-        var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath), content, Authors);
+        var authorsFile = Path.Combine(BasePath, "authors.json");
+        if (File.Exists(authorsFile))
+            return ParseAuthors(await File.ReadAllTextAsync(authorsFile, ct));
+        return ImmutableDictionary<string, Author>.Empty;
     }
+
 
     public override void Dispose()
     {
-        base.Dispose();
-        articleStream.Dispose();
         watcher?.Dispose();
         watcher = null;
+        base.Dispose();
     }
 
     public override Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
