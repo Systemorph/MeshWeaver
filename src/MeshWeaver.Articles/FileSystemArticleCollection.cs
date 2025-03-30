@@ -75,6 +75,7 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
         }
     }
 
+
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
         var authorsFile = Path.Combine(BasePath, "authors.json");

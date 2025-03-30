@@ -15,11 +15,9 @@ public abstract class ArticleCollection : IDisposable
 
     protected ArticleCollection(ArticleSourceConfig config, IMessageHub hub)
     {
-
         Hub = hub;
         this.config = config;
         articleStream = CreateStream();
-
     }
 
     private  ISynchronizationStream<InstanceCollection> CreateStream()
@@ -38,7 +36,7 @@ public abstract class ArticleCollection : IDisposable
     public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
 
     public IObservable<Article> GetArticle(string path, ArticleOptions options = null)
-        => articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
+        => articleStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
 
 
     public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions)
@@ -137,4 +135,35 @@ public abstract class ArticleCollection : IDisposable
 
     public abstract Task DeleteFileAsync(string filePath);
     protected abstract IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
+
+    public bool IsArticle(string path, out string name)
+    {
+        name = Path.GetFileNameWithoutExtension(path);
+        if (Path.GetExtension(path) != ".md")
+            return false;
+        return articleStream.Current.Value.Instances.ContainsKey(name);
+    }
+
+
+    public virtual string GetContentType(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        return MimeTypes.TryGetValue(extension, out var mimeType) ? mimeType : "application/octet-stream";
+    }
+    private static readonly Dictionary<string, string> MimeTypes = new()
+    {
+        { ".txt", "text/plain" },
+        { ".md", "text/markdown" },
+        { ".html", "text/html" },
+        { ".htm", "text/html" },
+        { ".jpg", "image/jpeg" },
+        { ".jpeg", "image/jpeg" },
+        { ".png", "image/png" },
+        { ".gif", "image/gif" },
+        { ".bmp", "image/bmp" },
+        { ".svg", "image/svg+xml" },
+        { ".json", "application/json" },
+        { ".pdf", "application/pdf" },
+        // Add more mappings as needed
+    };
 }

@@ -24,6 +24,7 @@
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
         <PackageReference Include="Microsoft.Identity.Web" />
         <PackageReference Include="Microsoft.Identity.Web.Ui" />
+        <PackageReference Include="System.Composition.AttributedModel" />
     </ItemGroup>
 
     <ItemGroup>
