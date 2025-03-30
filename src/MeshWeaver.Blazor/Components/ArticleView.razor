@@ -3,6 +3,7 @@
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Markdown
 @using MeshWeaver.Mesh
+@using Microsoft.AspNetCore.Components.Authorization
 
 @inherits BlazorView<ArticleControl, ArticleView>
 
@@ -20,7 +21,13 @@
                         </div>
                     }
                 </div>
+                <FluentSpacer></FluentSpacer>
                 <span class="published-date">@Published.ToString("MMMM dd, yyyy")</span>
+                <AuthorizeView Roles="@Roles.PortalAdmin">
+                    <Authorized>
+                        <FluentNavLink class="edit-link" Href="@EditLink">Edit</FluentNavLink>
+                    </Authorized>
+                </AuthorizeView>
             </div>
             <h1 class="title">@Title</h1>
             <p class="abstract">@Abstract</p>
@@ -30,11 +37,11 @@
             {
                 <div class="video">                
                     <iframe class="youtube-embed"
-                                                           src="@GetEmbedUrl(VideoUrl)"
-                                                           title="YouTube video player"
-                                                           loading="lazy"
-                                                           allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                                                           allowfullscreen>
+                    src="@GetEmbedUrl(VideoUrl)"
+                    title="YouTube video player"
+                    loading="lazy"
+                    allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowfullscreen>
                     </iframe>
                 </div>
 
@@ -55,7 +62,7 @@
     private string Name;
     private string Collection;
     private string Title;
-    private KernelAddress KernelAddress = new();
+    private readonly KernelAddress KernelAddress = new();
     private IReadOnlyCollection<string> Tags;
     private string Thumbnail;
     private string Abstract;
@@ -65,6 +72,7 @@
     private string Html;
     private string VideoUrl;
     private MarkdownControl MarkdownControl;
+    private string EditLink => $"/article/edit/{Collection}/{Name}";
     private string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
 
     protected override void BindData()
