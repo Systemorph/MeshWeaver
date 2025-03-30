@@ -8,9 +8,6 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
     public string BasePath { get; } = config.BasePath;
     private FileSystemWatcher watcher;
 
-
-
-
     public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
@@ -20,9 +17,7 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
             return null;
         return Task.FromResult<Stream>(File.OpenRead(fullPath));
     }
-
-
-
+    
     protected override Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
         if (path is null)
@@ -57,9 +52,6 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
         if (Path.GetExtension(e.FullPath) == ".md")
             UpdateArticle(e.FullPath);
     }
-
-
-
 
     protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, CancellationToken ct)
     {
