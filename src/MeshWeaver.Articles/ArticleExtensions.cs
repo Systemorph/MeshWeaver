@@ -90,8 +90,6 @@ public static class ArticleExtensions
         // Append the main content
         markdownBuilder.Append(article.Content);
 
-        if(!article.Content.EndsWith('\n'))
-            markdownBuilder.AppendLine();
         return markdownBuilder.ToString();
     }
     public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content,
