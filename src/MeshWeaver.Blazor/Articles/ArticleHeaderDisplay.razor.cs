@@ -8,6 +8,8 @@ namespace MeshWeaver.Blazor.Articles;
 public partial class ArticleHeaderDisplay
 {
     [Parameter] public ModelParameter<Article> Model { get; set; }
+    private bool isEditMenuOpen;
+    
     private string Name
     {
         get => Model?.Element.Name;
@@ -86,5 +88,7 @@ public partial class ArticleHeaderDisplay
         }
         return videoUrl;
     }
+    [Parameter]
+    public EventCallback<ArticleDisplayMode> DisplayModeChanged { get; set; }
 
 }

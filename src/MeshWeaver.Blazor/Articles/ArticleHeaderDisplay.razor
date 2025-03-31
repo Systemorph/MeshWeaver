@@ -1,38 +1,67 @@
-﻿<PageTitle>@Title</PageTitle>
-<div class="article-header">
-    <div class="header-content">
-        <div class="meta-info">
-            <div class="author-info">
-                @foreach (var author in Authors)
-                {
-                    <div class="author">
-                        <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>
-                    </div>
-                }
-            </div>
-            <FluentSpacer></FluentSpacer>
-            <span class="published-date">@Published?.ToString("MMMM dd, yyyy")</span>
-        </div>
-        <h1 class="title">@Title</h1>
-        <p class="abstract">@Abstract</p>
-    </div>
-    <div class="media">
-        @if (!string.IsNullOrEmpty(VideoUrl))
-        {
-            <div class="video">                
-                <iframe class="youtube-embed"
-                        src="@GetEmbedUrl(VideoUrl)"
-                        title="YouTube video player"
-                        loading="lazy"
-                        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                        allowfullscreen>
-                </iframe>
-            </div>
+﻿@page "/article-header-display"
+@using Microsoft.AspNetCore.Components.Authorization
+@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 
-        }
-        else
-        {
-            <img class="thumbnail" src="@ThumbnailPath" alt="Article Thumbnail" />
-        }
-    </div>
+<PageTitle>@Title</PageTitle>
+<div class="article-header">
+        <!-- Existing display content -->
+        <div class="header-content">
+            <div class="meta-info">
+                <div class="author-info">
+                    @foreach (var author in Authors)
+                    {
+                        <div class="author">
+                            <FluentPersona Name="@author.FormatName()"
+                                           ImageSize="24px"
+                                           Image="@author.ImageUrl" />
+                        </div>
+                    }
+                </div>
+                <FluentSpacer></FluentSpacer>
+                <span class="published-date">@Published?.ToString("MMMM dd, yyyy")</span>
+                <!-- Edit Menu -->
+                <AuthorizeView Roles="@Roles.PortalAdmin">
+                    <Authorized>
+                        <FluentButton id="editMenuButton" 
+                                      IconStart="@(new Icons.Regular.Size20.Edit())" 
+                                      Appearance="Appearance.Lightweight"
+                                      Title="Edit Options"
+                                  @onclick="@(() => isEditMenuOpen = !isEditMenuOpen)">
+                            Edit
+                        </FluentButton>
+
+                    <FluentMenu Anchor="editMenuButton" @bind-Open="isEditMenuOpen">
+                            <FluentMenuItem OnClick="@(() => DisplayModeChanged.InvokeAsync(ArticleDisplayMode.EditHeading))">
+                                <span slot="start"><FluentIcon Value="@(new Icons.Regular.Size20.DocumentHeader())" Color="Color.Neutral" /></span>
+                                Header
+                            </FluentMenuItem>
+                            <FluentMenuItem OnClick="@(() => DisplayModeChanged.InvokeAsync(ArticleDisplayMode.EditContent))">
+                                <span slot="start"><FluentIcon Value="@(new Icons.Regular.Size20.Markdown())" Color="Color.Neutral" /></span>
+                                Content
+                            </FluentMenuItem>
+                        </FluentMenu>
+                    </Authorized>
+                </AuthorizeView>            </div>
+            <h1 class="title">@Title</h1>
+            <p class="abstract">@Abstract</p>
+        </div>
+        <div class="media">
+            @if (!string.IsNullOrEmpty(VideoUrl))
+            {
+                <div class="video">
+                    <iframe class="youtube-embed"
+                            src="@GetEmbedUrl(VideoUrl)"
+                            title="YouTube video player"
+                            loading="lazy"
+                            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            allowfullscreen>
+                    </iframe>
+                </div>
+            }
+            else
+            {
+                <img class="thumbnail" src="@ThumbnailPath" alt="Article Thumbnail" />
+            }
+        </div>
 </div>
+
