@@ -20,5 +20,3 @@ using static MeshWeaver.Layout.Controls;
 var pareto = new Pareto(2,3);
 Markdown($"Mean: {pareto.Mean}, Variance: {pareto.Variance}")
 ```
-
-
