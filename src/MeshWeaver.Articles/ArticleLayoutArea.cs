@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
@@ -10,30 +9,7 @@ public static class ArticleLayoutArea
 {
     private static ArticleControl RenderArticle(Article article)
     {
-        var content = article.PrerenderedHtml;
-
-        return new ArticleControl
-        {
-            Name = article.Name,
-            Collection = article.Collection,
-            Title = article.Title,
-            Abstract = article.Abstract,
-            Authors = article.AuthorDetails,
-            Published = article.Published,
-            Tags = article.Tags,
-            LastUpdated = article.LastUpdated,
-            Thumbnail = article.Thumbnail,
-            Html = content,
-            VideoUrl = article.VideoUrl,
-            PageTitle = article.Title,
-            CodeSubmissions = article.CodeSubmissions,
-            Meta = new Dictionary<string, object>()
-            {
-                ["description"] = article.Abstract, 
-                ["keywords"] = string.Join(',',article.Tags), 
-                ["abstract"] = article.Abstract
-            },
-        };
+        return Template.Bind(article, a => new ArticleControl(a));
     }
 
     internal static IObservable<object> Article(LayoutAreaHost host, RenderingContext _)

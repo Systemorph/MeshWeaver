@@ -64,9 +64,10 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
-        articleControl.Name.Should().Be("Overview");
-        articleControl.Content.Should().BeNull();
-        articleControl.Html.Should().NotBe(null);
+        var article = articleControl.Article.Should().BeOfType<Article>().Subject;
+        article.Name.Should().Be("Overview");
+        article.Content.Should().BeNull();
+        article.PrerenderedHtml.Should().NotBe(null);
     }
     [Fact]
     public virtual async Task NotFound()

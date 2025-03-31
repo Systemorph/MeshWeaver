@@ -48,16 +48,6 @@ public partial class ContentPage : IDisposable
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
-    private MarkdownControl ConvertToMarkdown(object uiControl)
-    {
-        return uiControl switch
-        {
-            MarkdownControl markdownControl => markdownControl,
-            ArticleControl article => new(null) { Html = article.Html },
-
-            _ => new MarkdownControl($"Could not convert control: {uiControl}")
-        };
-    }
 
     public void Dispose()
     {

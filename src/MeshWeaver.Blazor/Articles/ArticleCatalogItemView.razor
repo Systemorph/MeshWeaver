@@ -1,8 +1,4 @@
-﻿@using MeshWeaver.Articles
-@using MeshWeaver.Blazor.Infrastructure
-@using Microsoft.FluentUI.AspNetCore.Components.Icons.Filled
-@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
-@inherits BlazorView<ArticleCatalogItemControl, ArticleCatalogItemView>
+﻿@inherits BlazorView<ArticleCatalogItemControl, ArticleCatalogItemView>
 
 <a href="@Data.Url" class="article-card-link">
     <article class="article-card">
@@ -32,7 +28,7 @@
                         @if (HasVideo)
                         {
                             <div class="video-info">
-                                <FluentIcon Title="Video" Value="@(new Size20.Video())"/>
+                                <FluentIcon Title="Video" Value="@(new Icons.Filled.Size20.Video())"/>
                                 <span>@VideoDuration</span>
                             </div>
                         }

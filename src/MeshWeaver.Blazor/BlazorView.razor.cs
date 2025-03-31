@@ -130,7 +130,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected void UpdatePointer(object value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, DataContext, reference, Model);
+        Stream.UpdatePointer(value, DataContext, reference, (ModelParameter<JsonElement>)Model);
     }
 
 
