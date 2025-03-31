@@ -1,0 +1,38 @@
+﻿<PageTitle>@Title</PageTitle>
+<div class="article-header">
+    <div class="header-content">
+        <div class="meta-info">
+            <div class="author-info">
+                @foreach (var author in Authors)
+                {
+                    <div class="author">
+                        <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>
+                    </div>
+                }
+            </div>
+            <FluentSpacer></FluentSpacer>
+            <span class="published-date">@Published?.ToString("MMMM dd, yyyy")</span>
+        </div>
+        <h1 class="title">@Title</h1>
+        <p class="abstract">@Abstract</p>
+    </div>
+    <div class="media">
+        @if (!string.IsNullOrEmpty(VideoUrl))
+        {
+            <div class="video">                
+                <iframe class="youtube-embed"
+                        src="@GetEmbedUrl(VideoUrl)"
+                        title="YouTube video player"
+                        loading="lazy"
+                        allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowfullscreen>
+                </iframe>
+            </div>
+
+        }
+        else
+        {
+            <img class="thumbnail" src="@ThumbnailPath" alt="Article Thumbnail" />
+        }
+    </div>
+</div>

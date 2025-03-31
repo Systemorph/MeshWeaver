@@ -5,125 +5,6 @@
     width: 100%;
 }
 
-.article-header {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start; /* Align content to the left */
-    padding: 16px;
-    box-sizing: border-box;
-    background-color: var(--color-canvas-default);
-    color: var(--color-fg-default);
-    width: 75%; /* Decrease overall page width to 75% */
-    margin: 0 auto; /* Center the page content */
-}
-
-.title:focus {
-    outline: none;
-}
-
-.header-content {
-    width: 100%;
-    text-align: left; /* Left-align text */
-}
-
-.meta-info {
-    display: flex;
-    justify-content: flex-start;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-.author-info {
-    display: flex;
-    align-items: center;
-    margin-right: 16px;
-}
-
-.author {
-    margin-right: 8px;
-}
-
-.published-date {
-    font-size: 12pt;
-    margin-right: 8px;
-}
-
-.title {
-    font-size: 24pt;
-    font-weight: bold;
-    margin-bottom: 16px; /* Increase space between title and abstract */
-}
-
-.abstract {
-    font-size: 18pt; /* Increase font size */
-    color: var(--color-accent-fg); /* Change the color to an accent color */
-    line-height: 1.8; /* Increase line height to make it less dense */
-    margin-bottom: 24px; /* Keep the space between abstract and video */
-}
-
-.media {
-    position: relative;
-    width: 75%;
-    height: 0;
-    padding-top: 42.1875%; /* Exact 16:9 Aspect Ratio (75% × 56.25% = 42.1875%) */
-    margin: 0 auto; /* Center the media */
-    overflow: hidden; /* Hide overflow to ensure the image is cut */
-    border-radius: 4px; /* Add slight rounding to corners */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* Add subtle shadow for depth */
-}
-
-@media (max-width: 768px) {
-    .media {
-        width: 90%; /* Slightly wider on medium screens */
-        padding-top: 50.625%; /* Maintain 16:9 ratio (90% × 56.25% = 50.625%) */
-    }
-}
-
-@media (max-width: 600px) {
-    .media {
-        width: 100%; /* Full width on small devices */
-        padding-top: 56.25%; /* Standard 16:9 aspect ratio */
-    }
-}
-
-.youtube-embed {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    border: none;
-    transition: opacity 0.3s ease; /* Smooth fade-in effect when loaded */
-}
-
-    .youtube-embed:not([src]) {
-        opacity: 0; /* Hide iframe until it has a src */
-    }
-
-    .youtube-embed[src] {
-        opacity: 1; /* Show iframe when it has a src */
-    }
-
-.thumbnail {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover; /* Ensure the image covers the media area */
-    transition: transform 0.3s ease; /* Subtle zoom effect on hover */
-}
-
-    .thumbnail:hover {
-        transform: scale(1.02); /* Slight zoom on hover */
-    }
-
-@media (forced-colors: active) {
-    .youtube-embed {
-        border: 1px solid currentColor;
-    }
-}
-
 .article-content {
     width: 75%; /* Decrease the width to 75% */
     margin: 32px auto 16px; /* Increase top margin to separate from media */
@@ -135,24 +16,15 @@
 }
 
 @media (max-width: 768px) {
-    .article-header,
     .article-content {
         width: 85%; /* Slightly wider on medium screens */
     }
 }
 
 @media (max-width: 600px) {
-    .article-header,
     .article-content {
         width: 95%; /* Nearly full width on small devices */
         padding: 12px; /* Slightly smaller padding */
     }
 
-    .title {
-        font-size: 20pt; /* Smaller title on mobile */
-    }
-
-    .abstract {
-        font-size: 16pt; /* Smaller abstract on mobile */
-    }
 }
