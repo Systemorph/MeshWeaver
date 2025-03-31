@@ -53,20 +53,20 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
             UpdateArticle(Path.GetRelativePath(BasePath, e.FullPath));
     }
 
-    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, CancellationToken ct)
+    protected override IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct)
     {
-        var files = filter == MarkdownFilter 
+        var files = filter == MarkdownFilter
             ? Directory.GetFiles(BasePath, "*.md")
             : Directory.GetFiles(BasePath).Where(f => filter is null || filter.Invoke(f));
-        foreach (var file in files)
-        {
-            if (!File.Exists(file))
-                continue;
-            
-            yield return (File.OpenRead(file), Path.GetRelativePath(BasePath, file), File.GetLastWriteTime(file));
-        }
-    }
 
+        var items = files
+            .Where(File.Exists)
+            .Select(file =>
+                (Stream: (Stream)File.OpenRead(file), Path: Path.GetRelativePath(BasePath, file), LastModified: File.GetLastWriteTime(file)));
+
+        // Convert the synchronous IEnumerable to an IAsyncEnumerable
+        return items.ToAsyncEnumerable();
+    }
 
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {

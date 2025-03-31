@@ -71,11 +71,10 @@ public record ReduceManager<TStream>
                 (workspace, reference, configuration) =>
                    reference is TReference tReference ?
                     (ISynchronizationStream<TReduced>)
-                    WorkspaceStreams.CreateWorkspaceStream<TStream, TReduced, TReference>(
+                    WorkspaceStreams.CreateWorkspaceStream<TReduced, TReference>(
                         workspace, 
                         tReference, 
-                        configuration,
-                        reducer.Invoke) : null
+                        configuration) : null
             );
 
         return ret;

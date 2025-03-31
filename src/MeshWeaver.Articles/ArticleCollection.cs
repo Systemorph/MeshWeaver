@@ -36,7 +36,7 @@ public abstract class ArticleCollection : IDisposable
     public string Collection  => config.Name;
     public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
 
-    public IObservable<Article> GetArticle(string path, ArticleOptions options = null)
+    public IObservable<Article> GetArticle(string path)
         => articleStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
 
 

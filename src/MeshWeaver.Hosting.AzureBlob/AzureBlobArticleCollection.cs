@@ -95,36 +95,116 @@ public class AzureBlobArticleCollection : ArticleCollection
     }
 
 
-    public override Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+    public override async Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
     {
-        throw new NotImplementedException();
+        var prefix = path.TrimStart('/');
+        if (!string.IsNullOrEmpty(prefix) && !prefix.EndsWith('/'))
+            prefix += '/';
+
+        var folders = new HashSet<string>();
+
+        await foreach (var blob in containerClient.GetBlobsAsync(prefix: prefix))
+        {
+            var relativePath = blob.Name;
+            if (relativePath.StartsWith(prefix))
+                relativePath = relativePath.Substring(prefix.Length);
+
+            var slashIndex = relativePath.IndexOf('/');
+            if (slashIndex > 0)
+            {
+                var folderName = relativePath.Substring(0, slashIndex);
+                folders.Add(folderName);
+            }
+        }
+
+        return folders.Select(folder => new FolderItem(
+            '/' + Path.Combine(prefix, folder),
+            folder,
+            0 // We don't have a direct way to count items in Azure Blob
+        )).ToArray();
     }
 
-    public override Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+    public override async Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
     {
-        throw new NotImplementedException();
+        var prefix = path.TrimStart('/');
+        if (!string.IsNullOrEmpty(prefix) && !prefix.EndsWith('/'))
+            prefix += '/';
+
+        var files = new List<FileItem>();
+
+        await foreach (var blob in containerClient.GetBlobsAsync(prefix: prefix))
+        {
+            var relativePath = blob.Name;
+            if (relativePath.StartsWith(prefix))
+                relativePath = relativePath.Substring(prefix.Length);
+
+            if (!relativePath.Contains('/'))
+            {
+                files.Add(new FileItem(
+                    '/' + blob.Name,
+                    relativePath,
+                    blob.Properties.LastModified?.DateTime ?? DateTime.MinValue
+                ));
+            }
+        }
+
+        return files;
     }
 
-    public override Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+    public override async Task SaveFileAsync(string path, string fileName, Stream openReadStream)
     {
-        throw new NotImplementedException();
+        var fullPath = Path.Combine(path.TrimStart('/'), fileName);
+        var blobClient = containerClient.GetBlobClient(fullPath);
+
+        // Reset stream position to beginning before uploading
+        if (openReadStream.CanSeek)
+            openReadStream.Position = 0;
+
+        await blobClient.UploadAsync(openReadStream, overwrite: true);
     }
 
-    public override Task CreateFolderAsync(string returnValue)
+    public override async Task CreateFolderAsync(string path)
     {
-        throw new NotImplementedException();
+        // In Azure Blob Storage, folders don't technically exist as discrete entities.
+        // They are inferred from blob names.
+        // To "create" a folder, you'd typically upload a placeholder file
+
+        var fullPath = path.TrimStart('/');
+        if (!fullPath.EndsWith('/'))
+            fullPath += '/';
+
+        fullPath += ".folder"; // placeholder file
+
+        var blobClient = containerClient.GetBlobClient(fullPath);
+        await blobClient.UploadAsync(new MemoryStream(), overwrite: true);
     }
 
-    public override Task DeleteFolderAsync(string folderPath)
+    public override async Task DeleteFolderAsync(string folderPath)
     {
-        throw new NotImplementedException();
+        folderPath = folderPath.TrimStart('/');
+        if (!folderPath.EndsWith('/'))
+            folderPath += '/';
+
+        // Find all blobs with this prefix and delete them
+        await foreach (var blob in containerClient.GetBlobsAsync(prefix: folderPath))
+        {
+            var blobClient = containerClient.GetBlobClient(blob.Name);
+            await blobClient.DeleteIfExistsAsync();
+        }
     }
 
-    public override Task DeleteFileAsync(string filePath)
+    public override async Task DeleteFileAsync(string filePath)
     {
-        throw new NotImplementedException();
-    }
+        filePath = filePath.TrimStart('/');
+        var blobClient = containerClient.GetBlobClient(filePath);
 
+        var response = await blobClient.DeleteIfExistsAsync();
+
+        if (!response.Value)
+        {
+            throw new FileNotFoundException($"File not found: {filePath}");
+        }
+    }
     protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
