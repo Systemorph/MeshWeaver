@@ -179,7 +179,7 @@ public static class LayoutClientExtensions
             return conversion(value.Deserialize<object>(hub.JsonSerializerOptions));
         return value.Deserialize<T>(hub.JsonSerializerOptions);
     }
-    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter data)
+    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
     {
         try
         {

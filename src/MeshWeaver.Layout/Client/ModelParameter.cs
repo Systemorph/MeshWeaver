@@ -5,7 +5,6 @@ namespace MeshWeaver.Layout.Client;
 
 public abstract class ModelParameter
 {
-    public abstract object Submit();
     public abstract void Confirm();
     public abstract object GetValueFromModel(JsonPointerReference reference);
 }
@@ -39,7 +38,8 @@ public class ModelParameter<TModel> : ModelParameter
             ElementChanged(this, Element);
     }
 
-    public override object Submit()
+
+    public TModel Submit()
     {
         toBePersisted.Enqueue(LastSubmitted);
         LastSubmitted = Element;

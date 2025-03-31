@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -39,7 +40,7 @@ public abstract class ArticleCollection : IDisposable
         => articleStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
 
 
-    public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions)
+    public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions _)
         => articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
 
@@ -71,6 +72,14 @@ public abstract class ArticleCollection : IDisposable
 
     public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
     public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
+
+    public Task SaveArticleAsync(Article article)
+    {
+        var markdown = article.ConvertToMarkdown();
+        var utfEncoding = new UTF8Encoding(false);
+        var markdownStream = new MemoryStream(utfEncoding.GetBytes(markdown));
+        return SaveFileAsync(article.Path, "", markdownStream);
+    }
 
     public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
     {
