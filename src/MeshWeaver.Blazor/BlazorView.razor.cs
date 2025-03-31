@@ -31,7 +31,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     public string DataContext { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
-    public ModelParameter Model { get; set; }
+    public ModelParameter<JsonElement> Model { get; set; }
 
     protected string Style { get; set; }
 

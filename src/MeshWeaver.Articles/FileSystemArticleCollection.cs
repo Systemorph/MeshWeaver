@@ -21,10 +21,10 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
     protected override Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
         if (path is null)
-            return null;
+            return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>(default);
         var fullPath = Path.Combine(BasePath, path);
         if (!File.Exists(fullPath))
-            return null;
+            return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>(default);
         return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>((File.OpenRead(fullPath), path, File.GetLastAccessTime(path)));
     }
 
@@ -43,14 +43,14 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
         if (Path.GetExtension(e.FullPath) == ".md")
-            UpdateArticle(e.FullPath);
+            UpdateArticle(Path.GetRelativePath(BasePath, e.FullPath));
     }
 
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
         if (Path.GetExtension(e.FullPath) == ".md")
-            UpdateArticle(e.FullPath);
+            UpdateArticle(Path.GetRelativePath(BasePath, e.FullPath));
     }
 
     protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, CancellationToken ct)

@@ -9,7 +9,7 @@
         case ArticleDisplayMode.EditHeading:
             <AuthorizeView Roles="@Roles.PortalAdmin">
                 <Authorized>
-                    <ArticleHeaderEditor Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode"></ArticleHeaderEditor>
+                    <ArticleHeaderEditor Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode" ></ArticleHeaderEditor>
                 </Authorized>
             </AuthorizeView>
             break;

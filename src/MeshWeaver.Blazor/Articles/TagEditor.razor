@@ -21,7 +21,7 @@
             Id="tag-input"
             Placeholder="Add new tag"
             @bind-Value="newTag"
-            @onkeyup="@(e => { if (e.Key == "Enter") AddTag(); })" />
+            @onkeyup="@(async e => { if (e.Key == "Enter") await AddTag(); })" />
         
         <FluentButton 
             OnClick="AddTag"

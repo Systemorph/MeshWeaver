@@ -3,7 +3,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.FileExplorer
 
-<Title>Browse @Collection</Title>
+<PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
     <Authorized>
         <FileBrowser CollectionName="@Collection" CurrentPath="@Path"></FileBrowser>

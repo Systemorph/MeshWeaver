@@ -15,8 +15,8 @@
     <FluentTabs>
         <FluentTab Label="Basic Info">
             <div class="editor-form-group">
-                <FluentTextField Label="Name" @bind-Value="@Name" />
-                <FluentTextField Label="Collection" @bind-Value="@Collection" />
+                <FluentTextField Label="Name" @bind-Value="@Name" ReadOnly="true"/>
+                <FluentTextField Label="Collection" @bind-Value="@CollectionName" ReadOnly="true"/>
                 <FluentTextField Label="Title" @bind-Value="@Title" />
                 <FluentTextArea Label="Abstract" @bind-Value="@Abstract" Rows="4" />
             </div>

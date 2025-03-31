@@ -14,7 +14,7 @@ public abstract class ArticleHeaderBase : ComponentBase
         set => Model?.Update(a => a with { Name = value });
     }
 
-    protected string Collection
+    protected string CollectionName
     {
         get => Model?.Element.Collection;
         set => Model?.Update(a => a with { Collection = value });
@@ -70,8 +70,8 @@ public abstract class ArticleHeaderBase : ComponentBase
         get => Model?.Element.VideoUrl;
         set => Model?.Update(a => a with { VideoUrl = value });
     }
-    protected string EditLink => $"/article/edit/{Collection}/{Name}";
-    protected string ThumbnailPath => $"/static/{Collection}/{Thumbnail}";
+    protected string EditLink => $"/article/edit/{CollectionName}/{Name}";
+    protected string ThumbnailPath => $"/static/{CollectionName}/{Thumbnail}";
     protected string GetEmbedUrl(string videoUrl)
     {
         if (videoUrl.Contains("youtube.com/watch"))

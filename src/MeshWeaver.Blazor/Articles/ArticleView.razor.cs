@@ -16,11 +16,12 @@ public partial class ArticleView
     private ModelParameter<Article> data;
     private ActivityLog Log { get; set; }
     [Inject] private IToastService ToastService { get; set; }
-
+    private JsonPointerReference ArticlePointer { get; set; }
     protected override void BindData()
     {
+        ArticlePointer = new JsonPointerReference(ViewModel.DataContext);
         DataBind(
-            new JsonPointerReference(ViewModel.DataContext),
+            ArticlePointer,
             x => x.data,
             jsonObject => Convert((Article)jsonObject)
         );
