@@ -4,7 +4,19 @@
 
 
 <div class="article-container">
-    <ArticleHeaderDisplay Model="@ArticleModel"></ArticleHeaderDisplay>
+    @switch (DisplayMode)
+    {
+        case ArticleDisplayMode.EditHeading:
+            <AuthorizeView Roles="@Roles.PortalAdmin">
+                <Authorized>
+                    <ArticleHeaderEditor Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode"></ArticleHeaderEditor>
+                </Authorized>
+            </AuthorizeView>
+            break;
+        default:
+            <ArticleHeaderDisplay Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode"></ArticleHeaderDisplay>
+            break;
+    }
 </div>
 <div class="article-content markdown-body">
     <MarkdownView ViewModel="@MarkdownControl" />

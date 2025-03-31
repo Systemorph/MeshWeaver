@@ -1,8 +1,7 @@
-﻿@page "/article-header-display"
-@using Microsoft.AspNetCore.Components.Authorization
-@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+﻿@inherits ArticleHeaderBase
 
 <PageTitle>@Title</PageTitle>
+
 <div class="article-header">
         <!-- Existing display content -->
         <div class="header-content">
@@ -26,11 +25,11 @@
                                       IconStart="@(new Icons.Regular.Size20.Edit())" 
                                       Appearance="Appearance.Lightweight"
                                       Title="Edit Options"
-                                  @onclick="@(() => isEditMenuOpen = !isEditMenuOpen)">
+                                  @onclick="@(() => IsEditMenuOpen = !IsEditMenuOpen)">
                             Edit
                         </FluentButton>
 
-                    <FluentMenu Anchor="editMenuButton" @bind-Open="isEditMenuOpen">
+                    <FluentMenu Anchor="editMenuButton" @bind-Open="IsEditMenuOpen">
                             <FluentMenuItem OnClick="@(() => DisplayModeChanged.InvokeAsync(ArticleDisplayMode.EditHeading))">
                                 <span slot="start"><FluentIcon Value="@(new Icons.Regular.Size20.DocumentHeader())" Color="Color.Neutral" /></span>
                                 Header

@@ -1,0 +1,32 @@
+﻿<div class="tag-editor">
+    <FluentLabel For="tag-input">Tags</FluentLabel>
+    
+    <div class="tags-list">
+        @foreach (var tag in Tags)
+        {
+            <div class="tag-item">
+                <span>@tag</span>
+                <FluentButton 
+                    OnClick="() => RemoveTag(tag)" 
+                    Appearance="Appearance.Lightweight" 
+                    Title="Remove tag">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+                </FluentButton>
+            </div>
+        }
+    </div>
+    
+    <div class="add-tag-container">
+        <FluentTextField 
+            Id="tag-input"
+            Placeholder="Add new tag"
+            @bind-Value="newTag"
+            @onkeyup="@(e => { if (e.Key == "Enter") AddTag(); })" />
+        
+        <FluentButton 
+            OnClick="AddTag"
+            Appearance="Appearance.Accent">
+            Add
+        </FluentButton>
+    </div>
+</div>

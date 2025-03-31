@@ -111,4 +111,10 @@ public partial class ArticleView
     }
 
 
+    private ArticleDisplayMode DisplayMode { get; set; }
+    private Task ChangeDisplayMode(ArticleDisplayMode mode)
+    {
+        DisplayMode = mode;
+        return InvokeAsync(StateHasChanged);
+    }
 }

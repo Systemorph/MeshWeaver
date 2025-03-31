@@ -1,0 +1,28 @@
+﻿.tag-editor {
+    margin-bottom: 1rem;
+}
+
+.tags-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.5rem 0;
+}
+
+.tag-item {
+    display: flex;
+    align-items: center;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+}
+
+    .tag-item span {
+        margin-right: 0.5rem;
+    }
+
+.add-tag-container {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
