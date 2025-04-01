@@ -1,8 +1,4 @@
-﻿using System.Composition;
-using MeshWeaver.Articles;
-using MeshWeaver.Layout.Views;
-using MeshWeaver.Layout;
-using MeshWeaver.Blazor.Infrastructure;
+﻿using MeshWeaver.Blazor.Infrastructure;
 using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
@@ -13,7 +9,6 @@ public partial class ContentPage : IDisposable
     private string ContentType { get; set; }
     IDisposable ArticleStreamSubscription { get; set; }
     [Inject] private PortalApplication PortalApplication { get; set; }
-    private UiControl RootControl { get; set; }
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
@@ -22,15 +17,7 @@ public partial class ContentPage : IDisposable
             return;
 
         ContentType = collection.GetContentType(Path);
-        if(ContentType == "text/markdown")
-            ArticleStreamSubscription ??= PortalApplication.Hub
-                .RenderArticle(Collection, Path)
-                .Subscribe(a =>
-                {
-                    RootControl = a as UiControl;
-                    InvokeAsync(StateHasChanged);
-                });
-        else
+        if(ContentType != "text/markdown")
         {
             Content = await collection.GetContentAsync(Path);
         }

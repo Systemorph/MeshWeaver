@@ -48,7 +48,6 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.Content);
             entity.Property(e => e.Path).IsRequired();
             entity.Property(e => e.PrerenderedHtml);
-            entity.Property(e => e.Created);
             entity.Property(e => e.LastUpdated);
             entity.Property(e => e.Status);
 

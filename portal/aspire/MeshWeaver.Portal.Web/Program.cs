@@ -13,7 +13,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 builder.AddKeyedAzureTableClient("orleans-clustering");
-builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
+builder.AddKeyedAzureBlobClient(StorageProviders.Documentation);
+builder.AddKeyedAzureBlobClient(StorageProviders.Reinsurance);
 
 // Add services to the container.
 builder.ConfigureWebPortalServices();

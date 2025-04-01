@@ -103,7 +103,7 @@ public static class LayoutExtensions
         var first = true;
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
+        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream?.Hub.JsonSerializerOptions);
 
         return stream
             .Where(i =>

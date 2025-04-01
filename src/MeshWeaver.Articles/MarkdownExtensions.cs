@@ -7,16 +7,15 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Articles;
 
-public static class ArticleExtensions
+public static class MarkdownExtensions
 {
     public static LayoutDefinition AddArticleLayouts(this LayoutDefinition layout)
     {
         return layout
-            .WithView(nameof(ArticleLayoutArea.Article), ArticleLayoutArea.Article)
+            .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
             .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog);
     }
 
@@ -92,19 +91,30 @@ public static class ArticleExtensions
 
         return markdownBuilder.ToString();
     }
-    public static Article ParseArticle(string collection, string path, DateTime lastWriteTime, string content,
+    public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content,
         IReadOnlyDictionary<string, Author> authors)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
 
-        var pipeline = MarkdownExtensions.CreateMarkdownPipeline(collection);
+        var pipeline = Markdown.MarkdownExtensions.CreateMarkdownPipeline(collection);
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         var name = Path.GetFileNameWithoutExtension(path);
 
         if (yamlBlock is null)
-            return null;
+            return new MarkdownElement
+            {
+                Name = name,
+                Path = path,
+                Collection = collection,
+                Url = GetContentUrl(collection, name),
+                PrerenderedHtml = document.ToHtml(pipeline),
+                LastUpdated = lastWriteTime,
+                Content = content,
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+
+            };
 
         var ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
                 .Deserialize<Article>(yamlBlock.Lines.ToString());
@@ -117,8 +127,7 @@ public static class ArticleExtensions
             Name = name,
             Path = path,
             Collection = collection,
-            Url = GetArticleUrl(collection, name),
-            Extension = Path.GetExtension(path),
+            Url = GetContentUrl(collection, name),
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
@@ -138,8 +147,8 @@ public static class ArticleExtensions
     }
 
 
-    public static string GetArticleUrl(string collection, string path)
-        => $"article/{collection}/{path}";
+    public static string GetContentUrl(string collection, string path)
+        => $"content/{collection}/{path}";
 
 
 

@@ -1,5 +1,6 @@
 ﻿@page "/content/{Collection}/{**Path}"
 @using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Infrastructure
 @inject IArticleService ArticleService
 @inject NavigationManager NavigationManager
 
@@ -9,9 +10,9 @@
 
 }
 
-@if(RootControl is not null)
+@if(ContentType == "text/markdown")
 {
-    <DispatchView ViewModel="@RootControl"></DispatchView>
+    <LayoutArea Address="@PortalApplication.Hub.Address" Area="Content" Id="@(Collection + '/' + Path)"/>
 }
 else if (Content != null)
 {

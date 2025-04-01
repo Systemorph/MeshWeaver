@@ -119,13 +119,13 @@ public abstract class ArticleCollection : IDisposable
 
     protected abstract Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
-    private async Task<Article> ParseArticleAsync(Stream stream, string path, DateTime lastModified, CancellationToken ct)
+    private async Task<MarkdownElement> ParseArticleAsync(Stream stream, string path, DateTime lastModified, CancellationToken ct)
     {
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(ct);
  
 
-        return ArticleExtensions.ParseArticle(
+        return MarkdownExtensions.ParseContent(
             Collection,
             path,
             lastModified,
@@ -157,7 +157,9 @@ public abstract class ArticleCollection : IDisposable
     public virtual string GetContentType(string path)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();
-        return MimeTypes.TryGetValue(extension, out var mimeType) ? mimeType : "application/octet-stream";
+        if(string.IsNullOrEmpty(extension))
+            return "text/markdown";
+        return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }
     private static readonly Dictionary<string, string> MimeTypes = new()
     {
