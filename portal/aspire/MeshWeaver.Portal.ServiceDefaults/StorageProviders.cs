@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Mesh;
+﻿namespace MeshWeaver.Portal.ServiceDefaults;
 
 public static class StorageProviders
 {

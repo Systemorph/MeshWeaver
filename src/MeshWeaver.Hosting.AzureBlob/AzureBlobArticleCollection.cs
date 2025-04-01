@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
@@ -160,9 +161,18 @@ public class AzureBlobArticleCollection : ArticleCollection
         if (openReadStream.CanSeek)
             openReadStream.Position = 0;
 
-        await blobClient.UploadAsync(openReadStream, overwrite: true);
-    }
+        // Set content type for images based on file extension
+        var contentType = GetContentType(fileName);
+        var blobUploadOptions = new BlobUploadOptions
+        {
+            HttpHeaders = new BlobHttpHeaders
+            {
+                ContentType = contentType
+            }
+        };
 
+        await blobClient.UploadAsync(openReadStream, blobUploadOptions);
+    }
     public override async Task CreateFolderAsync(string path)
     {
         // In Azure Blob Storage, folders don't technically exist as discrete entities.
