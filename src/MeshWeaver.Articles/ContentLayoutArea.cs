@@ -5,14 +5,14 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
-public static class ArticleLayoutArea
+public static class ContentLayoutArea
 {
     private static ArticleControl RenderArticle(Article article)
     {
         return Template.Bind(article, a => new ArticleControl(a));
     }
 
-    internal static IObservable<object> Article(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<object> Content(LayoutAreaHost host, RenderingContext _)
     {
         var split = host.Reference.Id?.ToString()!.Split("/");
         if (split is null || split.Length < 2)

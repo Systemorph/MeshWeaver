@@ -26,12 +26,12 @@ public class ArticleParsingTest(ITestOutputHelper output) : HubTestBase(output)
         {
             var content = await File.ReadAllTextAsync(file);
             var path = Path.GetRelativePath(baseDir, file);
-            var article = ArticleExtensions.ParseArticle("demo", path, DateTime.UtcNow, content, ImmutableDictionary<string,Author>.Empty);
-            article.Should().NotBeNull();
+            var markdownElement = MarkdownExtensions.ParseContent("demo", path, DateTime.UtcNow, content, ImmutableDictionary<string,Author>.Empty);
+            var article = markdownElement.Should().BeOfType<Article>().Subject;
+            
             article.Title.Should().Be("Northwind Overview");
             article.Abstract.Should().Be("This is a sample description of the article.");
             article.Name.Should().Be("Overview");
-            article.Extension.Should().Be(".md");
             article.Url.Should().Be("article/demo/Overview");
         }
     }
