@@ -21,6 +21,7 @@ public record Article : MarkdownElement
     public TimeSpan VideoDuration { get; set; }
     public string VideoUrl { get; set; }
     public string VideoTitle { get; set; }
+    public string VideoDescription { get; set; }
     public string VideoTagLine { get; set; }
     public string VideoTranscript { get; set; }
     public string Title { get; set; }
@@ -50,7 +51,7 @@ public record Article : MarkdownElement
     public float[] VectorRepresentation { get; set; }
     public string AuthorAvatar { get; set; }
 
-
+    public string Transcript { get; set; }
 
 }
 

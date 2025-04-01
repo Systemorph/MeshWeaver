@@ -46,10 +46,16 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.Name).IsRequired();
             entity.Property(e => e.Title);
             entity.Property(e => e.Content);
+            entity.Property(e => e.PrerenderedHtml);
             entity.Property(e => e.Path).IsRequired();
             entity.Property(e => e.PrerenderedHtml);
             entity.Property(e => e.LastUpdated);
             entity.Property(e => e.Status);
+            entity.Property(e => e.VideoTranscript);
+            entity.Property(e => e.VideoDuration);
+            entity.Property(e => e.VideoUrl);
+            entity.Property(e => e.VideoTitle);
+            entity.Property(e => e.VideoDescription);
 
             // Handle collections (convert to JSON)
             entity.Property(e => e.Authors)
