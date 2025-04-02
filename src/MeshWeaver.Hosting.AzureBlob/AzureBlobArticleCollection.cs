@@ -35,9 +35,7 @@ public class AzureBlobArticleCollection : ArticleCollection
         if (!await blobClient.ExistsAsync(ct))
             return null;
 
-        var memoryStream = new MemoryStream();
-        await blobClient.DownloadToAsync(memoryStream, ct);
-        return memoryStream;
+        return await blobClient.OpenReadAsync(cancellationToken:ct);
     }
 
 
