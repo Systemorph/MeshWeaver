@@ -81,8 +81,12 @@ else
         .WithReference(azureMeshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
+    // Add the EntraId parameters
+    var entraTenantId = builder.AddParameter("EntraTenantId");
+    var entraClientId = builder.AddParameter("EntraClientId");
+    var entraAdminGroupId = builder.AddParameter("EntraAdminGroupId");
 
-    // Configure the frontend to wait for database migrations to complete
+        // Configure the frontend to wait for database migrations to complete
     var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()
@@ -90,13 +94,16 @@ else
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
         .WithReference(azureMeshweaverdb)
+        .WithEnvironment("ENTRA_TENANT_ID", entraTenantId)
+        .WithEnvironment("ENTRA_CLIENT_ID", entraClientId)
+        .WithEnvironment("ENTRA_ADMIN_GROUP_ID", entraAdminGroupId)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 
     // Add Application Insights
-    var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
-    silo.WithReference(insights);
-    frontend.WithReference(insights);
+    //var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
+    //silo.WithReference(insights);
+    //frontend.WithReference(insights);
 
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
@@ -111,7 +118,6 @@ else
 #pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
         });
 }
-
 var app = builder.Build();
 
 app.Run();
