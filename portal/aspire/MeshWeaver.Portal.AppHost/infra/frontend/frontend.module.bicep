@@ -13,11 +13,9 @@ param meshweaverblobs_outputs_blobendpoint string
 
 param azure_postgres_outputs_connectionstring string
 
-param entratenantid_value string
+param entraidtenantid_value string
 
-param entraclientid_value string
-
-param entraadmingroupid_value string
+param entraidclientid_value string
 
 param outputs_azure_container_registry_managed_identity_id string
 
@@ -30,10 +28,10 @@ param outputs_azure_container_registry_endpoint string
 param frontend_containerimage string
 
 param meshweaverCertificate string
-param meshweaverCertificate2 string
+param meshweaverCertificate2 string = ''
 
 param meshweaverDomain string
-param meshweaverDomain2 string
+param meshweaverDomain2 string = ''
 
 resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'frontend'
@@ -140,16 +138,16 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
               value: '${azure_postgres_outputs_connectionstring};Database=meshweaverdb'
             }
             {
-              name: 'ENTRA_TENANT_ID'
-              value: entratenantid_value
+              name: 'EntraId:TenantId'
+              value: entraidtenantid_value
             }
             {
-              name: 'ENTRA_CLIENT_ID'
-              value: entraclientid_value
+              name: 'EntraId:ClientId'
+              value: entraidclientid_value
             }
             {
-              name: 'ENTRA_ADMIN_GROUP_ID'
-              value: entraadmingroupid_value
+              name: 'EntraId:Groups:RoleMappings:5aa83bc7-e8d5-4d69-bffa-1e05689b7614'
+              value: 'PortalAdmin'
             }
             {
               name: 'AZURE_CLIENT_ID'

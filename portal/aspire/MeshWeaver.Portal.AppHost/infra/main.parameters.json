@@ -5,14 +5,14 @@
       "principalId": {
         "value": "${AZURE_PRINCIPAL_ID}"
       },
-      "EntraAdminGroupId": {
-        "value": "${AZURE_ENTRA_ADMIN_GROUP_ID}"
+      "EntraIdAdminGroupId": {
+        "value": "${AZURE_ENTRA_ID_ADMIN_GROUP_ID}"
       },
-      "EntraClientId": {
-        "value": "${AZURE_ENTRA_CLIENT_ID}"
+      "EntraIdClientId": {
+        "value": "${AZURE_ENTRA_ID_CLIENT_ID}"
       },
-      "EntraTenantId": {
-        "value": "${AZURE_ENTRA_TENANT_ID}"
+      "EntraIdTenantId": {
+        "value": "${AZURE_ENTRA_ID_TENANT_ID}"
       },
       "mesh_cluster_id": {
         "value": "${AZURE_MESH_CLUSTER_ID}"

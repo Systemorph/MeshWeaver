@@ -22,6 +22,12 @@ var orleansTables = appStorage.AddTables("orleans-clustering");
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables);
 
+// Add the EntraId parameters
+var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
+var entraIdClientId = builder.AddParameter("EntraIdClientId");
+var entraIdAdminGroupId = builder.AddParameter("EntraIdAdminGroupId");
+
+
 // PostgreSQL database setup - conditionally use containerized or Azure PostgreSQL
 if (!builder.ExecutionContext.IsPublishMode)
 {
@@ -54,6 +60,9 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
+        .WithEnvironment("EntraId:TenantId", entraIdTenantId)
+        .WithEnvironment("EntraId:ClientId", entraIdClientId)
+        .WithEnvironment("EntraId:Groups:RoleMappings:"+ entraIdAdminGroupId.Resource.Value, "PortalAdmin")
         .WithReference(meshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
@@ -81,10 +90,6 @@ else
         .WithReference(azureMeshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
-    // Add the EntraId parameters
-    var entraTenantId = builder.AddParameter("EntraTenantId");
-    var entraClientId = builder.AddParameter("EntraClientId");
-    var entraAdminGroupId = builder.AddParameter("EntraAdminGroupId");
 
         // Configure the frontend to wait for database migrations to complete
     var frontend = builder
@@ -94,9 +99,9 @@ else
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
         .WithReference(azureMeshweaverdb)
-        .WithEnvironment("ENTRA_TENANT_ID", entraTenantId)
-        .WithEnvironment("ENTRA_CLIENT_ID", entraClientId)
-        .WithEnvironment("ENTRA_ADMIN_GROUP_ID", entraAdminGroupId)
+        .WithEnvironment("EntraId:TenantId", entraIdTenantId)
+        .WithEnvironment("EntraId:ClientId", entraIdClientId)
+        .WithEnvironment("EntraId:Groups:RoleMappings:" + entraIdAdminGroupId.Resource.Value, "PortalAdmin")
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 

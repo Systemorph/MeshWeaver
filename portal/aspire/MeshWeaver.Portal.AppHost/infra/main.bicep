@@ -12,9 +12,9 @@ param location string
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
 
-param EntraAdminGroupId string
-param EntraClientId string
-param EntraTenantId string
+param EntraIdAdminGroupId string
+param EntraIdClientId string
+param EntraIdTenantId string
 @metadata({azd: {
   type: 'generate'
   config: {length:25,noUpper:true,noSpecial:true}
