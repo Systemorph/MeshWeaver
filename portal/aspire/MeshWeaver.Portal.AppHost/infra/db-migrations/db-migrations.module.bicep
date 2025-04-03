@@ -1,13 +1,7 @@
 @description('The location for the resource(s) to be deployed.')
 param location string = resourceGroup().location
 
-param silo_containerport string
-
-param meshweaverblobs_outputs_tableendpoint string
-
-param mesh_cluster_id_value string
-
-param mesh_service_id_value string
+param db_migrations_containerport string
 
 param azure_postgres_outputs_connectionstring string
 
@@ -19,28 +13,18 @@ param outputs_azure_container_apps_environment_id string
 
 param outputs_azure_container_registry_endpoint string
 
-param silo_containerimage string
+param db_migrations_containerimage string
 
-resource silo 'Microsoft.App/containerApps@2024-03-01' = {
-  name: 'silo'
+resource db_migrations 'Microsoft.App/containerApps@2024-03-01' = {
+  name: 'db-migrations'
   location: location
   properties: {
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
         external: false
-        targetPort: silo_containerport
+        targetPort: db_migrations_containerport
         transport: 'http'
-        additionalPortMappings: [
-          {
-            external: false
-            targetPort: 8000
-          }
-          {
-            external: false
-            targetPort: 8001
-          }
-        ]
       }
       registries: [
         {
@@ -53,12 +37,8 @@ resource silo 'Microsoft.App/containerApps@2024-03-01' = {
     template: {
       containers: [
         {
-          image: silo_containerimage
-          name: 'silo'
-          resources: {
-            cpu: 2
-            memory: '4Gi'
-          }
+          image: db_migrations_containerimage
+          name: 'db-migrations'
           env: [
             {
               name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES'
@@ -78,39 +58,7 @@ resource silo 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'HTTP_PORTS'
-              value: silo_containerport
-            }
-            {
-              name: 'Orleans__Clustering__ProviderType'
-              value: 'AzureTableStorage'
-            }
-            {
-              name: 'Orleans__Clustering__ServiceKey'
-              value: 'orleans-clustering'
-            }
-            {
-              name: 'ConnectionStrings__orleans-clustering'
-              value: meshweaverblobs_outputs_tableendpoint
-            }
-            {
-              name: 'Orleans__ClusterId'
-              value: mesh_cluster_id_value
-            }
-            {
-              name: 'Orleans__ServiceId'
-              value: mesh_service_id_value
-            }
-            {
-              name: 'Orleans__EnableDistributedTracing'
-              value: 'true'
-            }
-            {
-              name: 'Orleans__Endpoints__SiloPort'
-              value: '8000'
-            }
-            {
-              name: 'Orleans__Endpoints__GatewayPort'
-              value: '8001'
+              value: db_migrations_containerport
             }
             {
               name: 'ConnectionStrings__meshweaverdb'
