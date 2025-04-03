@@ -25,7 +25,7 @@ var orleans = builder.AddOrleans("mesh")
 // Add the EntraId parameters
 var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
 var entraIdClientId = builder.AddParameter("EntraIdClientId");
-var entraIdAdminGroupId = builder.AddParameter("EntraIdAdminGroupId");
+var entraIdAdminGroupId = builder.AddParameter("PortalAdminGroup");
 
 
 // PostgreSQL database setup - conditionally use containerized or Azure PostgreSQL
@@ -60,9 +60,9 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
-        .WithEnvironment("EntraId:TenantId", entraIdTenantId)
-        .WithEnvironment("EntraId:ClientId", entraIdClientId)
-        .WithEnvironment("EntraId:Groups:RoleMappings:"+ entraIdAdminGroupId.Resource.Value, "PortalAdmin")
+        .WithEnvironment("EntraIdTenantId", entraIdTenantId)
+        .WithEnvironment("EntraIdClientId", entraIdClientId)
+        .WithEnvironment("PortalAdminGroup", entraIdAdminGroupId)
         .WithReference(meshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
