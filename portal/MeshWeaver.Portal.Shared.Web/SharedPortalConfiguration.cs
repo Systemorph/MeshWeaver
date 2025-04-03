@@ -3,6 +3,7 @@ using System.Security.Claims;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
@@ -51,17 +52,32 @@ public static class SharedPortalConfiguration
 
         services.AddHttpContextAccessor();
 
+        // Get the EntraId configuration section
+        var entraIdConfig = builder.Configuration.GetSection("EntraId");
+
+        // Bind environment variables to the EntraId section
+        if (!string.IsNullOrEmpty(builder.Configuration["EntraIdTenantId"]))
+        {
+            entraIdConfig["TenantId"] = builder.Configuration["EntraIdTenantId"];
+        }
+
+        if (!string.IsNullOrEmpty(builder.Configuration["EntraIdClientId"]))
+        {
+            entraIdConfig["ClientId"] = builder.Configuration["EntraIdClientId"];
+        }
+
         builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));
+            .AddMicrosoftIdentityWebApp(entraIdConfig);
         // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
         builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
         {
-
+            var adminGroup = builder.Configuration.GetValue<string>("PortalAdminGroup");
+            
             // Get role mappings from configuration
-            var roleMappings = builder.Configuration
-                .GetSection("EntraId:Groups:RoleMappings")
-                .GetChildren()
-                .ToDictionary(x => x.Key, x => x.Value);
+            var roleMappings = string.IsNullOrEmpty(adminGroup) 
+                ? new Dictionary<string,string>() 
+                : new(){ { adminGroup, Roles.PortalAdmin }};
+                
 
             options.Events.OnTokenValidated = async context =>
             {

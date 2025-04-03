@@ -5,14 +5,14 @@
       "principalId": {
         "value": "${AZURE_PRINCIPAL_ID}"
       },
-      "EntraIdAdminGroupId": {
-        "value": "${AZURE_ENTRA_ID_ADMIN_GROUP_ID}"
-      },
       "EntraIdClientId": {
         "value": "${AZURE_ENTRA_ID_CLIENT_ID}"
       },
       "EntraIdTenantId": {
         "value": "${AZURE_ENTRA_ID_TENANT_ID}"
+      },
+      "PortalAdminGroup": {
+        "value": "${AZURE_PORTAL_ADMIN_GROUP}"
       },
       "mesh_cluster_id": {
         "value": "${AZURE_MESH_CLUSTER_ID}"
