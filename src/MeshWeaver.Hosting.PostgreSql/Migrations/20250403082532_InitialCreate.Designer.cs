@@ -15,8 +15,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MeshWeaver.Hosting.PostgreSql.Migrations
 {
     [DbContext(typeof(MeshWeaverDbContext))]
-    [Migration("20250319211606_MessageLog")]
-    partial class MessageLog
+    [Migration("20250403082532_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -56,12 +56,6 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("Content")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("Created")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Extension")
                         .HasColumnType("text");
 
                     b.Property<string>("IconId")
@@ -108,8 +102,14 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Title")
                         .HasColumnType("text");
 
+                    b.Property<string>("Transcript")
+                        .HasColumnType("text");
+
                     b.PrimitiveCollection<float[]>("VectorRepresentation")
                         .HasColumnType("real[]");
+
+                    b.Property<string>("VideoDescription")
+                        .HasColumnType("text");
 
                     b.Property<TimeSpan>("VideoDuration")
                         .HasColumnType("interval");
@@ -221,8 +221,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
 
             modelBuilder.Entity("MeshWeaver.Mesh.MessageLog", b =>
                 {
-                    b.Property<DateTimeOffset>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
                     b.Property<string>("Exception")
                         .HasColumnType("text");
@@ -237,7 +240,10 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Properties")
                         .HasColumnType("jsonb");
 
-                    b.HasKey("Timestamp");
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
 
                     b.ToTable("Messages");
                 });

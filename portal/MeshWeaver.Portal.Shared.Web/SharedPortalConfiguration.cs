@@ -12,6 +12,7 @@ using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,10 @@ public static class SharedPortalConfiguration
         // 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role' instead of 'roles'
         // This flag ensures that the ClaimsIdentity claims collection will be built from the claims in the token.
         JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+        builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true,
+                reloadOnChange: true)
+            .AddEnvironmentVariables();
 
         var services = builder.Services;
         services.AddRazorPages()

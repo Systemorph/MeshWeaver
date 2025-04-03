@@ -79,6 +79,23 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "Messages",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Level = table.Column<string>(type: "text", nullable: false),
+                    Timestamp = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                    Message = table.Column<string>(type: "text", nullable: true),
+                    Exception = table.Column<string>(type: "text", nullable: true),
+                    Properties = table.Column<string>(type: "jsonb", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Messages", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Articles",
                 columns: table => new
                 {
@@ -86,25 +103,19 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     VideoDuration = table.Column<TimeSpan>(type: "interval", nullable: false),
                     VideoUrl = table.Column<string>(type: "text", nullable: true),
                     VideoTitle = table.Column<string>(type: "text", nullable: true),
+                    VideoDescription = table.Column<string>(type: "text", nullable: true),
                     VideoTagLine = table.Column<string>(type: "text", nullable: true),
                     VideoTranscript = table.Column<string>(type: "text", nullable: true),
-                    Extension = table.Column<string>(type: "text", nullable: true),
-                    Name = table.Column<string>(type: "text", nullable: false),
                     Title = table.Column<string>(type: "text", nullable: true),
                     Pinned = table.Column<bool>(type: "boolean", nullable: false),
-                    Collection = table.Column<string>(type: "text", nullable: false),
-                    Path = table.Column<string>(type: "text", nullable: false),
                     Abstract = table.Column<string>(type: "text", nullable: true),
                     Thumbnail = table.Column<string>(type: "text", nullable: true),
                     Views = table.Column<int>(type: "integer", nullable: false),
                     Likes = table.Column<int>(type: "integer", nullable: false),
                     Comments = table.Column<int>(type: "integer", nullable: false),
-                    Published = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    Content = table.Column<string>(type: "text", nullable: true),
+                    Published = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Status = table.Column<int>(type: "integer", nullable: false),
                     StatusHistory = table.Column<ValueTuple<ArticleStatus, DateTime>[]>(type: "jsonb", nullable: true),
-                    Created = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    PrerenderedHtml = table.Column<string>(type: "text", nullable: true),
                     IconId = table.Column<string>(type: "text", nullable: true),
                     Source = table.Column<string>(type: "text", nullable: true),
                     Authors = table.Column<string>(type: "text", nullable: true),
@@ -112,7 +123,13 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     Tags = table.Column<string>(type: "text", nullable: true),
                     VectorRepresentation = table.Column<float[]>(type: "real[]", nullable: true),
                     AuthorAvatar = table.Column<string>(type: "text", nullable: true),
+                    Transcript = table.Column<string>(type: "text", nullable: true),
+                    Name = table.Column<string>(type: "text", nullable: false),
+                    Collection = table.Column<string>(type: "text", nullable: false),
+                    PrerenderedHtml = table.Column<string>(type: "text", nullable: true),
                     LastUpdated = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    Content = table.Column<string>(type: "text", nullable: true),
+                    Path = table.Column<string>(type: "text", nullable: false),
                     CodeSubmissions = table.Column<IReadOnlyList<SubmitCodeRequest>>(type: "jsonb", nullable: true)
                 },
                 constraints: table =>
@@ -151,6 +168,9 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
 
             migrationBuilder.DropTable(
                 name: "MeshNodes");
+
+            migrationBuilder.DropTable(
+                name: "Messages");
 
             migrationBuilder.DropTable(
                 name: "Icon");
