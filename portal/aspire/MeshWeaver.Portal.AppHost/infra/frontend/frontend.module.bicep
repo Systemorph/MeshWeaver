@@ -44,18 +44,22 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
         stickySessions: {
           affinity: 'sticky'
         }
-        customDomains: [
-          {
-            name: meshweaverDomain
-            bindingType: (meshweaverCertificate != '') ? 'SniEnabled' : 'Disabled'
-            certificateId: (meshweaverCertificate != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate}' : null
-          }
-          {
-            name: meshweaverDomain2
-            bindingType: (meshweaverCertificate2 != '') ? 'SniEnabled' : 'Disabled'
-            certificateId: (meshweaverCertificate2 != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate2}' : null
-          }
-        ]
+        customDomains: concat(
+              [
+                {
+                  name: meshweaverDomain
+                  bindingType: (meshweaverCertificate != '') ? 'SniEnabled' : 'Disabled'
+                  certificateId: (meshweaverCertificate != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate}' : null
+                }
+              ],
+              (meshweaverCertificate2 != '') ? [
+                {
+                  name: meshweaverDomain2
+                  bindingType: 'SniEnabled'
+                  certificateId: '${outputs_azure_container_apps_environment_id}/managedCertificates/${meshweaverCertificate2}'
+                }
+              ] : []
+        )      
       }
       registries: [
         {
@@ -120,7 +124,11 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'true'
             }
             {
-              name: 'ConnectionStrings__articles'
+              name: 'ConnectionStrings__documentation'
+              value: meshweaverblobs_outputs_blobendpoint
+            }
+            {
+              name: 'ConnectionStrings__reinsurance'
               value: meshweaverblobs_outputs_blobendpoint
             }
             {

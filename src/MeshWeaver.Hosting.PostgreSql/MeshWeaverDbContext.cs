@@ -120,13 +120,17 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.Xml).IsRequired();
         });
 
+        // Configure MessageLog entity
         modelBuilder.Entity<MessageLog>(entity =>
         {
-            entity.HasKey(e => e.Timestamp); // Assuming Timestamp is the primary key
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id)
+                  .ValueGeneratedOnAdd(); // Auto-generate the Id
+            entity.Property(e => e.Timestamp);
             entity.Property(e => e.Level).IsRequired();
             entity.Property(e => e.Properties).HasColumnType("jsonb");
-            entity.Property(e => e.Message); 
-            entity.Property(e => e.Exception); 
+            entity.Property(e => e.Message);
+            entity.Property(e => e.Exception);
         });
     }
 }
