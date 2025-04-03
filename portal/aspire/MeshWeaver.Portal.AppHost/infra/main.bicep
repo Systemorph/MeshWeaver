@@ -12,6 +12,9 @@ param location string
 @description('Id of the user or app to assign application roles')
 param principalId string = ''
 
+param EntraAdminGroupId string
+param EntraClientId string
+param EntraTenantId string
 @metadata({azd: {
   type: 'generate'
   config: {length:25,noUpper:true,noSpecial:true}
@@ -65,14 +68,6 @@ module meshweaverblobs 'meshweaverblobs/meshweaverblobs.module.bicep' = {
     principalType: 'ServicePrincipal'
   }
 }
-module meshweaverinsights 'meshweaverinsights/meshweaverinsights.module.bicep' = {
-  name: 'meshweaverinsights'
-  scope: rg
-  params: {
-    location: location
-    logAnalyticsWorkspaceId: resources.outputs.AZURE_LOG_ANALYTICS_WORKSPACE_ID
-  }
-}
 
 output MANAGED_IDENTITY_CLIENT_ID string = resources.outputs.MANAGED_IDENTITY_CLIENT_ID
 output MANAGED_IDENTITY_NAME string = resources.outputs.MANAGED_IDENTITY_NAME
@@ -86,4 +81,3 @@ output AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN string = resources.output
 output AZURE_POSTGRES_CONNECTIONSTRING string = azure_postgres.outputs.connectionString
 output MESHWEAVERBLOBS_BLOBENDPOINT string = meshweaverblobs.outputs.blobEndpoint
 output MESHWEAVERBLOBS_TABLEENDPOINT string = meshweaverblobs.outputs.tableEndpoint
-output MESHWEAVERINSIGHTS_APPINSIGHTSCONNECTIONSTRING string = meshweaverinsights.outputs.appInsightsConnectionString

@@ -13,7 +13,11 @@ param meshweaverblobs_outputs_blobendpoint string
 
 param azure_postgres_outputs_connectionstring string
 
-param meshweaverinsights_outputs_appinsightsconnectionstring string
+param entratenantid_value string
+
+param entraclientid_value string
+
+param entraadmingroupid_value string
 
 param outputs_azure_container_registry_managed_identity_id string
 
@@ -136,8 +140,16 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
               value: '${azure_postgres_outputs_connectionstring};Database=meshweaverdb'
             }
             {
-              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-              value: meshweaverinsights_outputs_appinsightsconnectionstring
+              name: 'ENTRA_TENANT_ID'
+              value: entratenantid_value
+            }
+            {
+              name: 'ENTRA_CLIENT_ID'
+              value: entraclientid_value
+            }
+            {
+              name: 'ENTRA_ADMIN_GROUP_ID'
+              value: entraadmingroupid_value
             }
             {
               name: 'AZURE_CLIENT_ID'
