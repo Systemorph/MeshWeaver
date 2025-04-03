@@ -15,6 +15,7 @@ public class AzureBlobArticleCollection : ArticleCollection
     private readonly BlobContainerClient containerClient;
     private readonly ISynchronizationStream<InstanceCollection> articleStream;
     private readonly ILogger<AzureBlobArticleCollection> logger;
+
     public AzureBlobArticleCollection(
         ArticleSourceConfig config,
         IMessageHub hub,
@@ -25,7 +26,6 @@ public class AzureBlobArticleCollection : ArticleCollection
         containerClient = client.GetBlobContainerClient(containerName);
     }
 
-
     public override async Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
@@ -35,10 +35,8 @@ public class AzureBlobArticleCollection : ArticleCollection
         if (!await blobClient.ExistsAsync(ct))
             return null;
 
-        return await blobClient.OpenReadAsync(cancellationToken:ct);
+        return await blobClient.OpenReadAsync(cancellationToken: ct);
     }
-
-
 
     protected override async Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
@@ -52,6 +50,56 @@ public class AzureBlobArticleCollection : ArticleCollection
 
     protected override void AttachMonitor()
     {
+        // In Azure Blob Storage we don't have file system watcher events
+        // We'll trigger update events when operations are performed through our API
+        logger.LogInformation("Azure Blob Storage monitor attached - changes will be tracked on operations");
+    }
+
+    // File change handlers
+    private void OnFileChanged(string path)
+    {
+        if (Path.GetExtension(path) == ".md")
+        {
+            logger.LogInformation("File changed: {Path}", path);
+            UpdateArticle(path);
+        }
+    }
+
+    private void OnFileAdded(string path)
+    {
+        if (Path.GetExtension(path) == ".md")
+        {
+            logger.LogInformation("File added: {Path}", path);
+            UpdateArticle(path);
+        }
+    }
+
+    private void OnFileDeleted(string path)
+    {
+        if (Path.GetExtension(path) == ".md")
+        {
+            logger.LogInformation("File deleted: {Path}", path);
+            // The base class doesn't provide a method to remove an article,
+            // so we'll just update which should handle the absence of the file
+            UpdateArticle(path);
+        }
+    }
+
+    private void OnFileRenamed(string oldPath, string newPath)
+    {
+        logger.LogInformation("File renamed: {OldPath} -> {NewPath}", oldPath, newPath);
+
+        if (Path.GetExtension(oldPath) == ".md")
+        {
+            // Handle old path (will likely remove the article since file doesn't exist)
+            UpdateArticle(oldPath);
+        }
+
+        if (Path.GetExtension(newPath) == ".md")
+        {
+            // Handle new path
+            UpdateArticle(newPath);
+        }
     }
 
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
@@ -64,18 +112,15 @@ public class AzureBlobArticleCollection : ArticleCollection
             using var reader = new StreamReader(stream);
             var content = await reader.ReadToEndAsync(ct);
             return ParseAuthors(content);
-
         }
         return ImmutableDictionary<string, Author>.Empty;
     }
 
-
-    private async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool> filter = null, string prefix=null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    private async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool> filter = null, string prefix = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-
         await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix ?? ""))
         {
-            if(cancellationToken.IsCancellationRequested)
+            if (cancellationToken.IsCancellationRequested)
                 yield break;
             if (filter is null || filter.Invoke(blobItem.Name))
             {
@@ -86,13 +131,11 @@ public class AzureBlobArticleCollection : ArticleCollection
         }
     }
 
-
     public override void Dispose()
     {
         base.Dispose();
-        articleStream.Dispose();
+        articleStream?.Dispose();
     }
-
 
     public override async Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
     {
@@ -155,6 +198,9 @@ public class AzureBlobArticleCollection : ArticleCollection
         var fullPath = Path.Combine(path.TrimStart('/'), fileName);
         var blobClient = containerClient.GetBlobClient(fullPath);
 
+        // Check if file exists to determine if this is an add or update
+        bool exists = await blobClient.ExistsAsync();
+
         // Reset stream position to beginning before uploading
         if (openReadStream.CanSeek)
             openReadStream.Position = 0;
@@ -170,7 +216,18 @@ public class AzureBlobArticleCollection : ArticleCollection
         };
 
         await blobClient.UploadAsync(openReadStream, blobUploadOptions);
+
+        // Trigger appropriate event based on whether this was an add or update
+        if (exists)
+        {
+            OnFileChanged(fullPath);
+        }
+        else
+        {
+            OnFileAdded(fullPath);
+        }
     }
+
     public override async Task CreateFolderAsync(string path)
     {
         // In Azure Blob Storage, folders don't technically exist as discrete entities.
@@ -198,6 +255,9 @@ public class AzureBlobArticleCollection : ArticleCollection
         {
             var blobClient = containerClient.GetBlobClient(blob.Name);
             await blobClient.DeleteIfExistsAsync();
+
+            // Trigger delete event for each file
+            OnFileDeleted(blob.Name);
         }
     }
 
@@ -212,16 +272,59 @@ public class AzureBlobArticleCollection : ArticleCollection
         {
             throw new FileNotFoundException($"File not found: {filePath}");
         }
+
+        // Trigger delete event
+        OnFileDeleted(filePath);
     }
-    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string,bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
+
+    // New method to handle file renaming
+    public async Task RenameFileAsync(string oldPath, string newPath)
+    {
+        oldPath = oldPath.TrimStart('/');
+        newPath = newPath.TrimStart('/');
+
+        // Get reference to the source blob
+        var sourceBlobClient = containerClient.GetBlobClient(oldPath);
+
+        if (!await sourceBlobClient.ExistsAsync())
+        {
+            throw new FileNotFoundException($"Source file not found: {oldPath}");
+        }
+
+        // Get reference to the destination blob
+        var destBlobClient = containerClient.GetBlobClient(newPath);
+
+        // Copy the blob to the new location
+        await destBlobClient.StartCopyFromUriAsync(sourceBlobClient.Uri);
+
+        // Wait for the copy to complete
+        BlobProperties properties;
+        do
+        {
+            await Task.Delay(100);
+            properties = await destBlobClient.GetPropertiesAsync();
+        } while (properties.CopyStatus == CopyStatus.Pending);
+
+        if (properties.CopyStatus != CopyStatus.Success)
+        {
+            throw new IOException($"Copy operation failed: {properties.CopyStatus}");
+        }
+
+        // Delete the source blob
+        await sourceBlobClient.DeleteAsync();
+
+        // Trigger rename event
+        OnFileRenamed(oldPath, newPath);
+    }
+
+    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
-        await foreach (var article in GetAllFromContainer(filter, cancellationToken:cancellationToken))
+        await foreach (var article in GetAllFromContainer(filter, cancellationToken: cancellationToken))
         {
-            if(cancellationToken.IsCancellationRequested)
+            if (cancellationToken.IsCancellationRequested)
                 yield break;
             yield return article;
         }
-
     }
 }
