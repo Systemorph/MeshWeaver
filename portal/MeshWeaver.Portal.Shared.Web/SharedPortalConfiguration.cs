@@ -52,23 +52,9 @@ public static class SharedPortalConfiguration
 
         services.AddHttpContextAccessor();
 
-        // Get the EntraId configuration section
-        var entraIdConfig = builder.Configuration.GetSection("EntraId");
-
-        // Bind environment variables to the EntraId section
-        if (!string.IsNullOrEmpty(builder.Configuration["EntraIdTenantId"]))
-        {
-            entraIdConfig["TenantId"] = builder.Configuration["EntraIdTenantId"];
-        }
-
-        if (!string.IsNullOrEmpty(builder.Configuration["EntraIdClientId"]))
-        {
-            entraIdConfig["ClientId"] = builder.Configuration["EntraIdClientId"];
-        }
 
         builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(entraIdConfig);
-        // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
+            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
         builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
         {
             var adminGroup = builder.Configuration.GetValue<string>("PortalAdminGroup");
