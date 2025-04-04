@@ -122,7 +122,7 @@ public static class MarkdownExtensions
             ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
                 .Deserialize<Article>(yamlBlock.Lines.ToString());
         }
-        catch (Exception e)
+        catch 
         {
 
             ret = new();
@@ -168,6 +168,14 @@ public record ArticleCatalogOptions
     public string Collection { get; init; }
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
+
+    public ArticleSortOrder SortOrder { get; init; }
+}
+
+public enum ArticleSortOrder
+{
+    DescendingPublishDate,
+    AscendingPublishDate
 }
 
 

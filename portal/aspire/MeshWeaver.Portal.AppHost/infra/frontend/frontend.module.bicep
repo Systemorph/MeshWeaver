@@ -19,6 +19,8 @@ param entraidclientid_value string
 
 param portaladmingroup_value string
 
+param googleanalyticstrackingid_value string = ''
+
 param outputs_azure_container_registry_managed_identity_id string
 
 param outputs_managed_identity_client_id string
@@ -148,8 +150,12 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
               value: entraidclientid_value
             }
             {
-              name: 'PortalAdminGroup'
+              name: 'EntraId__RoleMappings__PortalAdmin'
               value: portaladmingroup_value
+            }
+            {
+              name: 'GoogleAnalyticsTrackingId'
+              value: googleanalyticstrackingid_value
             }
             {
               name: 'AZURE_CLIENT_ID'

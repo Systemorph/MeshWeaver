@@ -11,6 +11,9 @@
       "EntraIdTenantId": {
         "value": "${AZURE_ENTRA_ID_TENANT_ID}"
       },
+      "GoogleAnalyticsTrackingId": {
+        "value": "${AZURE_GOOGLE_ANALYTICS_TRACKING_ID}"
+      },
       "PortalAdminGroup": {
         "value": "${AZURE_PORTAL_ADMIN_GROUP}"
       },

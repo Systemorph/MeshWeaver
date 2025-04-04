@@ -47,7 +47,7 @@ public class ArticleService : IArticleService
         return (await allCollections.Select(c => c.GetArticles(catalogOptions))
                 .CombineLatest()
                 .SelectMany(x => x)
-                .Select(FilterArticles)
+                .Select(articles => ApplyOptions(articles, catalogOptions))
                 .Skip(catalogOptions.Page * catalogOptions.PageSize)
                 .Take(catalogOptions.PageSize)
                 .FirstAsync())
@@ -55,14 +55,20 @@ public class ArticleService : IArticleService
             ;
     }
 
-    private IEnumerable<Article> FilterArticles(IEnumerable<Article> articles)
+    private IEnumerable<Article> ApplyOptions(IEnumerable<Article> articles, ArticleCatalogOptions options)
     {
         if (userService.Context is not null && userService.Context.Roles.Contains(Roles.PortalAdmin))
             return articles;
         var now = DateTime.UtcNow;
-        return articles
+        articles = articles
             .Where(a => a.Published is not null && a.Published <= now)
 ;
+        return options.SortOrder switch
+        {
+            ArticleSortOrder.AscendingPublishDate => articles.OrderBy(a => a.Published),
+            ArticleSortOrder.DescendingPublishDate => articles.OrderByDescending(a => a.Published),
+            _ => throw new ArgumentOutOfRangeException()
+        };
     }
 
     public IObservable<Article> GetArticle(string collection, string article)
