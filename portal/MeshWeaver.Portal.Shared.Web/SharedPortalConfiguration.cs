@@ -58,7 +58,7 @@ public static class SharedPortalConfiguration
         builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
         {
             var roleMappings = builder.Configuration
-                .GetSection("EntraId__RoleMappings")
+                .GetSection("EntraId:RoleMappings")
                 .GetChildren()
                 .ToDictionary(x => x.Value, x => x.Key);
 

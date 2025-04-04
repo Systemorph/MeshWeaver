@@ -2,6 +2,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <ProjectGuid>{df164dda-93b7-406c-a7b1-72f449d7fa85}</ProjectGuid>
+    <UserSecretsId>7a281b74-ad11-4dd9-987b-c59ec5a5dd4c</UserSecretsId>
   </PropertyGroup>
     <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
