@@ -57,13 +57,10 @@ public static class SharedPortalConfiguration
             .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
         builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
         {
-            var adminGroup = builder.Configuration.GetValue<string>("PortalAdminGroup");
-            
-            // Get role mappings from configuration
-            var roleMappings = string.IsNullOrEmpty(adminGroup) 
-                ? new Dictionary<string,string>() 
-                : new(){ { adminGroup, Roles.PortalAdmin }};
-                
+            var roleMappings = builder.Configuration
+                .GetSection("EntraId__RoleMappings")
+                .GetChildren()
+                .ToDictionary(x => x.Value, x => x.Key);
 
             options.Events.OnTokenValidated = async context =>
             {
