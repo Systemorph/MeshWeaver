@@ -102,7 +102,7 @@ else
         .WithReference(azureMeshweaverdb)
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
-        .WithEnvironment("PortalAdminGroup", entraIdAdminGroupId)
+        .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
         .WithEnvironment("GoogleAnalyticsTrackingId", googleTrackingId)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
