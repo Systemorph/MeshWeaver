@@ -116,8 +116,17 @@ public static class MarkdownExtensions
 
             };
 
-        var ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
+        Article ret;
+        try
+        {
+            ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
                 .Deserialize<Article>(yamlBlock.Lines.ToString());
+        }
+        catch (Exception e)
+        {
+
+            ret = new();
+        }
 
         // Remove the YAML block from the content
         var contentWithoutYaml = content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n');
