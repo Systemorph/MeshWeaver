@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Blazor.Infrastructure;
+﻿namespace MeshWeaver.Articles;
 
 public static class Roles
 {

@@ -8,10 +8,12 @@ namespace MeshWeaver.Articles;
 public class ArticleService : IArticleService
 {
     private readonly IMessageHub hub;
+    private readonly UserService userService;
 
-    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub)
+    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub, UserService userService)
     {
         this.hub = hub;
+        this.userService = userService;
         var configs = serviceProvider.GetRequiredService<IOptions<List<ArticleSourceConfig>>>();
         collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
     }
@@ -38,22 +40,29 @@ public class ArticleService : IArticleService
     public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
         CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
         var allCollections = 
             string.IsNullOrEmpty(catalogOptions.Collection)
             ? collections.Values
             : [collections[catalogOptions.Collection]];
         return (await allCollections.Select(c => c.GetArticles(catalogOptions))
                 .CombineLatest()
-                .Select(x => x
-                    .SelectMany(y => y)
-                    .Where(a => a.Published is not null && a.Published <= now)
-                    .OrderByDescending(a => a.Published))
+                .SelectMany(x => x)
+                .Select(FilterArticles)
                 .Skip(catalogOptions.Page * catalogOptions.PageSize)
                 .Take(catalogOptions.PageSize)
                 .FirstAsync())
             .ToArray()
             ;
+    }
+
+    private IEnumerable<Article> FilterArticles(IEnumerable<Article> articles)
+    {
+        if (userService.Context is not null && userService.Context.Roles.Contains(Roles.PortalAdmin))
+            return articles;
+        var now = DateTime.UtcNow;
+        return articles
+            .Where(a => a.Published is not null && a.Published <= now)
+;
     }
 
     public IObservable<Article> GetArticle(string collection, string article)

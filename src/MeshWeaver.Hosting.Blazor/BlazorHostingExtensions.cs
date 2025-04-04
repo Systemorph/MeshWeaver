@@ -21,9 +21,11 @@ public static class BlazorHostingExtensions
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
-    public static void MapMeshWeaver(this IEndpointRouteBuilder app)
+    public static void MapMeshWeaver(this WebApplication app)
     {
-        app.MapStaticContent(app.ServiceProvider.GetRequiredService<IArticleService>());
+        app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
+        app.UseMiddleware<UserContextMiddleware>();
+
         //app.MapRazorComponents<ApplicationPage>();
     }
     private static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)

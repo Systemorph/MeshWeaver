@@ -46,7 +46,10 @@ public record MeshBuilder
     private void Register()
     {
         ConfigureServices(services => services
-            .AddSingleton(_ => BuildMeshConfiguration()).AddSingleton(BuildHub));
+            .AddSingleton(_ => BuildMeshConfiguration())
+            .AddSingleton(BuildHub)
+            .AddSingleton<UserService>()
+            );
 
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
 

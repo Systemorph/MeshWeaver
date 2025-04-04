@@ -79,12 +79,12 @@ public static class SharedPortalConfiguration
                 await Task.CompletedTask;
             };
         });
-
+        
         builder.Services.AddControllersWithViews()
             .AddMicrosoftIdentityUI();
 
         builder.Services.AddAuthorization();
-
+         
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(
@@ -130,6 +130,7 @@ public static class SharedPortalConfiguration
         //app.MapMeshWeaverSignalRHubs();
 
         app.MapMeshWeaver();
+        app.UseMiddleware<UserContextMiddleware>();
         app.UseHttpsRedirection();
 
 
