@@ -62,7 +62,7 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithReference(appStorage.AddBlobs("reinsurance"))
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
-        .WithEnvironment("PortalAdminGroup", entraIdAdminGroupId)
+        .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
         .WithReference(meshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
