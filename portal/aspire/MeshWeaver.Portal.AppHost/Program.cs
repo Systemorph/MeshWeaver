@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Aspire.Hosting;
+using Microsoft.Extensions.Hosting;
 
 // Add this namespace for Azure resources
 
@@ -26,7 +27,6 @@ var orleans = builder.AddOrleans("mesh")
 var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
 var entraIdClientId = builder.AddParameter("EntraIdClientId");
 var entraIdAdminGroupId = builder.AddParameter("PortalAdminGroup");
-
 
 // PostgreSQL database setup - conditionally use containerized or Azure PostgreSQL
 if (!builder.ExecutionContext.IsPublishMode)
@@ -91,6 +91,7 @@ else
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 
+    var googleTrackingId = builder.AddParameter("GoogleAnalyticsTrackingId");
         // Configure the frontend to wait for database migrations to complete
     var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
@@ -102,6 +103,7 @@ else
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
         .WithEnvironment("PortalAdminGroup", entraIdAdminGroupId)
+        .WithEnvironment("GoogleAnalyticsTrackingId", googleTrackingId)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 

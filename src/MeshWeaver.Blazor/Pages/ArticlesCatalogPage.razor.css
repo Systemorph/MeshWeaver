@@ -14,3 +14,7 @@
     display: flex;
     align-items: center;
 }
+/* Spacer element to add space between toolbar and layout area */
+.toolbar-spacer {
+    height: 2rem;
+}
