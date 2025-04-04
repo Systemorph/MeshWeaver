@@ -23,14 +23,16 @@ public partial class LayoutAreaView
     {
         await base.SetParametersAsync(parameters);
         BindViewModel();
-        if (IsNotPreRender)
-            BindStream();
-        else
+        if (AreaStream is not null
+            && (!AreaStream.Reference.Equals(ViewModel?.Reference) ||
+                !AreaStream.Owner.Equals(ViewModel?.Address)))
         {
-            if (AreaStream != null)
-                AreaStream.Dispose();
+            AreaStream.Dispose();
             AreaStream = null;
         }
+
+        if (IsNotPreRender)
+            BindStream();
     }
     private bool showProgress;
     private string progressMessage;

@@ -3,6 +3,7 @@
 @using MeshWeaver.Blazor.FileExplorer
 
 @inject PortalApplication Portal
+@inject NavigationManager NavigationManager
 
 <div class="articles-catalog-page">
     <FluentToolbar Class="toolbar">
@@ -17,7 +18,7 @@
 
     private void HandleCollectionChanged(string collection)
     {
-        Collection = collection;
+        NavigationManager.NavigateTo($"/articles/{collection}");
         InvokeAsync(StateHasChanged);
     }
 }
