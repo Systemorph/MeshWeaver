@@ -57,12 +57,13 @@ public class ArticleService : IArticleService
 
     private IEnumerable<Article> ApplyOptions(IEnumerable<Article> articles, ArticleCatalogOptions options)
     {
-        if (userService.Context is not null && userService.Context.Roles.Contains(Roles.PortalAdmin))
-            return articles;
-        var now = DateTime.UtcNow;
-        articles = articles
-            .Where(a => a.Published is not null && a.Published <= now)
-;
+        if (userService.Context is null || !userService.Context.Roles.Contains(Roles.PortalAdmin))
+        {
+            var now = DateTime.UtcNow;
+            articles = articles
+                .Where(a => a.Published is not null && a.Published <= now);
+
+        }
         return options.SortOrder switch
         {
             ArticleSortOrder.AscendingPublishDate => articles.OrderBy(a => a.Published),
