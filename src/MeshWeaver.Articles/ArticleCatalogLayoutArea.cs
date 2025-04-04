@@ -17,8 +17,8 @@ public static class ArticleCatalogLayoutArea
     /// <returns></returns>
     public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
     {
-        var collection = host.Hub.GetArticleService();
-        var articles = await collection.GetArticleCatalog(ParseToOptions(host.Reference), ct);
+        var articleService = host.Hub.GetArticleService();
+        var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Reference), ct);
         return articles.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))
                     )
