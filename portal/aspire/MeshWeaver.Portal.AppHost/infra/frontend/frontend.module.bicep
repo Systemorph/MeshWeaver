@@ -17,6 +17,8 @@ param entraidtenantid_value string
 
 param entraidclientid_value string
 
+param portaladmingroup_value string
+
 param outputs_azure_container_registry_managed_identity_id string
 
 param outputs_managed_identity_client_id string
@@ -138,16 +140,16 @@ resource frontend 'Microsoft.App/containerApps@2024-03-01' = {
               value: '${azure_postgres_outputs_connectionstring};Database=meshweaverdb'
             }
             {
-              name: 'EntraId:TenantId'
+              name: 'EntraId__TenantId'
               value: entraidtenantid_value
             }
             {
-              name: 'EntraId:ClientId'
+              name: 'EntraId__ClientId'
               value: entraidclientid_value
             }
             {
-              name: 'EntraId:Groups:RoleMappings:5aa83bc7-e8d5-4d69-bffa-1e05689b7614'
-              value: 'PortalAdmin'
+              name: 'PortalAdminGroup'
+              value: portaladmingroup_value
             }
             {
               name: 'AZURE_CLIENT_ID'
