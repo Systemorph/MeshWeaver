@@ -14,6 +14,7 @@ param principalId string = ''
 
 param EntraIdClientId string
 param EntraIdTenantId string
+param GoogleAnalyticsTrackingId string
 param PortalAdminGroup string
 @metadata({azd: {
   type: 'generate'

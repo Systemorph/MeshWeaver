@@ -15,7 +15,7 @@ public static class ArticleCatalogLayoutArea
     /// <param name="ctx">Rendering context</param>
     /// <param name="ct"></param>
     /// <returns></returns>
-    public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
+    public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var articleService = host.Hub.GetArticleService();
         var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Reference), ct);
@@ -47,13 +47,5 @@ public static class ArticleCatalogLayoutArea
         => menu.WithView(Controls.NavLink(displayName ?? collection.Wordify(), $"articles/{collection}"));
 
 
-    /// <summary>
-    /// Gets a LayoutAreaReference for the article catalog with the query options.
-    /// </summary>
-    /// <param name="path"></param>
-    /// <param name="options"></param>
-    /// <returns></returns>
-    public static LayoutAreaReference GetCatalogLayoutReference(string path, Func<ArticleCatalogOptions, ArticleCatalogOptions> options = null)
-        => new(nameof(Catalog)) { Id = path }; // TODO V10: Create sth with options (22.01.2025, Roland Bürgi)
 
 }
