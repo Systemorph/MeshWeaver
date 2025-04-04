@@ -11,10 +11,10 @@ public class FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub
     public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
-            return null;
+            return Task.FromResult<Stream>(null);
         var fullPath = Path.Combine(BasePath, path);
         if (!File.Exists(fullPath))
-            return null;
+            return Task.FromResult<Stream>(null);
         return Task.FromResult<Stream>(File.OpenRead(fullPath));
     }
     
