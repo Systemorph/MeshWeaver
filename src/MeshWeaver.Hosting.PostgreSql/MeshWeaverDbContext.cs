@@ -75,6 +75,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.StatusHistory).HasColumnType("jsonb");
             entity.Property(e => e.AuthorDetails).HasColumnType("jsonb");
             entity.Property(e => e.CodeSubmissions).HasColumnType("jsonb");
+            entity.Property(e => e.Icon).HasColumnType("jsonb");
         });
 
         // Configure Author entity
@@ -125,7 +126,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id)
-                  .ValueGeneratedOnAdd(); // Auto-generate the Id
+                  .UseIdentityAlwaysColumn(); // Auto-generate the Id
             entity.Property(e => e.Timestamp);
             entity.Property(e => e.Level).IsRequired();
             entity.Property(e => e.Properties).HasColumnType("jsonb");
