@@ -1,0 +1,55 @@
+﻿@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@implements IDialogContentComponent<DeleteModel>
+
+<div class="delete-confirmation">
+    <p>@Content?.ConfirmationMessage</p>
+
+    @if (Content?.Count > 1)
+    {
+        <ul class="delete-items-list">
+            @foreach (var item in Content.ItemsToDelete.Take(5))
+            {
+                <li>@item.Name</li>
+            }
+            @if (Content.Count > 5)
+            {
+                <li>And @(Content.Count - 5) more...</li>
+            }
+        </ul>
+    }
+</div>
+
+<FluentDialogFooter>
+    <FluentButton Appearance="Appearance.Accent"
+                  Disabled="@(Content is null || !Content.HasItems)"
+                  OnClick="@DeleteAsync">
+        Delete
+    </FluentButton>
+    <FluentButton Appearance="Appearance.Neutral"
+                  OnClick="@CancelAsync">
+        Cancel
+    </FluentButton>
+</FluentDialogFooter>
+
+@code
+{
+    [Parameter] public DeleteModel Content { get; set; }
+
+    [CascadingParameter]
+    public FluentDialog Dialog { get; set; } = default!;
+
+    private async Task DeleteAsync()
+    {
+        if (Content.HasItems)
+        {
+            await Content.DeleteAsync();
+            await Dialog.CloseAsync(Content);
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        await Dialog.CancelAsync();
+    }
+}
+

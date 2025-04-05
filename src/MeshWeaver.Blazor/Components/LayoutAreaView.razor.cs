@@ -23,14 +23,16 @@ public partial class LayoutAreaView
     {
         await base.SetParametersAsync(parameters);
         BindViewModel();
-        if (IsNotPreRender)
-            BindStream();
-        else
+        if (AreaStream is not null
+            && (!AreaStream.Reference.Equals(ViewModel?.Reference) ||
+                !AreaStream.Owner.Equals(ViewModel?.Address)))
         {
-            if (AreaStream != null)
-                AreaStream.Dispose();
+            AreaStream.Dispose();
             AreaStream = null;
         }
+
+        if (IsNotPreRender)
+            BindStream();
     }
     private bool showProgress;
     private string progressMessage;
@@ -64,15 +66,15 @@ public partial class LayoutAreaView
     private string RenderingArea { get; set; }
     private void BindStream()
     {
-        if (AreaStream != null)
+        if (AreaStream is null)
         {
-            Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
-            AreaStream.Dispose();
+            //Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
+            //AreaStream.Dispose();
+            Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address, ViewModel.Reference);
+            AreaStream = Address.Equals(Workspace.Hub.Address)
+                ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
+                : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
         }
-        Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address, ViewModel.Reference);
-        AreaStream = Address.Equals(Workspace.Hub.Address)
-            ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
-            : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
     }
 
 

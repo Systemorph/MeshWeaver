@@ -11,8 +11,6 @@ param mesh_service_id_value string
 
 param azure_postgres_outputs_connectionstring string
 
-param meshweaverinsights_outputs_appinsightsconnectionstring string
-
 param outputs_azure_container_registry_managed_identity_id string
 
 param outputs_managed_identity_client_id string
@@ -117,10 +115,6 @@ resource silo 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ConnectionStrings__meshweaverdb'
               value: '${azure_postgres_outputs_connectionstring};Database=meshweaverdb'
-            }
-            {
-              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-              value: meshweaverinsights_outputs_appinsightsconnectionstring
             }
             {
               name: 'AZURE_CLIENT_ID'

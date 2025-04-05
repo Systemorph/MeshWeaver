@@ -1,0 +1,44 @@
+﻿@using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@implements IDialogContentComponent<CreateFolderModel>
+<FluentTextField @ref="textField" @bind-Value="Content.Name" Placeholder="New Folder"  />
+<FluentDialogFooter>
+    <FluentButton Appearance="Appearance.Accent"
+                  Disabled="@(Content is null || !Content.IsValid())"
+                  OnClick="@SaveAsync">
+        Create
+    </FluentButton>
+    <FluentButton Appearance="Appearance.Neutral"
+                  OnClick="@CancelAsync">
+        Cancel
+    </FluentButton>
+</FluentDialogFooter>
+
+@code
+{
+    [Parameter] public CreateFolderModel Content { get; set; }
+    [CascadingParameter] public FluentDialog Dialog { get; set; }
+    private FluentTextField textField;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            textField.FocusAsync();
+        }
+    }
+
+
+    private async Task SaveAsync()
+    {
+        if (Content.IsValid())
+        {
+            await Content.CreateAsync();
+            await Dialog.CloseAsync(Content);
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        await Dialog.CancelAsync();
+    }
+}

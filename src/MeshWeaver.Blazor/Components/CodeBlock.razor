@@ -1,7 +1,7 @@
 ﻿@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
-<div @ref="CodeBlockElement">
+<div @ref="CodeBlockElement" class="code-content">
     @((MarkupString)Html)
     <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
 </div>

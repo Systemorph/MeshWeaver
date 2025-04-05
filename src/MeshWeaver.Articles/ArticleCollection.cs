@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -8,24 +9,51 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
-public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub hub) : IDisposable
+public abstract class ArticleCollection : IDisposable
 {
-    protected IMessageHub Hub { get; } = hub;
-    public string Collection { get; } = config.Name;
-    public string DisplayName { get;  } = config.DisplayName ?? config.Name.Wordify();
+    private readonly ISynchronizationStream<InstanceCollection> articleStream;
+    private readonly ArticleSourceConfig config;
 
-    public abstract IObservable<Article> GetArticle(string path, ArticleOptions options = null);
+    protected ArticleCollection(ArticleSourceConfig config, IMessageHub hub)
+    {
+        Hub = hub;
+        this.config = config;
+        articleStream = CreateStream();
+    }
 
-    public abstract IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions);
+    private  ISynchronizationStream<InstanceCollection> CreateStream()
+    {
+        var ret = new SynchronizationStream<InstanceCollection>(
+            new(Collection, null),
+        Hub,
+            new EntityReference(Collection, "/"),
+            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
+            x => x);
+        ret.Initialize(InitializeAsync, null);
+        return ret;
+    }
+    protected IMessageHub Hub { get; } 
+    public string Collection  => config.Name;
+    public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
+
+    public IObservable<Article> GetArticle(string path)
+        => articleStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
+
+
+    public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions _)
+        => articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
+
 
     public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
+        articleStream.Dispose();
     }
-    protected ImmutableDictionary<string, Author> Authors = ImmutableDictionary<string, Author>.Empty;
 
-    protected ImmutableDictionary<string, Author> LoadAuthorsAsync(string content)
+    protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
+
+    protected ImmutableDictionary<string, Author> ParseAuthors(string content)
     {
         var ret = JsonSerializer
             .Deserialize<ImmutableDictionary<string, Author>>(
@@ -40,131 +68,113 @@ public abstract class ArticleCollection(ArticleSourceConfig config, IMessageHub 
                 })).ToImmutableDictionary();
     }
 
-}
+    public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
 
-public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
-{
-    public const string SourceType = "FileSystem";
-    public ArticleCollection Create(ArticleSourceConfig config)
+    public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
+    public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
+
+    public Task SaveArticleAsync(Article article)
     {
-        return new FileSystemArticleCollection(config, hub);
-    }
-}
-
-public class FileSystemArticleCollection : ArticleCollection
-{
-    public string BasePath { get; }
-    private FileSystemWatcher watcher;
-
-    private readonly ISynchronizationStream<InstanceCollection> articleStream;
-
-    public FileSystemArticleCollection(ArticleSourceConfig config, IMessageHub hub) : base(config, hub)
-    {
-        BasePath = config.BasePath;
-        articleStream = CreateStream(BasePath);
+        var markdown = article.ConvertToMarkdown();
+        var utfEncoding = new UTF8Encoding(false);
+        var markdownStream = new MemoryStream(utfEncoding.GetBytes(markdown));
+        return SaveFileAsync(article.Path, "", markdownStream);
     }
 
-
-    public override IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions toOptions) => 
-        articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
-
-
-    public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
+    public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
     {
-        if (path is null)
-            return null;
-        var fullPath = Path.Combine(BasePath, path);
-        if (!File.Exists(fullPath))
-            return null;
-        return Task.FromResult<Stream>(File.OpenRead(fullPath));
+        var files = await GetFilesAsync(currentPath);
+        var folders = await GetFoldersAsync(currentPath);
+        return folders
+            .Cast<CollectionItem>()
+            .Concat(files)
+            .ToArray();
     }
+    protected static bool MarkdownFilter(string name)
+        => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
-    private ISynchronizationStream<InstanceCollection> CreateStream(string path)
+    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        var ret = new SynchronizationStream<InstanceCollection>(
-            new(Collection, path), 
-            Hub, 
-            new EntityReference(Collection, path),
-            Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x);
-        ret.Initialize(InitializeAsync, null);
+        Authors = await LoadAuthorsAsync(ct);
+        var ret = new InstanceCollection(
+            await GetStreams(MarkdownFilter, ct)
+                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream,tuple.Path, tuple.LastModified, ct))
+                .Where(x => x is not null)
+                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
+        );
+        AttachMonitor();
         return ret;
     }
-
-    public override IObservable<Article> GetArticle(string path, ArticleOptions options = null) => 
-        articleStream.Reduce(new InstanceReference(path), c => c.ReturnNullWhenNotPresent()).Select(x => (Article)x?.Value);
-
-    public void MonitorFileSystem()
-    {
-        watcher = new FileSystemWatcher(BasePath)
-        {
-            IncludeSubdirectories = true
-        };
-        watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite;
-        watcher.Changed += OnChanged;
-        watcher.Renamed += OnRenamed;
-        watcher.EnableRaisingEvents = true;
-    }
-
-    private void OnRenamed(object sender, RenamedEventArgs e)
-    {
-        UpdateArticle(e.FullPath);
-    }
-
-
-    private void OnChanged(object sender, FileSystemEventArgs e)
-    {
-        UpdateArticle(e.FullPath);
-    }
-
-    private void UpdateArticle(string path)
+    protected void UpdateArticle(string path)
     {
         articleStream.Update(async (x, ct) =>
         {
-            var article = await LoadArticle(path, ct);
+            var tuple = await GetStreamAsync(path, ct);
+            if (tuple.Stream is null)
+                return null;
+            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
             return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
         }, null);
     }
 
-    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
-    {
-        var authorsFile = Path.Combine(BasePath, "authors.json");
-        if(File.Exists(authorsFile))
-            Authors = LoadAuthorsAsync(await File.ReadAllTextAsync(authorsFile, ct));
+    protected abstract Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
-        var ret = new InstanceCollection(
-            await GetAllFromPath()
-                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
+    private async Task<MarkdownElement> ParseArticleAsync(Stream stream, string path, DateTime lastModified, CancellationToken ct)
+    {
+        using var reader = new StreamReader(stream);
+        var content = await reader.ReadToEndAsync(ct);
+ 
+
+        return MarkdownExtensions.ParseContent(
+            Collection,
+            path,
+            lastModified,
+            content,
+            Authors
         );
-        MonitorFileSystem();
-        return ret;
     }
 
+    protected abstract void AttachMonitor();
 
-    private async IAsyncEnumerable<Article> GetAllFromPath()
+    protected abstract Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct);
+
+    public abstract Task CreateFolderAsync(string returnValue);
+
+    public abstract Task DeleteFolderAsync(string folderPath);
+
+    public abstract Task DeleteFileAsync(string filePath);
+    protected abstract IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
+
+    public bool IsArticle(string path, out string name)
     {
-        var files = Directory.GetFiles(BasePath, "*.md");
-        foreach (var file in files)
-        {
-            yield return await LoadArticle(file, CancellationToken.None);
-        }
+        name = Path.GetFileNameWithoutExtension(path);
+        if (Path.GetExtension(path) != ".md")
+            return false;
+        return articleStream.Current.Value.Instances.ContainsKey(name);
     }
 
 
-    private async Task<Article> LoadArticle(string fullPath, CancellationToken ct)
+    public virtual string GetContentType(string path)
     {
-        if(!File.Exists(fullPath))
-           return null;
-        await using var stream = File.OpenRead(fullPath);
-        var content = await new StreamReader(stream).ReadToEndAsync(ct);
-        return ArticleExtensions.ParseArticle(Collection, Path.GetRelativePath(BasePath, fullPath), File.GetLastWriteTime(fullPath),content, Authors);
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if(string.IsNullOrEmpty(extension))
+            return "text/markdown";
+        return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }
-
-    public override void Dispose()
+    private static readonly Dictionary<string, string> MimeTypes = new()
     {
-        base.Dispose();
-        articleStream.Dispose();
-        watcher?.Dispose();
-        watcher = null;
-    }
+        { ".txt", "text/plain" },
+        { ".md", "text/markdown" },
+        { ".html", "text/html" },
+        { ".htm", "text/html" },
+        { ".jpg", "image/jpeg" },
+        { ".jpeg", "image/jpeg" },
+        { ".png", "image/png" },
+        { ".gif", "image/gif" },
+        { ".bmp", "image/bmp" },
+        { ".svg", "image/svg+xml" },
+        { ".json", "application/json" },
+        { ".pdf", "application/pdf" },
+        // Add more mappings as needed
+    };
 }

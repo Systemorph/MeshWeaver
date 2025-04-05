@@ -1,0 +1,70 @@
+@inherits ArticleHeaderBase
+
+<div class="article-header-editor">
+    <FluentToolbar>
+        <FluentButton Appearance="Appearance.Accent" OnClick="SaveAsync">
+            <FluentIcon Value="@(new Icons.Regular.Size20.Save())" Slot="start" />
+            Save
+        </FluentButton>
+        <FluentButton OnClick="DoneAsync">
+            <FluentIcon Value="@(new Icons.Regular.Size20.CheckmarkCircle())" Slot="start" />
+            Done
+        </FluentButton>
+    </FluentToolbar>
+
+    <FluentTabs>
+        <FluentTab Label="Basic Info">
+            <div class="editor-form-group">
+                <FluentTextField Label="Name" @bind-Value="@Name" ReadOnly="true"/>
+                <FluentTextField Label="Collection" @bind-Value="@CollectionName" ReadOnly="true"/>
+                <FluentTextField Label="Title" @bind-Value="@Title" />
+                <FluentTextArea Label="Abstract" @bind-Value="@Abstract" Rows="4" />
+            </div>
+        </FluentTab>
+        
+        <FluentTab Label="Media">
+            <div class="editor-form-group">
+                <FluentTextField Label="Thumbnail" @bind-Value="@Thumbnail" />
+                @if (!string.IsNullOrEmpty(Thumbnail))
+                {
+                    <div class="thumbnail-preview">
+                        <img src="@ThumbnailPath" alt="Thumbnail preview" />
+                    </div>
+                }
+                <FluentTextField Label="Video URL" @bind-Value="@VideoUrl" />
+                @if (!string.IsNullOrEmpty(VideoUrl))
+                {
+                    <div class="video-preview">
+                        <iframe src="@GetEmbedUrl(VideoUrl)" frameborder="0" allowfullscreen></iframe>
+                    </div>
+                }
+            </div>
+        </FluentTab>
+        
+        <FluentTab Label="Tags & Publishing">
+            <div class="editor-form-group">
+                <TagEditor @bind-Tags="@Tags" />
+                
+                <FluentDatePicker Label="Published Date" @bind-Value="@Published" />
+                
+                @if (LastUpdated.HasValue)
+                {
+                    <FluentLabel>Last Updated: @LastUpdated.Value.ToString("g")</FluentLabel>
+                }
+                
+                @if (Authors != null && Authors.Any())
+                {
+                    <div class="authors-list">
+                        <FluentLabel>Authors:</FluentLabel>
+                        <ul>
+                            @foreach (var author in Authors)
+                            {
+                                <li>@author.FirstName @author.MiddleName @author.LastName</li>
+                            }
+                        </ul>
+                    </div>
+                }
+            </div>
+        </FluentTab>
+    </FluentTabs>
+</div>

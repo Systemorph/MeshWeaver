@@ -45,16 +45,15 @@ public partial class DataGridView
 
         builder.OpenComponent(0,
             typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
-        var index = 0;
-        builder.AddComponentParameter(++index, nameof(PropertyColumn<object, object>.Property),
+        builder.AddComponentParameter(1, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
-        builder.AddAttribute(++index, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext));
+        builder.AddAttribute(2, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext));
         if (column.Format is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
+            builder.AddAttribute(3, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
         if (column.Sortable is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
+            builder.AddAttribute(4, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
         if (column.Tooltip is not null)
-            builder.AddAttribute(++index, nameof(PropertyColumn<object, object>.TooltipText),
+            builder.AddAttribute(5, nameof(PropertyColumn<object, object>.TooltipText),
                 (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext)));
 
         builder.CloseComponent();

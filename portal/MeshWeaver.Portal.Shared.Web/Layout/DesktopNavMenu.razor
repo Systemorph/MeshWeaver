@@ -1,10 +1,23 @@
-﻿@using MeshWeaver.Layout.Views
+﻿@using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Infrastructure
+@using Microsoft.AspNetCore.Components.Authorization
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
-        <FluentAppBarItem
-            Href="/articles"
-            Match="NavLinkMatch.All"
-            IconRest="ArticlesIcon()"
-            IconActive="ArticlesIcon(active: true)"
-            Text="Blog" />
+    <FluentAppBarItem
+        Href="/articles"
+        Match="NavLinkMatch.All"
+        IconRest="ArticlesIcon()"
+        IconActive="ArticlesIcon(active: true)"
+        Text="Blog" />
+    <AuthorizeView Roles="@Roles.PortalAdmin">
+        <Authorized>
+            <FluentAppBarItem
+                Href="/collections"
+                Match="NavLinkMatch.All"
+                IconRest="CollectionsIcon()"
+                IconActive="CollectionsIcon(active: true)"
+                Text="Collections" />
+        </Authorized>
+    </AuthorizeView>
+
 </FluentAppBar>

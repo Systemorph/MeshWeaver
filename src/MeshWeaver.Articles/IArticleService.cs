@@ -3,6 +3,9 @@
 public interface IArticleService
 {
     Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default);
-    IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions options);
+    Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions options, CancellationToken ct = default);
     IObservable<Article> GetArticle(string collection, string article);
+
+    Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default);
+    ArticleCollection GetCollection(string collectionName);
 }

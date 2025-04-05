@@ -1,39 +1,13 @@
-@page "/article/{Collection}/{**Path}"
+@page "/article/{**Path}"
 @using System.Reactive.Linq
 @using MeshWeaver.Articles
 @using MeshWeaver.Blazor.Infrastructure
 @inject PortalApplication PortalApplication
-@implements IDisposable
 
-<DispatchView ViewModel="@RootControl"></DispatchView>
+<LayoutArea Address="@PortalApplication.Hub.Address" Area="Article" Id="@Path"></LayoutArea>
 
 @code
 {
-    [Parameter] public string Collection { get; set; }
     [Parameter] public string Path { get; set; }
 
-    IDisposable ArticleStreamSubscription { get; set; }
-    UiControl RootControl { get; set; }
-    protected override void OnParametersSet()
-    {
-        base.OnParametersSet();
-
-        // Dispose of previous subscription if it exists
-        ArticleStreamSubscription?.Dispose();
-
-        ArticleStreamSubscription = PortalApplication.Hub
-            .RenderArticle(Collection, Path)
-            .Cast<UiControl>()
-            .Subscribe(a =>
-            {
-                RootControl = a;
-                InvokeAsync(StateHasChanged);
-            });
-    }
-
-    public void Dispose()
-    {
-        // This will be called when the component is removed from the UI (user navigates away)
-        ArticleStreamSubscription?.Dispose();
-    }
 }

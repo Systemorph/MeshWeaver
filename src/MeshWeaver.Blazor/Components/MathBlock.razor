@@ -15,11 +15,21 @@
     </script>
 </HeadContent>
 
-<div @ref="MathBlockElement" @attributes="AdditionalAttributes">
-    @((MarkupString)Html)
-</div>
+@if (Name == "div")
+{
+    <div class="math"@ref="MathBlockElement" @attributes="AdditionalAttributes">
+        @((MarkupString)Html)
+    </div>
+}
+@if (Name == "span")
+{
+    <span class="math" @ref="MathBlockElement" @attributes="AdditionalAttributes">
+        @((MarkupString)Html)
+    </span>
+}
 
 @code {
+    [Parameter] public string Name { get; set; }
     [Parameter] public string Html { get; set; }
     [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
     private IJSObjectReference Mathjax;

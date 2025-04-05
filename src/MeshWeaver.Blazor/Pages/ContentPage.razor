@@ -1,0 +1,40 @@
+﻿@page "/content/{Collection}/{**Path}"
+@using MeshWeaver.Articles
+@using MeshWeaver.Blazor.Infrastructure
+@inject IArticleService ArticleService
+@inject NavigationManager NavigationManager
+
+@code {
+    [Parameter] public string Collection { get; set; }
+    [Parameter] public string Path { get; set; }
+
+}
+
+@if(ContentType == "text/markdown")
+{
+    <LayoutArea Address="@PortalApplication.Hub.Address" Area="Content" Id="@(Collection + '/' + Path)"/>
+}
+else if (Content != null)
+{
+    if (ContentType.StartsWith("image/"))
+    {
+        <img src="data:@ContentType;base64,@Convert.ToBase64String(ReadStream(Content))" />
+    }
+    else if (ContentType == "text/plain")
+    {
+        <pre>@ReadStreamAsString(Content)</pre>
+    }
+    else if (ContentType == "application/pdf")
+    {
+        <iframe src="data:application/pdf;base64,@Convert.ToBase64String(ReadStream(Content))" width="100%" height="600px"></iframe>
+    }
+    else if (ContentType == "application/json")
+    {
+        <pre>@ReadStreamAsString(Content)</pre>
+    }
+    else
+    {
+        <p>Unsupported content type: @ContentType</p>
+    }
+}
+

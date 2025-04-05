@@ -1,0 +1,26 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+
+@inherits BlazorView<ArticleControl, ArticleView>
+
+
+<div class="article-container">
+    @switch (DisplayMode)
+    {
+        case ArticleDisplayMode.EditHeading:
+            <AuthorizeView Roles="@Roles.PortalAdmin">
+                <Authorized>
+                    <ArticleHeaderEditor Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode" ></ArticleHeaderEditor>
+                </Authorized>
+            </AuthorizeView>
+            break;
+        default:
+            <ArticleHeaderDisplay Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode"></ArticleHeaderDisplay>
+            break;
+    }
+</div>
+<div class="article-content markdown-body">
+    <MarkdownView ViewModel="@MarkdownControl" />
+</div>
+
+@code
+{}

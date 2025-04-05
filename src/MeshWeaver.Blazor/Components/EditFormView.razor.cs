@@ -10,7 +10,7 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class EditFormView
 {
-    private ModelParameter data;
+    private ModelParameter<JsonElement> data;
     private ActivityLog Log { get; set; }
 
     protected override void BindData()
@@ -42,7 +42,8 @@ public partial class EditFormView
     {
         if (jsonObject == null)
             return null;
-        var ret = new ModelParameter(jsonObject);
+        var jsonModel = jsonObject.ToJsonString();
+        var ret = new ModelParameter<JsonElement>(JsonDocument.Parse(jsonModel).RootElement, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
         ret.ElementChanged += OnModelChanged;
         return ret;
     }

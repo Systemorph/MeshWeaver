@@ -1,0 +1,30 @@
+﻿.article-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* Center the container content */
+    width: 100%;
+}
+
+.article-content {
+    width: 75%; /* Decrease the width to 75% */
+    margin: 32px auto 16px; /* Increase top margin to separate from media */
+    padding: 16px;
+    box-sizing: border-box;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
+    font-size: 16pt; /* Increase the font size */
+}
+
+@media (max-width: 768px) {
+    .article-content {
+        width: 85%; /* Slightly wider on medium screens */
+    }
+}
+
+@media (max-width: 600px) {
+    .article-content {
+        width: 95%; /* Nearly full width on small devices */
+        padding: 12px; /* Slightly smaller padding */
+    }
+
+}

@@ -1,8 +1,9 @@
-﻿using System.Diagnostics;
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
@@ -12,6 +13,7 @@ using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -29,19 +31,60 @@ public static class SharedPortalConfiguration
         // 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role' instead of 'roles'
         // This flag ensures that the ClaimsIdentity claims collection will be built from the claims in the token.
         JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+        builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true,
+                reloadOnChange: true)
+            .AddEnvironmentVariables();
 
         var services = builder.Services;
+        services.AddRazorPages()
+
+            .AddMicrosoftIdentityUI();
+        services.AddRazorComponents()
+            .AddInteractiveServerComponents()
+            .AddHubOptions(opt =>
+            {
+                opt.DisableImplicitFromServicesParameters = true;
+            });
+        services.AddScoped<CacheStorageAccessor>();
+        services.AddSingleton<IAppVersionService, AppVersionService>();
+        services.AddSingleton<DimensionManager>();
 
         services.AddHttpContextAccessor();
 
-        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));
 
+        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
+        builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+        {
+            var roleMappings = builder.Configuration
+                .GetSection("EntraId:RoleMappings")
+                .GetChildren()
+                .ToDictionary(x => x.Value, x => x.Key);
+
+            options.Events.OnTokenValidated = async context =>
+            {
+                var identity = context.Principal?.Identity as ClaimsIdentity;
+                if (identity?.IsAuthenticated == true)
+                {
+                    var groupClaims = identity.FindAll("groups").ToList();
+                    foreach (var groupClaim in groupClaims)
+                    {
+                        if (roleMappings.TryGetValue(groupClaim.Value, out var roleName))
+                        {
+                            identity.AddClaim(new Claim(ClaimTypes.Role, roleName));
+                        }
+                    }
+                }
+                await Task.CompletedTask;
+            };
+        });
+        
         builder.Services.AddControllersWithViews()
             .AddMicrosoftIdentityUI();
 
         builder.Services.AddAuthorization();
-
+         
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(
@@ -51,20 +94,7 @@ public static class SharedPortalConfiguration
     public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
             where TBuilder : MeshBuilder
             =>
-            (TBuilder)builder.ConfigureServices(services =>
-            {
-                services.AddRazorPages(options =>
-                {
-                    options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.IgnoreAntiforgeryTokenAttribute());
-                })
-
-                .AddMicrosoftIdentityUI();
-                services.AddRazorComponents().AddInteractiveServerComponents();
-                services.AddSingleton<CacheStorageAccessor>();
-                services.AddSingleton<IAppVersionService, AppVersionService>();
-                services.AddSingleton<DimensionManager>();
-                return services;
-            })
+            (TBuilder)builder
                 .AddBlazor(layoutClient => layoutClient
                         .AddChartJs()
                         .AddAgGrid()
@@ -79,7 +109,7 @@ public static class SharedPortalConfiguration
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(SharedPortalConfiguration));
 #pragma warning disable CA1416
-        logger.LogInformation("Starting blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+        logger.LogInformation("Starting blazor server on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
 
 
@@ -100,6 +130,7 @@ public static class SharedPortalConfiguration
         //app.MapMeshWeaverSignalRHubs();
 
         app.MapMeshWeaver();
+        app.UseMiddleware<UserContextMiddleware>();
         app.UseHttpsRedirection();
 
 
@@ -111,7 +142,7 @@ public static class SharedPortalConfiguration
 
         app.Run();
 #pragma warning disable CA1416
-        logger.LogInformation("Started blazor server on PID: {PID}", Process.GetCurrentProcess().Id);
+        logger.LogInformation("Started blazor server on PID: {PID}", Environment.ProcessId);
 #pragma warning restore CA1416
     }
 }

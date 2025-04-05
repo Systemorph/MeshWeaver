@@ -1,0 +1,87 @@
+﻿@using MeshWeaver.Articles
+@using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+
+
+<div class="file-browser">
+    <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
+    <FluentToolbar Class="toolbar">
+        @if (Collection != null)
+        {
+            <div class="toolbar-row">
+                <FluentBreadcrumb>
+                    @{
+                        var accumulatedPath = "/collections/" + @Collection.Collection;
+                        <FluentBreadcrumbItem Href="@accumulatedPath">@Root</FluentBreadcrumbItem>
+                        @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
+                        {
+                            accumulatedPath += '/' + folder;
+                            <FluentBreadcrumbItem Href="@accumulatedPath">@folder</FluentBreadcrumbItem>
+                        }
+
+                    }
+                </FluentBreadcrumb>
+            </div>
+        }
+        <div class="toolbar-row">
+            <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
+            <FluentSpacer></FluentSpacer>
+            @if (Collection is not null)
+            {
+                <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+            }
+        </div>
+    </FluentToolbar>
+    <FluentInputFile @ref="@myFileByStream"
+                     AnchorId="MyUploadStream"
+                     DragDropZoneVisible="false"
+                     Mode="InputFileMode.Stream"
+                     Multiple="true"
+                     MaximumFileSize="@(20 * 1024 * 1024)"
+                     ProgressPercentChanged="@(p => progressPercent = p)"
+                     OnFileUploaded="@OnFileUploadedAsync"
+                     OnCompleted="@OnCompleted" />
+
+    <FluentProgress Min="0" Max="100" Value="@progressPercent" Visible="@(progressPercent > 0)" />
+    <FluentLabel Alignment="HorizontalAlignment.Center">
+        @progressTitle
+    </FluentLabel>
+    
+    <!-- Combined DataGrid for Folders and Files -->
+    <FluentDataGrid Items="@CollectionItems.AsQueryable()"
+                    TGridItem="CollectionItem"
+                    ShowHover="true"
+                    ResizableColumns="true">
+        <SelectColumn TGridItem="CollectionItem"
+                      SelectMode="DataGridSelectMode.Multiple"
+                      SelectFromEntireRow="false"
+                      @bind-SelectedItems="SelectedItems"/>
+        <TemplateColumn TGridItem="CollectionItem" Title="Name">
+            <div class="grid-item">
+                <a href="@GetLink(context)" class="file-browser-link">
+                    @if (context is FolderItem)
+                    {
+                        <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
+                    }
+                    else
+                    {
+                        <FluentIcon Value="@(new Icons.Regular.Size20.Document())"/>
+                    }
+                    <span>@context.Name</span>
+                </a>
+            </div>
+        </TemplateColumn>
+        <TemplateColumn TGridItem="CollectionItem" Title="Details">
+            @if (context is FolderItem folder)
+            {
+                <span>@folder.ItemCount items</span>
+            }
+            else if (context is FileItem file)
+            {
+                <span>Modified: @file.LastModified.ToString("yyyy-MM-dd HH:mm")</span>
+            }
+        </TemplateColumn>
+    </FluentDataGrid>
+ </div>

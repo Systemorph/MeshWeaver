@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
-using System.Runtime.Serialization;
 using System.Text.Json;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -201,11 +200,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private record SynchronizationStreamAddress(string Id) : Address("sync", Id);
 
-
-    public void Revert<TReduced>(ChangeItem<TReduced> change)
-    {
-        // TODO V10: Implement revert mechanism (20.10.2024, Roland Bürgi)
-    }
 
     public void Dispose()
     {

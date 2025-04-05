@@ -5,7 +5,6 @@ using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
 using MeshWeaver.Articles;
 using MeshWeaver.Hosting.AzureBlob;
-using MeshWeaver.Mesh;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;

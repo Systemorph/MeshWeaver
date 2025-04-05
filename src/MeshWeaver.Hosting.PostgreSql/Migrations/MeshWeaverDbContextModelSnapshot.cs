@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using MeshWeaver.Articles;
+using MeshWeaver.Domain;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Kernel;
 using Microsoft.EntityFrameworkCore;
@@ -55,14 +56,8 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Content")
                         .HasColumnType("text");
 
-                    b.Property<DateTime>("Created")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Extension")
-                        .HasColumnType("text");
-
-                    b.Property<string>("IconId")
-                        .HasColumnType("text");
+                    b.Property<Icon>("Icon")
+                        .HasColumnType("jsonb");
 
                     b.Property<DateTime>("LastUpdated")
                         .HasColumnType("timestamp with time zone");
@@ -105,8 +100,14 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Title")
                         .HasColumnType("text");
 
+                    b.Property<string>("Transcript")
+                        .HasColumnType("text");
+
                     b.PrimitiveCollection<float[]>("VectorRepresentation")
                         .HasColumnType("real[]");
+
+                    b.Property<string>("VideoDescription")
+                        .HasColumnType("text");
 
                     b.Property<TimeSpan>("VideoDuration")
                         .HasColumnType("interval");
@@ -127,8 +128,6 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Url");
-
-                    b.HasIndex("IconId");
 
                     b.ToTable("Articles");
                 });
@@ -153,25 +152,6 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .IsUnique();
 
                     b.ToTable("Authors");
-                });
-
-            modelBuilder.Entity("MeshWeaver.Domain.Icon", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Provider")
-                        .HasColumnType("text");
-
-                    b.Property<int>("Size")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("Variant")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Icon");
                 });
 
             modelBuilder.Entity("MeshWeaver.Mesh.MeshNode", b =>
@@ -218,8 +198,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
 
             modelBuilder.Entity("MeshWeaver.Mesh.MessageLog", b =>
                 {
-                    b.Property<DateTimeOffset>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
 
                     b.Property<string>("Exception")
                         .HasColumnType("text");
@@ -234,7 +217,10 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Properties")
                         .HasColumnType("jsonb");
 
-                    b.HasKey("Timestamp");
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
 
                     b.ToTable("Messages");
                 });
@@ -257,15 +243,6 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("DataProtectionKeys");
-                });
-
-            modelBuilder.Entity("MeshWeaver.Articles.Article", b =>
-                {
-                    b.HasOne("MeshWeaver.Domain.Icon", "Icon")
-                        .WithMany()
-                        .HasForeignKey("IconId");
-
-                    b.Navigation("Icon");
                 });
 #pragma warning restore 612, 618
         }

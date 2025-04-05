@@ -23,8 +23,9 @@
     border-radius: 5px;
     border: 1px solid var(--color-border-default);
     background-color: var(--neutral-layer-2);
-    font-size: 1em; /* Adjust this value as needed */
-    line-height: 1.5; /* Adjust this value as needed */
+    font-size: 1em; 
+    line-height: 1.5; 
+    margin-bottom: 1.5em;
 }
 
     .markdown-body ::deep .code-content code {

@@ -91,7 +91,8 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var obj = await objectStream.Timeout(10.Seconds()).FirstAsync();
         const string Universe = nameof(Universe);
 
-        var model = new ModelParameter(obj.AsNode());
+        var jsonModel = obj.AsNode()?.ToJsonString();
+        var model = new ModelParameter<JsonElement>(string.IsNullOrEmpty(jsonModel) ? default : JsonDocument.Parse(jsonModel).RootElement, (m,r)=>m.GetValueFromModel(r));
         model.Update(new JsonPatch(PatchOperation.Replace(JsonPointer.Parse("/displayName"), JsonNode.Parse($"\"{Universe}\""))));
 
         var log = await stream.SubmitModel(model);

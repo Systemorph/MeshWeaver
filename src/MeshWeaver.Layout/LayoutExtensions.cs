@@ -103,7 +103,7 @@ public static class LayoutExtensions
         var first = true;
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
+        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream?.Hub.JsonSerializerOptions);
 
         return stream
             .Where(i =>
@@ -172,7 +172,8 @@ public static class LayoutExtensions
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id));
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))
+        .Select(x => x.Value);
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<EntityStore> stream,

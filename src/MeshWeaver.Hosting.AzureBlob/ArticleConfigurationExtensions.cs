@@ -29,7 +29,7 @@ public class AzureBlobArticleCollectionFactory(IMessageHub hub, IServiceProvider
     {
 
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
-        var blobServiceClient = factory.CreateClient(StorageProviders.Articles);
+        var blobServiceClient = factory.CreateClient(config.BasePath);
 
         return new AzureBlobArticleCollection(config, hub, blobServiceClient);
     }
