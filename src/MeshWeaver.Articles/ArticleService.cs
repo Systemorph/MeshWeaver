@@ -46,7 +46,7 @@ public class ArticleService : IArticleService
             : [collections[catalogOptions.Collection]];
         return (await allCollections.Select(c => c.GetArticles(catalogOptions))
                 .CombineLatest()
-                .SelectMany(x => x)
+                .Select(c => c.SelectMany(articles => articles))
                 .Select(articles => ApplyOptions(articles, catalogOptions))
                 .Skip(catalogOptions.Page * catalogOptions.PageSize)
                 .Take(catalogOptions.PageSize)
