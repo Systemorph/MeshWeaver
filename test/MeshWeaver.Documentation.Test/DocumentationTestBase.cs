@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using MeshWeaver.Articles;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
@@ -61,5 +62,19 @@ namespace MeshWeaver.Documentation.Test
         /// Address of the documentation application
         /// </summary>
         protected static readonly ApplicationAddress Address = new("Documentation");
+
+        /// <summary>
+        /// Gets the id from "/data/\"id\""
+        /// </summary>
+        /// <param name="articleControl"></param>
+        /// <returns></returns>
+        protected static string GetIdFromDataContext(UiControl articleControl)
+        {
+            var pattern = @"/data/\""(?<id>[^\""]+)\""";
+            var match = Regex.Match(articleControl.DataContext, pattern);
+            var id = match.Groups["id"].Value;
+            return id;
+        }
+
     }
 }
