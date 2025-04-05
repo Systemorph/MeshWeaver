@@ -72,6 +72,11 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
+        // Check if UserService is registered in the parent service provider
+        if (ParentServiceProvider?.GetService<UserService>() == null)
+        {
+            services.AddSingleton<UserService>();
+        }
         Services.Invoke(services);
         return services;
     }
@@ -139,8 +144,6 @@ public record MessageHubConfiguration
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<UserService>();
-        if (userService is null)
-            return syncPipeline;
         return syncPipeline.AddPipeline((d, next) =>
         {
             var context = userService.Context;
@@ -156,8 +159,6 @@ public record MessageHubConfiguration
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<UserService>();
-        if(userService is null)
-            return asyncPipeline;
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
             if(d.Properties.TryGetValue(nameof(UserContext), out var ctx) && ctx is UserContext userContext)
