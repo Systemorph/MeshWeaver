@@ -11,6 +11,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive.Utility;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -32,14 +33,18 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
     {
 
         var client = GetClient();
-        var articleStream = client.RenderArticle("Documentation","Calculator");
+        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content"){Id= "Documentation/Calculator" });
 
         var control = await articleStream
+            .GetControlStream("Content")
             .Timeout(10.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Which;
-        var article = (Article)articleControl.Article;
+        var articleReference = articleControl.Article.Should().BeOfType<JsonPointerReference>().Which;
+        var id = GetIdFromDataContext(articleControl);
+        var entity = await articleStream.GetDataAsync(id).Timeout(5.Seconds());
+        var article = entity.Should().BeOfType<Article>().Which;
         article.Name.Should().Be("Calculator");
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBeNull();
@@ -66,8 +71,5 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         control.Should().BeOfType<MarkdownControl>()
             .Which.Markdown.ToString().Should().Contain("3");
     }
-
-
-
 
 }

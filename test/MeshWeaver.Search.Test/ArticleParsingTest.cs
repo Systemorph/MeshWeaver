@@ -32,7 +32,7 @@ public class ArticleParsingTest(ITestOutputHelper output) : HubTestBase(output)
             article.Title.Should().Be("Northwind Overview");
             article.Abstract.Should().Be("This is a sample description of the article.");
             article.Name.Should().Be("Overview");
-            article.Url.Should().Be("article/demo/Overview");
+            article.Url.Should().Be("content/demo/Overview");
         }
     }
 }

@@ -2,8 +2,10 @@
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using FluentAssertions;
+using FluentAssertions.Equivalency;
 using FluentAssertions.Extensions;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;
@@ -13,6 +15,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive.Utility;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
@@ -57,16 +60,20 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task BasicArticle()
     {
         var client = GetClient();
-        var articleStream = client.RenderArticle("Test","Overview");
+        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content") {Id = "Test/Overview"});
 
         var control = await articleStream
+            .GetControlStream("Content")
             .Timeout(3.Seconds())
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
-        var article = articleControl.Article.Should().BeOfType<Article>().Subject;
+        articleControl.Article.Should().BeOfType<JsonPointerReference>();
+        var article = await articleStream
+            .GetDataAsync<Article>(GetIdFromDataContext(articleControl))
+            .Timeout(3.Seconds());
         article.Name.Should().Be("Overview");
-        article.Content.Should().BeNull();
+        article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBe(null);
     }
     [Fact]
@@ -114,5 +121,19 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         return base.ConfigureClient(configuration)
             .AddLayout(x => x.AddArticleLayouts());
     }
+
+    /// <summary>
+    /// Gets the id from "/data/\"id\""
+    /// </summary>
+    /// <param name="articleControl"></param>
+    /// <returns></returns>
+    protected static string GetIdFromDataContext(UiControl articleControl)
+    {
+        var pattern = @"/data/\""(?<id>[^\""]+)\""";
+        var match = Regex.Match(articleControl.DataContext, pattern);
+        var id = match.Groups["id"].Value;
+        return id;
+    }
+
 }
 
