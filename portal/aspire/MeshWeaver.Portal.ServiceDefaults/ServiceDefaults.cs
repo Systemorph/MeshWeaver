@@ -121,6 +121,9 @@ public static class ServiceDefaults
             connectionName,
             configureDataSourceBuilder: (dataSourceBuilder) =>
             {
+                // Add this line to enable dynamic JSON serialization
+                dataSourceBuilder.EnableDynamicJson();
+
                 if (string.IsNullOrEmpty(dataSourceBuilder.ConnectionStringBuilder.Password))
                 {
                     var credentials = new DefaultAzureCredential();

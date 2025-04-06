@@ -1,7 +1,9 @@
-﻿using MeshWeaver.Articles;
+﻿using System.Text.Json;
+using MeshWeaver.Articles;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
@@ -33,6 +35,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
     /// </summary>
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; } = null!;
 
+    public DbSet<SystemLog> SystemLogs { get; set; } = null!;
     public DbSet<MessageLog> Messages { get; set; } = null!;
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -57,17 +60,28 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.VideoTitle);
             entity.Property(e => e.VideoDescription);
 
-            // Handle collections (convert to JSON)
+            // Store collections as JSONB (preferred approach)
             entity.Property(e => e.Authors)
+                .HasColumnType("jsonb")
                 .HasConversion(
-                    v => string.Join(',', v),
-                    v => v.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList());
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions)null))
+                .Metadata.SetValueComparer(
+                    new ValueComparer<List<string>>(
+                        (c1, c2) => c1 != null && c2 != null && c1.SequenceEqual(c2),
+                        c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v.GetHashCode())),
+                        c => c.ToList()));
 
             entity.Property(e => e.Tags)
+                .HasColumnType("jsonb")
                 .HasConversion(
-                    v => string.Join(',', v),
-                    v => v.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList());
-
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions)null),
+                    v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions)null))
+                .Metadata.SetValueComparer(
+                    new ValueComparer<List<string>>(
+                        (c1, c2) => c1 != null && c2 != null && c1.SequenceEqual(c2),
+                        c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v.GetHashCode())),
+                        c => c.ToList()));
             // Use PostgreSQL specific features for more complex types
             entity.Property(e => e.VectorRepresentation).HasColumnType("real[]");
 
@@ -121,17 +135,46 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
             entity.Property(e => e.Xml).IsRequired();
         });
 
-        // Configure MessageLog entity
-        modelBuilder.Entity<MessageLog>(entity =>
+        // Configure SystemLog entity
+        modelBuilder.Entity<SystemLog>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id)
                   .UseIdentityAlwaysColumn(); // Auto-generate the Id
+            entity.Property(e => e.Service);
+            entity.Property(e => e.ServiceId);
             entity.Property(e => e.Timestamp);
-            entity.Property(e => e.Level).IsRequired();
-            entity.Property(e => e.Properties).HasColumnType("jsonb");
+            entity
+                .Property(e => e.Properties).HasColumnType("jsonb")
+                .HasConversion(
+                    v => JsonSerializer.Serialize(v, (JsonSerializerOptions)null),
+                    v => JsonSerializer.Deserialize<Dictionary<string, object>>(v, (JsonSerializerOptions)null))
+                .Metadata.SetValueComparer(new DictionaryValueComparer());
             entity.Property(e => e.Message);
             entity.Property(e => e.Exception);
         });
+
+        modelBuilder.Entity<MessageLog>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Id)
+                    .UseIdentityAlwaysColumn(); // Auto-generate the Id
+                entity.Property(e => e.Service);
+                entity.Property(e => e.ServiceId);
+                entity.Property(e => e.MessageId);
+                entity.Property(e => e.Timestamp);
+                entity.Property(e => e.State).IsRequired();
+                entity.Property(e => e.Message).HasColumnType("jsonb");
+                entity.Property(e => e.Address);
+                entity.Property(e => e.Sender);
+                entity.Property(e => e.Target);
+                entity.Property(e => e.AccessContext).HasColumnType("jsonb");
+                entity.Property(e => e.Properties).HasColumnType("jsonb")
+                    .HasConversion(
+                        v => JsonSerializer.Serialize(v, (JsonSerializerOptions)null),
+                        v => JsonSerializer.Deserialize<Dictionary<string, object>>(v, (JsonSerializerOptions)null))
+                    .Metadata.SetValueComparer(new DictionaryValueComparer());
+            }
+        );
     }
 }

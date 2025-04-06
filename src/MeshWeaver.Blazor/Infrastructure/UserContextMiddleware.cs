@@ -1,6 +1,5 @@
 ﻿using System.Security.Claims;
 using MeshWeaver.Messaging;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -8,8 +7,6 @@ namespace MeshWeaver.Blazor.Infrastructure;
 
 public class UserContextMiddleware(RequestDelegate next)
 {
-    private const string UserContextKey = "UserContext";
-
     public async Task InvokeAsync(HttpContext context)
     {
 
@@ -25,17 +22,17 @@ public class UserContextMiddleware(RequestDelegate next)
     }
 
 
-    private UserContext ExtractUserContext(ClaimsPrincipal user)
+    private AccessContext ExtractUserContext(ClaimsPrincipal user)
     {
         if (user?.Identity?.IsAuthenticated != true)
         {
             return null;
         }
 
-        return new UserContext
+        return new AccessContext
         {
             Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name"),
-            UserId = user.FindFirstValue("preferred_username"),
+            ObjectId = user.FindFirstValue("preferred_username"),
             Email = user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email"),
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };

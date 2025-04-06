@@ -1,9 +1,11 @@
-﻿using MeshWeaver.Connection.Orleans;
+﻿using Autofac.Core;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Web;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.DataProtection;
 using Orleans.Configuration;
 
@@ -17,8 +19,11 @@ builder.AddKeyedAzureBlobClient(StorageProviders.Reinsurance);
 // Add services to the container.
 builder.ConfigureWebPortalServices();
 builder.ConfigurePostgreSqlContext("meshweaverdb");
-builder.UseOrleansMeshClient(new MeshAddress())
-    .AddEfCoreSerilog()
+
+var serviceId = Guid.NewGuid().AsString();
+builder.UseOrleansMeshClient(new MeshAddress(serviceId))
+    .AddEfCoreSerilog("Frontend", serviceId)
+    .AddEfCoreMessageLog("Frontend", serviceId)
     .ConfigureWebPortal()
     .ConfigureServices(services =>
     {

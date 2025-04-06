@@ -1,6 +1,4 @@
-﻿using MeshWeaver.ShortGuid;
-
-namespace MeshWeaver.Messaging;
+﻿namespace MeshWeaver.Messaging;
 
 public class DeliveryFailureException : Exception
 {
@@ -50,7 +48,6 @@ public enum ErrorType
     StartupScriptFailed
 }
 
-public record PersistenceAddress() : Address("persistence", Guid.NewGuid().AsString());
 
 public record HeartbeatEvent;
 

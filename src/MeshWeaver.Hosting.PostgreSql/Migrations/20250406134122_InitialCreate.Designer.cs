@@ -16,7 +16,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MeshWeaver.Hosting.PostgreSql.Migrations
 {
     [DbContext(typeof(MeshWeaverDbContext))]
-    [Migration("20250405110308_InitialCreate")]
+    [Migration("20250406134122_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -44,7 +44,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Authors")
-                        .HasColumnType("text");
+                        .HasColumnType("jsonb");
 
                     b.Property<IReadOnlyList<SubmitCodeRequest>>("CodeSubmissions")
                         .HasColumnType("jsonb");
@@ -95,7 +95,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Tags")
-                        .HasColumnType("text");
+                        .HasColumnType("jsonb");
 
                     b.Property<string>("Thumbnail")
                         .HasColumnType("text");
@@ -207,11 +207,57 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
 
+                    b.Property<object>("AccessContext")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Address")
+                        .HasColumnType("text");
+
+                    b.Property<object>("Message")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("MessageId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Properties")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Sender")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Service")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ServiceId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Target")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Messages");
+                });
+
+            modelBuilder.Entity("MeshWeaver.Mesh.SystemLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
+
                     b.Property<string>("Exception")
                         .HasColumnType("text");
 
                     b.Property<string>("Level")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Message")
@@ -220,12 +266,18 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Properties")
                         .HasColumnType("jsonb");
 
+                    b.Property<string>("Service")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ServiceId")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("Timestamp")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
-                    b.ToTable("Messages");
+                    b.ToTable("SystemLogs");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey", b =>
