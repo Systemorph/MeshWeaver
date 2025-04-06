@@ -1,0 +1,66 @@
+﻿.article-header-editor {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    padding: 1rem;
+}
+
+    /* Target the FluentTabs component directly */
+    .article-header-editor ::deep fluent-tabs,
+    .article-header-editor ::deep .fluent-tabs-panel {
+        width: 75%;
+        margin: 32px auto 16px;
+        box-sizing: border-box;
+    }
+
+    /* Ensure toolbar has proper width too */
+    .article-header-editor ::deep fluent-toolbar {
+        width: 75%;
+        margin: 0 auto;
+    }
+
+.editor-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem 0;
+    width: 100%;
+}
+
+.thumbnail-preview img {
+    max-width: 300px;
+    max-height: 200px;
+    object-fit: contain;
+    margin-top: 0.5rem;
+}
+
+.video-preview iframe {
+    width: 100%;
+    max-width: 560px;
+    height: 315px;
+    margin-top: 0.5rem;
+}
+
+.authors-list ul {
+    list-style-type: none;
+    padding-left: 0;
+}
+
+/* Responsive adjustments to match article-content */
+@media (max-width: 768px) {
+    .article-header-editor ::deep fluent-tabs,
+    .article-header-editor ::deep .fluent-tabs-panel,
+    .article-header-editor ::deep fluent-toolbar {
+        width: 85%; /* Slightly wider on medium screens */
+    }
+}
+
+@media (max-width: 600px) {
+    .article-header-editor ::deep fluent-tabs,
+    .article-header-editor ::deep .fluent-tabs-panel,
+    .article-header-editor ::deep fluent-toolbar {
+        width: 95%; /* Nearly full width on small devices */
+        padding: 12px; /* Slightly smaller padding */
+    }
+}

@@ -2,19 +2,20 @@
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
+using MeshWeaver.ShortGuid;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddKeyedAzureTableClient("orleans-clustering");
 
-// Create MeshAddress instance
-var address = new MeshAddress();
 builder.ConfigurePostgreSqlContext("meshweaverdb");
 
 // Configure Orleans with Azure Table Storage
-builder.UseOrleansMeshServer(address)
+var serviceId = Guid.NewGuid().AsString();
+builder.UseOrleansMeshServer(new MeshAddress(serviceId))
     .ConfigurePortalMesh()
-    .AddEfCoreSerilog()
+    .AddEfCoreSerilog("Silo", serviceId)
+    .AddEfCoreMessageLog("Silo", serviceId)
     ;
 
 var app = builder.Build();

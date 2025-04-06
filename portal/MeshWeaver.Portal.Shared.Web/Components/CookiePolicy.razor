@@ -2,15 +2,15 @@
 @inject IJSRuntime JsRuntime;
 @inject IConfiguration Configuration
 
-@if (!IsDevelopment)
+@if (!IsDevelopment && !string.IsNullOrEmpty(TrackingId))
 {
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-WVCQBS4P31"></script>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=@TrackingId"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
         function gtag(){dataLayer.push(arguments);}
         gtag('js', new Date());
 
-        gtag('config', 'G-WVCQBS4P31');
+        gtag('config', '@TrackingId');
     </script>
 }
 
@@ -25,11 +25,11 @@
         </div>
         <div class="cookie-consent-buttons">
             <FluentButton Appearance="Appearance.Accent"
-            @onclick="AcceptCookies">
+                          @onclick="AcceptCookies">
                 Accept
             </FluentButton>
             <FluentButton Appearance="Appearance.Neutral"
-            @onclick="RejectCookies">
+                          @onclick="RejectCookies">
                 Reject Non-Essential
             </FluentButton>
         </div>
@@ -39,11 +39,13 @@
 @code {
     private bool IsVisible;
     private bool IsDevelopment;
+    private string TrackingId;
 
     protected override void OnInitialized()
     {
         base.OnInitialized();
         IsDevelopment = Configuration.GetValue<bool>("IsDevelopment");
+        TrackingId = Configuration["GoogleAnalyticsTrackingId"];
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

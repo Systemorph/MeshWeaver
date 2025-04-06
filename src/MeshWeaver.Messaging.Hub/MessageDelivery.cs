@@ -23,9 +23,9 @@ public abstract record MessageDelivery(Address Sender, Address Target) : IMessag
     }
 
     public object AccessProvidedBy { get; init; }
-    public string AccessObject { get; init; } // TODO SMCv2: later on we might think about accessibility for this property (2023/10/04, Dmitry Kalabin)
+    public AccessContext AccessContext { get; init; } // TODO SMCv2: later on we might think about accessibility for this property (2023/10/04, Dmitry Kalabin)
 
-    IMessageDelivery IMessageDelivery.SetAccessObject(string accessObject, object address) => this with { AccessObject = accessObject, AccessProvidedBy = address, };
+    IMessageDelivery IMessageDelivery.SetAccessContext(AccessContext accessObject) => this with { AccessContext = accessObject };
 
     IMessageDelivery IMessageDelivery.SetProperty(string name, object value)
     {

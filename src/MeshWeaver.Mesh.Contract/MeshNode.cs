@@ -4,13 +4,33 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
 
+public record SystemLog(
+    string Service,
+    string ServiceId,
+    string Level,
+    DateTimeOffset Timestamp,
+    string Message,
+    string Exception,
+    IReadOnlyDictionary<string,object> Properties
+)
+{
+    public long Id { get; init; }
+}
 public record MessageLog(
-    string Level, 
-    DateTimeOffset Timestamp, 
-    string Message, 
-    string Exception, 
-    string Properties
-    );
+    string Service,
+    string ServiceId,
+    DateTimeOffset Timestamp,
+    string Address,
+    string MessageId,
+    IReadOnlyDictionary<string, object> Message, 
+    string Sender,
+    string Target,
+    string State,
+    IReadOnlyDictionary<string, object> AccessContext,
+    IReadOnlyDictionary<string, object> Properties)
+{
+    public long Id { get; init; }
+}
 public record MeshNode(
     string AddressType,
     string AddressId, 

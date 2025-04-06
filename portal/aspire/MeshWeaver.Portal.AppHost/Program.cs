@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using Aspire.Hosting;
+using Microsoft.Extensions.Hosting;
 
 // Add this namespace for Azure resources
 
@@ -21,6 +22,11 @@ var orleansTables = appStorage.AddTables("orleans-clustering");
 
 var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables);
+
+// Add the EntraId parameters
+var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
+var entraIdClientId = builder.AddParameter("EntraIdClientId");
+var entraIdAdminGroupId = builder.AddParameter("PortalAdminGroup");
 
 // PostgreSQL database setup - conditionally use containerized or Azure PostgreSQL
 if (!builder.ExecutionContext.IsPublishMode)
@@ -52,7 +58,11 @@ if (!builder.ExecutionContext.IsPublishMode)
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()
         .WithReference(orleans.AsClient())
-        .WithReference(appStorage.AddBlobs("articles"))
+        .WithReference(appStorage.AddBlobs("documentation"))
+        .WithReference(appStorage.AddBlobs("reinsurance"))
+        .WithEnvironment("EntraId__TenantId", entraIdTenantId)
+        .WithEnvironment("EntraId__ClientId", entraIdClientId)
+        .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
         .WithReference(meshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
@@ -81,20 +91,26 @@ else
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 
-    // Configure the frontend to wait for database migrations to complete
+    var googleTrackingId = builder.AddParameter("GoogleAnalyticsTrackingId");
+        // Configure the frontend to wait for database migrations to complete
     var frontend = builder
         .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
         .WithExternalHttpEndpoints()
         .WithReference(orleans.AsClient())
-        .WithReference(appStorage.AddBlobs("articles"))
+        .WithReference(appStorage.AddBlobs("documentation"))
+        .WithReference(appStorage.AddBlobs("reinsurance"))
         .WithReference(azureMeshweaverdb)
+        .WithEnvironment("EntraId__TenantId", entraIdTenantId)
+        .WithEnvironment("EntraId__ClientId", entraIdClientId)
+        .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
+        .WithEnvironment("GoogleAnalyticsTrackingId", googleTrackingId)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 
     // Add Application Insights
-    var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
-    silo.WithReference(insights);
-    frontend.WithReference(insights);
+    //var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
+    //silo.WithReference(insights);
+    //frontend.WithReference(insights);
 
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
@@ -109,7 +125,6 @@ else
 #pragma warning restore ASPIREACADOMAINS001 // Suppress warning about evaluation features
         });
 }
-
 var app = builder.Build();
 
 app.Run();

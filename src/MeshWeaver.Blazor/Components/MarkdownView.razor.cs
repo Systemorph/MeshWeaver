@@ -37,47 +37,47 @@ public partial class MarkdownView
         var doc = new HtmlDocument();
         doc.LoadHtml(Html);
 
-        var sequence = 0;
-        RenderNodes(builder, doc.DocumentNode.ChildNodes, ref sequence);
+        RenderNodes(builder, doc.DocumentNode.ChildNodes);
     }
 
-    private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes, ref int sequence)
+    private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes)
     {
         foreach (var node in nodes)
         {
             switch (node)
             {
                 case HtmlTextNode text:
-                    builder.AddMarkupContent(sequence++, text.Text);
+                    builder.AddMarkupContent(1, text.Text);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
                     var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
-                    RenderLayoutArea(builder, address, area, areaId, ref sequence);
+                    RenderLayoutArea(builder, address, area, areaId);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
-                    builder.OpenComponent<Mermaid>(sequence++);
-                    builder.AddAttribute(sequence++, nameof(Mermaid.IsDark), Mode is DesignThemeModes.Dark);
-                    builder.AddAttribute(sequence++, nameof(Mermaid.Diagram), node.InnerHtml);
+                    builder.OpenComponent<Mermaid>(1);
+                    builder.AddAttribute(2, nameof(Mermaid.IsDark), Mode is DesignThemeModes.Dark);
+                    builder.AddAttribute(3, nameof(Mermaid.Diagram), node.InnerHtml);
                     builder.CloseComponent();
                     break;
                 case { Name: "pre" } when node.ChildNodes.Any(n => n.Name == "code"):
-                    builder.OpenComponent<CodeBlock>(sequence++);
-                    builder.AddAttribute(sequence++, nameof(CodeBlock.Html), node.OuterHtml);
+                    builder.OpenComponent<CodeBlock>(1);
+                    builder.AddAttribute(2, nameof(CodeBlock.Html), node.OuterHtml);
                     builder.CloseComponent();
                     break;
                 case { Name: "span" } when node.GetAttributeValue("class", "").Contains("math"):
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("math"):
-                    builder.OpenComponent<MathBlock>(sequence++);
-                    builder.AddAttribute(sequence++, nameof(MathBlock.Html), node.OuterHtml);
+                    builder.OpenComponent<MathBlock>(1);
+                    builder.AddAttribute(2, nameof(MathBlock.Name), node.Name);
+                    builder.AddAttribute(3, nameof(MathBlock.Html), node.InnerHtml);
                     builder.CloseComponent();
                     break;
                 default:
-                    builder.OpenElement(sequence++, node.Name);
+                    builder.OpenElement(1, node.Name);
                     foreach (var attribute in node.Attributes)
-                        builder.AddAttribute(sequence++, attribute.Name, attribute.Value);
-                    RenderNodes(builder, node.ChildNodes, ref sequence);
+                        builder.AddAttribute(2, attribute.Name, attribute.Value);
+                    RenderNodes(builder, node.ChildNodes);
                     builder.CloseElement();
                     break;
             }
@@ -85,13 +85,13 @@ public partial class MarkdownView
     }
 
 
-    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId, ref int sequence)
+    private void RenderLayoutArea(RenderTreeBuilder builder, string address, string area, string areaId)
     {
-        builder.OpenElement(sequence++, "div");
-        builder.AddAttribute(sequence++, "class", "layout-area");
+        builder.OpenElement(1, "div");
+        builder.AddAttribute(2, "class", "layout-area");
 
-        builder.OpenComponent<LayoutAreaView>(sequence++);
-        builder.AddAttribute(sequence++, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = areaId })
+        builder.OpenComponent<LayoutAreaView>(3);
+        builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = areaId })
         {
             ShowProgress = true,
             ProgressMessage = $"Loading {area}"

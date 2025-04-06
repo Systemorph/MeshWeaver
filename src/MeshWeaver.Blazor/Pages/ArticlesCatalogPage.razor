@@ -1,10 +1,25 @@
-﻿@page "/articles/{**Options}"
+﻿@page "/articles/{**Collection}"
 @using MeshWeaver.Blazor.Infrastructure
-@inject PortalApplication Portal
+@using MeshWeaver.Blazor.FileExplorer
 
-<LayoutArea Address="@Portal.Hub.Address" Area="Catalog" Id="@Options"/>
+@inject PortalApplication Portal
+@inject NavigationManager NavigationManager
+
+<div class="articles-catalog-page">
+    <FluentToolbar Class="toolbar">
+        <CollectionPicker Collection="@Collection" CollectionChanged="HandleCollectionChanged" NullLabel="(all)"/>
+    </FluentToolbar>
+    <div class="toolbar-spacer"></div>
+    <LayoutArea Address="@Portal.Hub.Address" Area="Catalog" Id="@Collection" />
+</div>
+
 @code
 {
     [Parameter] public string Collection { get; set; }
-    [Parameter] public string Options { get; set; }
+
+    private void HandleCollectionChanged(string collection)
+    {
+        NavigationManager.NavigateTo($"/articles/{collection}");
+        InvokeAsync(StateHasChanged);
+    }
 }

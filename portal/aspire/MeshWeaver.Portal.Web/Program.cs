@@ -1,10 +1,11 @@
-﻿using MeshWeaver.Connection.Orleans;
+﻿using Autofac.Core;
+using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.PostgreSql;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Web;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.DataProtection;
 using Orleans.Configuration;
 
@@ -13,13 +14,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 builder.AddKeyedAzureTableClient("orleans-clustering");
-builder.AddKeyedAzureBlobClient(StorageProviders.Articles);
-
+builder.AddKeyedAzureBlobClient(StorageProviders.Documentation);
+builder.AddKeyedAzureBlobClient(StorageProviders.Reinsurance);
 // Add services to the container.
 builder.ConfigureWebPortalServices();
 builder.ConfigurePostgreSqlContext("meshweaverdb");
-builder.UseOrleansMeshClient(new MeshAddress())
-    .AddEfCoreSerilog()
+
+var serviceId = Guid.NewGuid().AsString();
+builder.UseOrleansMeshClient(new MeshAddress(serviceId))
+    .AddEfCoreSerilog("Frontend", serviceId)
+    .AddEfCoreMessageLog("Frontend", serviceId)
     .ConfigureWebPortal()
     .ConfigureServices(services =>
     {

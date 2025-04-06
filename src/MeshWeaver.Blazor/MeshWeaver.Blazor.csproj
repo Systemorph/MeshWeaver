@@ -14,14 +14,18 @@
     <ItemGroup>
         <SupportedPlatform Include="browser" />
         <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
-        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
+        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false" />
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="BlazorMonaco" />
         <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
         <PackageReference Include="Microsoft.EntityFrameworkCore" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
+        <PackageReference Include="Microsoft.Identity.Web" />
+        <PackageReference Include="Microsoft.Identity.Web.Ui" />
+        <PackageReference Include="System.Composition.AttributedModel" />
     </ItemGroup>
 
     <ItemGroup>

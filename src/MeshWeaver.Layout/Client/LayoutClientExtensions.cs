@@ -18,7 +18,7 @@ public static class LayoutClientExtensions
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
         object value,
         string dataContext,
-        JsonPointerReference reference, ModelParameter model = null)
+        JsonPointerReference reference, ModelParameter<JsonElement> model = null)
     {
         if (reference is not null)
         {
@@ -73,7 +73,7 @@ public static class LayoutClientExtensions
             .DistinctUntilChanged();
 
 
-    public static JsonElement? GetValueFromModel(this ModelParameter model, JsonPointerReference reference)
+    public static JsonElement? GetValueFromModel(this ModelParameter<JsonElement> model, JsonPointerReference reference)
     {
         var pointer = JsonPointer.Parse($"/{reference.Pointer}");
         return pointer.Evaluate(model.Element);
@@ -179,7 +179,7 @@ public static class LayoutClientExtensions
             return conversion(value.Deserialize<object>(hub.JsonSerializerOptions));
         return value.Deserialize<T>(hub.JsonSerializerOptions);
     }
-    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter data)
+    public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
     {
         try
         {

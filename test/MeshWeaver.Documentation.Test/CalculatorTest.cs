@@ -8,10 +8,10 @@ using MeshWeaver.Articles;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive.Utility;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -33,21 +33,26 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
     {
 
         var client = GetClient();
-        var articleStream = client.RenderArticle("Documentation","Calculator");
+        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content"){Id= "Documentation/Calculator" });
 
         var control = await articleStream
+            .GetControlStream("Content")
             .Timeout(10.Seconds())
-            .FirstAsync();
+            .FirstAsync(x => x is not null);
 
-        var article = control.Should().BeOfType<ArticleControl>().Which;
+        var articleControl = control.Should().BeOfType<ArticleControl>().Which;
+        var articleReference = articleControl.Article.Should().BeOfType<JsonPointerReference>().Which;
+        var id = GetIdFromDataContext(articleControl);
+        var entity = await articleStream.GetDataAsync(id).Timeout(5.Seconds());
+        var article = entity.Should().BeOfType<Article>().Which;
         article.Name.Should().Be("Calculator");
-        article.Content.Should().BeNull();
-        article.Html.Should().NotBeNull();
+        article.Content.Should().NotBeNull();
+        article.PrerenderedHtml.Should().NotBeNull();
         var kernelAddress = new KernelAddress();
         foreach (var s in article.CodeSubmissions)
             client.Post(s, o => o.WithTarget(kernelAddress));
 
-        var html = article.Html.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
+        var html = article.PrerenderedHtml.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
 
         var (addressString, area) = HtmlParser
             .ExtractDataAddressAttributes(html)
@@ -66,8 +71,5 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         control.Should().BeOfType<MarkdownControl>()
             .Which.Markdown.ToString().Should().Contain("3");
     }
-
-
-
 
 }

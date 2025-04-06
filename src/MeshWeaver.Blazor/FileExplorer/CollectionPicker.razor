@@ -1,0 +1,9 @@
+<FluentSelect Width="150px" Placeholder="@NullLabel" bind-value="SelectedCollection" ValueChanged="OnValueChanged" Items="@collections" OptionText="@(a => a.Text)" OptionValue="@(a => a.Value)" />
+    
+@code
+{
+    [Parameter]
+    public string Collection { get; set; }
+    [Parameter] public EventCallback<string> CollectionChanged { get; set; }
+
+}
