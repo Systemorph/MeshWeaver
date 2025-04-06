@@ -16,7 +16,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MeshWeaver.Hosting.PostgreSql.Migrations
 {
     [DbContext(typeof(MeshWeaverDbContext))]
-    [Migration("20250406134122_InitialCreate")]
+    [Migration("20250406154839_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -43,7 +43,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<IReadOnlyCollection<Author>>("AuthorDetails")
                         .HasColumnType("jsonb");
 
-                    b.Property<string>("Authors")
+                    b.PrimitiveCollection<List<string>>("Authors")
                         .HasColumnType("jsonb");
 
                     b.Property<IReadOnlyList<SubmitCodeRequest>>("CodeSubmissions")
@@ -94,7 +94,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.PrimitiveCollection<ValueTuple<ArticleStatus, DateTime>[]>("StatusHistory")
                         .HasColumnType("jsonb");
 
-                    b.Property<string>("Tags")
+                    b.PrimitiveCollection<List<string>>("Tags")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Thumbnail")
@@ -207,19 +207,19 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Id"));
 
-                    b.Property<object>("AccessContext")
+                    b.Property<IReadOnlyDictionary<string, object>>("AccessContext")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Address")
                         .HasColumnType("text");
 
-                    b.Property<object>("Message")
+                    b.Property<IReadOnlyDictionary<string, object>>("Message")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("MessageId")
                         .HasColumnType("text");
 
-                    b.Property<string>("Properties")
+                    b.Property<IReadOnlyDictionary<string, object>>("Properties")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Sender")
@@ -263,7 +263,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("Message")
                         .HasColumnType("text");
 
-                    b.Property<string>("Properties")
+                    b.Property<IReadOnlyDictionary<string, object>>("Properties")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Service")

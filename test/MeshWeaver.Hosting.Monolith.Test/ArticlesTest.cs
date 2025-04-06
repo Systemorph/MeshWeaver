@@ -5,7 +5,6 @@ using System.Reactive.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using FluentAssertions;
-using FluentAssertions.Equivalency;
 using FluentAssertions.Extensions;
 using MeshWeaver.Articles;
 using MeshWeaver.Data;

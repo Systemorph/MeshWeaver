@@ -22,11 +22,11 @@ public record MessageLog(
     DateTimeOffset Timestamp,
     string Address,
     string MessageId,
-    object Message, 
+    IReadOnlyDictionary<string, object> Message, 
     string Sender,
     string Target,
     string State,
-    object AccessContext,
+    IReadOnlyDictionary<string, object> AccessContext,
     IReadOnlyDictionary<string, object> Properties)
 {
     public long Id { get; init; }

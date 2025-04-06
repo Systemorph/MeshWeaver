@@ -39,9 +39,9 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     StatusHistory = table.Column<ValueTuple<ArticleStatus, DateTime>[]>(type: "jsonb", nullable: true),
                     Icon = table.Column<Icon>(type: "jsonb", nullable: true),
                     Source = table.Column<string>(type: "text", nullable: true),
-                    Authors = table.Column<string>(type: "jsonb", nullable: true),
+                    Authors = table.Column<List<string>>(type: "jsonb", nullable: true),
                     AuthorDetails = table.Column<IReadOnlyCollection<Author>>(type: "jsonb", nullable: true),
-                    Tags = table.Column<string>(type: "jsonb", nullable: true),
+                    Tags = table.Column<List<string>>(type: "jsonb", nullable: true),
                     VectorRepresentation = table.Column<float[]>(type: "real[]", nullable: true),
                     AuthorAvatar = table.Column<string>(type: "text", nullable: true),
                     Transcript = table.Column<string>(type: "text", nullable: true),
@@ -118,12 +118,12 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     Timestamp = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     Address = table.Column<string>(type: "text", nullable: true),
                     MessageId = table.Column<string>(type: "text", nullable: true),
-                    Message = table.Column<object>(type: "jsonb", nullable: true),
+                    Message = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true),
                     Sender = table.Column<string>(type: "text", nullable: true),
                     Target = table.Column<string>(type: "text", nullable: true),
                     State = table.Column<string>(type: "text", nullable: false),
-                    AccessContext = table.Column<object>(type: "jsonb", nullable: true),
-                    Properties = table.Column<string>(type: "jsonb", nullable: true)
+                    AccessContext = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true),
+                    Properties = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -142,7 +142,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     Timestamp = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     Message = table.Column<string>(type: "text", nullable: true),
                     Exception = table.Column<string>(type: "text", nullable: true),
-                    Properties = table.Column<string>(type: "jsonb", nullable: true)
+                    Properties = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true)
                 },
                 constraints: table =>
                 {
