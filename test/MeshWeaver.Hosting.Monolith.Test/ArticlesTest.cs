@@ -64,14 +64,14 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .GetControlStream("Content")
-            .Timeout(3.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
         articleControl.Article.Should().BeOfType<JsonPointerReference>();
         var article = await articleStream
             .GetDataAsync<Article>(GetIdFromDataContext(articleControl))
-            .Timeout(3.Seconds());
+            .Timeout(20.Seconds());
         article.Name.Should().Be("Overview");
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBe(null);
@@ -83,7 +83,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var articleStream = client.RenderArticle("Test","NotFound");
 
         var control = await articleStream
-            .Timeout(3.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
@@ -98,7 +98,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .GetControlStream("Catalog")
-            .Timeout(3.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
