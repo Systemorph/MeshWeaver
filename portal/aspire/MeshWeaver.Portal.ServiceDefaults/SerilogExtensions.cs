@@ -14,9 +14,43 @@ namespace MeshWeaver.Portal.ServiceDefaults;
 
 public static class SerilogExtensions
 {
-    public static MeshHostApplicationBuilder AddEfCoreSerilog(this MeshHostApplicationBuilder builder)
+    public static MeshHostApplicationBuilder AddEfCoreSerilog(this MeshHostApplicationBuilder builder, string service, string serviceId)
     {
-        var sink = new EfCoreSink();
+        var sink = new EfCoreSystemLogSink(service, serviceId);
+        var messageDeliveryPolicy = new DestructuringPolicy();
+        builder.ConfigureHub(h =>
+            h.WithInitialization(hub =>
+            {
+                messageDeliveryPolicy.JsonOptions = hub.JsonSerializerOptions;
+                sink.Initialize(hub.ServiceProvider);
+            }));
+
+        // Create Serilog logger configuration
+        var loggerConfiguration = new LoggerConfiguration()
+            .MinimumLevel.Warning()
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+            .MinimumLevel.Override("System", LogEventLevel.Warning)
+            .Enrich.FromLogContext()
+            .WriteTo.Sink(sink)
+            .Destructure.With(messageDeliveryPolicy)
+            .Destructure.ToMaximumDepth(4)
+            .Destructure.ToMaximumStringLength(1000)
+            .Destructure.ToMaximumCollectionCount(20)
+            ;
+
+
+        // Create logger and register
+        var logger = loggerConfiguration.CreateLogger();
+
+
+        // Add Serilog to the logging pipeline
+        builder.Host.Logging.AddSerilog(logger);
+
+        return builder;
+    }
+    public static MeshHostApplicationBuilder AddEfCoreMessageLog(this MeshHostApplicationBuilder builder, string service, string serviceId)
+    {
+        var sink = new EfCoreMessageLogSink(service, serviceId);
         var messageDeliveryPolicy = new DestructuringPolicy();
         builder.ConfigureHub(h =>
             h.WithInitialization(hub =>
@@ -28,16 +62,15 @@ public static class SerilogExtensions
         // Create Serilog logger configuration
         var loggerConfiguration = new LoggerConfiguration()
             .MinimumLevel.Information()
-            .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
-            .MinimumLevel.Override("System", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .WriteTo.Sink(sink)
             .Destructure.With(messageDeliveryPolicy)
             .Destructure.ToMaximumDepth(4)
             .Destructure.ToMaximumStringLength(1000)
             .Destructure.ToMaximumCollectionCount(20)
-            // Filter to only include MessageService delivery logs
-            .Filter.ByIncludingOnly(Filter);
+            .Filter.ByIncludingOnly(Matching.FromSource("MeshWeaver.Messaging.MessageService"));
+
+
 
         // Create logger and register
         var logger = loggerConfiguration.CreateLogger();
@@ -48,52 +81,122 @@ public static class SerilogExtensions
 
         return builder;
     }
-
-    private static bool Filter(LogEvent evt)
+    public static IReadOnlyDictionary<string, object> ToJsonDictionary(this StructureValue structuredValue)
     {
-        if (!Matching.FromSource<MessageService>()(evt))
-            return false;
-        if (!evt.Properties.TryGetValue("Delivery", out var lepv))
-            return false;
-        if (lepv is not StructureValue sv)
-            return false;
-
-        // Find the message property in the delivery structure
-        var messageProp = sv.Properties.FirstOrDefault(p => p.Name == "message");
-        if (messageProp?.Value is not StructureValue messageValue)
-            return false;
-
-        // Check if it has a $type property indicating ExecutionRequest
-        var typeProp = messageValue.Properties.FirstOrDefault(p => p.Name == "$type");
-        if (typeProp?.Value.ToString().Contains("ExecutionRequest") == true)
-            return false;
-
-        return true;
+        var dictionary = structuredValue.Properties.ToDictionary(p => p.Name, p => ConvertToJsonCompatibleValue(p.Value));
+        return dictionary;
     }
+
+    public static object ConvertToJsonCompatibleValue(this LogEventPropertyValue value)
+    {
+        return value switch
+        {
+            StructureValue sv => sv.Properties.ToDictionary(p => p.Name, p => ConvertToJsonCompatibleValue(p.Value)),
+            SequenceValue seq => seq.Elements.Select(ConvertToJsonCompatibleValue).ToList(),
+            ScalarValue scalar => scalar.Value,
+            _ => value.ToString()
+        };
+    }
+    public static IReadOnlyDictionary<string,object> ConvertToJsonCompatibleValue(this IReadOnlyDictionary<string,LogEventPropertyValue> dict)
+    {
+        return dict?.ToDictionary(x => x.Key, x => x.Value.ConvertToJsonCompatibleValue());
+    }
+
 }
-public class EfCoreSink : ILogEventSink
+public class EfCoreSystemLogSink(string service, string id) : ILogEventSink
 {
     private IServiceProvider serviceProvider;
 
     public void Initialize(IServiceProvider serviceProvider)
         => this.serviceProvider = serviceProvider;
- 
+
     public void Emit(LogEvent logEvent)
     {
-        using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
-        if (dbContext is null)
-            return;
 
-        var logEntry = new MessageLog(
-            logEvent.Level.ToString(), 
-            logEvent.Timestamp.UtcDateTime, 
-            logEvent.RenderMessage(), 
+        var logEntry = new SystemLog(
+            service,
+            id,
+            logEvent.Level.ToString(),
+            logEvent.Timestamp.UtcDateTime,
+            logEvent.RenderMessage(),
             logEvent.Exception?.ToString(),
-            JsonSerializer.Serialize(logEvent.Properties.ToDictionary(x => x.Key, x => x.Value.ToString()))
+            logEvent.Properties.ConvertToJsonCompatibleValue()
         );
 
-        dbContext.Messages.Add(logEntry);
-        dbContext.SaveChanges();
+        try
+        {
+            using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
+            if (dbContext is null)
+                return;
+
+            dbContext.SystemLogs.Add(logEntry);
+            dbContext.SaveChanges();
+        }
+        catch
+        {   
+        }
+    }
+
+}
+public class EfCoreMessageLogSink(string service, string serviceId) : ILogEventSink
+{
+    private IServiceProvider serviceProvider;
+
+    public void Initialize(IServiceProvider serviceProvider)
+        => this.serviceProvider = serviceProvider;
+
+    public void Emit(LogEvent evt)
+    {
+
+        if (!Matching.FromSource<MessageService>()(evt))
+            return;
+        if (!evt.Properties.TryGetValue("Delivery", out var deliveryStructured))
+            return;
+        if (deliveryStructured is not StructureValue delivery)
+            return;
+
+
+        var deliveryProps = delivery.Properties.ToDictionary(x => x.Name, x => x.Value);
+        var target = deliveryProps.GetValueOrDefault("target")?.ToString();
+        if (string.IsNullOrWhiteSpace(target))
+            return;
+
+        // Find the message property in the delivery structure
+        var messageProp = deliveryProps.GetValueOrDefault( "message");
+        if (messageProp is not StructureValue messageValue)
+            return;
+
+        // Check if it has a $type property indicating ExecutionRequest
+        var typeProp = messageValue.Properties.FirstOrDefault(p => p.Name == "$type");
+        if (typeProp?.Value.ToString().Contains("ExecutionRequest") == true)
+            return;
+
+
+
+        var logEntry = new MessageLog(
+            service,
+            serviceId,
+            evt.Timestamp.UtcDateTime,
+            evt.Properties.GetValueOrDefault("Address")?.ToString(),
+            deliveryProps.GetValueOrDefault("id").ToString(),
+            messageValue.ToJsonDictionary(),
+            deliveryProps.GetValueOrDefault("sender")?.ToString(),
+            target,
+            deliveryProps.GetValueOrDefault("state")?.ToString(),
+            (deliveryProps.GetValueOrDefault("accessContext") as StructureValue)?.ToJsonDictionary(),
+            (deliveryProps.GetValueOrDefault("properties") as StructureValue)?.ToJsonDictionary()
+
+        );
+        try
+        {
+            using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
+            if (dbContext is null)
+                return;
+
+            dbContext.Messages.Add(logEntry);
+            dbContext.SaveChanges();
+        }
+        catch{}
     }
 }
 public class DestructuringPolicy : IDestructuringPolicy

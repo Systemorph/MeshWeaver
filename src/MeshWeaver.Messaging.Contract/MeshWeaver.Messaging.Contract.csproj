@@ -6,7 +6,4 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Activities.Contract\MeshWeaver.Activities.Contract.csproj" />
-  </ItemGroup>
 </Project>

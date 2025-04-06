@@ -148,7 +148,7 @@ public record MessageHubConfiguration
         {
             var context = userService.Context;
             if (context is not null)
-                d = d.SetProperty(nameof(UserContext), context);
+                d = d.SetAccessContext(context);
             return next(d);
 
         });
@@ -161,8 +161,7 @@ public record MessageHubConfiguration
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<UserService>();
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
-            if(d.Properties.TryGetValue(nameof(UserContext), out var ctx) && ctx is UserContext userContext)
-                userService.SetContext(userContext);
+            userService.SetContext(d.AccessContext);
             try
             {
                 return await next.Invoke(d, ct);

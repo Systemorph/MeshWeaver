@@ -8,6 +8,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Activities.Contract\MeshWeaver.Activities.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.ShortGuid\MeshWeaver.ShortGuid.csproj" />
   </ItemGroup>

@@ -74,7 +74,7 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery,  CancellationToken cancellationToken)
     {
-        logger.LogDebug("Buffering message {@Delivery} in {Address}", delivery, Address);
+        logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
 
         lock (locker)
         {
