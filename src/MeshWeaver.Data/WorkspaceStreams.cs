@@ -7,12 +7,10 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceStreams
 {
-    internal static ISynchronizationStream CreateWorkspaceStream<TStream, TReduced, TReference>(
+    internal static ISynchronizationStream CreateWorkspaceStream<TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration,
-        ReduceFunction<TStream, TReference, TReduced> reducer
-    )
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var collections = reference.GetCollections();

@@ -1,9 +1,5 @@
-﻿using Azure.Core;
-using Azure.Identity;
-using MeshWeaver.Hosting.PostgreSql;
-using MeshWeaver.Portal.MigrationService;
+﻿using MeshWeaver.Portal.MigrationService;
 using MeshWeaver.Portal.ServiceDefaults;
-using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 

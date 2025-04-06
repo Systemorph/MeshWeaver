@@ -50,7 +50,6 @@ public partial class UserProfile : ComponentBase
                 name = null;
                 username = null;
                 initials = null;
-                Logger.LogError("Dashboard:Frontend:AuthMode is configured for OpenIDConnect, but there is no authenticated user.");
             }
         
     }

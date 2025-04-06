@@ -1,6 +1,6 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -17,6 +17,8 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
     where TDataSource : UnpartitionedDataSourceWithStorage<TDataSource, TTypeSource> 
     where TTypeSource : ITypeSource
 {
+
+
     private readonly IMessageHub persistenceHub = Workspace.Hub.ServiceProvider.CreateMessageHub(
         new PersistenceAddress(),
         c => c

@@ -10,12 +10,13 @@ public class MessageService : IMessageService
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
     private bool isDisposing;
-    private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken Token)> buffer = new();
-    private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken Token)> deliveryAction;
+    private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
+    private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
     private readonly HierarchicalRouting hierarchicalRouting;
-
+    private readonly SyncDelivery postPipeline;
+    private readonly AsyncDelivery deliveryPipeline;
 
 
     private readonly DeferralContainer deferralContainer;
@@ -35,11 +36,12 @@ public class MessageService : IMessageService
 
         deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
         deliveryAction = 
-            new(x => 
-                deferralContainer.DeliverAsync(x.Delivery, x.Token)); 
+            new(x => x.Invoke()); 
 
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+        postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
+        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
     }
 
     void IMessageService.Start()
@@ -70,15 +72,15 @@ public class MessageService : IMessageService
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken);
 
-    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery,  CancellationToken cancellationToken)
     {
-        logger.LogDebug("Buffering message {@Delivery} in {Address}", delivery, Address);
+        logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
 
         lock (locker)
         {
             if (isDisposing)
                 return delivery.Failed("Hub disposing");
-            buffer.Post((delivery, cancellationToken));
+            buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
         }
         return delivery.Forwarded();
     }
@@ -166,7 +168,7 @@ public class MessageService : IMessageService
 
     private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic);
 
-    private IMessageDelivery<TMessage> PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
+    private IMessageDelivery PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
     {
         if (typeof(TMessage) != message.GetType())
             return (IMessageDelivery<TMessage>)PostImplMethod
@@ -174,9 +176,10 @@ public class MessageService : IMessageService
                 .Invoke(this, [message, opt]);
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
+        
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
-        ScheduleNotify(delivery, default);
+        ScheduleNotify(postPipeline.Invoke(delivery),  default);
         return delivery;
     }
 

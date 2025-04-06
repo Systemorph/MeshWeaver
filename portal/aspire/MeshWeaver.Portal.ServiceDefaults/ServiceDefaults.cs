@@ -1,10 +1,8 @@
 ﻿using Azure.Core;
 using Azure.Identity;
-using Azure.Monitor.OpenTelemetry.AspNetCore;
 using MeshWeaver.Hosting.PostgreSql;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -24,7 +22,6 @@ public static class ServiceDefaults
 {
     public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
     {
-        builder.AddAppInsights();
         builder.ConfigureOpenTelemetry();
 
         builder.AddDefaultHealthChecks();
@@ -79,32 +76,11 @@ public static class ServiceDefaults
         return builder;
     }
 
-    private static void AddAppInsights(this IHostApplicationBuilder builder)
-    {
-        var appInsightsConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
-        if (!string.IsNullOrEmpty(appInsightsConnectionString))
-        {
-            builder.Logging.AddApplicationInsights(config =>
-            {
-                config.ConnectionString = appInsightsConnectionString;
-            }, options =>
-            {
-                options.TrackExceptionsAsExceptionTelemetry = true;
-                options.IncludeScopes = true;
-                options.FlushOnDispose = true;
-            });
-        }
-    }
     private static void AddOpenTelemetryExporters(this IHostApplicationBuilder builder)
     {
         if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
         {
             builder.Services.AddOpenTelemetry().UseOtlpExporter();
-        }
-        if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-        {
-            builder.Services.AddOpenTelemetry()
-                .UseAzureMonitor();
         }
     }
 
@@ -145,6 +121,9 @@ public static class ServiceDefaults
             connectionName,
             configureDataSourceBuilder: (dataSourceBuilder) =>
             {
+                // Add this line to enable dynamic JSON serialization
+                dataSourceBuilder.EnableDynamicJson();
+
                 if (string.IsNullOrEmpty(dataSourceBuilder.ConnectionStringBuilder.Password))
                 {
                     var credentials = new DefaultAzureCredential();

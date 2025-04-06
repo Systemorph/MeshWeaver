@@ -16,10 +16,9 @@ public interface IMessageDelivery
     string State { get; }
     object Message { get; }
 
-    string AccessObject { get; }
     IMessageDelivery Package(JsonSerializerOptions options);
 
-    internal IMessageDelivery SetAccessObject(string accessObject, object address);
+    internal IMessageDelivery SetAccessContext(AccessContext accessObject);
     internal IMessageDelivery ChangeState(string state);
     IMessageDelivery SetProperty(string name, object value);
     IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties);
@@ -37,6 +36,8 @@ public interface IMessageDelivery
     internal IMessageDelivery WithSender(Address address);
     internal IMessageDelivery WithTarget(Address address);
     IMessageDelivery Forwarded(params IEnumerable<Address> addresses);
+    AccessContext AccessContext { get; }
+
 }
 
 public interface IMessageDelivery<out TMessage> : IMessageDelivery

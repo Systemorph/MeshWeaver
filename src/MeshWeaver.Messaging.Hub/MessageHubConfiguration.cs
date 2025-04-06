@@ -16,7 +16,10 @@ public record MessageHubConfiguration
         Address = address;
         ParentServiceProvider = parentServiceProvider;
         TypeRegistry  = new TypeRegistry(ParentServiceProvider?.GetService<ITypeRegistry>()).WithType(address.GetType());
+        PostPipeline = [UserServicePostPipeline];
+        DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
+
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
@@ -69,6 +72,11 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
+        // Check if UserService is registered in the parent service provider
+        if (ParentServiceProvider?.GetService<UserService>() == null)
+        {
+            services.AddSingleton<UserService>();
+        }
         Services.Invoke(services);
         return services;
     }
@@ -130,6 +138,41 @@ public record MessageHubConfiguration
 
 
     internal ImmutableDictionary<(Type, string), object> Properties { get; init; } = ImmutableDictionary<(Type, string), object>.Empty;
+    internal ImmutableList<Func<SyncPipelineConfig, SyncPipelineConfig>> PostPipeline { get; set; }
+
+    public MessageHubConfiguration AddPostPipeline(Func<SyncPipelineConfig, SyncPipelineConfig> pipeline) => this with { PostPipeline = PostPipeline.Add(pipeline) };
+    private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
+    {
+        var userService = syncPipeline.Hub.ServiceProvider.GetService<UserService>();
+        return syncPipeline.AddPipeline((d, next) =>
+        {
+            var context = userService.Context;
+            if (context is not null)
+                d = d.SetAccessContext(context);
+            return next(d);
+
+        });
+    }
+    internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
+
+    public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
+    private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
+    {
+        var userService = asyncPipeline.Hub.ServiceProvider.GetService<UserService>();
+        return asyncPipeline.AddPipeline(async (d, ct, next) =>
+        {
+            userService.SetContext(d.AccessContext);
+            try
+            {
+                return await next.Invoke(d, ct);
+            }
+            finally
+            {
+                userService.SetContext(null);
+            }
+        });
+    }
+
     public T Get<T>(string context = null) => (T)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
     public MessageHubConfiguration Set<T>(T value, string context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value) };
 
@@ -146,5 +189,39 @@ public record MessageHubConfiguration
     }
 }
 
+public record AsyncPipelineConfig
+{
+    public AsyncPipelineConfig(IMessageHub Hub, AsyncDelivery asyncDelivery)
+    {
+        this.Hub = Hub;
+        AsyncDelivery = asyncDelivery;
+
+    }
+
+    internal AsyncDelivery AsyncDelivery { get; init; }
+
+    public AsyncPipelineConfig AddPipeline(
+        Func<IMessageDelivery, CancellationToken, AsyncDelivery, Task<IMessageDelivery>> pipeline)
+        => this with { AsyncDelivery = (d, ct) => pipeline.Invoke(d, ct, AsyncDelivery) };
+
+    public IMessageHub Hub { get; init; }
+}
+public record SyncPipelineConfig
+{
+    public SyncPipelineConfig(IMessageHub Hub, SyncDelivery syncDelivery)
+    {
+        this.Hub = Hub;
+        SyncDelivery = syncDelivery;
+
+    }
+
+    internal SyncDelivery SyncDelivery { get; init; }
+
+    public SyncPipelineConfig AddPipeline(
+        Func<IMessageDelivery, SyncDelivery, IMessageDelivery> pipeline)
+        => this with { SyncDelivery = d => pipeline.Invoke(d,  SyncDelivery) };
+
+    public IMessageHub Hub { get; init; }
+}
 
 internal record MessageHandlerItem(Type MessageType, Func<IMessageHub, IMessageDelivery, CancellationToken, Task<IMessageDelivery>> AsyncDelivery);

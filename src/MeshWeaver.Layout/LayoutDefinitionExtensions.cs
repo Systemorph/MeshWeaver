@@ -94,8 +94,10 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
-    ) => WithView(layout,
-        context, Observable.Return((ViewDefinition)(async (x, y, z) => await generator(x, y, z))));
+    ) => WithView(
+        layout,
+        context, 
+        Observable.Return<ViewDefinition>((async (x, y, z) => await generator(x, y, z))));
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,
@@ -119,9 +121,10 @@ public static class LayoutDefinitionExtensions
     /// <param name="context">The context function to determine when to render the view.</param>
     /// <param name="generator">The generator function to produce the view content.</param>
     /// <returns>The updated layout definition.</returns>
-    public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
+    public static LayoutDefinition WithView(
+        this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
-        IObservable<ViewDefinition<T>> generator) =>
+        IObservable<ViewDefinition> generator) =>
         layout.WithRenderer(context,
             (a, c, s) 
                 => a.RenderArea(c, generator, s))
@@ -184,8 +187,12 @@ public static class LayoutDefinitionExtensions
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view)
+        => layout.WithView(area, view, null);
+    public static LayoutDefinition WithView(this LayoutDefinition layout,
+        string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>> view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null)
+        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition)
         => layout.WithView(c => c.Area == area, view)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 

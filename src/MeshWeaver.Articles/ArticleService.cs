@@ -8,10 +8,12 @@ namespace MeshWeaver.Articles;
 public class ArticleService : IArticleService
 {
     private readonly IMessageHub hub;
+    private readonly UserService userService;
 
-    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub)
+    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub, UserService userService)
     {
         this.hub = hub;
+        this.userService = userService;
         var configs = serviceProvider.GetRequiredService<IOptions<List<ArticleSourceConfig>>>();
         collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
     }
@@ -26,7 +28,7 @@ public class ArticleService : IArticleService
 
     private readonly IReadOnlyDictionary<string, ArticleCollection> collections;
 
-    private ArticleCollection GetCollection(string collection)
+    public ArticleCollection GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
     public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
@@ -35,20 +37,48 @@ public class ArticleService : IArticleService
         return coll.GetContentAsync(path, ct);
     }
 
-    public IObservable<IEnumerable<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions)
+    public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
+        CancellationToken ct)
     {
-        var now = DateTime.UtcNow;
-        return collections.Values.Select(c => c.GetArticles(catalogOptions))
-            .CombineLatest()
-            .Select(x => x
-                .SelectMany(y => y)
-                .Where(a => a.Published is not null && a.Published <= now)
-                .OrderByDescending(a => a.Published))
-                ;
+        var allCollections = 
+            string.IsNullOrEmpty(catalogOptions.Collection)
+            ? collections.Values
+            : [collections[catalogOptions.Collection]];
+        return (await allCollections.Select(c => c.GetArticles(catalogOptions))
+                .CombineLatest()
+                .Select(c => c.SelectMany(articles => articles))
+                .Select(articles => ApplyOptions(articles, catalogOptions))
+                .Skip(catalogOptions.Page * catalogOptions.PageSize)
+                .Take(catalogOptions.PageSize)
+                .FirstAsync())
+            .ToArray()
+            ;
+    }
+
+    private IEnumerable<Article> ApplyOptions(IEnumerable<Article> articles, ArticleCatalogOptions options)
+    {
+        if (userService.Context is null || !userService.Context.Roles.Contains(Roles.PortalAdmin))
+        {
+            var now = DateTime.UtcNow;
+            articles = articles
+                .Where(a => a.Published is not null && a.Published <= now);
+
+        }
+        return options.SortOrder switch
+        {
+            ArticleSortOrder.AscendingPublishDate => articles.OrderBy(a => a.Published),
+            ArticleSortOrder.DescendingPublishDate => articles.OrderByDescending(a => a.Published),
+            _ => throw new ArgumentOutOfRangeException()
+        };
     }
 
     public IObservable<Article> GetArticle(string collection, string article)
     {
         return GetCollection(collection)?.GetArticle(article);
+    }
+
+    public Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default)
+    {
+        return Task.FromResult<IReadOnlyCollection<ArticleCollection>>(collections.Values.ToArray());
     }
 }

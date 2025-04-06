@@ -1,9 +1,10 @@
-﻿---
-Title: "Using external libraries"
+---
+Title: "Using External Libraries"
 Abstract: >
-    In this article we show how to include external libraries.
-Thumbnail: "images/Reactive Dialogs.jpeg"
-Published: "2025-03-02"
+  In this article we show how to include external libraries.
+  
+Thumbnail: "images/Libraries.jpg"
+Published: "2025-03-25"
 Authors:
   - "Roland Bürgi"
 Tags:
@@ -19,4 +20,3 @@ using static MeshWeaver.Layout.Controls;
 var pareto = new Pareto(2,3);
 Markdown($"Mean: {pareto.Mean}, Variance: {pareto.Variance}")
 ```
-
