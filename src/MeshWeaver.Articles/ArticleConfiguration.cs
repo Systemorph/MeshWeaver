@@ -1,21 +1,16 @@
-﻿using System.Collections.Immutable;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
-
-namespace MeshWeaver.Articles;
+﻿namespace MeshWeaver.Articles;
 
 
-public class ArticleSourceConfig
+public class ContentSourceConfig
 {
-    public string SourceType { get; set; } = FileSystemArticleCollectionFactory.SourceType;
+    public string SourceType { get; set; } = FileSystemContentCollectionFactory.SourceType;
     public string Name { get; set; }
     public string DisplayName { get; set; }
     public string BasePath { get; set; }
 }
 
-public interface IArticleCollectionFactory
+public interface IContentCollectionFactory
 {
-    ContentCollection Create(ArticleSourceConfig config);
+    ContentCollection Create(ContentSourceConfig config);
 }
 

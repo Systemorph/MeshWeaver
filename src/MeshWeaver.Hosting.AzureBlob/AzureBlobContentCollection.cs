@@ -17,7 +17,7 @@ public class AzureBlobContentCollection : ContentCollection
     private readonly ILogger<AzureBlobContentCollection> logger;
 
     public AzureBlobContentCollection(
-        ArticleSourceConfig config,
+        ContentSourceConfig config,
         IMessageHub hub,
         BlobServiceClient client) : base(config, hub)
     {

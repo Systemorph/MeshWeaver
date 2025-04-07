@@ -16,16 +16,16 @@ public static class ArticleConfigurationExtensions
     {
         return services
             .AddArticles()
-            .AddKeyedSingleton<IArticleCollectionFactory, AzureBlobArticleCollectionFactory>(
-                AzureBlobArticleCollectionFactory.SourceType);
+            .AddKeyedSingleton<IContentCollectionFactory, AzureBlobContentCollectionFactory>(
+                AzureBlobContentCollectionFactory.SourceType);
     }
 }
 
-public class AzureBlobArticleCollectionFactory(IMessageHub hub, IServiceProvider serviceProvider) : IArticleCollectionFactory
+public class AzureBlobContentCollectionFactory(IMessageHub hub, IServiceProvider serviceProvider) : IContentCollectionFactory
 {
     public const string SourceType = "AzureBlob";
 
-    public ContentCollection Create(ArticleSourceConfig config)
+    public ContentCollection Create(ContentSourceConfig config)
     {
 
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();

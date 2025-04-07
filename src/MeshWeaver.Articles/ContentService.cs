@@ -14,13 +14,13 @@ public class ContentService : IContentService
     {
         this.hub = hub;
         this.accessService = accessService;
-        var configs = serviceProvider.GetRequiredService<IOptions<List<ArticleSourceConfig>>>();
+        var configs = serviceProvider.GetRequiredService<IOptions<List<ContentSourceConfig>>>();
         collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
     }
 
-    private ContentCollection CreateCollection(ArticleSourceConfig config)
+    private ContentCollection CreateCollection(ContentSourceConfig config)
     {
-        var factory = hub.ServiceProvider.GetKeyedService<IArticleCollectionFactory>(config.SourceType);
+        var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
         if(factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
         return factory.Create(config);

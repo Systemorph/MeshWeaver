@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Articles;
 
-public class FileSystemContentCollection(ArticleSourceConfig config, IMessageHub hub) : ContentCollection(config, hub)
+public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub hub) : ContentCollection(config, hub)
 {
     public string BasePath { get; } = config.BasePath;
     private FileSystemWatcher watcher;

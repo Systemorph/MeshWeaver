@@ -2,10 +2,10 @@
 
 namespace MeshWeaver.Articles;
 
-public class FileSystemArticleCollectionFactory(IMessageHub hub) : IArticleCollectionFactory
+public class FileSystemContentCollectionFactory(IMessageHub hub) : IContentCollectionFactory
 {
     public const string SourceType = "FileSystem";
-    public ContentCollection Create(ArticleSourceConfig config)
+    public ContentCollection Create(ContentSourceConfig config)
     {
         return new FileSystemContentCollection(config, hub);
     }

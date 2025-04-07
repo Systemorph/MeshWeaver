@@ -11,14 +11,14 @@ namespace MeshWeaver.Articles;
 
 public abstract class ContentCollection : IDisposable
 {
-    private readonly ISynchronizationStream<InstanceCollection> articleStream;
-    private readonly ArticleSourceConfig config;
+    private readonly ISynchronizationStream<InstanceCollection> contentStream;
+    private readonly ContentSourceConfig config;
 
-    protected ContentCollection(ArticleSourceConfig config, IMessageHub hub)
+    protected ContentCollection(ContentSourceConfig config, IMessageHub hub)
     {
         Hub = hub;
         this.config = config;
-        articleStream = CreateStream();
+        contentStream = CreateStream();
     }
 
     private  ISynchronizationStream<InstanceCollection> CreateStream()
@@ -37,18 +37,18 @@ public abstract class ContentCollection : IDisposable
     public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
 
     public IObservable<Article> GetArticle(string path)
-        => articleStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
+        => contentStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
 
 
     public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions _)
-        => articleStream.Select(x => x.Value.Instances.Values.Cast<Article>());
+        => contentStream.Select(x => x.Value.Instances.Values.Cast<Article>());
 
 
     public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
-        articleStream.Dispose();
+        contentStream.Dispose();
     }
 
     protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
@@ -107,7 +107,7 @@ public abstract class ContentCollection : IDisposable
     }
     protected void UpdateArticle(string path)
     {
-        articleStream.Update(async (x, ct) =>
+        contentStream.Update(async (x, ct) =>
         {
             var tuple = await GetStreamAsync(path, ct);
             if (tuple.Stream is null)
@@ -150,7 +150,7 @@ public abstract class ContentCollection : IDisposable
         name = Path.GetFileNameWithoutExtension(path);
         if (Path.GetExtension(path) != ".md")
             return false;
-        return articleStream.Current.Value.Instances.ContainsKey(name);
+        return contentStream.Current.Value.Instances.ContainsKey(name);
     }
 
 
