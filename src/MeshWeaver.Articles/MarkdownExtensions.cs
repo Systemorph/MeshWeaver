@@ -25,7 +25,7 @@ public static class MarkdownExtensions
     public static IServiceCollection AddArticles(this IServiceCollection services)
         => services
                 .AddSingleton<IContentService, ContentService>()
-                .AddKeyedSingleton<IArticleCollectionFactory, FileSystemArticleCollectionFactory>(FileSystemArticleCollectionFactory.SourceType)
+                .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
             ;
 
     public static string ConvertToMarkdown(this Article article)

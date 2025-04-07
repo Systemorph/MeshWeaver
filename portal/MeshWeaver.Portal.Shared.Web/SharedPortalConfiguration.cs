@@ -86,7 +86,7 @@ public static class SharedPortalConfiguration
         builder.Services.AddAuthorization();
          
         builder.Services.AddSignalR();
-        builder.Services.Configure<List<ArticleSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
+        builder.Services.Configure<List<ContentSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
     }

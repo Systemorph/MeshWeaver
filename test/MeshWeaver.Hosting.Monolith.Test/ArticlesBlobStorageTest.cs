@@ -70,12 +70,12 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         });
         return services
             .AddAzureBlobArticles()
-            .Configure<List<ArticleSourceConfig>>(
-                options => options.Add(new ArticleSourceConfig()
+            .Configure<List<ContentSourceConfig>>(
+                options => options.Add(new ContentSourceConfig()
                 {
                     Name = "Test",
                     BasePath = StorageProviders.Articles,
-                    SourceType = AzureBlobArticleCollectionFactory.SourceType,
+                    SourceType = AzureBlobContentCollectionFactory.SourceType,
                 })
             );
     }

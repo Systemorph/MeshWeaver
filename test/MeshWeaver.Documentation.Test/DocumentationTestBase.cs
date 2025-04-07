@@ -40,8 +40,8 @@ namespace MeshWeaver.Documentation.Test
         private IServiceCollection ConfigureArticles(IServiceCollection services)
         {
             return services
-                .Configure<List<ArticleSourceConfig>>(
-                    options => options.Add(new ArticleSourceConfig()
+                .Configure<List<ContentSourceConfig>>(
+                    options => options.Add(new ContentSourceConfig()
                     {
                         Name = "Documentation", BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
                     })
