@@ -5,20 +5,20 @@ using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Articles;
 
-public class ArticleService : IArticleService
+public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
-    private readonly UserService userService;
+    private readonly AccessService accessService;
 
-    public ArticleService(IServiceProvider serviceProvider, IMessageHub hub, UserService userService)
+    public ContentService(IServiceProvider serviceProvider, IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
-        this.userService = userService;
+        this.accessService = accessService;
         var configs = serviceProvider.GetRequiredService<IOptions<List<ArticleSourceConfig>>>();
         collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
     }
 
-    private ArticleCollection CreateCollection(ArticleSourceConfig config)
+    private ContentCollection CreateCollection(ArticleSourceConfig config)
     {
         var factory = hub.ServiceProvider.GetKeyedService<IArticleCollectionFactory>(config.SourceType);
         if(factory is null)
@@ -26,9 +26,9 @@ public class ArticleService : IArticleService
         return factory.Create(config);
     }
 
-    private readonly IReadOnlyDictionary<string, ArticleCollection> collections;
+    private readonly IReadOnlyDictionary<string, ContentCollection> collections;
 
-    public ArticleCollection GetCollection(string collection)
+    public ContentCollection GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
     public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
@@ -57,7 +57,7 @@ public class ArticleService : IArticleService
 
     private IEnumerable<Article> ApplyOptions(IEnumerable<Article> articles, ArticleCatalogOptions options)
     {
-        if (userService.Context is null || !userService.Context.Roles.Contains(Roles.PortalAdmin))
+        if (accessService.Context is null || !accessService.Context.Roles.Contains(Roles.PortalAdmin))
         {
             var now = DateTime.UtcNow;
             articles = articles
@@ -77,8 +77,8 @@ public class ArticleService : IArticleService
         return GetCollection(collection)?.GetArticle(article);
     }
 
-    public Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)
     {
-        return Task.FromResult<IReadOnlyCollection<ArticleCollection>>(collections.Values.ToArray());
+        return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
     }
 }

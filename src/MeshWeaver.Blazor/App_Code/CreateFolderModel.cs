@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Blazor
 {
-    public class CreateFolderModel(ArticleCollection collection, IReadOnlyCollection<CollectionItem> items)
+    public class CreateFolderModel(ContentCollection collection, IReadOnlyCollection<CollectionItem> items)
     {
         public string Name { get; set; }
         public bool IsValid()

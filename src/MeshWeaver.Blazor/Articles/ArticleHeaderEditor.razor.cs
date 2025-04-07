@@ -8,7 +8,7 @@ namespace MeshWeaver.Blazor.Articles;
 public partial class ArticleHeaderEditor
 {
     [Inject] private IToastService ToastService { get; set; }
-    [Inject] private IArticleService ArticleService { get; set; }
+    [Inject] private IContentService ContentService { get; set; }
 
     private void SaveAsync()
     {
@@ -29,9 +29,9 @@ public partial class ArticleHeaderEditor
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        Collection = ArticleService.GetCollection(CollectionName);
+        Collection = ContentService.GetCollection(CollectionName);
     }
-    private ArticleCollection Collection { get; set; }
+    private ContentCollection Collection { get; set; }
 
     private void Reset()
     {

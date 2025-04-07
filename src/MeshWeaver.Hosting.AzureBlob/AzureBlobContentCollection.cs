@@ -10,19 +10,19 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
-public class AzureBlobArticleCollection : ArticleCollection
+public class AzureBlobContentCollection : ContentCollection
 {
     private readonly BlobContainerClient containerClient;
     private readonly ISynchronizationStream<InstanceCollection> articleStream;
-    private readonly ILogger<AzureBlobArticleCollection> logger;
+    private readonly ILogger<AzureBlobContentCollection> logger;
 
-    public AzureBlobArticleCollection(
+    public AzureBlobContentCollection(
         ArticleSourceConfig config,
         IMessageHub hub,
         BlobServiceClient client) : base(config, hub)
     {
         var containerName = config.BasePath;
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobArticleCollection>>();
+        logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobContentCollection>>();
         containerClient = client.GetBlobContainerClient(containerName);
     }
 

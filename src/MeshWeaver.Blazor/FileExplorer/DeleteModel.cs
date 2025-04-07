@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Blazor.FileExplorer;
 
-public class DeleteModel(ArticleCollection collection, IEnumerable<CollectionItem> itemsToDelete)
+public class DeleteModel(ContentCollection collection, IEnumerable<CollectionItem> itemsToDelete)
 {
     public IEnumerable<CollectionItem> ItemsToDelete { get; } = itemsToDelete;
 

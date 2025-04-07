@@ -7,14 +7,14 @@ namespace MeshWeaver.Blazor.FileExplorer;
 public partial class CollectionPicker
 {
     private IReadOnlyCollection<Option<string>> collections;
-    [Inject] private IArticleService ArticleService { get; set; }
+    [Inject] private IContentService ContentService { get; set; }
     [Parameter] public string NullLabel { get; set; }
     private string SelectedCollection { get; set; }
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
         SelectedCollection = Collection;
-        var definedCollections = await ArticleService.GetCollectionsAsync();
+        var definedCollections = await ContentService.GetCollectionsAsync();
 
         var options = definedCollections
             .Select(a => new Option<string>() { Text = a.DisplayName, Value = a.Collection });

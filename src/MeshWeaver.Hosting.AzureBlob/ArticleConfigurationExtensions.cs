@@ -25,12 +25,12 @@ public class AzureBlobArticleCollectionFactory(IMessageHub hub, IServiceProvider
 {
     public const string SourceType = "AzureBlob";
 
-    public ArticleCollection Create(ArticleSourceConfig config)
+    public ContentCollection Create(ArticleSourceConfig config)
     {
 
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
         var blobServiceClient = factory.CreateClient(config.BasePath);
 
-        return new AzureBlobArticleCollection(config, hub, blobServiceClient);
+        return new AzureBlobContentCollection(config, hub, blobServiceClient);
     }
 }

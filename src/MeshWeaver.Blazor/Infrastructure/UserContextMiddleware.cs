@@ -14,7 +14,7 @@ public class UserContextMiddleware(RequestDelegate next)
         var userContext = ExtractUserContext(context.User);
         if (userContext is not null)
         {
-            var userService = context.RequestServices.GetRequiredService<PortalApplication>().Hub.ServiceProvider.GetRequiredService<UserService>();
+            var userService = context.RequestServices.GetRequiredService<PortalApplication>().Hub.ServiceProvider.GetRequiredService<AccessService>();
             userService.SetContext(userContext);
         }
         // Continue the middleware pipeline

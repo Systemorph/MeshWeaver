@@ -8,7 +8,7 @@ namespace MeshWeaver.Blazor.FileExplorer;
 public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; }
-    [Inject] private IArticleService ArticleService { get; set; }
+    [Inject] private IContentService ContentService { get; set; }
     [Inject] private NavigationManager NavigationManager { get; set; }
     [Inject] private IToastService ToastService { get; set; }
     [Parameter] public string CollectionName { get; set; }
@@ -19,7 +19,7 @@ public partial class FileBrowser
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
         await RefreshContentAsync();
     }
 
@@ -53,13 +53,13 @@ public partial class FileBrowser
             return;
         CollectionName = collection;
 
-        Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
         await RefreshContentAsync();
         await InvokeAsync(StateHasChanged);
     }
 
 
-    private ArticleCollection Collection { get; set; }
+    private ContentCollection Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
 

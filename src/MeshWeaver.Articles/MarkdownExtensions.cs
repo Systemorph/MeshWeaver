@@ -19,12 +19,12 @@ public static class MarkdownExtensions
             .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog);
     }
 
-    internal static IArticleService GetArticleService(this IMessageHub hub)
-        => hub.ServiceProvider.GetRequiredService<IArticleService>();
+    internal static IContentService GetArticleService(this IMessageHub hub)
+        => hub.ServiceProvider.GetRequiredService<IContentService>();
 
     public static IServiceCollection AddArticles(this IServiceCollection services)
         => services
-                .AddSingleton<IArticleService, ArticleService>()
+                .AddSingleton<IContentService, ContentService>()
                 .AddKeyedSingleton<IArticleCollectionFactory, FileSystemArticleCollectionFactory>(FileSystemArticleCollectionFactory.SourceType)
             ;
 

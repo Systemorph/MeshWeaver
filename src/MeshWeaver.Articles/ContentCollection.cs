@@ -9,12 +9,12 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.Articles;
 
-public abstract class ArticleCollection : IDisposable
+public abstract class ContentCollection : IDisposable
 {
     private readonly ISynchronizationStream<InstanceCollection> articleStream;
     private readonly ArticleSourceConfig config;
 
-    protected ArticleCollection(ArticleSourceConfig config, IMessageHub hub)
+    protected ContentCollection(ArticleSourceConfig config, IMessageHub hub)
     {
         Hub = hub;
         this.config = config;

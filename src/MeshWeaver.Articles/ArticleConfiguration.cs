@@ -16,6 +16,6 @@ public class ArticleSourceConfig
 
 public interface IArticleCollectionFactory
 {
-    ArticleCollection Create(ArticleSourceConfig config);
+    ContentCollection Create(ArticleSourceConfig config);
 }
 
