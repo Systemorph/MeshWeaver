@@ -1,6 +1,6 @@
 ﻿namespace MeshWeaver.Messaging;
 
-public class UserService
+public class AccessService
 {
     private readonly AsyncLocal<AccessContext> context = new();
 

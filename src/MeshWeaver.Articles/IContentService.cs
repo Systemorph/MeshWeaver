@@ -1,11 +1,11 @@
 ﻿namespace MeshWeaver.Articles;
 
-public interface IArticleService
+public interface IContentService
 {
     Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default);
     Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions options, CancellationToken ct = default);
     IObservable<Article> GetArticle(string collection, string article);
 
-    Task<IReadOnlyCollection<ArticleCollection>> GetCollectionsAsync(CancellationToken ct = default);
-    ArticleCollection GetCollection(string collectionName);
+    Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default);
+    ContentCollection GetCollection(string collectionName);
 }
