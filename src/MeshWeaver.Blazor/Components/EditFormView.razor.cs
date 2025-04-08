@@ -10,21 +10,21 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class EditFormView
 {
-    private ModelParameter<JsonElement> data;
+    private ModelParameter<JsonElement> model;
     private ActivityLog Log { get; set; }
 
     protected override void BindData()
     {
         DataBind(
             new JsonPointerReference(ViewModel.DataContext), 
-            x => x.data,
+            x => x.model,
             jsonObject => Convert((JsonObject)jsonObject)
             );
     }
 
     private async void Submit(EditContext context)
     {
-        var log = await Stream.SubmitModel(Model);
+        var log = await Stream.SubmitModel(model);
         if(log.Status == ActivityStatus.Succeeded)
         {
             Log = null;
@@ -50,7 +50,7 @@ public partial class EditFormView
 
     private void Reset()
     {
-        data.Reset();
+        model.Reset();
         InvokeAsync(StateHasChanged);
     }
 
@@ -68,8 +68,8 @@ public partial class EditFormView
 
     public override ValueTask DisposeAsync()
     {
-        if (data != null)
-            data.ElementChanged -= OnModelChanged;
+        if (model != null)
+            model.ElementChanged -= OnModelChanged;
         return base.DisposeAsync();
     }
 

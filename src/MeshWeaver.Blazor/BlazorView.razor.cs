@@ -2,11 +2,13 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Blazor.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -19,13 +21,12 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     [Inject] protected ILogger<TView> Logger { get; set; }
     [Inject] protected PortalApplication PortalApplication { get; set; }
     protected IMessageHub Hub => PortalApplication.Hub;
-    [Parameter]
-    public TViewModel ViewModel { get; set; }
+    [Parameter] public TViewModel ViewModel { get; set; }
 
-    [Parameter]
-    public ISynchronizationStream<JsonElement> Stream { get; set; }
-    [Parameter]
-    public string Area { get; set; }
+    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; }
+    [Parameter] public string Area { get; set; }
+
+    [CascadingParameter(Name = "Context")] public object Context { get; set; }
 
     [CascadingParameter(Name = nameof(DataContext))]
     public string DataContext { get; set; }
@@ -103,6 +104,15 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                 );
 
         }
+        else if (value is ContextProperty contextProperty)
+        {
+            var val = 
+                Context is JsonObject jo 
+                    ? jo[contextProperty.Property]
+                    : Context?.GetType().GetProperty(contextProperty.Property)?.GetValue(Context);
+            setter(Hub.ConvertSingle(val, conversion));
+
+        }
         else
         {
             setter(Hub.ConvertSingle(value, conversion));
@@ -152,7 +162,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         bindings.Clear();
     }
 
-    protected void OnClick()
+    protected virtual void OnClick()
     {
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }

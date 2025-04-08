@@ -41,7 +41,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    protected virtual Func<object, TValue> ConversionToValue => null;
+    protected virtual Func<object, TValue> ConversionToValue => v => (TValue)v;
 
     protected virtual object ConvertToData(TValue v) => v;
 

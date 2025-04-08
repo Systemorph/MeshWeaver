@@ -66,10 +66,5 @@ public partial class DataGridView
     }
 
     private const string Details = nameof(Details);
-    private void NavigateToUrl(JsonObject obj, string area)
-    {
-        var reference = new LayoutAreaReference(area) { Id = $"{obj[EntitySerializationExtensions.TypeProperty]}/{obj[EntitySerializationExtensions.IdProperty]}" };
-        NavigationManager.NavigateTo(reference.ToHref(Stream.Owner));
-    }
 
 }

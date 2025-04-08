@@ -121,7 +121,7 @@ public static class LayoutClientExtensions
         if (pointer.StartsWith('/'))
             return pointer.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(dataContext))
-            throw new SerializationException($"Invalid pointer submitted. Pointer {pointer} does not start with a / and no data context specified.");
+            return $"/{pointer}";
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
@@ -135,6 +135,7 @@ public static class LayoutClientExtensions
             // ReSharper disable ExpressionIsAlwaysNull
             JsonElement element => hub.ConvertJson(element, conversion),
             JsonObject obj => hub.ConvertJson(obj, conversion),
+            JsonNode node => node.Deserialize<T>(hub.JsonSerializerOptions),
             // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
             string s => ConvertString<T>(s),

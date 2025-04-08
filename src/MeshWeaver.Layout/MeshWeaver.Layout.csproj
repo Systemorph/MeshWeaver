@@ -8,6 +8,7 @@
       <PackageReference Include="System.Text.Json" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <PackageReference Include="System.Text.Encodings.Web" />
