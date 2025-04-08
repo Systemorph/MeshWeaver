@@ -85,7 +85,8 @@ public static class LayoutExtensions
                 typeof(LayoutAreaReference),
                 typeof(PropertyColumnControl<>),
                 typeof(Option), // this is not a control
-                typeof(Option<>) // this is not a control
+                typeof(Option<>), // this is not a control
+                typeof(ContextProperty) // this is not a control
             );
 
     public static IObservable<UiControl> GetControlStream(

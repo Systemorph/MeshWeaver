@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Domain;
@@ -23,6 +25,7 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
 {
     public object Render(EntityRenderingContext context) =>
         configuration.ViewBuilders
+            .Reverse()
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
 
@@ -44,8 +47,9 @@ public record DomainViewConfiguration
         PropertyViewBuilders = [(editor, ctx)=> 
             hub.ServiceProvider.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
         CatalogBuilders = [DefaultCatalog];
-    } 
+    }
 
+    public const string HrefProperty = "$href";
 
     private object DefaultCatalog(EntityRenderingContext context)
     {
@@ -56,12 +60,29 @@ public record DomainViewConfiguration
         if(!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         return ret
-                .WithView((a, _) => a
+                .WithView((a, ctx) => a
                     .Workspace
                     .GetStream(new CollectionsReference(typeDefinition.CollectionName))
                     .Select(changeItem =>
-                        typeDefinition.ToDataGrid(changeItem.Value.Collections.Values.First().Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, context.Host.Hub.JsonSerializerOptions)))
-                            .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
+                        typeDefinition.ToDataGrid(changeItem.Value.Collections.Values.First().Instances.Values
+                                .Select(o =>
+                                {
+                                    var serialized = typeDefinition.SerializeEntityAndId(o,
+                                        context.Host.Hub.JsonSerializerOptions);
+                                    serialized[HrefProperty] = new LayoutAreaReference("Details")
+                                    {
+                                        Id =
+                                            $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
+                                    }.ToHref(a.Hub.Address);
+                                    return serialized;
+                                }))
+                            .WithColumn(new TemplateColumnControl(
+                                new ButtonControl(null)
+                                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                                    .WithLabel("Edit")
+                                    .WithNavigateToHref(new ContextProperty(HrefProperty))
+                                )
+                            )
                     )
                 )
             ;
@@ -102,6 +123,7 @@ public record DomainViewConfiguration
                 context.TypeDefinition.Type.GetProperties()
                     .Aggregate(new EditFormControl(), (grid, property) =>
                         PropertyViewBuilders
+                            .Reverse()
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
@@ -115,6 +137,7 @@ public record DomainViewConfiguration
 
     public object GetCatalog(EntityRenderingContext context) =>
         CatalogBuilders
+            .Reverse()
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
 }

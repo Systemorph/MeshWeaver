@@ -25,6 +25,7 @@ public record DataGridControl(object Data)
     public DataGridControl Resizable(object resizable = null) => This with { ResizableColumns = resizable ?? true };
 }
 
+public record ContextProperty(string Property);
 
 public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
     where TColumn : DataColumnControl<TColumn>
@@ -35,7 +36,7 @@ public abstract record DataColumnControl<TColumn>() : UiControl<TColumn>(ModuleS
     public TColumn WithTooltipText(object tooltipText) => This with { Tooltip = tooltipText };
 
 }
-public abstract record PropertyColumnControl() : DataColumnControl<PropertyColumnControl> 
+public abstract record PropertyColumnControl : DataColumnControl<PropertyColumnControl> 
 {
     public string Property { get; init; }
     public object Sortable { get; init; } = true;
@@ -51,12 +52,9 @@ public record PropertyColumnControl<TProperty> : PropertyColumnControl
 }
 
 
-public record TemplateColumnControl(params UiControl[] Data)
+public record TemplateColumnControl(UiControl Template)
     : DataColumnControl<TemplateColumnControl>
 {
     public object Align { get; set; }
 }
 
-public record InfoButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
-public record EditButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
-public record DeleteButtonControl(object EntityType, object EntityId) : UiControl<InfoButtonControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);

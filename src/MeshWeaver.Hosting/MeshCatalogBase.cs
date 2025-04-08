@@ -37,8 +37,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
         if (cache.TryGetValue(address.ToString(), out var ret))
             return (MeshNode)ret;
         var node = Configuration.Nodes.GetValueOrDefault(address.ToString())
-               ??
-               Configuration.MeshNodeFactories
+               ?? Configuration.Nodes.GetValueOrDefault(address.Type)
+               ?? Configuration.MeshNodeFactories
                    .Select(f => f.Invoke(address))
                    .FirstOrDefault(x => x != null)
                ??
