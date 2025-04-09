@@ -55,6 +55,12 @@ public partial class DataGridView
         if (column.Tooltip is not null)
             builder.AddAttribute(5, nameof(PropertyColumn<object, object>.TooltipText),
                 (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext)));
+        if (column.IsDefaultSortColumn is not null)
+            builder.AddAttribute(6, nameof(PropertyColumn<object, object>.IsDefaultSortColumn), Stream.GetDataBoundValue<bool>(column.IsDefaultSortColumn, ViewModel.DataContext));
+        if (column.InitialSortDirection is not null)
+            builder.AddAttribute(7, nameof(PropertyColumn<object, object>.InitialSortDirection), Stream.GetDataBoundValue<SortDirection>(column.InitialSortDirection, ViewModel.DataContext));
+        if (column.Align is not null)
+            builder.AddAttribute(8, nameof(PropertyColumn<object, object>.Align), Stream.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext));
 
         builder.CloseComponent();
 

@@ -41,6 +41,10 @@ public abstract record PropertyColumnControl : DataColumnControl<PropertyColumnC
     public string Property { get; init; }
     public object Sortable { get; init; } = true;
     public object Format { get; init; }
+    public object IsDefaultSortColumn { get; init; }
+    public object InitialSortDirection { get; init; }
+    public object IsEditable { get; init; }
+    public object Align { get; set; }
 
     public PropertyColumnControl WithFormat(object format) => this with { Format = format };
     public abstract Type GetPropertyType();

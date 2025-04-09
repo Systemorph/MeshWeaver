@@ -87,7 +87,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
         if (value is JsonPointerReference reference)
         {
-            if (Model is not null)
+            if (Model is not null && !reference.Pointer.StartsWith('/'))
                 setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion));
             else
                 bindings.Add(Stream.DataBind(reference, DataContext, conversion)

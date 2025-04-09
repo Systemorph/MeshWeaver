@@ -20,7 +20,7 @@ namespace MeshWeaver.Northwind.Domain
     [Display(GroupName = "Reference Data")]
     public record Territory(
         [property: Key] string TerritoryId,
-        string TerritoryDescription,
-        [property:Dimension(typeof(Region))]int RegionId
+        [property: Sort(IsDefaultSort = true)]string TerritoryDescription,
+        [property: Dimension(typeof(Region))]int RegionId
     );
 }
