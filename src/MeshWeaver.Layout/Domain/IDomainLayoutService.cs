@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
@@ -10,6 +9,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
@@ -60,33 +60,41 @@ public record DomainViewConfiguration
         if(!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         return ret
-                .WithView((a, ctx) => a
-                    .Workspace
-                    .GetStream(new CollectionsReference(typeDefinition.CollectionName))
-                    .Select(changeItem =>
-                        typeDefinition.ToDataGrid(changeItem.Value.Collections.Values.First().Instances.Values
-                                .Select(o =>
-                                {
-                                    var serialized = typeDefinition.SerializeEntityAndId(o,
-                                        context.Host.Hub.JsonSerializerOptions);
-                                    serialized[HrefProperty] = new LayoutAreaReference("Details")
-                                    {
-                                        Id =
-                                            $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
-                                    }.ToHref(a.Hub.Address);
-                                    return serialized;
-                                }))
-                            .WithColumn(new TemplateColumnControl(
-                                new ButtonControl(null)
-                                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
-                                    .WithLabel("Edit")
-                                    .WithNavigateToHref(new ContextProperty(HrefProperty))
-                                )
-                            )
-                    )
-                )
+                .WithView((host,_) => RenderCatalog(host, context, typeDefinition))
             ;
 
+    }
+
+    private object RenderCatalog(LayoutAreaHost host, EntityRenderingContext context, ITypeDefinition typeDefinition)
+    {
+        var stream = host.Workspace
+            .GetStream(new CollectionReference(typeDefinition.CollectionName));
+
+        var id = Guid.NewGuid().AsString();
+        host.RegisterForDisposal(stream
+            .Select(i => i.Value.Instances.Values.Select(o =>
+            {
+                var serialized = typeDefinition.SerializeEntityAndId(o,
+                    context.Host.Hub.JsonSerializerOptions);
+                serialized[HrefProperty] = new LayoutAreaReference("Details")
+                {
+                    Id =
+                        $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
+                }.ToHref(host.Hub.Address);
+                return serialized;
+            }))
+
+            .Subscribe(x => host.UpdateData(id, x))
+        );
+
+        return typeDefinition.ToDataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+            .WithColumn(new TemplateColumnControl(
+                    new ButtonControl("Edit")
+                        .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                        .WithLabel("Edit")
+                        .WithNavigateToHref(new ContextProperty(HrefProperty))
+                )
+            );
     }
 
     internal ImmutableList<Func<EntityRenderingContext, object>> ViewBuilders { get; init; }
@@ -115,21 +123,25 @@ public record DomainViewConfiguration
 
     public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
     {
+        var id = Guid.NewGuid().AsString();
         var stream = host.Workspace
             .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
-        var ret = stream
-            .Select(x => x.Value)
-            .Bind(_ =>
-                context.TypeDefinition.Type.GetProperties()
-                    .Aggregate(new EditFormControl(), (grid, property) =>
+
+        var typeDefinition = context.TypeDefinition;
+        host.RegisterForDisposal(stream
+            .Select(e => typeDefinition.SerializeEntityAndId(e.Value, context.Host.Hub.JsonSerializerOptions))
+            .Subscribe(e => host.UpdateData(id,e))
+        );
+
+        return  context.TypeDefinition.Type.GetProperties()
+                    .Aggregate(new EditFormControl {DataContext = LayoutAreaReference.GetDataPointer(id)}, (grid, property) =>
                         PropertyViewBuilders
                             .Reverse()
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
                             .FirstOrDefault(x => x != null)
-                    ), ctx.Area);
-        return ret;
+                    );
     }
 
 
