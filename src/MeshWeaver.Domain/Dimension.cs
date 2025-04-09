@@ -6,5 +6,6 @@ public record Dimension : INamed
 {
     [Key]
     public string SystemName { get; init; }
+    [Sort(IsDefaultSort = true)]
     public string DisplayName { get; init; }
 }

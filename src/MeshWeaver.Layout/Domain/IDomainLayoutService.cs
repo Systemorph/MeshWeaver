@@ -89,9 +89,9 @@ public record DomainViewConfiguration
 
         return typeDefinition.ToDataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
             .WithColumn(new TemplateColumnControl(
-                    new ButtonControl("Edit")
+                    new ButtonControl("View")
                         .WithIconStart(FluentIcons.Edit(IconSize.Size16))
-                        .WithLabel("Edit")
+                        .WithLabel("View")
                         .WithNavigateToHref(new ContextProperty(HrefProperty))
                 )
             );
