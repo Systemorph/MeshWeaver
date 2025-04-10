@@ -1,6 +1,8 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.DataBinding;
 
@@ -10,47 +12,70 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     where TViewModel : UiControl, IFormControl
     where TView : FormComponentBase<TViewModel, TView, TValue>
 {
-    private TValue value;
+    private TValue data;
 
     public const string Edit = nameof(Edit);
     protected string Label { get; set; }
+    protected int ImmediateDelay { get; set; }
+    private JsonPointerReference DataPointer { get; set; }
+
+    protected bool AutoFocus { get; set; }
+    protected bool Immediate { get; set; }
+    protected Icon IconStart { get; set; }
+    protected Icon IconEnd { get; set; }
+    protected string Placeholder { get; set; }
+    protected bool Disabled { get; set; }
+    protected bool Readonly { get; set; }
+    protected bool Required { get; set; }
+
 
     private Subject<TValue> valueUpdateSubject;
+
     protected TValue Value
     {
-        get => value;
+        get => data;
         set
         {
-            valueUpdateSubject.OnNext(value);
-            SetValue(value);
+
+            var needsUpdate = !EqualityComparer<TValue>.Default.Equals(this.data, value);
+            this.data = value;
+            if (needsUpdate)
+                UpdatePointer(this.data, DataPointer);
         }
     }
 
     protected void SetValue(TValue v)
-        => this.value = v;
+        => this.data = v;
 
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Label, x => x.Label);
+        DataBind(ViewModel.Placeholder, x => x.Placeholder);
+        DataBind(ViewModel.Disabled, x => x.Disabled);
+        DataBind(ViewModel.AutoFocus, x => x.AutoFocus);
+        DataBind(ViewModel.Immediate, x => x.Immediate);
+        DataBind(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
+
+        DataPointer = ViewModel.Data as JsonPointerReference;
         valueUpdateSubject = new();
         AddBinding(valueUpdateSubject
             .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => UpdatePointer(ConvertToData(value), Pointer))
+            .Subscribe(x => UpdatePointer(ConvertToData(data), Pointer))
         );
-        DataBind(ViewModel.Data, x => x.Value, ConversionToValue);
+        DataBind(ViewModel.Data, x => x.data, ConversionToValue);
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    protected virtual Func<object, TValue> ConversionToValue => v => (TValue)v;
+    protected virtual Func<object, TValue> ConversionToValue => v => v is JsonElement je? je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions) : (TValue)v;
 
     protected virtual object ConvertToData(TValue v) => v;
 
     protected virtual bool NeedsUpdate(TValue v)
     {
-        return !Equals(value, v);
+        return !Equals(data, v);
     }
 
     protected JsonPointerReference Pointer { get; set; }

@@ -5,6 +5,7 @@ namespace MeshWeaver.Blazor.Components;
 public partial class NumberFieldView<TValue>
     where TValue:new()
 {
+
     /// <summary>
     /// When true, spin buttons will not be rendered.
     /// </summary>
@@ -18,17 +19,17 @@ public partial class NumberFieldView<TValue>
     /// <summary>
     /// Gets or sets the maximum length.
     /// </summary>
-    public string MaxLength { get; set; }
+    public int MaxLength { get; set; }
 
     /// <summary>
     /// Gets or sets the minimum length.
     /// </summary>
-    public string MinLength { get; set; }
+    public int MinLength { get; set; }
 
     /// <summary>
     /// Gets or sets the size.
     /// </summary>
-    public string Size { get; set; }
+    public int Size { get; set; }
 
     /// <summary>
     /// Gets or sets the amount to increase/decrease the number with. Only use whole number when TValue is int or long. 
@@ -55,10 +56,10 @@ public partial class NumberFieldView<TValue>
     /// </summary>
     public string ParsingErrorMessage { get; set; } = "The {0} field must be a number.";
 
+
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Data, x => x.Value);
         DataBind(ViewModel.HideStep, x => x.HideStep);
         DataBind(ViewModel.DataList, x => x.DataList);
         DataBind(ViewModel.MaxLength, x => x.MaxLength);
@@ -69,5 +70,6 @@ public partial class NumberFieldView<TValue>
         DataBind(ViewModel.Min, x => x.Min);
         DataBind(ViewModel.Appearance, x => x.Appearance);
         DataBind(ViewModel.ParsingErrorMessage, x => x.ParsingErrorMessage);
+
     }
 }

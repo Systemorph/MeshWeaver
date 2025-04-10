@@ -1,8 +1,7 @@
-@using Icon = MeshWeaver.Domain.Icon
 @inherits InputBase<TextFieldControl,TextFieldView, string>
 
 <FluentTextField 
-    @bind-Value="Data"
+    @bind-Value="Value"
     Placeholder="@Placeholder"
     Label="@Label"
     Autofocus="@AutoFocus"
@@ -10,7 +9,13 @@
     AutoComplete="@Autocomplete"
     Immediate="@Immediate"
     ImmediateDelay="@ImmediateDelay"
-    >
+    Style="@Style"
+    Class="@Class"
+    Readonly="@Readonly"
+    Required="@Required"
+    Size="@Size"
+    MinLength="@MinLength"
+    MaxLength="@MaxLength">
     @if (IconStart is not null)
     {
         <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
@@ -23,19 +28,15 @@
     
 @code
 {
-    private string Autocomplete { get; set; }
-    private Icon IconStart { get; set; }
-    private Icon IconEnd { get; set; }
+    private string Autocomplete;
 
     protected override void BindData()
     {
         base.BindData();
 
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Autocomplete, x => x.Autocomplete);
-            DataBind(ViewModel.IconStart, x => x.IconStart);
-            DataBind(ViewModel.IconEnd, x => x.IconEnd);
+        @if (ViewModel != null)  
+        {  
+           DataBind(ViewModel.Autocomplete, x => x.Autocomplete);  
         }
     }
 }

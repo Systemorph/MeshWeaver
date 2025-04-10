@@ -174,12 +174,12 @@ public record LayoutAreaHost : IDisposable
     {
         return Stream
             .Reduce(reference)
-            .Select(ci => Convert<T>(ci, reference))
+            .Select(ci => Convert<T>(ci))
             .Where(x => x is not null)
             .DistinctUntilChanged();
     }
 
-    private static T Convert<T>(ChangeItem<object> ci, EntityReference reference) where T : class
+    private static T Convert<T>(ChangeItem<object> ci) where T : class
     {
         var result = ci.Value;
         if (result is null)

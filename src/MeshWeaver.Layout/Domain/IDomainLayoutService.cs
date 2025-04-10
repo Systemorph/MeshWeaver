@@ -121,7 +121,7 @@ public record DomainViewConfiguration
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
-    public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
+    public object DetailsLayout(LayoutAreaHost host, RenderingContext _, EntityRenderingContext context)
     {
         var id = Guid.NewGuid().AsString();
         var stream = host.Workspace

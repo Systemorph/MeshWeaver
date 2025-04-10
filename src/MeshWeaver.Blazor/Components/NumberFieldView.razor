@@ -3,11 +3,30 @@
 @typeparam TValue
 
 
+
 <FluentNumberField 
     @bind-Value="Value" 
     Min="@Min" Max="@Max" 
     Appearance="@Appearance" 
     HideStep="@HideStep" 
     Step="@Step"
-    Label="@Label"/>
+    Label="@Label"
+    Readonly="@Readonly"
+    Disabled="@Disabled"
+    Placeholder="@Placeholder"
+    Required="@Required"
+    Size="@Size"
+    MinLength="@MinLength"
+    MaxLength="@MaxLength"
+    Style="@Style"
+>
+@if (IconStart is not null)
+{
+    <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
+}
+@if (IconEnd is not null)
+{
+    <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
+}
+</FluentNumberField>
 

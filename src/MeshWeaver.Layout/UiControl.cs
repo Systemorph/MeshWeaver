@@ -32,7 +32,10 @@ public abstract record UiControl : IUiControl
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
 
-    public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
+    /// <summary>
+    /// Whether the control is readonly.
+    /// </summary>
+    public object Readonly { get; init; } 
 
     public ImmutableList<Skin> Skins { get; init; } = [];
     public object Class { get; init; }
@@ -83,7 +86,7 @@ public abstract record UiControl : IUiControl
 
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
-               IsReadonly == other.IsReadonly &&
+               Readonly == other.Readonly &&
                (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
@@ -95,7 +98,7 @@ public abstract record UiControl : IUiControl
         HashCode.Combine(
             Id,
             Style,
-            IsReadonly,
+            Readonly,
             Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
             Class,
             DataContext

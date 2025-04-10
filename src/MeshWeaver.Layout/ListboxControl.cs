@@ -26,26 +26,9 @@ public interface IListControl : IFormControl
 /// <param name="Data">The data property associated with the list control, normally in form of .</param>
 /// <param name="Options">The options to be chosen from <see cref="JsonPointerReference"/>.</param>
 public abstract record ListControlBase<TControl>(object Data, object Options)
-    : UiControl<TControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IListControl
+    : FormControlBase<TControl>(Data), IListControl
     where TControl : ListControlBase<TControl>
 {
-    /// <summary>
-    /// The label bound to this control
-    /// </summary>
-    public object Label { get; init; }
-
-
-    /// <summary>
-    /// Sets the label.
-    /// </summary>
-    /// <param name="label"></param>
-    /// <returns></returns>
-    public TControl WithLabel(object label)
-        => This with { Label = label };
-
-    IFormControl IFormControl.WithLabel(object label)
-    => WithLabel(label);
-
     /// <summary>
     /// Sets the options for the list control.
     /// </summary>

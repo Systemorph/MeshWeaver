@@ -71,6 +71,12 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         };
 
 
+    protected override void UpdatePointer(object value, JsonPointerReference reference)
+    {
+        if (value is Option o)
+            value = o.Item;
+        base.UpdatePointer(value, reference);
+    }
 
     protected override object ConvertToData(Option value) => value?.Item;
     protected override bool NeedsUpdate(Option value)
