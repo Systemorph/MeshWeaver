@@ -1,4 +1,7 @@
 ﻿using System.Collections;
+using System.Text.Json;
+using Json.Pointer;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using LayoutOption=MeshWeaver.Layout.Option;
 using Option=MeshWeaver.Blazor.Components.OptionsExtension.Option;
@@ -18,11 +21,37 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         DataBind(
             ViewModel.Options,
             x => x.Options,
-            o =>
-                (o as IEnumerable)?.Cast<LayoutOption>().Select(option =>
-                    new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
-                .ToArray()
+            ConvertOptions
         );
+    }
+
+    private object lastParsedOptions;
+    private IReadOnlyCollection<Option> ConvertOptions(object options)
+    {
+
+        if(options is IReadOnlyCollection<object> optionsEnum && lastParsedOptions is IReadOnlyCollection<object> lastOptionsEnumerable && optionsEnum.Count == lastOptionsEnumerable.Count && optionsEnum.Zip(lastOptionsEnumerable, (x,y) => x.Equals(y)).All(x => x))
+            return Options;
+        lastParsedOptions = options;
+        var ret = (options as IEnumerable)?.Cast<LayoutOption>().Select(option =>
+                new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
+            .ToArray();
+
+        if (Model is not null && ret?.FirstOrDefault() is { } o && ViewModel.Data is JsonPointerReference reference)
+        {
+            var el = JsonPointer.Parse($"{DataContext}/{reference.Pointer}").Evaluate(Stream.Current.Value);
+            if (el.HasValue)
+            {
+                var val = el.Value.Deserialize<object>();
+                if (val is not null)
+                {
+                    var mapToString = OptionsExtension.MapToString(val, o.ItemType);
+                    var option = ret.FirstOrDefault(x => x.ItemString == mapToString);
+                    SetValue(option);
+                }
+            }
+
+        }
+        return ret;
     }
 
 

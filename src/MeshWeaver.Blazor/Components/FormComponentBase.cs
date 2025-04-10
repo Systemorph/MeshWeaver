@@ -22,9 +22,12 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         set
         {
             valueUpdateSubject.OnNext(value);
-            this.value = value;
+            SetValue(value);
         }
     }
+
+    protected void SetValue(TValue v)
+        => this.value = v;
 
     protected override void BindData()
     {
