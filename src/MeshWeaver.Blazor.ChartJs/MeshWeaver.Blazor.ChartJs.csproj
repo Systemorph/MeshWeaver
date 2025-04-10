@@ -8,7 +8,6 @@
     
   <ItemGroup>
       <SupportedPlatform Include="browser" />
-      <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,9 +21,6 @@
   </ItemGroup>
 
     <ItemGroup>
-        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false"/>
+        <Content Update="StaticAssets\**" Pack="true" CopyToPublishDirectory="false"/>
     </ItemGroup>
-  <ItemGroup>
-      <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
-  </ItemGroup>
 </Project>
