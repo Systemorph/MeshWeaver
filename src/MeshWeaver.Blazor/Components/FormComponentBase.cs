@@ -56,6 +56,10 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataBind(ViewModel.AutoFocus, x => x.AutoFocus);
         DataBind(ViewModel.Immediate, x => x.Immediate);
         DataBind(ViewModel.ImmediateDelay, x => x.ImmediateDelay);
+        DataBind(ViewModel.IconStart, x => x.IconStart);
+        DataBind(ViewModel.IconEnd, x => x.IconEnd);
+        DataBind(ViewModel.Readonly, x => x.Readonly);
+        DataBind(ViewModel.Required, x => x.Required);
 
         DataPointer = ViewModel.Data as JsonPointerReference;
         valueUpdateSubject = new();

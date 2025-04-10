@@ -349,10 +349,10 @@ public static class EditorExtensions
     private static readonly Dictionary<Type, Func<LayoutAreaHost, PropertyInfo, JsonPointerReference, object, UiControl>>
         ListControls = new()
         {
-            {typeof(SelectControl), (host,_, reference,options)=> RenderListControl(host, Controls.Select,  reference, options)},
-            {typeof(RadioGroupControl), (host,propertyInfo, reference,options)=> RenderListControl(host, (d,o)=>Controls.RadioGroup(d,o, propertyInfo.PropertyType.Name), reference, options)},
-            {typeof(ComboboxControl), (host,_, reference,options)=> RenderListControl(host, Controls.Combobox, reference, options)},
-            {typeof(ListboxControl), (host,_, reference,options)=> RenderListControl(host, Controls.Listbox, reference, options)},
+            {typeof(SelectControl), (host,property, reference,options)=> RenderListControl(host, (r,o)=>new SelectControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false },  reference, options)},
+            {typeof(RadioGroupControl), (host,property, reference,options)=> RenderListControl(host, (d,o)=>Controls.RadioGroup(d,o, property.PropertyType.Name), reference, options)},
+            {typeof(ComboboxControl), (host,property, reference,options)=> RenderListControl(host, (r,o)=>new ComboboxControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false }, reference, options)},
+            {typeof(ListboxControl), (host,property, reference,options)=> RenderListControl(host, (r,o) =>new ListboxControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false }, reference, options)},
         };
 
 
@@ -382,10 +382,10 @@ public static class EditorExtensions
     private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>> 
         BasicControls = new()
     {
-        {typeof(DateTimeControl), (reference,property,_) => new DateTimeControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false && !property.HasAttribute<KeyAttribute>()}},
-        {typeof(TextFieldControl), (reference,property,_)=> new TextFieldControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false && !property.HasAttribute<KeyAttribute>()}},
-        {typeof(NumberFieldControl), (reference, property, type)=> new NumberFieldControl(reference,type) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false && !property.HasAttribute<KeyAttribute>()}},
-        { typeof(CheckBoxControl), (reference, property, _) => new CheckBoxControl(reference) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false && !property.HasAttribute<KeyAttribute>() }},
+        {typeof(DateTimeControl), (reference,property,_) => new DateTimeControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
+        {typeof(TextFieldControl), (reference,property,_)=> new TextFieldControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
+        {typeof(NumberFieldControl), (reference, property, type)=> new NumberFieldControl(reference,type) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>()}},
+        { typeof(CheckBoxControl), (reference, property, _) => new CheckBoxControl(reference) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>() }},
     };
 
 
