@@ -123,17 +123,27 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
                 return defaultValue;
             }
         }
+        // Check if direct type assignment is possible
+        if (v is TValue typedValue)
+        {
+            return typedValue;
+        }
 
-        // Try standard conversion
         try
         {
-            return (TValue)v;
+            if (v is IConvertible && typeof(TValue).IsAssignableFrom(v.GetType()))
+            {
+                return (TValue)Convert.ChangeType(v, typeof(TValue));
+            }
         }
         catch
         {
-            // If all conversions fail, return default value
-            return default(TValue);
+            // If conversion fails, return default value
+            return defaultValue;
         }
+
+        // If we reached here, we couldn't convert the value
+        return defaultValue;
     }
 
     protected virtual object ConvertToData(TValue v) => v;

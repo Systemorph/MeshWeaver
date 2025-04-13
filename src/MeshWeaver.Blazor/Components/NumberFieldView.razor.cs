@@ -56,16 +56,24 @@ public partial class NumberFieldView<TValue>
     /// </summary>
     public string ParsingErrorMessage { get; set; } = "The {0} field must be a number.";
 
+    private bool IsIntegerLike(Type type)
+        => Nullable.GetUnderlyingType(type) is { } underlyingType
+            ? IsIntegerType(underlyingType)
+            : IsIntegerType(type);
 
+    private bool IsIntegerType(Type type)
+        => type == typeof(int) || type == typeof(long) || type == typeof(short) ||
+           type == typeof(byte) || type == typeof(sbyte) || type == typeof(uint) ||
+           type == typeof(ulong) || type == typeof(ushort);
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.HideStep, x => x.HideStep);
+        DataBind(ViewModel.HideStep, x => x.HideStep, defaultValue: !IsIntegerLike(typeof(TValue)));
         DataBind(ViewModel.DataList, x => x.DataList);
         DataBind(ViewModel.MaxLength, x => x.MaxLength, defaultValue: int.MaxValue);
         DataBind(ViewModel.MinLength, x => x.MinLength);
         DataBind(ViewModel.Size, x => x.Size);
-        DataBind(ViewModel.Step, x => x.Step);
+        DataBind(ViewModel.Step, x => x.Step, defaultValue:"any");
         DataBind(ViewModel.Max, x => x.Max);
         DataBind(ViewModel.Min, x => x.Min);
         DataBind(ViewModel.Appearance, x => x.Appearance);

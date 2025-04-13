@@ -1,32 +1,43 @@
 @inherits FormComponentBase<NumberFieldControl, NumberFieldView<TValue>, TValue>
 
+@using Microsoft.AspNetCore.Components.Forms
 @typeparam TValue
 
+<div class="root" part="root">
+    <span part="start">
+        <slot name="start">
+            @if (IconStart is not null)
+            {
+                <FluentIcon Value="@IconStart.ToFluentIcon()" class="icon-start" />
+            }
+        </slot>
+    </span>
 
+    @{
+        var appearanceClass = $"control {Appearance.ToString().ToLower()}-appearance";
+        var inputStyle = "background-color: transparent !important; width: 250px; min-height: 2.5rem;";
+    }
 
-<FluentNumberField 
-    @bind-Value="Value" 
-    Min="@Min" Max="@Max" 
-    Appearance="@Appearance" 
-    HideStep="@HideStep" 
-    Step="@Step"
-    Label="@Label"
-    Readonly="@Readonly"
-    Disabled="@Disabled"
-    Placeholder="@Placeholder"
-    Required="@Required"
-    Size="@Size"
-    MinLength="@MinLength"
-    MaxLength="@MaxLength"
-    Style="@Style"
->
-@if (IconStart is not null)
-{
-    <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
-}
-@if (IconEnd is not null)
-{
-    <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
-}
-</FluentNumberField>
+    <InputNumber @bind-Value="Value"
+                 id="control"
+                 class="@appearanceClass"
+                 part="control"
+                 readonly="@Readonly"
+                 disabled="@Disabled"
+                 placeholder="@Placeholder"
+                 step="@Step"
+                 min="@Min"
+                 max="@Max"
+                 size="@Size"
+                 style="@inputStyle"
+                 aria-label="@(string.IsNullOrEmpty(Label) ? "Numeric input" : null)" />
 
+    <span part="end">
+        <slot name="end">
+            @if (IconEnd is not null)
+            {
+                <FluentIcon Value="@IconEnd.ToFluentIcon()" class="icon-end" />
+            }
+        </slot>
+    </span>
+</div>
