@@ -62,7 +62,7 @@ public partial class NumberFieldView<TValue>
         base.BindData();
         DataBind(ViewModel.HideStep, x => x.HideStep);
         DataBind(ViewModel.DataList, x => x.DataList);
-        DataBind(ViewModel.MaxLength, x => x.MaxLength);
+        DataBind(ViewModel.MaxLength, x => x.MaxLength, defaultValue: int.MaxValue);
         DataBind(ViewModel.MinLength, x => x.MinLength);
         DataBind(ViewModel.Size, x => x.Size);
         DataBind(ViewModel.Step, x => x.Step);

@@ -26,7 +26,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     }
 
     private object lastParsedOptions;
-    private IReadOnlyCollection<Option> ConvertOptions(object options)
+    private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
 
         if(options is IReadOnlyCollection<object> optionsEnum && lastParsedOptions is IReadOnlyCollection<object> lastOptionsEnumerable && optionsEnum.Count == lastOptionsEnumerable.Count && optionsEnum.Zip(lastOptionsEnumerable, (x,y) => x.Equals(y)).All(x => x))
@@ -55,8 +55,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     }
 
 
-    protected override Func<object, Option> ConversionToValue =>
-        value =>
+    protected override Option ConversionToValue(object value, Option defaultValue)
         {
             if (Options is null)
                 return null;
@@ -68,7 +67,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             return Options.FirstOrDefault(x =>
                     x.ItemString == mapToString);
 
-        };
+        }
 
 
     protected override void UpdatePointer(object value, JsonPointerReference reference)

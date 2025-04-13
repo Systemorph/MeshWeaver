@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Runtime.Serialization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
@@ -67,9 +66,10 @@ public static class LayoutClientExtensions
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, 
         string dataContext = null, 
-        Func<object, T> conversion = null) =>
+        Func<object,T, T> conversion = null,
+        T defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
-            .Select(conversion ?? (x => stream.Hub.ConvertSingle<T>(x, null)))
+            .Select(x => conversion is not null ? conversion.Invoke(x,defaultValue) : stream.Hub.ConvertSingle(x, null, defaultValue))
             .DistinctUntilChanged();
 
 
@@ -125,16 +125,16 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
-    public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T> conversion)
+    public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T,T> conversion, T defaultValue = default(T))
     {
         if (conversion != null)
-            return conversion.Invoke(value);
+            return conversion.Invoke(value, defaultValue);
         return value switch
         {
-            null => default,
+            null => defaultValue,
             // ReSharper disable ExpressionIsAlwaysNull
-            JsonElement element => hub.ConvertJson(element, conversion),
-            JsonObject obj => hub.ConvertJson(obj, conversion),
+            JsonElement element => hub.ConvertJson(element, conversion, defaultValue),
+            JsonObject obj => hub.ConvertJson(obj, conversion, defaultValue),
             JsonNode node => node.Deserialize<T>(hub.JsonSerializerOptions),
             // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
@@ -164,20 +164,21 @@ public static class LayoutClientExtensions
 
     }
 
-    private static T ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object, T> conversion)
+    private static T ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object, T, T> conversion, T defaultValue = default(T))
     {
         if (value == null)
             return default;
         if (conversion != null)
-            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions));
+            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions), defaultValue);
         return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
     }
-    private static T ConvertJson<T>(this IMessageHub hub, JsonObject value, Func<object, T> conversion)
+    private static T ConvertJson<T>(this IMessageHub hub, JsonObject value, Func<object, T,T> conversion,
+        T defaultValue)
     {
         if (value == null)
             return default;
         if (conversion != null)
-            return conversion(value.Deserialize<object>(hub.JsonSerializerOptions));
+            return conversion(value.Deserialize<object>(hub.JsonSerializerOptions), defaultValue);
         return value.Deserialize<T>(hub.JsonSerializerOptions);
     }
     public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)

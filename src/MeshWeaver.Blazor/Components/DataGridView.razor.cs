@@ -1,11 +1,9 @@
 ﻿using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging.Serialization;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.FluentUI.AspNetCore.Components;
 using System.Linq.Expressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 
 namespace MeshWeaver.Blazor.Components;
@@ -31,7 +29,7 @@ public partial class DataGridView
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            o => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
+            (o, _) => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
         );
     }
 

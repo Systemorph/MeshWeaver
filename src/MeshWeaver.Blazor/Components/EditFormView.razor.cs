@@ -18,7 +18,7 @@ public partial class EditFormView
         DataBind(
             new JsonPointerReference(ViewModel.DataContext), 
             x => x.model,
-            jsonObject => Convert((JsonObject)jsonObject)
+            (jsonObject,_) => Convert((JsonObject)jsonObject)
             );
     }
 
@@ -38,7 +38,7 @@ public partial class EditFormView
         }
     }
 
-    private ModelParameter Convert(JsonObject jsonObject)
+    private ModelParameter<JsonElement> Convert(JsonObject jsonObject)
     {
         if (jsonObject == null)
             return null;

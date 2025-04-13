@@ -25,7 +25,7 @@
         DataBind(
             ViewModel.Options,
             x => x.Options,
-            o =>
+            (o,_) =>
                 (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
                     new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
                 .ToArray()

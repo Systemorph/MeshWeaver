@@ -47,7 +47,7 @@ public partial class LayoutAreaView
 
     }
 
-    private Address ConvertAddress(object address)
+    private Address ConvertAddress(object address, Address _)
     {
         if (address is string s)
             return Hub.GetAddress(s);

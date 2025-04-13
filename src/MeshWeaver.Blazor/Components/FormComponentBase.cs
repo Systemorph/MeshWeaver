@@ -67,13 +67,74 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => UpdatePointer(ConvertToData(data), Pointer))
+            .Subscribe(x => UpdatePointer(ConvertToData(x), Pointer))
         );
         DataBind(ViewModel.Data, x => x.data, ConversionToValue);
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    protected virtual Func<object, TValue> ConversionToValue => v => v is JsonElement je? je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions) : (TValue)v;
+    protected virtual TValue ConversionToValue(object v, TValue defaultValue)
+    {
+        if (v is JsonElement je)
+        {
+            return default(JsonElement).Equals(je)
+                ? default(TValue)
+                : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
+        }
+
+        // Handle specific conversions
+        if (v is string stringValue && typeof(TValue) != typeof(string))
+        {
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+
+            try
+            {
+                // Handle common numeric types
+                if (targetType == typeof(int))
+                    return (TValue)(object)int.Parse(stringValue);
+                if (targetType == typeof(double))
+                    return (TValue)(object)double.Parse(stringValue);
+                if (targetType == typeof(decimal))
+                    return (TValue)(object)decimal.Parse(stringValue);
+                if (targetType == typeof(float))
+                    return (TValue)(object)float.Parse(stringValue);
+                if (targetType == typeof(long))
+                    return (TValue)(object)long.Parse(stringValue);
+
+                // Handle boolean
+                if (targetType == typeof(bool))
+                    return (TValue)(object)bool.Parse(stringValue);
+
+                // Handle date/time
+                if (targetType == typeof(DateTime))
+                    return (TValue)(object)DateTime.Parse(stringValue);
+
+                // Handle enums
+                if (targetType.IsEnum)
+                    return (TValue)Enum.Parse(targetType, stringValue);
+
+                // Handle GUID
+                if (targetType == typeof(Guid))
+                    return (TValue)(object)Guid.Parse(stringValue);
+            }
+            catch
+            {
+                // If conversion fails, return default value for the type
+                return defaultValue;
+            }
+        }
+
+        // Try standard conversion
+        try
+        {
+            return (TValue)v;
+        }
+        catch
+        {
+            // If all conversions fail, return default value
+            return default(TValue);
+        }
+    }
 
     protected virtual object ConvertToData(TValue v) => v;
 
