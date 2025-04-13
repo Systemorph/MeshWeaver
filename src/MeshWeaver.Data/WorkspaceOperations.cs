@@ -248,7 +248,7 @@ public static class WorkspaceOperations
         foreach (var instance in instances)
         {
 
-            var context = new ValidationContext(instance);
+            var context = new ValidationContext(instance, serviceProvider:workspace.Hub.ServiceProvider, items:null);
             isValid = isValid && Validator.TryValidateObject(instance, context, validationResults);
         }
 

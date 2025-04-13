@@ -52,7 +52,6 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     [HubFact]
     public async Task TestEntityView()
     {
-        var host = GetHost();
         var reference = DomainViews.GetDetailsReference(typeof(DataRecord).FullName, "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
@@ -99,7 +98,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         value = await stream
-            .DataBind(namePointer, dataContext, x => (string)x)
+            .DataBind<string>(namePointer, dataContext, (x, _) => (string)x)
             .Where(x => x != "Hello")
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
