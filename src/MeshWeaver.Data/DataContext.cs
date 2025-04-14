@@ -35,7 +35,8 @@ public sealed record DataContext : IDisposable
 
     public IDataSource GetDataSourceForId(object id) => DataSourcesById.GetValueOrDefault(id);
 
-    public IDataSource GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type);
+    public IDataSource GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type)
+          ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetDataSourceForType(type.BaseType));
 
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
     public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; }
@@ -49,7 +50,8 @@ public sealed record DataContext : IDisposable
         TypeSources.GetValueOrDefault(collection);
 
     public ITypeSource GetTypeSource(Type type) =>
-        TypeSourcesByType.GetValueOrDefault(type);
+        TypeSourcesByType.GetValueOrDefault(type)
+        ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetTypeSource(type.BaseType));
 
 
     public ImmutableList<DataSourceBuilder> DataSourceBuilders { get; set; } =
