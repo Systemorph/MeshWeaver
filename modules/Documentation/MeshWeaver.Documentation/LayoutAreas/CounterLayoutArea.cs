@@ -23,7 +23,7 @@ public static class CounterLayoutArea
     /// <param name="context">The rendering context for the view.</param>
     /// <returns>An object representing the configured view within the layout.</returns>
 
-    private static object Counter(this LayoutAreaHost host, RenderingContext context)
+    private static UiControl Counter(this LayoutAreaHost host, RenderingContext context)
     {
         // this is actually the only place we keep the state
         var counter = 0;
@@ -48,5 +48,5 @@ public static class CounterLayoutArea
     /// <remarks>
     /// This method is utilized to dynamically update the displayed counter value within the UI. It converts the integer counter value to a string and displays it as a title of level 1.
     /// </remarks>
-    private static object Counter(int counter) => Controls.Title(counter.ToString(), 1);
+    private static UiControl Counter(int counter) => Controls.Title(counter.ToString(), 1);
 }

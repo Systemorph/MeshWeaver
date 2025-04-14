@@ -20,7 +20,7 @@ public static class DomainViews
             )
             .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
 
-    private static object DataModel(LayoutAreaHost host, RenderingContext arg)
+    private static UiControl DataModel(LayoutAreaHost host, RenderingContext arg)
     {
         return new MarkdownControl(host.GetMermaidDiagram()); 
     }
@@ -28,7 +28,7 @@ public static class DomainViews
 
     public const string Type = nameof(Type);
 
-    public static object Details(LayoutAreaHost area, RenderingContext ctx)
+    public static UiControl Details(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string typeAndId)
             return Error("Url has to be in form of Details/Type/Id");
@@ -61,7 +61,7 @@ public static class DomainViews
 
     private static MarkdownControl Error(string message) => new($"[!CAUTION]\n{message}\n");
 
-    public static object Catalog(LayoutAreaHost area, RenderingContext ctx)
+    public static UiControl Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string collection)
             throw new InvalidOperationException("No type specified for catalog.");
@@ -189,7 +189,7 @@ public static class DomainViews
 
     public static LayoutAreaReference GetDetailsReference(string collection, object id) =>
         new(nameof(Details)) { Id = $"{collection}/{id}" };
-    public static LayoutAreaReference GetCatalogReference(this IMessageHub hub, string collection) =>
+    public static LayoutAreaReference GetCatalogReference(string collection) =>
         new(nameof(Catalog)) { Id = $"{collection}" };
 }
 

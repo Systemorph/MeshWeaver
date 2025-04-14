@@ -5,7 +5,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -272,7 +271,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T:UiControl
     {
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,

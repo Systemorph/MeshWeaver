@@ -16,20 +16,20 @@ namespace MeshWeaver.Layout.Domain;
 
 public interface IDomainLayoutService
 {
-    object Render(EntityRenderingContext context);
+    UiControl Render(EntityRenderingContext context);
 
-    object GetCatalog(EntityRenderingContext context);
+    UiControl GetCatalog(EntityRenderingContext context);
 }
 
 public class DomainLayoutService(DomainViewConfiguration configuration) : IDomainLayoutService
 {
-    public object Render(EntityRenderingContext context) =>
+    public UiControl Render(EntityRenderingContext context) =>
         configuration.ViewBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
 
-    public object GetCatalog(EntityRenderingContext context)
+    public UiControl GetCatalog(EntityRenderingContext context)
     {
         return configuration.GetCatalog(context);
     }
@@ -51,7 +51,7 @@ public record DomainViewConfiguration
 
     public const string HrefProperty = "$href";
 
-    private object DefaultCatalog(EntityRenderingContext context)
+    private UiControl DefaultCatalog(EntityRenderingContext context)
     {
         var typeDefinition = context.TypeDefinition;
         var ret = Controls.Stack
@@ -65,7 +65,7 @@ public record DomainViewConfiguration
 
     }
 
-    private object RenderCatalog(LayoutAreaHost host, EntityRenderingContext context, ITypeDefinition typeDefinition)
+    private UiControl RenderCatalog(LayoutAreaHost host, EntityRenderingContext context, ITypeDefinition typeDefinition)
     {
         var stream = host.Workspace
             .GetStream(new CollectionReference(typeDefinition.CollectionName));
@@ -97,11 +97,11 @@ public record DomainViewConfiguration
             );
     }
 
-    internal ImmutableList<Func<EntityRenderingContext, object>> ViewBuilders { get; init; }
+    internal ImmutableList<Func<EntityRenderingContext, UiControl>> ViewBuilders { get; init; }
     internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
-    internal ImmutableList<Func<EntityRenderingContext, object>> CatalogBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl>> CatalogBuilders { get; init; } = [];
 
-    private object DefaultViewBuilder(EntityRenderingContext context)
+    private UiControl DefaultViewBuilder(EntityRenderingContext context)
     {
         var ret = new StackControl()
             .WithView(Controls.Title(context.TypeDefinition.DisplayName, 1));
@@ -115,13 +115,13 @@ public record DomainViewConfiguration
 
 
 
-    public DomainViewConfiguration WithView(Func<EntityRenderingContext, object> viewBuilder)
+    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl> viewBuilder)
         => this with { ViewBuilders = ViewBuilders.Add(viewBuilder) };
     public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl> viewBuilder)
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
-    public object DetailsLayout(LayoutAreaHost host, RenderingContext _, EntityRenderingContext context)
+    public UiControl DetailsLayout(LayoutAreaHost host, RenderingContext _, EntityRenderingContext context)
     {
         var id = Guid.NewGuid().AsString();
         var stream = host.Workspace
@@ -147,7 +147,7 @@ public record DomainViewConfiguration
 
 
 
-    public object GetCatalog(EntityRenderingContext context) =>
+    public UiControl GetCatalog(EntityRenderingContext context) =>
         CatalogBuilders
             .Reverse()
             .Select(x => x.Invoke(context))

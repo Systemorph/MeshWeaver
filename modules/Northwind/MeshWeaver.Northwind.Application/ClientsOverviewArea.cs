@@ -29,7 +29,7 @@ public static class ClientsOverviewArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the top clients bar chart.</returns>
-    public static IObservable<object> TopClients(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> TopClients(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
                 layoutArea.Workspace
@@ -44,6 +44,7 @@ public static class ClientsOverviewArea
                             )
                         )
                     )
+                    .Select(m => m.ToControl())
             );
 
     /// <summary>

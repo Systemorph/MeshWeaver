@@ -72,7 +72,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => a.Value.GetValueOrDefault(ctx.Area))
+                        .Select(a => (UiControl)a.Value.GetValueOrDefault(ctx.Area))
                 )
             )
             .AddMeshTypes()

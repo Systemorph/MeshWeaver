@@ -38,7 +38,7 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="ctx">The rendering context.</param>
-    public static object CalculatorArea(LayoutAreaHost host, RenderingContext ctx) 
+    public static UiControl CalculatorArea(LayoutAreaHost host, RenderingContext ctx) 
         => host.Edit(new Calculator{Summand1 = 1, Summand2 = 2}, CalculatorSum);
 
     /// <summary>
@@ -46,5 +46,5 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="calculator">The calculator instance</param>
     /// <returns>A Markdown Control with the sum.</returns>
-    static object CalculatorSum(Calculator calculator) => Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
+    static UiControl CalculatorSum(Calculator calculator) => Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
 }

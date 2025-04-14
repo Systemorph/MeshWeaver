@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -31,7 +32,7 @@ namespace MeshWeaver.Northwind.Application
         /// <param name="layoutArea">The layout area host.</param>
         /// <param name="context">The rendering context.</param>
         /// <returns>An observable sequence of objects representing the rendered top products view.</returns>
-        public static IObservable<object> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
+        public static IObservable<UiControl> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
             => layoutArea.YearlyNorthwindData()
                 .SelectMany(d =>
                     layoutArea.Workspace
@@ -40,10 +41,10 @@ namespace MeshWeaver.Northwind.Application
                         .ToBarChart(builder => builder
                             .WithOptions(o => o.OrderByValueDescending().TopValues(5))
                         )
-                        .Select(c => c
+                        .Select(c => new ChartControl(c
                             .AsHorizontal()
                             .WithDataLabels()
-                        )
+                        ))
 
                 );
     }

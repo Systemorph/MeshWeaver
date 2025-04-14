@@ -9,7 +9,7 @@ public static class LayoutAreaCatalogArea
     internal static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
         => layout.WithView(LayoutAreas, LayoutAreaCatalog);
 
-    private static object LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
+    private static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var layouts = host.GetLayoutAreaDefinitions();
         return layouts

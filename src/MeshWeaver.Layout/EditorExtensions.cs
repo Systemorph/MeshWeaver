@@ -21,32 +21,32 @@ public static class EditorExtensions
 {
     #region editor overloads
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
-    public static UiControl Edit(this LayoutAreaHost host, Type type, string id)
+    public static UiControl Edit(this LayoutAreaHost host, Type type, string id) 
         => host.Hub.ServiceProvider.Edit(type, id);
-    public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
+    public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
-        Func<T, IObservable<object>> result)
+        Func<T, IObservable<UiControl>> result) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
-    public static UiControl Edit<T>(this LayoutAreaHost host, T instance)
+    public static UiControl Edit<T>(this LayoutAreaHost host, T instance) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance));
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => hub.ServiceProvider.Edit(observable, (i, _, _) => result(i));
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result) 
         => hub.ServiceProvider.Edit(Observable.Return(instance), result);
     public static UiControl Edit<T>(this IServiceProvider serviceProvider, T instance,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result) 
         => serviceProvider.Edit(Observable.Return(instance), result);
 
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Edit(observable, result);
 
     public static UiControl Edit<T>(
@@ -85,8 +85,8 @@ public static class EditorExtensions
 
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
-            IObservable<T> observable,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     {
         var id = Guid.NewGuid().AsString();
         var editor = serviceProvider.Edit(observable, id);
@@ -96,40 +96,57 @@ public static class EditorExtensions
             .Stack
             .WithView(editor)
             .WithView((host, ctx) =>
-            host.Stream.GetDataStream<T>(id)
-                .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
-                .Select(x => result.Invoke(x,host, ctx)));
+                host.Stream.GetDataStream<T>(id)
+                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .Select(x => result.Invoke(x, host, ctx)));
+    }
+    public static UiControl Edit<T>(
+        this IServiceProvider serviceProvider,
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
+    {
+        var id = Guid.NewGuid().AsString();
+        var editor = serviceProvider.Edit(observable, id);
+        if (result == null)
+            return editor;
+        return Controls
+            .Stack
+            .WithView(editor)
+            .WithView((host, ctx) =>
+                host.Stream.GetDataStream<T>(id)
+                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
     #endregion
     #region Toolbar overloads
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, IObservable<object>> result)
+        Func<T, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, IObservable<object>> result)
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(observable, (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this IServiceProvider serviceProvider, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(Observable.Return(instance), result);
 
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Toolbar(observable, result);
 
     public static UiControl Toolbar<T>(
@@ -171,12 +188,12 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(observable, (t, host, ctx) => Observable.Return(result.Invoke(t, host, ctx)));
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, IObservable<object>> result)
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result) 
     {
         var id = Guid.NewGuid().AsString();
         var editor = serviceProvider.Toolbar(observable, id);
@@ -331,7 +348,7 @@ public static class EditorExtensions
         new(propertyInfo.Name.ToCamelCase());
 
 
-    private static IUiControl RenderControl(
+    private static UiControl RenderControl(
         LayoutAreaHost host,
         Type controlType,
         PropertyInfo propertyInfo,
@@ -340,9 +357,9 @@ public static class EditorExtensions
         object parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return ((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);
+            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return ((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter)).WithLabel(label);
+            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter)).WithLabel(label);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }
