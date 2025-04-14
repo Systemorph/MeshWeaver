@@ -3,7 +3,18 @@
 @using Microsoft.AspNetCore.Components.Forms
 @typeparam TValue
 
-<div class="root" part="root">
+<div class="root" part="root" style="
+    display: flex;
+    align-items: center;
+    position: relative;
+    margin-bottom: 1rem;
+    min-width: 250px;
+    width: 100%;
+    background: var(--neutral-fill-input-rest);
+    border: calc(var(--stroke-width) * 1px) solid var(--neutral-stroke-rest);
+    border-radius: calc(var(--control-corner-radius) * 1px);
+    height: calc((var(--base-height-multiplier) + var(--density)) * var(--design-unit) * 1px);
+">
     <span part="start">
         <slot name="start">
             @if (IconStart is not null)
@@ -15,7 +26,18 @@
 
     @{
         var appearanceClass = $"control {Appearance.ToString().ToLower()}-appearance";
-        var inputStyle = "background-color: transparent !important; width: 250px; min-height: 2.5rem;";
+
+        // Match the FluentUI design system's ComboBox styling
+        var inputStyle = @"
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        outline: none;
+        min-width: 250px;
+        width: 100%;
+        padding: 0 calc((10 + (var(--design-unit) * 2 * var(--density))) * 1px);
+        height: calc((var(--base-height-multiplier) + var(--density)) * var(--design-unit) * 1px);
+        ";
     }
 
     <InputNumber @bind-Value="Value"
