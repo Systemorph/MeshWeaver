@@ -131,8 +131,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
 
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition) where T:UiControl
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition) where T : UiControl
-        => WithView(Observable.Return( (ViewDefinition)(async (h,c,ct)=>await viewDefinition.Invoke(h,c,ct))), x => x);
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options = null) where T : UiControl
+        => WithView(Observable.Return( (ViewDefinition)(async (h,c,ct)=>await viewDefinition.Invoke(h,c,ct))), options ??(x => x));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition) where T : UiControl
         => WithView((h,c,_) => viewDefinition.Invoke(h,c), x => x);
     public TControl WithView<T>(ViewStream<T> viewDefinition) where T : UiControl
@@ -254,11 +254,13 @@ public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(s
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
         => WithView(viewDefinition.Invoke, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
-        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x => 
+        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x =>
             x.AddSkin(options.Invoke(CreateItemSkin(x))));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
-        => WithView((h, c, _) => 
-            viewDefinition.Invoke(h,c), x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
+        => WithView((h, c, _) =>
+            viewDefinition.Invoke(h, c), x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
+        => base.WithView<T>(viewDefinition, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
 
 
 

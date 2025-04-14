@@ -70,6 +70,7 @@ public static class BlazorViewRegistry
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
+            ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),

@@ -1,0 +1,19 @@
+@using BindAttributes = Microsoft.AspNetCore.Components.Web.BindAttributes
+@inherits BlazorView<ProgressControl, ProgressView>
+<FluentProgress Class="@Class" Style="@Style" Min="@Min" Max="@Max" Paused="@Paused" Value="@Progress"></FluentProgress>
+@code
+{
+    private int? Progress;
+    private int? Min;
+    private int? Max;
+    private bool? Paused;
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Progress, x => x.Progress);
+        DataBind(ViewModel.Min, x => x.Min);
+        DataBind(ViewModel.Max, x => x.Max);
+        DataBind(ViewModel.Paused, x => x.Paused);
+    }
+}
