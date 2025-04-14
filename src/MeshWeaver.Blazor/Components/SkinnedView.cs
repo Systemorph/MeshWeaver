@@ -20,7 +20,7 @@ public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView>
     {
         DisposeBindings();
         DataBind(ViewModel.Id, x => x.Id);
-        DataBind(Skin.Class, x => x.Class);
-        DataBind(Skin.Style, x => x.Style);
+        DataBind(ViewModel.Class, x => x.Class);
+        DataBind(ViewModel.Style, x => x.Style);
     }
 }

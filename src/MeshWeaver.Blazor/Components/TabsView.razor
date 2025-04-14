@@ -1,7 +1,12 @@
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @inherits SkinnedView<TabsControl, TabsSkin, TabsView>
 
-<FluentTabs ActiveTabId="@ActiveTabId" Height="@Height" Orientation="@Orientation">
+<FluentTabs 
+    ActiveTabId="@ActiveTabId" 
+    Height="@Height" 
+    Orientation="@Orientation"
+    Style="@Style"
+>
     <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"  />
 </FluentTabs>
 
