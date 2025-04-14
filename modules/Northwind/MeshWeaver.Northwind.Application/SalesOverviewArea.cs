@@ -32,7 +32,7 @@ public static class SalesOverviewArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence containing the bar chart view.</returns>
-    public static IObservable<object> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.YearlyNorthwindData()
             .SelectMany(data =>

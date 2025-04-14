@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Xunit.Abstractions;
 using System.Linq;
+using System.Threading;
 
 
 namespace MeshWeaver.Layout.Test;
@@ -45,7 +46,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 layout
                     .WithView(
                         StaticView,
-                        Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
+                        Controls.Stack.WithView(Controls.Html("Hello"), "Hello").WithView(Controls.Html("World"), "World")
                     )
                     .WithView(nameof(ViewWithProgress), ViewWithProgress)
                     .WithView(nameof(UpdatingView), UpdatingView())
@@ -64,7 +65,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         nameof(Counter),
                         Counter()
                     )
-                    .WithView("int", 3)
+                    .WithView("int", Controls.Html(3))
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
                     .WithView(nameof(AsyncView), AsyncView)
@@ -109,7 +110,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
 
-    private static async Task<object> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx)
+    private static async Task<UiControl> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)
     {
         var percentage = 0;
         var progress = Controls.Progress("Processing", percentage);
@@ -145,7 +146,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
     private record Toolbar(int Year);
 
-    private static object UpdatingView()
+    private static UiControl UpdatingView()
     {
         var toolbar = new Toolbar(2024);
 
@@ -260,7 +261,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .BeEquivalentTo("Hello", "World");
     }
 
-    private object Counter()
+    private UiControl Counter()
     {
         var counter = 0;
         return Controls
@@ -307,7 +308,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
     }
 
-    private object DataGrid(LayoutAreaHost area, RenderingContext ctx)
+    private UiControl DataGrid(LayoutAreaHost area, RenderingContext ctx)
     {
         var data = new DataRecord[] { new("1", "1"), new("2", "2") };
         return area.ToDataGrid(data, grid => grid
@@ -337,22 +338,24 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .BeOfType<DataGridControl>()
             .Which.Columns.Should()
             .HaveCount(2)
-            .And.Subject;
+            .And.Subject.ToArray();
         ;
+
 
         controls.Should().BeEquivalentTo(
                 [
                     new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.SystemName).ToCamelCase(),
-                        Title = nameof(DataRecord.SystemName).Wordify()
+                        Title = nameof(DataRecord.SystemName).Wordify(),
                     },
                     new PropertyColumnControl<string>
                     {
                         Property = nameof(DataRecord.DisplayName).ToCamelCase(),
-                        Title = nameof(DataRecord.DisplayName).Wordify()
+                        Title = nameof(DataRecord.DisplayName).Wordify(),
                     }
-                ]
+                ],
+                options => options.Including(c => c.Property).Including(c => c.Title)
             );
     }
 
@@ -367,7 +370,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls.Stack
             .WithView(Template.Bind(data, x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Value)), nameof(DataBoundCheckboxes)), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
-                .Select(d => d.Data.All(y => y.Value)
+                .Select(d => Controls.CheckBox(d.Data.All(y => y.Value))
                 ), Results);
     }
 
@@ -457,7 +460,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         deserialized.Should().BeEquivalentTo(data);
     }
 
-    private IObservable<object> CatalogView(LayoutAreaHost area, RenderingContext context)
+    private IObservable<UiControl> CatalogView(LayoutAreaHost area, RenderingContext context)
     {
         return area
             .Hub.GetWorkspace()
@@ -504,18 +507,18 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         grid.Columns.Should()
             .HaveCount(benchmarks.Length);
 
-        grid.Columns.Should().BeEquivalentTo(benchmarks);
+        grid.Columns.Should().BeEquivalentTo(benchmarks, options => options.Including(c => c.Property).Including(c => c.Title));
     }
 
     // TODO V10: Need to rewrite realistic test for disposing views. (29.07.2024, Roland Bürgi)
 
 
-    private static object AsyncView =>
+    private static UiControl AsyncView =>
         Controls.Stack
             .WithView(Observable.Return<ViewDefinition>(async (area, context, ct) =>
             {
                 await Task.Delay(3000, ct);
-                return "Ok";
+                return Controls.Html("Ok");
             }), "subarea");
 
 

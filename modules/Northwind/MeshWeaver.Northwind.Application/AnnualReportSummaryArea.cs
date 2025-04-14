@@ -28,7 +28,7 @@ public static class AnnualReportSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An object representing the rendered annual report summary area.</returns>
-    public static object AnnualReportSummary(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static UiControl AnnualReportSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(ValueBoxes, skin => skin.WithXs(12))
             .WithView(SummaryCharts, skin => skin.WithXs(12))
@@ -41,7 +41,7 @@ public static class AnnualReportSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of value boxes.</returns>
-    private static IObservable<object> ValueBoxes(LayoutAreaHost layoutArea, RenderingContext context)
+    private static IObservable<UiControl> ValueBoxes(LayoutAreaHost layoutArea, RenderingContext context)
     {
         var currentYear = layoutArea.Year();
         var previousYear = currentYear - 1;
@@ -69,7 +69,7 @@ public static class AnnualReportSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An object representing the rendered summary charts.</returns>
-    public static object SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
+    public static UiControl SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(
                 Controls.Stack.WithView(Controls.H2("Top Clients")).WithView(ClientsOverviewArea.TopClients)
@@ -97,7 +97,7 @@ public static class AnnualReportSummaryArea
             )
         ;
 
-    private static object Customers(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Customers(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Customers",
             FluentIcons.Person(),
@@ -105,7 +105,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Customers, previous.Customers) : null
         );
 
-    private static object Sales(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Sales(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Sales",
             FluentIcons.WalletCreditCard(),
@@ -113,7 +113,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Sales, previous.Sales) : null
         );
 
-    private static object Products(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Products(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Products",
             FluentIcons.Box(),
@@ -121,7 +121,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Products, previous.Products) : null
         );
 
-    private static object Orders(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Orders(SummaryItem current, SummaryItem previous) =>
         ValueBox(
             "Orders",
             FluentIcons.Checkmark(),

@@ -24,7 +24,7 @@ public static class ProductOverviewToolbarArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An object representing the product overview toolbar.</returns>
-    public static object ProductOverviewToolbar(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static UiControl ProductOverviewToolbar(this LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.Toolbar.WithView((_, _) =>
             layoutArea.GetProductCategories()
                 .Select(categories =>

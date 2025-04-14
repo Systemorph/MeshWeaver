@@ -122,7 +122,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestCatalog()
     {
         var host = GetHost();
-        var reference = host.GetCatalogReference(typeof(DataRecord).FullName);
+        var reference = DomainViews.GetCatalogReference(typeof(DataRecord).FullName);
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(

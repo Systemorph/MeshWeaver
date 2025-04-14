@@ -26,13 +26,14 @@ public static class RevenueSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the revenue summary line chart.</returns>
-    public static IObservable<object> RevenueSummary(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> RevenueSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .Select(data =>
+            .SelectMany(data =>
                 layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToLineChart(builder => builder)
+                    .ToLineChart(builder => builder).Select(x => x.ToControl())
+
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

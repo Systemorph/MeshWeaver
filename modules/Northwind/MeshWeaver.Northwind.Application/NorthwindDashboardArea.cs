@@ -28,7 +28,7 @@ public static class NorthwindDashboardArea
     /// <remarks>
     /// This method constructs the main view of the Northwind Dashboard, incorporating various subviews and components to provide a comprehensive overview of the application's data and functionality. The specific contents and layout of the dashboard are determined at runtime based on the rendering context.
     /// </remarks>
-    public static object Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static UiControl Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.LayoutGrid
             .WithClass("main-content")
