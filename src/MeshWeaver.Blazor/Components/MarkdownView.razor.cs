@@ -50,6 +50,8 @@ public partial class MarkdownView
                     builder.AddMarkupContent(1, text.Text);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
+                    if (!IsNotPrerender)
+                        break;
                     var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
                     var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);
                     var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", null);
@@ -101,5 +103,12 @@ public partial class MarkdownView
         builder.CloseElement();
     }
 
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        IsNotPrerender = true;
+    }
+
+    private bool IsNotPrerender { get; set; }
     private string ComponentContainerId(string id) => $"component-container-{id}";
 }

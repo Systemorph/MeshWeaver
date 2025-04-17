@@ -76,8 +76,22 @@ public partial class LayoutAreaView
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
         }
     }
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        if (firstRender)
+        {
+            IsNotPreRender = true;
+            // If we're now rendered and we don't have a stream yet, bind it
+            if (AreaStream == null)
+            {
+                BindStream();
+                StateHasChanged();
+            }
 
+        }
+    }
 
-    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
+    protected bool IsNotPreRender { get; private set; }
 
 }
