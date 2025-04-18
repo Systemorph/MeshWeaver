@@ -30,7 +30,7 @@ public static class LayoutExtensions
             .AddData(data =>
                 data.Configure(reduction =>
                     reduction
-                        .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
+                        .AddWorkspaceReferenceStream<EntityStore>(
                             (workspace, reference, configuration) =>
                                 reference is not LayoutAreaReference layoutArea ? null :
                                 new LayoutAreaHost(

@@ -8,7 +8,8 @@ namespace MeshWeaver.Data;
 
 public delegate ChangeItem<TReduced> ReduceFunction<TStream, in TReference, TReduced>(
     ChangeItem<TStream> current,
-    TReference reference
+    TReference reference,
+    bool initial
 )
     where TReference : WorkspaceReference;
 
@@ -57,21 +58,21 @@ public record ReduceManager<TStream>
     )
         where TReference : WorkspaceReference<TReduced>
     {
-        object Lambda(ChangeItem<TStream> ws, WorkspaceReference r, LinkedListNode<ReduceDelegate> node) =>
-            WorkspaceStreams.ReduceApplyRules(ws, r, reducer, node);
+        object Lambda(ChangeItem<TStream> ws, WorkspaceReference r, bool initial, LinkedListNode<ReduceDelegate> node) =>
+            WorkspaceStreams.ReduceApplyRules(ws, r, reducer, initial, node);
         Reducers.AddFirst(Lambda);
 
         var ret = AddStreamReducer<TReference, TReduced>(
                 (parent, reference, config) =>
                     (ISynchronizationStream<TReduced>)
-                    parent.CreateReducedStream(reference, reducer, config)
+                    parent.CreateReducedStream(reference, reducer,config)
 
             )
-            .AddWorkspaceReferenceStream<TReduced,TReference>(
+            .AddWorkspaceReferenceStream<TReduced>(
                 (workspace, reference, configuration) =>
                    reference is TReference tReference ?
                     (ISynchronizationStream<TReduced>)
-                    WorkspaceStreams.CreateWorkspaceStream<TReduced, TReference>(
+                    WorkspaceStreams.CreateWorkspaceStream(
                         workspace, 
                         tReference, 
                         configuration) : null
@@ -80,8 +81,8 @@ public record ReduceManager<TStream>
         return ret;
     }
 
-    public TReduced Reduce<TReduced>(ChangeItem<TStream> value, WorkspaceReference<TReduced> reference) => 
-        (TReduced)Reduce(value, (WorkspaceReference)reference);
+    public TReduced Reduce<TReduced>(ChangeItem<TStream> value, WorkspaceReference<TReduced> reference, bool initial) => 
+        (TReduced)Reduce(value, (WorkspaceReference)reference, initial);
 
     public ReduceManager<TStream> AddStreamReducer<TReference, TReduced>(
         ReducedStreamProjection<TStream, TReference, TReduced> reducer
@@ -98,10 +99,9 @@ public record ReduceManager<TStream>
             ),
         };
     }
-    public ReduceManager<TStream> AddWorkspaceReferenceStream<TReduced, TReference>(
+    public ReduceManager<TStream> AddWorkspaceReferenceStream<TReduced>(
         ReducedStreamProjection<TReduced> reducer
     )
-        where TReference : WorkspaceReference
     {
         return this with
         {
@@ -113,14 +113,14 @@ public record ReduceManager<TStream>
     }
 
 
-    public object Reduce(ChangeItem<TStream> workspaceState, WorkspaceReference reference)
+    public object Reduce(ChangeItem<TStream> workspaceState, WorkspaceReference reference, bool initial)
     {
         var first = Reducers.First;
         if (first == null)
             throw new NotSupportedException(
                 $"No reducer found for reference type {typeof(TStream).Name}"
             );
-        return first.Value(workspaceState, reference, first);
+        return first.Value(workspaceState, reference,initial, first);
     }
 
     public ISynchronizationStream<TReduced> ReduceStream<TReduced>(
@@ -169,6 +169,7 @@ public record ReduceManager<TStream>
     internal delegate object ReduceDelegate(
         ChangeItem<TStream> state,
         WorkspaceReference reference,
+        bool initial,
         LinkedListNode<ReduceDelegate> node
     );
 
