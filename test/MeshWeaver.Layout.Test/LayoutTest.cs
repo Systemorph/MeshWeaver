@@ -419,12 +419,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetControlStream(resultsArea)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
-        var resultItemTemplate = resultsControl.Should().BeOfType<HtmlControl>().Which;
+        var resultItemTemplate = resultsControl.Should().BeOfType<CheckBoxControl>().Which;
         resultItemTemplate.DataContext.Should().BeNull();
 
         resultItemTemplate
-            .Data.Should().BeOfType<string>()
-            .Which.Should().Contain("<pre>True</pre>");
+            .Data.Should().BeOfType<bool>()
+            .Which.Should().BeTrue();
 
         var firstValuePointer = enumerableReference.Pointer + "/0/value";
 
@@ -439,11 +439,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x => !((string)((HtmlControl)x).Data).Contains("<pre>True</pre>"))
+            .Where(x => !((bool)((CheckBoxControl)x).Data))
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
-        ((string)((HtmlControl)resultsControl).Data).Should().Contain("<pre>False</pre>");
+        ((bool)((CheckBoxControl)resultsControl).Data).Should().Be(false);
     }
     [HubFact]
     public void TestSerialization()

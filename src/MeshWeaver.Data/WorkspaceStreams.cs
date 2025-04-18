@@ -51,7 +51,10 @@ c => c
             );
 
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
-        ret.Initialize(async ct => await streams.ToAsyncEnumerable().SelectAwait(async x => await x.FirstAsync()).AggregateAsync(new EntityStore(), (x, y) =>
+        ret.Initialize(async ct => await streams
+            .ToAsyncEnumerable()
+            .SelectAwait(async x => await x.FirstAsync())
+            .AggregateAsync(new EntityStore(), (x, y) =>
             x.Merge(y.Value), cancellationToken: ct), ex => logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address));
 
         foreach (var stream in streams)
@@ -84,13 +87,14 @@ c => c
         ChangeItem<TStream> state,
         WorkspaceReference @ref,
         ReduceFunction<TStream, TReference, TReduced> reducer,
+        bool initial,
         LinkedListNode<ReduceManager<TStream>.ReduceDelegate> node
     )
         where TReference : WorkspaceReference<TReduced>
     {
         return @ref is TReference reference
-            ? reducer.Invoke(state, reference)
-            : node.Next?.Value(state, @ref, node.Next);
+            ? reducer.Invoke(state, reference, initial)
+            : node.Next?.Value(state, @ref, initial, node.Next);
     }
 
     internal static ISynchronizationStream CreateReducedStream<TStream, TReference, TReduced>(
@@ -109,15 +113,24 @@ c => c
         );
 
         stream.RegisterForDisposal(reducedStream);
-        var selected = stream
-            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference));
+
+        var selectedInitial = stream
+            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, true))
+            .Take(1)
+            .Concat(stream
+                .Skip(1)
+                .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, false)));
 
         if (!reducedStream.Configuration.NullReturn)
-            selected = selected
+        {
+            selectedInitial = selectedInitial
                 .Where(x => x is { Value: not null });
 
+        }
+
+
         reducedStream.RegisterForDisposal(
-            selected
+            selectedInitial
                 .DistinctUntilChanged()
                 .Subscribe(reducedStream)
         );
