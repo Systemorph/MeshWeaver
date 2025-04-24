@@ -5,9 +5,9 @@ Abstract: >
   This is also true for data reports: Very often, the same data is presented in different ways to different audiences.
   This article shows how to use layout areas to personalize data reports.
 Thumbnail: "images/Layout Areas.jpeg"
-VideoUrl: "https://www.youtube.com/embed/1TY8p0cEX9M?si=9ZrvNVqXRw2noQg5"
+VideoUrl: "https://www.youtube.com/embed/q1MKJ-8R2yM?si=dLCU50EDhYvELID3"
 VideoDuration: "00:15:00"
-Published: "2025-02-02"
+Published: "2025-04-21"
 Authors:
   - "Roland Bürgi"
 Tags:
