@@ -6,8 +6,8 @@ Abstract: >
   concerns between data, business logic, and presentation. In this article, we show
   the path from specification to implementation.    
 Thumbnail: "images/Specification to Implementation.jpeg"
-Published: "2025-02-04"
-VideoUrl: "https://www.youtube.com/embed/soujo5VBE00?si=XDLP2Bik8pg1DqBp"
+Published: "2025-04-24"
+VideoUrl: "https://www.youtube.com/embed/VqSMWsvc4gM?si=QSaj3yM75vpr4hba"
 VideoDuration: "00:15:11"
 VideoTitle: "Transform Your Prototypes into Production-Ready Code!"
 VideoTagLine: "From Ideas to Reality"
