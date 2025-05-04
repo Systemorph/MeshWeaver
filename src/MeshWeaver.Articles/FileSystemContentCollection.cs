@@ -128,7 +128,8 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
 
     public override Task CreateFolderAsync(string path)
     {
-        Directory.CreateDirectory(Path.Combine(BasePath, path));
+        if(!Directory.Exists(path))
+            Directory.CreateDirectory(Path.Combine(BasePath, path!));
         return Task.CompletedTask;
     }
 
