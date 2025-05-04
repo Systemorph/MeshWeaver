@@ -1,0 +1,26 @@
+@inherits BlazorView<FileBrowserControl,FileBrowserView>
+
+<FileBrowser CollectionName="@Collection" CurrentPath="@Path" CreatePath="@CreatePath"></FileBrowser>
+
+@code
+{
+    private string Collection;
+    private string Path;
+    private bool CreatePath;
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Collection, x => x.Collection);
+        DataBind(ViewModel.Path, x => x.Path, defaultValue: "/");
+        DataBind(ViewModel.CreatePath, x => x.CreatePath);
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        if (CreatePath)
+        {
+
+        }
+    }
+}

@@ -166,4 +166,7 @@ public static class Controls
 
     public static RadioGroupControl RadioGroup(object data, object options, object type)
         => new(data, options, type);
+
+    public static FileBrowserControl FileBrowser(object collection, object path = null)
+        => new(collection) { Path = path };
 }

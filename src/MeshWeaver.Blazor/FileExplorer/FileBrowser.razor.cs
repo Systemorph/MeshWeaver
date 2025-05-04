@@ -14,12 +14,15 @@ public partial class FileBrowser
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
 
+    [Parameter]public bool CreatePath { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
         Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
+        if (CreatePath && Collection is not null)
+            await Collection.CreateFolderAsync(CurrentPath);
         await RefreshContentAsync();
     }
 
