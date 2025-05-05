@@ -1,19 +1,62 @@
-@using BindAttributes = Microsoft.AspNetCore.Components.Web.BindAttributes
+@using Microsoft.FluentUI.AspNetCore.Components.Extensions
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using ProgressStroke = Microsoft.FluentUI.AspNetCore.Components.ProgressStroke
 @inherits BlazorView<ProgressControl, ProgressView>
-<FluentProgress Class="@Class" Style="@Style" Min="@Min" Max="@Max" Paused="@Paused" Value="@Progress"></FluentProgress>
+
+<FluentStack Orientation="Orientation.Vertical">
+    @if (Message is not null && MessagePosition == MessagePosition.Top)
+    {
+        <FluentLabel>@Message</FluentLabel>
+    }
+    <FluentStack Orientation="Orientation.Horizontal">
+        <FluentProgress Class="@Class" Style="@Style"
+                        Min="@Min" Max="@Max"
+                        Stroke="@Stroke"
+                        Paused="@Paused"
+                        Width="@Width"
+                        Value="@Progress"
+                        Color="@Color"></FluentProgress>
+        @if (!HideNumber)
+        {
+            <FluentLabel Style="width: 20px;">@Progress</FluentLabel>
+        }
+        @if (Message is not null && MessagePosition == MessagePosition.Right)
+        {
+            <FluentLabel>@Message</FluentLabel>
+        }
+
+    </FluentStack>
+    @if (Message is not null && MessagePosition == MessagePosition.Bottom)
+    {
+        <FluentLabel>@Message</FluentLabel>
+    }
+
+</FluentStack>
 @code
 {
     private int? Progress;
     private int? Min;
     private int? Max;
     private bool? Paused;
+    private ProgressStroke Stroke;
+    private string Width;
+    string Color;
+    bool HideNumber;
+    private string Message;
+    private MessagePosition MessagePosition;
 
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Progress, x => x.Progress);
-        DataBind(ViewModel.Min, x => x.Min);
-        DataBind(ViewModel.Max, x => x.Max);
-        DataBind(ViewModel.Paused, x => x.Paused);
+        DataBind(ViewModel.Progress, x => x.Progress, defaultValue:0);
+        DataBind(ViewModel.Min, x => x.Min, defaultValue:0);
+        DataBind(ViewModel.Max, x => x.Max,defaultValue:100);
+        DataBind(ViewModel.Paused, x => x.Paused, defaultValue:true);
+        DataBind(ViewModel.Stroke, x => x.Stroke, defaultValue: ProgressStroke.Normal);
+        DataBind(ViewModel.Width, x => x.Width, defaultValue: "200px");
+        DataBind(ViewModel.Color, x => x.Color, defaultValue: OfficeColor.Default.ToAttributeValue());
+        DataBind(ViewModel.HideNumber, x => x.HideNumber);
+        DataBind(ViewModel.Message, x => x.Message);
+        DataBind(ViewModel.MessagePosition, x => x.MessagePosition);
     }
 }
