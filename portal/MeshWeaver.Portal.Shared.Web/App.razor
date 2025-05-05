@@ -12,6 +12,7 @@
     <link href="_content/MeshWeaver.Blazor/css/markdown.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
+    <link href="css/theme.css" rel="stylesheet" />
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.ico" />
     <HeadOutlet @rendermode="RenderMode.InteractiveServer"/>
@@ -19,11 +20,11 @@
 </head>
 
 <body>
-    <Routes @rendermode="RenderMode.InteractiveServer" />
-    <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode"/>
-    <CookiePolicy @rendermode="RenderMode.InteractiveServer" />
-    <script src="_framework/blazor.web.js"></script>
-    <script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
+<Routes @rendermode="RenderMode.InteractiveServer" />
+<FluentDesignTheme StorageName="theme" @bind-Mode="@Mode"/>
+<CookiePolicy @rendermode="RenderMode.InteractiveServer" />
+<script src="_framework/blazor.web.js"></script>
+<script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
 </body>
 
 </html>
