@@ -51,6 +51,17 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             }
 
         }
+        else
+        {
+            if (ViewModel.Data is JsonPointerReference p)
+            {
+                var pointer = JsonPointer.Parse($"{DataContext}/{p.Pointer}");
+                Options = ret;
+                SetValue(ConversionToValue(pointer.Evaluate(Stream.Current.Value), ret?.FirstOrDefault()));
+
+            }
+
+        }
         return ret;
     }
 
