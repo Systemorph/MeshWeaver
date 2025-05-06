@@ -48,28 +48,25 @@ public static class ProgressLayoutArea
             );
         message.OnNext("Working...");
         progress.OnNext(0);
-        try
+        for (var i = 1; i <= progressSettings.MaxProgress && !cancellationTokenSource.IsCancellationRequested; i++)
         {
-            for (var i = 1; i <= progressSettings.MaxProgress; i++)
-            {
-                cancellationTokenSource.Token.ThrowIfCancellationRequested();
-                await Task.Delay(progressSettings.MillisecondsToTick, cancellationTokenSource.Token);
-                progress.OnNext(i);
-                if (i == 50)
-                    message.OnNext("Halfway there!");
-                if (i == 100)
-                    message.OnNext("Done!");
-            }
-
+            await Task.Delay(progressSettings.MillisecondsToTick);
+            progress.OnNext(i);
+            if (i == 50)
+                message.OnNext("Halfway there!");
+            if (i == 100)
+                message.OnNext("Done!");
         }
-        catch
+
+        if (cancellationTokenSource.IsCancellationRequested)
         {
-            progress.OnNext(0);
-            message.OnNext("Cancelled!");
+                progress.OnNext(0);
+                message.OnNext("Cancelled!");
         }
 
         await Task.Delay(TimeSpan.FromSeconds(1));
         progress.OnCompleted();
+        message.OnCompleted();
         host.UpdateArea(area, RunButton(host, progressSettings));
     }
 }

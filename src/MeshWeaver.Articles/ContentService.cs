@@ -44,9 +44,9 @@ public class ContentService : IContentService
             string.IsNullOrEmpty(catalogOptions.Collection)
             ? collections.Values
             : [collections[catalogOptions.Collection]];
-        return (await allCollections.Select(c => c.GetArticles(catalogOptions))
+        return (await allCollections.Select(c => c.GetMarkdown(catalogOptions))
                 .CombineLatest()
-                .Select(c => c.SelectMany(articles => articles))
+                .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
                 .Select(articles => ApplyOptions(articles, catalogOptions))
                 .Skip(catalogOptions.Page * catalogOptions.PageSize)
                 .Take(catalogOptions.PageSize)
@@ -74,7 +74,7 @@ public class ContentService : IContentService
 
     public IObservable<Article> GetArticle(string collection, string article)
     {
-        return GetCollection(collection)?.GetArticle(article);
+        return GetCollection(collection)?.GetMarkdown(article).OfType<Article>();
     }
 
     public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)

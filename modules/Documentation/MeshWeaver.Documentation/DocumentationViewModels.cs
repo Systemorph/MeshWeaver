@@ -23,6 +23,7 @@ public static class DocumentationViewModels
             .AddCalculator()
             .AddDistributionStatistics()
             .AddProgress()
+            .AddFileBrowser()
         );
 
 }

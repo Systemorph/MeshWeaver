@@ -56,8 +56,8 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
     protected override IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct)
     {
         var files = filter == MarkdownFilter
-            ? Directory.GetFiles(BasePath, "*.md")
-            : Directory.GetFiles(BasePath).Where(f => filter is null || filter.Invoke(f));
+            ? Directory.GetFiles(BasePath, "*.md", SearchOption.AllDirectories)
+            : Directory.GetFiles(BasePath,"*", SearchOption.AllDirectories).Where(f => filter is null || filter.Invoke(f));
 
         var items = files
             .Where(File.Exists)
