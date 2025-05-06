@@ -11,14 +11,14 @@ namespace MeshWeaver.Articles;
 
 public abstract class ContentCollection : IDisposable
 {
-    private readonly ISynchronizationStream<InstanceCollection> contentStream;
+    private readonly ISynchronizationStream<InstanceCollection> markdownStream;
     private readonly ContentSourceConfig config;
 
     protected ContentCollection(ContentSourceConfig config, IMessageHub hub)
     {
         Hub = hub;
         this.config = config;
-        contentStream = CreateStream();
+        markdownStream = CreateStream();
     }
 
     private  ISynchronizationStream<InstanceCollection> CreateStream()
@@ -36,19 +36,19 @@ public abstract class ContentCollection : IDisposable
     public string Collection  => config.Name;
     public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
 
-    public IObservable<Article> GetArticle(string path)
-        => contentStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path).TrimStart('/')), c => c.ReturnNullWhenNotPresent()).Select(x => (Article) x?.Value);
+    public IObservable<object> GetMarkdown(string path)
+        => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent()).Select(x => x?.Value);
 
 
-    public IObservable<IEnumerable<Article>> GetArticles(ArticleCatalogOptions _)
-        => contentStream.Select(x => x.Value.Instances.Values.Cast<Article>());
+    public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)
+        => markdownStream.Select(x => x.Value.Instances.Values);
 
 
     public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
-        contentStream.Dispose();
+        markdownStream.Dispose();
     }
 
     protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
@@ -73,12 +73,12 @@ public abstract class ContentCollection : IDisposable
     public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
     public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
 
-    public Task SaveArticleAsync(Article article)
+    public async Task SaveArticleAsync(Article article)
     {
         var markdown = article.ConvertToMarkdown();
         var utfEncoding = new UTF8Encoding(false);
-        var markdownStream = new MemoryStream(utfEncoding.GetBytes(markdown));
-        return SaveFileAsync(article.Path, "", markdownStream);
+        await using var memoryStream = new MemoryStream(utfEncoding.GetBytes(markdown));
+        await SaveFileAsync(article.Path, "", memoryStream);
     }
 
     public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
@@ -100,14 +100,14 @@ public abstract class ContentCollection : IDisposable
             await GetStreams(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream,tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)x.Name, x => (object)x, cancellationToken: ct)
+                .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x.Path), x => (object)x, cancellationToken: ct)
         );
         AttachMonitor();
         return ret;
     }
     protected void UpdateArticle(string path)
     {
-        contentStream.Update(async (x, ct) =>
+        markdownStream.Update(async (x, ct) =>
         {
             var tuple = await GetStreamAsync(path, ct);
             if (tuple.Stream is null)
@@ -145,13 +145,6 @@ public abstract class ContentCollection : IDisposable
     public abstract Task DeleteFileAsync(string filePath);
     protected abstract IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
 
-    public bool IsArticle(string path, out string name)
-    {
-        name = Path.GetFileNameWithoutExtension(path);
-        if (Path.GetExtension(path) != ".md")
-            return false;
-        return contentStream.Current.Value.Instances.ContainsKey(name);
-    }
 
 
     public virtual string GetContentType(string path)

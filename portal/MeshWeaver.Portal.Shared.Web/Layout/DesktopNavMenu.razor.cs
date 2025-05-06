@@ -4,7 +4,9 @@
 using MeshWeaver.Layout.Views;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular;
 using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
+using Size20 = Microsoft.FluentUI.AspNetCore.Components.Icons.Filled.Size20;
 
 namespace MeshWeaver.Portal.Shared.Web.Layout;
 
@@ -13,7 +15,11 @@ public partial class DesktopNavMenu : ComponentBase
     public static Icon ArticlesIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.Book()
-            : new Icons.Regular.Size24.Book();
+            : new Size24.Book();
+    public static Icon DocumentationIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.DocumentCube()
+            : new Size24.DocumentCube();
     public static Icon CollectionsIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.DocumentFolder()

@@ -12,6 +12,14 @@
         /// </summary>
         public object Path { get; init; } 
 
-        public object CreatePath { get; init; }
+        public object PathCreation { get; init; }
+
+        public FileBrowserControl CreatePath()
+            => this with { PathCreation = true };
+
+        public FileBrowserControl WithTopLevel(string path)
+            => this with { TopLevelPath = path };
+
+        public string TopLevelPath { get; init; }
     }
 }

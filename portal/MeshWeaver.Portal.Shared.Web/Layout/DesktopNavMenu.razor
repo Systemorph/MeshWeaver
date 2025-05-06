@@ -1,5 +1,4 @@
 ﻿@using MeshWeaver.Articles
-@using MeshWeaver.Blazor.Infrastructure
 @using Microsoft.AspNetCore.Components.Authorization
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
@@ -9,6 +8,11 @@
         IconRest="ArticlesIcon()"
         IconActive="ArticlesIcon(active: true)"
         Text="Blog" />
+    <FluentAppBarItem Href="/content/Documentation/Readme.md"
+                      Match="NavLinkMatch.All"
+                      IconRest="DocumentationIcon()"
+                      IconActive="DocumentationIcon(active: true)"
+                      Text="Areas" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
             <FluentAppBarItem

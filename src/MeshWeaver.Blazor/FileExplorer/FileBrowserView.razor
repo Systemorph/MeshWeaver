@@ -1,18 +1,20 @@
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
-<FileBrowser CollectionName="@Collection" CurrentPath="@Path" CreatePath="@CreatePath"></FileBrowser>
+<FileBrowser CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" Embed="@true"></FileBrowser>
 
 @code
 {
     private string Collection;
     private string Path;
-    private bool CreatePath;
+    private bool PathCreation;
+    private string TopLevelPath;
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Collection, x => x.Collection);
         DataBind(ViewModel.Path, x => x.Path, defaultValue: "/");
-        DataBind(ViewModel.CreatePath, x => x.CreatePath);
+        DataBind(ViewModel.PathCreation, x => x.PathCreation);
+        DataBind(ViewModel.TopLevelPath, x => x.TopLevelPath);
     }
 
 }

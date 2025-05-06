@@ -6,7 +6,7 @@
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
     <Authorized>
-        <FileBrowser CollectionName="@Collection" CurrentPath="@Path"></FileBrowser>
+        <FileBrowser CollectionName="@Collection" ShowCollectionSelection="@true" CurrentPath="@Path"></FileBrowser>
     </Authorized>
     <NotAuthorized>
         <h3>Access Denied</h3>

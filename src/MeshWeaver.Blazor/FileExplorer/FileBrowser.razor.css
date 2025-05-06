@@ -63,3 +63,14 @@
     .file-browser-link:hover {
         text-decoration: underline;
     }
+
+/* Add these styles to the existing CSS file */
+::deep .breadcrumb-clickable {
+    cursor: pointer;
+    color: var(--neutral-foreground-rest);
+}
+
+    ::deep .breadcrumb-clickable:hover {
+        text-decoration: underline;
+        color: var(--accent-foreground-rest);
+    }
