@@ -9,7 +9,6 @@ public class UserContextMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(HttpContext context)
     {
-
         // Add user context to the message delivery properties
         var userContext = ExtractUserContext(context.User);
         if (userContext is not null)
@@ -18,7 +17,7 @@ public class UserContextMiddleware(RequestDelegate next)
             userService.SetContext(userContext);
         }
         // Continue the middleware pipeline
-        await next(context);
+        await next(context);  
     }
 
 
@@ -38,4 +37,3 @@ public class UserContextMiddleware(RequestDelegate next)
         };
     }
 }
-
