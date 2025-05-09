@@ -12,7 +12,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
     {
         if (path is null)
             return Task.FromResult<Stream>(null);
-        var fullPath = Path.Combine(BasePath, path);
+        var fullPath = Path.Combine(BasePath, path.TrimStart('/'));
         if (!File.Exists(fullPath))
             return Task.FromResult<Stream>(null);
         return Task.FromResult<Stream>(File.OpenRead(fullPath));
