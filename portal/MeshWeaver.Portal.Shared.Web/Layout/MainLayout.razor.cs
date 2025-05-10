@@ -1,12 +1,18 @@
-﻿using MeshWeaver.Portal.Shared.Web.Components;
+﻿using MeshWeaver.Blazor.Chat;
+using MeshWeaver.Portal.Shared.Web.Components;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Portal.Shared.Web.Layout;
 
 public partial class MainLayout
 {
+    [Inject]
+    private IJSRuntime JSRuntime { get; set; }
+
     private const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
@@ -40,6 +46,27 @@ public partial class MainLayout
         });
 
         await dialog.Result;
+    }
+    public bool IsAIChatVisible { get; private set; }
+    private Chat chatComponent;
+
+    public void ToggleAIChatVisibility()
+    {
+        IsAIChatVisible = !IsAIChatVisible;
+        StateHasChanged();
+    }
+    private async Task StartResize(MouseEventArgs e)
+    {
+        // Call the JavaScript function to handle the resize operation
+        await JSRuntime.InvokeVoidAsync("chatResizer.startResize");
+    }
+
+    private async Task HandleNewChatAsync()
+    {
+        if (chatComponent != null)
+        {
+            await chatComponent.ResetConversationAsync();
+        }
     }
 
 }
