@@ -1,0 +1,33 @@
+﻿/* Initial state with no transitions to prevent flashing */
+code {
+    transition: none;
+}
+
+    /* Initial highlighting shouldn't flash */
+    code.initial-highlight {
+        transition: none !important;
+    }
+
+    /* Style during content changes - slightly faded */
+    code.highlight-pending {
+        opacity: 0.95;
+        transition: none !important;
+    }
+
+    /* Style after highlighting is complete - fade back in */
+    code.highlight-complete {
+        opacity: 1;
+        transition: opacity 0.3s ease-out;
+    }
+
+        /* Only enable transitions on syntax elements after content has stabilized */
+        code.highlight-complete .hljs-keyword,
+        code.highlight-complete .hljs-string,
+        code.highlight-complete .hljs-number,
+        code.highlight-complete .hljs-comment,
+        code.highlight-complete .hljs-tag,
+        code.highlight-complete .hljs-attr,
+        code.highlight-complete .hljs-name,
+        code.highlight-complete .hljs-built_in {
+            transition: color 0.3s ease-out;
+        }

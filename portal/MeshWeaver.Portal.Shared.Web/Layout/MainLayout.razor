@@ -1,5 +1,6 @@
 ﻿@using MeshWeaver.Portal.Shared.Web.Infrastructure
 @using MeshWeaver.Blazor.Components
+@using MeshWeaver.Blazor.Chat
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
 <div class="layout" style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
@@ -32,6 +33,11 @@
             </div>
             <div class="notifications">
                 <NotificationCenter/>
+            </div>
+            <div class="chat">
+                <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                </FluentButton>
             </div>
             <div class="settings">
                 <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
@@ -77,6 +83,28 @@
     <FluentMenuProvider />                
     <FluentToastProvider MaxToastCount="10"/>
     <FluentKeyCodeProvider/>
+    @if (IsAIChatVisible)
+    {
+        <div class="ai-chat-overlay">
+            <div class="ai-chat-container">
+                <div class="ai-chat-resizer" @onmousedown="@(e => StartResize(e))"></div>
+                <div class="ai-chat-content">
+                    <div class="ai-chat-header">
+                        <span>AI Chat</span>
+                        <div class="ai-chat-header-controls">
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="HandleNewChatAsync" Title="New chat">
+                                <FluentIcon Value="@(new Icons.Regular.Size16.Add())" />
+                            </FluentButton>
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="ToggleAIChatVisibility" Title="Close">
+                                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" />
+                            </FluentButton>
+                        </div>
+                    </div>
+                    <Chat @ref="chatComponent"></Chat>
+                </div>
+            </div>
+        </div>
+    }
 
     <div id="blazor-error-ui">
         An unhandled error has occurred.

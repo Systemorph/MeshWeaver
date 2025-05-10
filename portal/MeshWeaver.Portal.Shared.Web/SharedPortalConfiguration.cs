@@ -1,5 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using MeshWeaver.AI;
 using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
@@ -46,6 +47,9 @@ public static class SharedPortalConfiguration
             {
                 opt.DisableImplicitFromServicesParameters = true;
             });
+        services.AddAI();
+        services.Configure<AICredentialsConfiguration>(builder.Configuration.GetSection("AI"));
+
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
         services.AddSingleton<DimensionManager>();
@@ -53,38 +57,43 @@ public static class SharedPortalConfiguration
         services.AddHttpContextAccessor();
 
 
-        builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-            .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("EntraId"));       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
-        builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
+        var entraIdConfig = builder.Configuration.GetSection("EntraId");
+        if (entraIdConfig.GetChildren().Any())
         {
-            var roleMappings = builder.Configuration
-                .GetSection("EntraId:RoleMappings")
-                .GetChildren()
-                .ToDictionary(x => x.Value, x => x.Key);
-
-            options.Events.OnTokenValidated = async context =>
+            builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+                .AddMicrosoftIdentityWebApp(entraIdConfig);       // In ConfigureWebPortalServices in SharedPortalConfiguration.cs
+            builder.Services.Configure<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme, options =>
             {
-                var identity = context.Principal?.Identity as ClaimsIdentity;
-                if (identity?.IsAuthenticated == true)
+                var roleMappings = builder.Configuration
+                    .GetSection("EntraId:RoleMappings")
+                    .GetChildren()
+                    .ToDictionary(x => x.Value, x => x.Key);
+
+                options.Events.OnTokenValidated = async context =>
                 {
-                    var groupClaims = identity.FindAll("groups").ToList();
-                    foreach (var groupClaim in groupClaims)
+                    var identity = context.Principal?.Identity as ClaimsIdentity;
+                    if (identity?.IsAuthenticated == true)
                     {
-                        if (roleMappings.TryGetValue(groupClaim.Value, out var roleName))
+                        var groupClaims = identity.FindAll("groups").ToList();
+                        foreach (var groupClaim in groupClaims)
                         {
-                            identity.AddClaim(new Claim(ClaimTypes.Role, roleName));
+                            if (roleMappings.TryGetValue(groupClaim.Value, out var roleName))
+                            {
+                                identity.AddClaim(new Claim(ClaimTypes.Role, roleName));
+                            }
                         }
                     }
-                }
-                await Task.CompletedTask;
-            };
-        });
-        
-        builder.Services.AddControllersWithViews()
-            .AddMicrosoftIdentityUI();
+                    await Task.CompletedTask;
+                };
+            });
 
-        builder.Services.AddAuthorization();
-         
+            builder.Services.AddControllersWithViews()
+                .AddMicrosoftIdentityUI();
+            builder.Services.AddAuthorization();
+        }
+
+
+
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ContentSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
         builder.Services.Configure<StylesConfiguration>(
@@ -124,8 +133,11 @@ public static class SharedPortalConfiguration
         app.UseAntiforgery();
         app.UseCookiePolicy();
 
-        app.UseAuthentication();
-        app.UseAuthorization();
+        if (app.Configuration.GetSection("EntraId").GetChildren().Any())
+        {
+            app.UseAuthentication();
+            app.UseAuthorization();
+        }
 
         //app.MapMeshWeaverSignalRHubs();
 

@@ -17,6 +17,8 @@
     <PackageVersion Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.1.0" />
     <PackageVersion Include="Autofac" Version="8.2.1" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.2.0-beta.4" />
+    <PackageVersion Include="Azure.Core" Version="1.44.1" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.10.0" />
     <PackageVersion Include="Azure.Identity" Version="1.13.2" />
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.2.0" />
@@ -53,6 +55,9 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="9.4.3-preview.1.25230.7" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="9.4.3-preview.1.25230.7" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="9.4.3-preview.1.25230.7" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.11.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="9.0.0-preview.9.24556.5" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
@@ -104,6 +109,7 @@
     <PackageVersion Include="Microsoft.Orleans.Server" Version="9.1.2" />
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="9.1.2" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageVersion Include="OpenAI" Version="2.2.0-beta.4" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.11.2" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.11.2" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.11.1" />

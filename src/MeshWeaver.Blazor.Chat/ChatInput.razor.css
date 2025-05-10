@@ -1,0 +1,71 @@
+﻿.input-box {
+    display: flex;
+    flex-direction: column;
+    background: var(--neutral-layer-1);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.75rem;
+    color: var(--neutral-foreground-rest);
+}
+
+.input-box:focus-within {
+    outline: 2px solid var(--accent-fill-rest);
+    box-shadow: 0 0 0 2px var(--neutral-layer-1), 0 0 0 4px var(--accent-fill-rest);
+}
+
+textarea {
+    resize: none;
+    border: none;
+    outline: none;
+    flex-grow: 1;
+    background-color: var(--neutral-layer-1);
+    color: var(--neutral-foreground-rest);
+}
+
+textarea::placeholder {
+    color: var(--neutral-foreground-hint);
+}
+
+textarea:placeholder-shown+.tools {
+    --send-button-color: var(--neutral-foreground-hint);
+}
+
+.tools {
+    display: flex;
+    margin-top: 1rem;
+    align-items: center;
+}
+
+.tool-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    color: inherit;
+    stroke: currentColor;
+}
+
+.send-button {
+    color: var(--send-button-color, var(--neutral-foreground-rest));
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+}
+
+.send-button:hover {
+    color: var(--accent-fill-hover);
+}
+
+.attach {
+    background-color: transparent;
+    border-style: dashed;
+    color: var(--neutral-foreground-hint);
+    border-color: var(--neutral-stroke-rest);
+    padding: 3px 8px;
+    cursor: pointer;
+}
+
+.attach:hover {
+    background-color: var(--neutral-fill-secondary-hover);
+    color: var(--neutral-foreground-rest);
+}

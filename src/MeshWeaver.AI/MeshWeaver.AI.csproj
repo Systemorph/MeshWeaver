@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <ItemGroup>
+        <PackageReference Include="Azure.AI.OpenAI" />
+        <PackageReference Include="Azure.Core" />
+        <PackageReference Include="Microsoft.Extensions.AI" />
+        <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+        <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+        <PackageReference Include="OpenAI" />
+
+    </ItemGroup>
+    <ItemGroup>
+      <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+      <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    </ItemGroup>
+
+</Project>
