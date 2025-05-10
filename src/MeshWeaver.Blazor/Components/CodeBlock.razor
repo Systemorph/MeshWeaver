@@ -1,6 +1,11 @@
 ﻿@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
+<HeadContent>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+</HeadContent>
+
 <div @ref="CodeBlockElement" class="code-content">
     @((MarkupString)Html)
     <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
@@ -8,25 +13,43 @@
 
 @code {
     [Parameter] public string Html { get; set; }
-    private IJSObjectReference Highlight;
     private ElementReference CodeBlockElement;
+    private IJSObjectReference jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
         {
-            Highlight ??= await JsRuntime.Import("highlight.js");
-        }
+            if (firstRender)
+            {
+                jsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
+                "./_content/MeshWeaver.Blazor/Components/CodeBlock.razor.js");
+            }
 
-        if (Highlight is not null)
+            if (jsModule is not null)
+            {
+                await jsModule.InvokeVoidAsync("highlightBlock", CodeBlockElement);
+            }
+        }
+        catch (Exception ex)
         {
-            await Highlight.InvokeVoidAsync("highlightCode", CodeBlockElement);
+            Console.WriteLine($"Error highlighting code: {ex.Message}");
         }
     }
 
     private async Task CopyToClipboard()
     {
-        var codeElement = await JsRuntime.InvokeAsync<string>("eval", "document.querySelector('[ref=CodeBlockElement] code').innerText");
-        await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", codeElement);
+        try
+        {
+            if (jsModule is not null)
+            {
+                var codeText = await jsModule.InvokeAsync<string>("getCodeText", CodeBlockElement);
+                await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", codeText);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error copying to clipboard: {ex.Message}");
+        }
     }
 }

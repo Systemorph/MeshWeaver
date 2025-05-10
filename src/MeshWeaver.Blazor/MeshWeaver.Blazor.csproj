@@ -1,7 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
-    <Import Project="StaticAssets\StaticAssets.targets" />
-
     <PropertyGroup>
         <ProjectGuid>{ce297aa3-047e-49f5-9b04-e02385772a5b}</ProjectGuid>
         <RazorCompileOnBuild>true</RazorCompileOnBuild>
@@ -9,11 +7,8 @@
         <StaticWebAssetBasePath>_content/MeshWeaver.Blazor</StaticWebAssetBasePath>
     </PropertyGroup>
 
-
-
     <ItemGroup>
         <SupportedPlatform Include="browser" />
-        <Content Update="StaticAssets\**" Pack="true" CopyToPublishDirectory="false" />
     </ItemGroup>
 
     <ItemGroup>
@@ -32,10 +27,6 @@
         <ProjectReference Include="..\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Serialization\" />
     </ItemGroup>
 
 

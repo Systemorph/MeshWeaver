@@ -2,6 +2,23 @@
 code {
     transition: none;
 }
+/* Add this to your stylesheet */
+.code-content pre code {
+    white-space: pre;
+    display: block;
+}
+
+.code-content {
+    position: relative;
+}
+
+.copy-to-clipboard {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    cursor: pointer;
+    /* Add your icon styling here */
+}
 
     /* Initial highlighting shouldn't flash */
     code.initial-highlight {
