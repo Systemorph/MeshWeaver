@@ -37,15 +37,20 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
         {
-            Mathjax ??= await JsRuntime.Import("mathjax.js");
-            await Mathjax.InvokeAsync<bool>("waitForMathJax");
-        }
+            if (firstRender)
+            {
+                Mathjax ??= await JsRuntime.Import("mathjax.js");
+                await Mathjax.InvokeAsync<bool>("waitForMathJax");
+            }
 
-        if (Mathjax is not null)
-        {
-            await Mathjax.InvokeVoidAsync("typeset", MathBlockElement);
+            if (Mathjax is not null)
+            {
+                await Mathjax.InvokeVoidAsync("typeset", MathBlockElement);
+            }
+
         }
+        catch{}
     }
 }
