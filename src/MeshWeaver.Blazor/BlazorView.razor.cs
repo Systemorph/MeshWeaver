@@ -10,6 +10,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
@@ -19,6 +20,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 {
     [Inject] protected ILogger<TView> Logger { get; set; }
     [Inject] protected PortalApplication PortalApplication { get; set; }
+    [Inject] protected IJSRuntime JSRuntime { get; set; }
     protected IMessageHub Hub => PortalApplication.Hub;
     [Parameter] public TViewModel ViewModel { get; set; }
 

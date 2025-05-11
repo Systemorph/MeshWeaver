@@ -9,6 +9,11 @@ namespace MeshWeaver.Documentation.LayoutAreas
     /// </summary>
     public static class FileBrowserLayoutArea
     {
+        /// <summary>
+        /// Adds the file browser demo to the layout.
+        /// </summary>
+        /// <param name="layout"></param>
+        /// <returns></returns>
         public static LayoutDefinition AddFileBrowser(this LayoutDefinition layout)
             => layout.WithView(nameof(FileBrowser), FileBrowser);
 
