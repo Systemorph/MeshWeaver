@@ -1,19 +1,16 @@
-﻿.container {
-/*    
-    --ag-header-foreground-color: #292b36;
-    --ag-header-background-color: #f4f4f4;
-    --ag-odd-row-background-color: rgba(244, 244, 244, 0.4);
-    --ag-row-hover-color: rgba(204, 227, 255, 0.2);
-    --ag-column-hover-color: rgba(204, 227, 255, 0.2);
-*/
+/* Base grid container styles */
+.ag-grid-container {
     --ag-cell-horizontal-padding: 12px;
     font-family: roboto, "sans-serif";
     font-size: 14px;
     font-weight: 400;
     line-height: 16px;
+    height: 500px;
+    width: 100%;
 }
 
-.container ::deep .ag-header {
+/* Header styles */
+.ag-grid-container .ag-header {
     font-family: overpass, "sans-serif";
     font-size: 12px;
     line-height: 14px;
@@ -21,6 +18,67 @@
     text-transform: uppercase;
 }
 
-.container ::deep .ag-header-group-cell {
+.ag-grid-container .ag-header-group-cell {
     font-weight: 600;
+}
+
+/* Theme transition styles */
+.ag-theme-alpine,
+.ag-theme-alpine-dark {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Light theme adjustments */
+.ag-grid-container.ag-theme-alpine {
+    /* Default theme, no overrides needed */
+}
+
+/* Dark mode specific adjustments */
+.ag-grid-container.ag-theme-alpine-dark {
+    --ag-foreground-color: #e5e5e5;
+    --ag-background-color: #1f1f1f;
+    --ag-header-background-color: #2d2d2d;
+    --ag-odd-row-background-color: #292929;
+    --ag-control-panel-background-color: #292929;
+    --ag-border-color: #444444;
+    --ag-row-border-color: #444444;
+    --ag-row-hover-color: rgba(255, 255, 255, 0.1);
+    --ag-selected-row-background-color: rgba(0, 113, 255, 0.2);
+
+    /* Additional dark mode styles */
+    --ag-input-focus-border-color: #0171ff;
+    --ag-range-selection-border-color: #0171ff;
+    --ag-range-selection-background-color: rgba(0, 113, 255, 0.2);
+    --ag-checkbox-checked-color: #0171ff;
+    --ag-checkbox-unchecked-color: #c6c6c6;
+    --ag-input-disabled-background-color: #3a3a3a;
+    --ag-input-disabled-border-color: #555555;
+}
+
+/* Dark mode specific adjustments for buttons and icons */
+.ag-theme-alpine-dark .ag-icon {
+    color: #c6c6c6;
+}
+
+.ag-theme-alpine-dark .ag-header-cell-menu-button:hover,
+.ag-theme-alpine-dark .ag-side-button-button:hover,
+.ag-theme-alpine-dark .ag-header-cell-menu-button:focus,
+.ag-theme-alpine-dark .ag-side-button-button:focus {
+    color: #0171ff;
+}
+
+.ag-theme-alpine-dark .ag-tab {
+    border-bottom: 2px solid transparent;
+}
+
+.ag-theme-alpine-dark .ag-tab-selected {
+    border-bottom-color: #0171ff;
+}
+
+.ag-theme-alpine-dark .ag-checkbox-input-wrapper.ag-checked::after {
+    color: #0171ff;
+}
+
+.ag-theme-alpine-dark input[class^='ag-']:focus {
+    border-color: #0171ff;
 }
