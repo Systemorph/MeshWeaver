@@ -3,13 +3,14 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Blazor.Infrastructure;
-using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
@@ -28,6 +29,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     [Parameter] public string Area { get; set; }
 
     [CascadingParameter(Name = "Context")] public object Context { get; set; }
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
 
     [CascadingParameter(Name = nameof(DataContext))]
     public string DataContext { get; set; }
@@ -158,4 +162,17 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     {
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
+
+
+    protected async Task<bool> IsDarkModeAsync()
+    {
+        return Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => await JSRuntime.InvokeAsync<bool>("themeHandler.isDarkMode")
+        };
+
+    }
 }
+

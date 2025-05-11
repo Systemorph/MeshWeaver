@@ -8,13 +8,12 @@
 </HeadContent>
 
 
-<div @ref="Element" class="ag-grid-container @(IsDarkMode ? "ag-theme-alpine-dark" : "ag-theme-alpine")"
+<div @ref="Element" class="ag-grid-container"
      style="height: 500px; width: 100%;" data-grid-id="@id"></div>
 
 @code
 {
     ElementReference Element;
-    private bool IsDarkMode => false;
     private IJSObjectReference JSModule;
 
 
@@ -37,17 +36,9 @@
 
         if (JSModule is not null && Options is not null)
         {
-            await JSModule.InvokeVoidAsync("renderGrid", id, Element, Options, IsDarkMode);
+            await JSModule.InvokeVoidAsync("renderGrid", id, Element, Options);
         }
 
-        // Check if the theme mode has changed
-        if (!firstRender)
-        {
-            if (JSModule is not null)
-            {
-                await JSModule.InvokeVoidAsync("updateTheme", id, IsDarkMode);
-            }
-        }
     }
 
     protected override void OnParametersSet()

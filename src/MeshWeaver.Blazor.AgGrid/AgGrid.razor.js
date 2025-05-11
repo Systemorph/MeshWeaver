@@ -49,7 +49,24 @@ function loadScript(src) {
     });
 }
 
-// Main function to render the AG Grid
+// Update your updateTheme function with a safety check
+export function updateTheme(id) {
+    const gridElement = document.querySelector(`[data-grid-id="${id}"]`);
+    if (gridElement) {
+        // Check if themeHandler exists before trying to use it
+        const isDarkMode = window.themeHandler && typeof window.themeHandler.isDarkMode === 'function'
+            ? window.themeHandler.isDarkMode()
+            : false;
+
+        // Remove existing theme classes
+        gridElement.classList.remove('ag-theme-alpine', 'ag-theme-alpine-dark');
+
+        // Apply the appropriate theme class
+        gridElement.classList.add(isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine');
+    }
+}
+
+// Update the renderGrid function with proper AG Grid initialization
 export async function renderGrid(id, element, options) {
     try {
         // Dynamically load AG Grid scripts if they're not already loaded
@@ -70,17 +87,28 @@ export async function renderGrid(id, element, options) {
         // Prepare options by deserializing any function strings
         const processedOptions = deserialize(options);
 
-        // Create the grid with the AG Grid API
-        element.classList.add('ag-theme-alpine'); // Ensure theme class is applied
-        const gridApi = window.agGrid.createGrid(element, processedOptions);
-        instances.set(id, gridApi);
+        // Create the grid with the correct AG Grid API
+        // THIS IS THE FIX - using new agGrid.Grid instead of createGrid
+        const gridInstance = new window.agGrid.Grid(element, processedOptions);
+        instances.set(id, gridInstance);
 
-        return gridApi;
+        // Apply the initial theme
+        updateTheme(id);
+
+        // Set up an observer for theme changes safely
+        if (window.themeHandler && typeof window.themeHandler.registerThemeChangeCallback === 'function') {
+            window.themeHandler.registerThemeChangeCallback(() => {
+                updateTheme(id);
+            });
+        } else {
+            console.warn('Theme handler not available. Dark mode detection will not work automatically.');
+        }
+
+        return gridInstance;
     } catch (error) {
         console.error('Error rendering AG Grid:', error);
     }
 }
-
 // Set AG Grid license key
 export function setLicenseKey(key) {
     if (key && window.agGrid && window.agGrid.LicenseManager) {
@@ -131,16 +159,3 @@ export function initSystemThemeDetection(dotNetReference) {
     return isDark;
 }
 
-export function updateTheme(gridId, isDarkMode) {
-    const gridDiv = document.querySelector(`[data-grid-id="${gridId}"]`);
-    if (gridDiv && window.gridInstances && window.gridInstances[gridId]) {
-        // Update theme class
-        gridDiv.classList.remove('ag-theme-alpine', 'ag-theme-alpine-dark');
-        gridDiv.classList.add(isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine');
-
-        // If there's an API instance, refresh it to apply the theme
-        if (window.gridInstances[gridId].api) {
-            window.gridInstances[gridId].api.refreshCells({ force: true });
-        }
-    }
-}
