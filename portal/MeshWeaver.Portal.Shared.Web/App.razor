@@ -1,4 +1,5 @@
 ﻿@using Microsoft.Extensions.Configuration
+@using MeshWeaver.Blazor.Components
 @inject IConfiguration Configuration
 
 <!DOCTYPE html>
@@ -19,15 +20,19 @@
 </head>
 
 <body>
-<Routes @rendermode="RenderMode.InteractiveServer" />
-<FluentDesignTheme StorageName="theme" @bind-Mode="@Mode"/>
-<CookiePolicy @rendermode="RenderMode.InteractiveServer" />
-<script src="_framework/blazor.web.js"></script>
-<script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
+<CascadingValue Name="ThemeMode" Value="@(Mode)">
+    <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
+    <Routes @rendermode="RenderMode.InteractiveServer"/>
+</CascadingValue>
+<CookiePolicy @rendermode="RenderMode.InteractiveServer"/>
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
+    <script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
 </body>
 
 </html>
 
 @code {
     private DesignThemeModes Mode;
+
 }
