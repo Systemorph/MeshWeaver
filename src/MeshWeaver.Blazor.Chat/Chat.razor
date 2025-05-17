@@ -17,7 +17,6 @@
 </div>
 
 @code {
-    private string SelectedModel => "o3-mini";
     private readonly List<ChatMessage> messages = new();
     private CancellationTokenSource currentResponseCancellation;
     private ChatMessage currentResponseMessage;
@@ -52,8 +51,8 @@
         var responseText = new TextContent("");
         currentResponseMessage = new ChatMessage(ChatRole.Assistant, [responseText]);
         currentResponseCancellation = new();
-        var chatClient = ChatService.Get(SelectedModel);
-        var chatOptions = ChatService.GetOptions(Hub, NavigationManager.ToBaseRelativePath(NavigationManager.Uri), SelectedModel);
+        var chatClient = ChatService.Get();
+        var chatOptions = ChatService.GetOptions(Hub, NavigationManager.ToBaseRelativePath(NavigationManager.Uri));
         await foreach (var update in chatClient.GetStreamingResponseAsync([.. messages], chatOptions, currentResponseCancellation.Token))
         {
             messages.AddMessages(update, filter: c => c is not TextContent);
