@@ -222,6 +222,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Blazor.Chat", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.AI", "src\MeshWeaver.AI\MeshWeaver.AI.csproj", "{91BC2E77-E52A-4311-8CFE-8CB1719AAD53}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Documentation.AI", "MeshWeaver.Documentation.AI\MeshWeaver.Documentation.AI.csproj", "{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -580,6 +582,10 @@ Global
 		{91BC2E77-E52A-4311-8CFE-8CB1719AAD53}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{91BC2E77-E52A-4311-8CFE-8CB1719AAD53}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{91BC2E77-E52A-4311-8CFE-8CB1719AAD53}.Release|Any CPU.Build.0 = Release|Any CPU
+		{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -677,6 +683,7 @@ Global
 		{6CC891A5-E49E-4774-2303-FC55C3444A69} = {4C68D283-B46D-4CC1-B02C-4B212D01B4A6}
 		{22011843-5269-8E34-0A7E-4657B72F9A46} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{91BC2E77-E52A-4311-8CFE-8CB1719AAD53} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{01E6EA07-FB9D-4F44-9C8D-1C1DC9AD6BFB} = {E014F414-2BBC-4ACA-B8DB-D81CB162E8FC}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

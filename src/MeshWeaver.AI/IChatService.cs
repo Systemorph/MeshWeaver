@@ -15,7 +15,7 @@ namespace MeshWeaver.AI;
 public interface IChatService
 {
     IChatClient Get(string model = null);
-    ChatOptions GetOptions(IMessageHub hub, string uri, string selectedModel);
+    ChatOptions GetOptions(IMessageHub hub, string uri, string selectedModel = null);
 
     public ProgressMessage GetProgressMessage(FunctionCallContent content);
     string SystemPrompt { get; }
@@ -56,6 +56,8 @@ public class ChatService : IChatService
 
     public IChatClient Get(string model)
     {
+        if (string.IsNullOrWhiteSpace(model))
+            model = credentialsConfiguration.Models.First();
         return clients.GetOrAdd(model, _ => new ChatClientBuilder(client.GetChatClient(model).AsIChatClient())
             .UseFunctionInvocation()
             .Build());

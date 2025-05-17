@@ -6,6 +6,7 @@
         <SupportedPlatform Include="browser" />
     </ItemGroup>
     <ItemGroup>
+        <ProjectReference Include="..\..\MeshWeaver.Documentation.AI\MeshWeaver.Documentation.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />

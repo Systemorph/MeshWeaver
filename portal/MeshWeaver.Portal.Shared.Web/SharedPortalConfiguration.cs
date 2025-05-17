@@ -20,6 +20,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
+using MeshWeaver.Documentation.AI;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
@@ -47,7 +48,7 @@ public static class SharedPortalConfiguration
             {
                 opt.DisableImplicitFromServicesParameters = true;
             });
-        services.AddAI();
+        services.AddAI(conf => conf.AddDocumentationAI());
         services.Configure<AICredentialsConfiguration>(builder.Configuration.GetSection("AI"));
 
         services.AddScoped<CacheStorageAccessor>();
