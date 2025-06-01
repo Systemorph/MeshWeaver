@@ -43,11 +43,9 @@ public record CollectionReference(string Name) : WorkspaceReference<InstanceColl
 public record AggregateWorkspaceReference(params WorkspaceReference<EntityStore>[] References)
     : WorkspaceReference<EntityStore>;
 
-public record CollectionsReference(IReadOnlyCollection<string> Collections)
+public record CollectionsReference(params IReadOnlyCollection<string> Collections)
     : WorkspaceReference<EntityStore>
 {
-    public CollectionsReference(params string[] Collections) : this((IReadOnlyCollection<string>)Collections)
-    { }
 
     public override string ToString() => string.Join(',',Collections);
 
