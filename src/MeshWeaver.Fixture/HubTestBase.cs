@@ -30,7 +30,7 @@ public class HubTestBase : TestBase
             )
         );
     }
-    private static readonly Dictionary<string, Type> AddressTypes = new ()
+    private static readonly Dictionary<string, Type> AddressTypes = new()
     {
         { new ClientAddress().Type, typeof(ClientAddress) },
         { new HostAddress().Type, typeof(HostAddress) },
@@ -62,11 +62,12 @@ public class HubTestBase : TestBase
     {
         return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
     }
-
     public override async Task DisposeAsync()
     {
-        Logger.LogInformation("Starting disposal of router");   
+        Logger.LogInformation("Starting disposal of router");
         Router.Dispose();
+
+        // Remove timeout workarounds - let it hang to see what messages are circulating
         await Router.Disposal;
         Logger.LogInformation("Finished disposal of router");
     }

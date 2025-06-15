@@ -23,9 +23,9 @@ public class MessageService : IMessageService
 
 
     public MessageService(
-        Address address, 
-        ILogger<MessageService> logger, 
-        IMessageHub hub, 
+        Address address,
+        ILogger<MessageService> logger,
+        IMessageHub hub,
         IMessageHub parentHub
         )
     {
@@ -35,8 +35,8 @@ public class MessageService : IMessageService
         this.hub = hub;
 
         deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
-        deliveryAction = 
-            new(x => x.Invoke()); 
+        deliveryAction =
+            new(x => x.Invoke());
 
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
@@ -66,13 +66,13 @@ public class MessageService : IMessageService
     public IMessageHub ParentHub { get; }
 
 
-    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) => 
+    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken);
 
-    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery,  CancellationToken cancellationToken)
+    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
 
@@ -89,10 +89,10 @@ public class MessageService : IMessageService
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        if(delivery.Target is null || delivery.Target.Equals(hub.Address))
+        if (delivery.Target is null || delivery.Target.Equals(hub.Address))
             return ScheduleExecution(delivery, cancellationToken);
 
-        if(delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
+        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
             return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
 
         return await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
@@ -111,7 +111,7 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                if(delivery.Message is ExecutionRequest er)
+                if (delivery.Message is ExecutionRequest er)
                     er.ExceptionCallback?.Invoke(e);
                 else
                 {
@@ -120,8 +120,8 @@ public class MessageService : IMessageService
                 }
             }
 
-            if(delivery.Message is not ExecutionRequest)
-                logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address); 
+            if (delivery.Message is not ExecutionRequest)
+                logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address);
 
         });
         return delivery.Forwarded(hub.Address);
@@ -176,17 +176,15 @@ public class MessageService : IMessageService
                 .Invoke(this, [message, opt]);
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
-        
+
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
-        ScheduleNotify(postPipeline.Invoke(delivery),  default);
+        ScheduleNotify(postPipeline.Invoke(delivery), default);
         return delivery;
     }
 
-    
-    private readonly Lock locker = new();
 
-    public async ValueTask DisposeAsync()
+    private readonly Lock locker = new(); public async ValueTask DisposeAsync()
     {
         lock (locker)
         {
@@ -195,13 +193,40 @@ public class MessageService : IMessageService
             isDisposing = true;
         }
 
+        logger.LogDebug("Starting disposal of message service in {Address}", Address);
+
+        // Complete the buffers to stop accepting new messages
         buffer.Complete();
+        executionBuffer.Complete();
 
-        logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
-        await deliveryAction.Completion;
-        logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
-        await deferralContainer.DisposeAsync();
+        try
+        {
+            logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
+            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
+            logger.LogDebug("Deliveries completed successfully in {Address}", Address);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogError("Delivery completion timed out after 3 seconds in {Address}", Address);
+        }
+
+        // Don't wait for execution completion during disposal as this disposal itself
+        // runs as an execution and might cause deadlocks waiting for itself
+        logger.LogDebug("Skipping execution completion wait during disposal for {Address}", Address);
+
+        try
+        {
+            logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
+            using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await deferralContainer.DisposeAsync().AsTask().WaitAsync(deferralsTimeout.Token);
+            logger.LogDebug("Deferrals completed successfully in {Address}", Address);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogError("Deferrals disposal timed out after 2 seconds in {Address}", Address);
+        }
+
         logger.LogDebug("Finished disposing message service in {Address}", Address);
-
     }
 }
