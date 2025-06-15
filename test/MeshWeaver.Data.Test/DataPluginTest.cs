@@ -18,16 +18,36 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
-public record MyData(string Id, [property: Required] string Text)
+/// <summary>
+/// Test data record for data plugin testing
+/// </summary>
+/// <param name="Id">Unique identifier for the data item</param>
+/// <param name="Text">Text content of the data item</param>
+public record MyData(
+    string Id,
+    [property: Required] string Text)
 {
+    /// <summary>
+    /// Initial test data collection for seeding tests
+    /// </summary>
     public static MyData[] InitialData = [new("1", "A"), new("2", "B")];
 
 }
+
+/// <summary>
+/// Tests for data plugin functionality including CRUD operations, schema generation, and data synchronization
+/// </summary>
+/// <param name="output">Test output helper for logging</param>
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
     private ImmutableDictionary<object, object> storage = ImmutableDictionary<object, object>.Empty;
 
+    /// <summary>
+    /// Configures the host message hub for data plugin testing
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -43,6 +63,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
+    /// <summary>
+    /// Configures the client to connect to host data sources for MyData type
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
     ) =>
@@ -51,6 +76,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                 data.AddHubSource(new HostAddress(), dataSource => dataSource.WithType<MyData>())
             );
 
+    /// <summary>
+    /// Tests basic data plugin initialization and data loading
+    /// </summary>
     [Fact]
     public async Task InitializeTest()
     {
@@ -63,6 +91,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
+    /// <summary>
+    /// Tests data update operations through the data plugin
+    /// </summary>
     [Fact]
     public async Task Update()
     {
@@ -119,6 +150,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
     }
 
+    /// <summary>
+    /// Tests data deletion operations through the data plugin
+    /// </summary>
     [Fact]
     public async Task Delete()
     {
@@ -159,10 +193,19 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 
-    public static string TextChange = nameof(TextChange);
+    /// <summary>
+    /// Text change constant for testing purposes
+    /// </summary>
+    public const string TextChange = nameof(TextChange);
 
+    /// <summary>
+    /// Local import request record for activity testing
+    /// </summary>
     public record LocalImportRequest : IRequest<ActivityLog>;
 
+    /// <summary>
+    /// Tests workspace variable usage functionality
+    /// </summary>
     [Fact]
     public async Task CheckUsagesFromWorkspaceVariable()
     {
@@ -193,17 +236,30 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
     }
 
+    /// <summary>
+    /// Initializes test data for MyData type
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token for the operation</param>
+    /// <returns>A task that represents the asynchronous operation, containing the initialized data</returns>
     private Task<IEnumerable<MyData>> InitializeMyData(CancellationToken cancellationToken)
     {
         storage = MyData.InitialData.ToImmutableDictionary(x => (object)x.Id, x => (object)x);
         return Task.FromResult<IEnumerable<MyData>>(MyData.InitialData);
     }
 
+    /// <summary>
+    /// Saves updated MyData instances to storage
+    /// </summary>
+    /// <param name="instanceCollection">The collection of instances to save</param>
+    /// <returns>The saved instance collection</returns>
     private InstanceCollection SaveMyData(InstanceCollection instanceCollection)
     {
         storage = instanceCollection.Instances;
         return instanceCollection;
     }
+    /// <summary>
+    /// Tests validation failure scenarios and error handling
+    /// </summary>
     [Fact]
     public async Task ValidationFailure()
     {
@@ -227,6 +283,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }
 
+    /// <summary>
+    /// Tests collection reference reduction operations
+    /// </summary>
     [Fact]
     public async Task ReduceCollectionReference()
     {
@@ -238,6 +297,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         collection.Should().BeEquivalentTo(MyData.InitialData);
     }
 
+    /// <summary>
+    /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldReturnValidJsonSchema()
     {
@@ -273,6 +335,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         requiredArray.Should().Contain("text"); // Because it has [Required] attribute
     }
 
+    /// <summary>
+    /// Tests that GetSchemaRequest returns empty schema for unknown types
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForUnknownType_ShouldReturnEmptySchema()
     {
@@ -293,6 +358,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         schemaResponse.Schema.Should().Be("{}");
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns all available registered types
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldReturnAvailableTypes()
     {
@@ -317,6 +385,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         myDataType.Description.Should().NotBeNullOrEmpty();
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns types in sorted order
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldReturnSortedTypes()
     {
@@ -337,6 +408,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName ?? t1.Name).Equals(t2.DisplayName ?? t2.Name));
     }
 
+    /// <summary>
+    /// Tests update operations with invalid data and validation error handling
+    /// </summary>
     [Fact]
     public async Task UpdateWithInvalidData_ShouldReturnValidationErrors()
     {
@@ -362,6 +436,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         response.Log.Messages.Should().NotBeEmpty();
     }
 
+    /// <summary>
+    /// Tests updating non-existent records creates new records
+    /// </summary>
     [Fact]
     public async Task UpdateNonExistentRecord_ShouldCreateNewRecord()
     {
@@ -394,6 +471,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         updatedData.Should().Contain(x => x.Id == "999" && x.Text == "New Item");
     }
 
+    /// <summary>
+    /// Tests handling of multiple simultaneous update operations
+    /// </summary>
     [Fact]
     public async Task MultipleSimultaneousUpdates_ShouldHandleCorrectly()
     {
@@ -440,6 +520,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         finalData.Should().Contain(x => x.Id == "12" && x.Text == "Update 3");
     }
 
+    /// <summary>
+    /// Tests schema request behavior with null or empty type parameters
+    /// </summary>
     [Fact]
     public async Task SchemaRequest_WithNullOrEmptyType_ShouldReturnEmptySchema()
     {
@@ -467,6 +550,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         schemaResponseEmpty.Schema.Should().Be("{}");
     }
 
+    /// <summary>
+    /// Tests data synchronization consistency between client and host
+    /// </summary>
     [Fact]
     public async Task DataSynchronization_BetweenClientAndHost_ShouldStayConsistent()
     {
@@ -514,6 +600,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         updatedClientData.Should().Contain(x => x.Id == "1" && x.Text == "Updated Text");
     }
 
+    /// <summary>
+    /// Tests collection reference operations with specific data types
+    /// </summary>
     [Fact]
     public async Task CollectionReference_WithSpecificType_ShouldReturnCorrectData()
     {

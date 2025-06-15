@@ -11,8 +11,16 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
+/// <summary>
+/// Tests for data synchronization between host and client workspaces
+/// </summary>
 public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Configures the host with test data sources for LineOfBusiness and BusinessUnit
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -28,6 +36,11 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
             );
     }
 
+    /// <summary>
+    /// Configures the client to connect to host data sources
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
     )
@@ -43,6 +56,9 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
 
     private const string NewName = nameof(NewName);
 
+    /// <summary>
+    /// Tests basic data synchronization from client to host workspace
+    /// </summary>
     [HubFact]
     public async Task TestBasicSynchronization()
     {
@@ -74,6 +90,9 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
             .FirstAsync(); // we query directly the host to see that data sync worked
         loadedInstance.Should().Be(businessUnit);
     }
+    /// <summary>
+    /// Tests data reduction functionality after updates are applied
+    /// </summary>
     [HubFact]
     public async Task ReduceAfterUpdate()
     {

@@ -26,6 +26,9 @@ public record WorkspaceTestData(
     bool IsActive = true
 )
 {
+    /// <summary>
+    /// Sample test data used for workspace testing scenarios
+    /// </summary>
     public static WorkspaceTestData[] TestData =
     [
         new("1", "First Item", DateTime.UtcNow.AddDays(-1)),
@@ -39,6 +42,11 @@ public record WorkspaceTestData(
 /// </summary>
 public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Configures the host with WorkspaceTestData for testing workspace operations
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -52,6 +60,11 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
+    /// <summary>
+    /// Configures the client to connect to host workspace data sources
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
@@ -59,6 +72,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
                     dataSource.WithType<WorkspaceTestData>())
             );
 
+    /// <summary>
+    /// Tests that workspace initializes correctly with the predefined test data
+    /// </summary>
     [Fact]
     public async Task Workspace_ShouldInitializeWithTestData()
     {
@@ -77,6 +93,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         data.Should().BeEquivalentTo(WorkspaceTestData.TestData);
     }
 
+    /// <summary>
+    /// Tests that workspace can retrieve a specific item by its key
+    /// </summary>
     [Fact]
     public async Task Workspace_GetObservableWithKey_ShouldReturnSpecificItem()
     {
@@ -94,6 +113,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         item.Should().BeEquivalentTo(expectedItem);
     }
 
+    /// <summary>
+    /// Tests that workspace returns null when querying for a non-existent key
+    /// </summary>
     [Fact]
     public async Task Workspace_GetObservableWithNonExistentKey_ShouldReturnNull()
     {
@@ -110,6 +132,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         item.Should().BeNull();
     }
 
+    /// <summary>
+    /// Tests that workspace can filter items using predicate expressions
+    /// </summary>
     [Fact]
     public async Task Workspace_FilterByPredicate_ShouldReturnMatchingItems()
     {
@@ -128,6 +153,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         activeItems.Should().AllSatisfy(item => item.IsActive.Should().BeTrue());
     }
 
+    /// <summary>
+    /// Tests that updating an item triggers observable changes in the workspace
+    /// </summary>
     [Fact]
     public async Task Workspace_UpdateItem_ShouldTriggerObservableChanges()
     {
@@ -173,6 +201,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         subscription.Dispose();
     }
 
+    /// <summary>
+    /// Tests that deleting an item removes it from the workspace collection
+    /// </summary>
     [Fact]
     public async Task Workspace_DeleteItem_ShouldRemoveFromCollection()
     {
@@ -204,6 +235,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         updatedData.Should().NotContain(x => x.Id == "3");
     }
 
+    /// <summary>
+    /// Tests that data change requests with activities properly log changes
+    /// </summary>
     [Fact]
     public async Task DataChangeRequest_WithActivity_ShouldLogChanges()
     {        // arrange
@@ -223,6 +257,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         dataChangeResponse.Log.Category.Should().Be(ActivityCategory.DataUpdate);
         dataChangeResponse.Status.Should().Be(DataChangeStatus.Committed);
     }
+    /// <summary>
+    /// Tests that collection references provide proper stream access to collections
+    /// </summary>
     [Fact]
     public async Task CollectionReference_ShouldProvideStreamAccess()
     {
@@ -242,6 +279,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         collection.Should().BeEquivalentTo(WorkspaceTestData.TestData);
     }
 
+    /// <summary>
+    /// Tests that entity references provide access to specific items in the workspace
+    /// </summary>
     [Fact]
     public async Task EntityReference_ShouldProvideSpecificItemAccess()
     {
@@ -262,6 +302,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         item.Name.Should().Be("Second Item");
     }
 
+    /// <summary>
+    /// Tests that multiple clients can synchronize data changes across the workspace
+    /// </summary>
     [Fact]
     public async Task Workspace_MultipleClients_ShouldSynchronizeData()
     {
