@@ -1,5 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Fixture;
@@ -73,7 +75,8 @@ public class SerializationTest : HubTestBase
 
         var response = await client.AwaitResponse(
             new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(new HostAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
         );
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
