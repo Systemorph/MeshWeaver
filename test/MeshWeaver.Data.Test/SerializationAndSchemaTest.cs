@@ -63,6 +63,22 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                     .WithType<NestedData>(type =>
                         type.WithKey(instance => instance.Value)
                     )
+                    .WithType<PolymorphicContainer>(type =>
+                        type.WithKey(instance => instance.Id)
+                            .WithInitialData(_ => Task.FromResult(new[] { PolymorphicContainer.CreateSample() }.AsEnumerable()))
+                    )
+                    .WithType<BaseShape>(type =>
+                        type.WithKey(instance => instance.Name)
+                    )
+                    .WithType<Circle>(type =>
+                        type.WithKey(instance => instance.Name)
+                    )
+                    .WithType<Rectangle>(type =>
+                        type.WithKey(instance => instance.Name)
+                    )
+                    .WithType<Triangle>(type =>
+                        type.WithKey(instance => instance.Name)
+                    )
                 )
             );
     }
@@ -73,7 +89,12 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                 data.AddHubSource(new HostAddress(), dataSource =>
                     dataSource
                         .WithType<SerializationTestData>()
-                        .WithType<NestedData>())
+                        .WithType<NestedData>()
+                        .WithType<PolymorphicContainer>()
+                        .WithType<BaseShape>()
+                        .WithType<Circle>()
+                        .WithType<Rectangle>()
+                        .WithType<Triangle>())
             );
 
     [Fact]
@@ -353,4 +374,396 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         item.Tags.Should().Equal("updated", "complex");
         item.Details.Value.Should().Be("Nested Value"); // Should preserve unchanged nested values
     }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleInheritance()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(PolymorphicContainer).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        schemaResponse.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify polymorphic properties exist
+        properties.TryGetProperty("id", out _).Should().BeTrue();
+        properties.TryGetProperty("containerName", out _).Should().BeTrue();
+        properties.TryGetProperty("primaryShape", out _).Should().BeTrue();
+        properties.TryGetProperty("shapes", out _).Should().BeTrue();
+        properties.TryGetProperty("namedShapes", out _).Should().BeTrue();
+
+        // Verify primary shape is recognized as object (polymorphic)
+        var primaryShapeProperty = properties.GetProperty("primaryShape");
+        primaryShapeProperty.GetProperty("type").GetString().Should().Be("object");
+        primaryShapeProperty.GetProperty("description").GetString().Should().Contain("Complex type");
+
+        // Verify shapes array
+        var shapesProperty = properties.GetProperty("shapes");
+        shapesProperty.GetProperty("type").GetString().Should().Be("array");
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForBaseShape_ShouldShowAbstractProperties()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(BaseShape).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        schemaResponse.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify base properties
+        properties.TryGetProperty("name", out _).Should().BeTrue();
+        properties.TryGetProperty("color", out _).Should().BeTrue();
+        properties.TryGetProperty("area", out _).Should().BeTrue();
+
+        // Area should be a number (double)
+        var areaProperty = properties.GetProperty("area");
+        areaProperty.GetProperty("type").GetString().Should().Be("number");
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForCircle_ShouldIncludeInheritedAndOwnProperties()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(Circle).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        schemaResponse.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify inherited properties from BaseShape
+        properties.TryGetProperty("name", out _).Should().BeTrue();
+        properties.TryGetProperty("color", out _).Should().BeTrue();
+        properties.TryGetProperty("area", out _).Should().BeTrue();
+
+        // Verify Circle-specific property
+        properties.TryGetProperty("radius", out _).Should().BeTrue();
+        var radiusProperty = properties.GetProperty("radius");
+        radiusProperty.GetProperty("type").GetString().Should().Be("number");
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForRectangle_ShouldIncludeWidthAndHeight()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(Rectangle).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        schemaResponse.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify inherited properties
+        properties.TryGetProperty("name", out _).Should().BeTrue();
+        properties.TryGetProperty("color", out _).Should().BeTrue();
+        properties.TryGetProperty("area", out _).Should().BeTrue();
+
+        // Verify Rectangle-specific properties
+        properties.TryGetProperty("width", out _).Should().BeTrue();
+        properties.TryGetProperty("height", out _).Should().BeTrue();
+
+        var widthProperty = properties.GetProperty("width");
+        widthProperty.GetProperty("type").GetString().Should().Be("number");
+
+        var heightProperty = properties.GetProperty("height");
+        heightProperty.GetProperty("type").GetString().Should().Be("number");
+    }
+
+    [Fact]
+    public async Task GetDomainTypesRequest_ShouldIncludePolymorphicTypes()
+    {
+        // arrange
+        var client = GetClient();
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetDomainTypesRequest(),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
+        var typeNames = typesResponse.Types.Select(t => t.Name).ToArray();
+
+        // Should include all polymorphic types
+        typeNames.Should().Contain(name => name.Contains("PolymorphicContainer"));
+        typeNames.Should().Contain(name => name.Contains("BaseShape"));
+        typeNames.Should().Contain(name => name.Contains("Circle"));
+        typeNames.Should().Contain(name => name.Contains("Rectangle"));
+        typeNames.Should().Contain(name => name.Contains("Triangle"));
+    }
+
+    [Fact]
+    public async Task PolymorphicDataSerialization_ShouldPreserveTypeInformation()
+    {
+        // arrange
+        var client = GetClient();
+        var container = new PolymorphicContainer(
+            Id: "poly-test",
+            ContainerName: "Polymorphic Test",
+            PrimaryShape: new Triangle("Primary Triangle", "Blue", 10.0, 8.0),
+            Shapes: new List<BaseShape>
+            {
+                new Circle("Test Circle", "Red", 5.0),
+                new Rectangle("Test Rectangle", "Green", 3.0, 4.0)
+            },
+            NamedShapes: new Dictionary<string, BaseShape>
+            {
+                ["main"] = new Circle("Main Shape", "Purple", 7.0)
+            }
+        );
+
+        // act
+        var response = await client.AwaitResponse(
+            DataChangeRequest.Update(new object[] { container }),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        response.Message.Should().BeOfType<DataChangeResponse>();
+
+        var retrievedData = await client
+            .GetWorkspace()
+            .GetObservable<PolymorphicContainer>()
+            .Timeout(10.Seconds())
+            .FirstOrDefaultAsync(items => items?.Any(x => x.Id == "poly-test") == true);
+
+        var item = retrievedData.First(x => x.Id == "poly-test");
+
+        // Verify primary shape preserved type and properties
+        item.PrimaryShape.Should().BeOfType<Triangle>();
+        var triangle = (Triangle)item.PrimaryShape;
+        triangle.Base.Should().Be(10.0);
+        triangle.Height.Should().Be(8.0);
+        triangle.Area.Should().Be(40.0); // 0.5 * 10 * 8
+
+        // Verify shapes collection preserved types
+        item.Shapes.Should().HaveCount(2);
+        item.Shapes.OfType<Circle>().Should().HaveCount(1);
+        item.Shapes.OfType<Rectangle>().Should().HaveCount(1);
+
+        var circle = item.Shapes.OfType<Circle>().First();
+        circle.Radius.Should().Be(5.0);
+        circle.Area.Should().BeApproximately(Math.PI * 25, 0.001); // π * r²
+
+        var rectangle = item.Shapes.OfType<Rectangle>().First();
+        rectangle.Width.Should().Be(3.0);
+        rectangle.Height.Should().Be(4.0);
+        rectangle.Area.Should().Be(12.0);
+
+        // Verify named shapes dictionary
+        item.NamedShapes.Should().ContainKey("main");
+        item.NamedShapes["main"].Should().BeOfType<Circle>();
+        var namedCircle = (Circle)item.NamedShapes["main"];
+        namedCircle.Radius.Should().Be(7.0);
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ShouldIncludeTypePropertyAndDefault()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(SerializationTestData).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify $type property exists
+        properties.TryGetProperty("$type", out var typeProperty).Should().BeTrue();
+        typeProperty.GetProperty("type").GetString().Should().Be("string");
+        typeProperty.GetProperty("description").GetString().Should().Contain("Type discriminator");
+        typeProperty.GetProperty("default").GetString().Should().Be(typeName);
+
+        // Verify $type is in required fields
+        var required = schemaJson.RootElement.GetProperty("required");
+        var requiredArray = required.EnumerateArray().Select(e => e.GetString()).ToArray();
+        requiredArray.Should().Contain("$type");        // Verify default object has $type
+        var defaultObj = schemaJson.RootElement.GetProperty("default");
+        defaultObj.GetProperty("type").GetString().Should().Be(typeName);
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForBaseShape_ShouldIncludeInheritors()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(BaseShape).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+
+        // Verify oneOf property exists for potential inheritors
+        if (schemaJson.RootElement.TryGetProperty("oneOf", out var oneOfProperty))
+        {
+            var inheritors = oneOfProperty.EnumerateArray().ToArray();
+            inheritors.Should().NotBeEmpty("Base class should have inheritors");
+
+            // Check that we have Circle, Rectangle, and Triangle as inheritors
+            var inheritorTitles = inheritors
+                .Where(i => i.TryGetProperty("title", out _))
+                .Select(i => i.GetProperty("title").GetString())
+                .ToArray();
+
+            inheritorTitles.Should().Contain(title => title.Contains("Circle"));
+            inheritorTitles.Should().Contain(title => title.Contains("Rectangle"));
+            inheritorTitles.Should().Contain(title => title.Contains("Triangle"));
+        }
+    }
+
+    [Fact]
+    public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleComplexPolymorphicProperties()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(PolymorphicContainer).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify $type property exists for the container itself
+        properties.TryGetProperty("$type", out var typeProperty).Should().BeTrue();
+
+        // Verify polymorphic properties are marked as objects
+        properties.TryGetProperty("primaryShape", out var primaryShapeProperty).Should().BeTrue();
+        primaryShapeProperty.GetProperty("type").GetString().Should().Be("object");
+
+        properties.TryGetProperty("shapes", out var shapesProperty).Should().BeTrue();
+        shapesProperty.GetProperty("type").GetString().Should().Be("array");
+
+        properties.TryGetProperty("namedShapes", out var namedShapesProperty).Should().BeTrue();
+        namedShapesProperty.GetProperty("type").GetString().Should().Be("object");
+    }
+}
+
+/// <summary>
+/// Base class for polymorphic testing
+/// </summary>
+public abstract record BaseShape(string Name, string Color)
+{
+    public abstract double Area { get; }
+}
+
+/// <summary>
+/// Circle implementation of BaseShape
+/// </summary>
+public record Circle(string Name, string Color, double Radius) : BaseShape(Name, Color)
+{
+    public override double Area => Math.PI * Radius * Radius;
+}
+
+/// <summary>
+/// Rectangle implementation of BaseShape
+/// </summary>
+public record Rectangle(string Name, string Color, double Width, double Height) : BaseShape(Name, Color)
+{
+    public override double Area => Width * Height;
+}
+
+/// <summary>
+/// Triangle implementation of BaseShape
+/// </summary>
+public record Triangle(string Name, string Color, double Base, double Height) : BaseShape(Name, Color)
+{
+    public override double Area => 0.5 * Base * Height;
+}
+
+/// <summary>
+/// Container class that has polymorphic properties
+/// </summary>
+public record PolymorphicContainer(
+    string Id,
+    [property: Required] string ContainerName,
+    BaseShape PrimaryShape,
+    List<BaseShape> Shapes,
+    Dictionary<string, BaseShape> NamedShapes
+)
+{
+    public static PolymorphicContainer CreateSample() => new(
+        Id: "container1",
+        ContainerName: "Test Container",
+        PrimaryShape: new Circle("Main Circle", "Blue", 5.0),
+        Shapes: new List<BaseShape>
+        {
+            new Circle("Circle1", "Red", 3.0),
+            new Rectangle("Rect1", "Green", 4.0, 6.0),
+            new Triangle("Triangle1", "Yellow", 8.0, 5.0)
+        },
+        NamedShapes: new Dictionary<string, BaseShape>
+        {
+            ["primary"] = new Circle("Primary", "Purple", 2.5),
+            ["secondary"] = new Rectangle("Secondary", "Orange", 3.0, 3.0)
+        }
+    );
 }
