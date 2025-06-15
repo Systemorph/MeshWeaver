@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJsonTypeInfoResolver
 {
+    private readonly ConcurrentDictionary<Type, List<JsonDerivedType>> _derivedTypesCache = new();
     public override JsonTypeInfo GetTypeInfo(Type type, JsonSerializerOptions options)
     {
         var jsonTypeInfo = base.GetTypeInfo(type, options);        // Only configure polymorphism for supported types that need it
@@ -28,7 +30,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                     {
                         TypeDiscriminatorPropertyName = EntitySerializationExtensions.TypeProperty,
                         IgnoreUnrecognizedTypeDiscriminators = true,
-                        UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToBaseType
+                        UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToNearestAncestor
                     };
 
                     foreach (var derivedType in derivedTypes)
@@ -55,6 +57,11 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
     }
     private List<JsonDerivedType> GetDerivedTypes(Type baseType)
     {
+        return _derivedTypesCache.GetOrAdd(baseType, ComputeDerivedTypes);
+    }
+
+    private List<JsonDerivedType> ComputeDerivedTypes(Type baseType)
+    {
         var derivedTypes = new List<JsonDerivedType>();
 
         // For non-abstract, non-interface types, add the type itself as a derived type
@@ -66,7 +73,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
             derivedTypes.Add(new JsonDerivedType(baseType, typeName));
         }
 
-        // Also add any actual derived types from the registry
+        // Find all derived types from the registry for ANY type
         foreach (var registeredType in typeRegistry.Types)
         {
             var derivedType = registeredType.Value.Type;
@@ -75,24 +82,8 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
             if (derivedType == baseType)
                 continue;
 
-            // For object type, include all registered types that can be serialized
-            if (baseType == typeof(object))
-            {
-                if (CanBeSerializedPolymorphically(derivedType))
-                {
-                    derivedTypes.Add(new JsonDerivedType(derivedType, registeredType.Key));
-                }
-            }
-            // For interfaces and abstract types, check if the registered type implements/inherits from the base type
-            else if (baseType.IsInterface || baseType.IsAbstract)
-            {
-                if (IsValidDerivedTypeForInterface(baseType, derivedType))
-                {
-                    derivedTypes.Add(new JsonDerivedType(derivedType, registeredType.Key));
-                }
-            }
-            // For other base types, check if it's a valid derived type
-            else if (IsValidDerivedType(baseType, derivedType))
+            // Check if this registered type inherits from or implements the base type
+            if (IsValidDerivedTypeForBase(baseType, derivedType))
             {
                 derivedTypes.Add(new JsonDerivedType(derivedType, registeredType.Key));
             }
@@ -100,23 +91,15 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
 
         return derivedTypes;
     }
-    private static bool IsValidDerivedTypeForInterface(Type baseType, Type derivedType)
+    private static bool IsValidDerivedTypeForBase(Type baseType, Type derivedType)
     {
-        // Skip generic type definitions - they cannot be used as derived types in System.Text.Json polymorphism
-        if (derivedType.IsGenericTypeDefinition)
+        // For object type, include all registered types that can be serialized polymorphically
+        if (baseType == typeof(object))
         {
-            return false;
+            return CanBeSerializedPolymorphically(derivedType);
         }
 
-        // For concrete types, use normal assignability check
-        if (baseType.IsAssignableFrom(derivedType))
-            return true;
-
-        return false;
-    }
-    private static bool IsValidDerivedType(Type baseType, Type derivedType)
-    {
-        // Must be assignable to base type
+        // Check if the derived type is actually assignable from the base type
         if (!baseType.IsAssignableFrom(derivedType))
             return false;
 
@@ -124,7 +107,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
         if (derivedType.IsGenericTypeDefinition)
             return false;
 
-        // Must not be abstract or interface (unless we configure fallback)
+        // Must not be abstract or interface for polymorphic serialization
         if (derivedType.IsAbstract || derivedType.IsInterface)
             return false;
 
@@ -138,6 +121,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
 
         return true;
     }
+
     private static bool HasIncompatibleCustomConverter(Type type)
     {
         // Known types with custom converters that don't support polymorphism metadata
@@ -213,7 +197,6 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                type == typeof(DateTimeOffset) ||
                type == typeof(Guid) ||
                type == typeof(TimeSpan) ||
-               type.IsEnum ||
-               (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string));
+               type.IsEnum || (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string));
     }
 }

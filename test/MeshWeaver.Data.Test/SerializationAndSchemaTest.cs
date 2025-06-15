@@ -936,8 +936,96 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         Output.WriteLine("Generated Schema:");
         Output.WriteLine(schemaResponse.Schema);
 
-        // This test is for debugging - always pass
-        Assert.True(true);
+        // This test is for debugging - always pass        Assert.True(true);
+    }    /// <summary>
+    /// Tests that EntityReference serializes correctly with $type discriminator
+    /// and can be deserialized back to abstract WorkspaceReference type
+    /// </summary>
+    [Fact]
+    public void EntityReference_SerializesWithTypeDiscriminator_AndDeserializesToWorkspaceReference()
+    {
+        // arrange
+        var client = GetClient();
+        var originalEntity = new EntityReference("TestCollection", "test-id");
+
+        // act - serialize the EntityReference
+        var serializedJson = JsonSerializer.Serialize(originalEntity, client.JsonSerializerOptions);
+        Output.WriteLine($"Serialized EntityReference: {serializedJson}");
+
+        // assert - verify $type discriminator is present
+        serializedJson.Should().Contain("$type");
+        serializedJson.Should().Contain("EntityReference");
+        serializedJson.Should().Contain("TestCollection");
+        serializedJson.Should().Contain("test-id");
+
+        // act - deserialize back to abstract WorkspaceReference type
+        var deserializedReference = JsonSerializer.Deserialize<WorkspaceReference>(serializedJson, client.JsonSerializerOptions);
+
+        // assert - verify deserialization worked correctly
+        deserializedReference.Should().NotBeNull();
+        deserializedReference.Should().BeOfType<EntityReference>();
+        
+        var deserializedEntity = deserializedReference.Should().BeOfType<EntityReference>().Which;
+        deserializedEntity.Collection.Should().Be("TestCollection");
+        deserializedEntity.Id.Should().Be("test-id");
+        deserializedEntity.Pointer.Should().Be("/TestCollection/'test-id'");
+    }
+
+    /// <summary>
+    /// Tests that various WorkspaceReference types serialize correctly with discriminators
+    /// </summary>
+    [Fact]
+    public void WorkspaceReference_VariousTypes_SerializeWithCorrectDiscriminators()
+    {
+        // arrange
+        var client = GetClient();
+        var testReferences = new WorkspaceReference[]
+        {
+            new EntityReference("Users", "user123"),
+            new JsonPointerReference("/data/items/0"),
+            new InstanceReference("instance456"),
+            new CollectionReference("Products")
+        };
+
+        foreach (var reference in testReferences)
+        {
+            // act - serialize each reference type
+            var serializedJson = JsonSerializer.Serialize(reference, client.JsonSerializerOptions);
+            Output.WriteLine($"Serialized {reference.GetType().Name}: {serializedJson}");
+
+            // assert - verify $type discriminator is present
+            serializedJson.Should().Contain("$type");
+            serializedJson.Should().Contain(reference.GetType().Name);
+
+            // act - deserialize back to abstract WorkspaceReference type
+            var deserializedReference = JsonSerializer.Deserialize<WorkspaceReference>(serializedJson, client.JsonSerializerOptions);
+
+            // assert - verify deserialization worked correctly
+            deserializedReference.Should().NotBeNull();
+            deserializedReference.Should().BeOfType(reference.GetType());
+            deserializedReference.Should().Be(reference);
+        }
+    }
+
+    /// <summary>
+    /// Tests that an empty reference object fails gracefully during deserialization
+    /// </summary>
+    [Fact]    public void WorkspaceReference_EmptyObject_FailsGracefullyDuringDeserialization()
+    {
+        // arrange
+        var client = GetClient();
+        var malformedJson = "{\"$type\":\"MeshWeaver.Data.SubscribeRequest\",\"streamId\":\"test\",\"reference\":{}}";
+
+        // act & assert - should throw meaningful exception
+        var exception = Assert.Throws<NotSupportedException>(() =>
+        {
+            JsonSerializer.Deserialize<SubscribeRequest>(malformedJson, client.JsonSerializerOptions);
+        });
+
+        // assert - verify exception contains helpful information
+        exception.Message.Should().Contain("WorkspaceReference");
+        exception.Message.Should().Contain("type discriminator");
+        Output.WriteLine($"Expected exception occurred: {exception.Message}");
     }
 }
 

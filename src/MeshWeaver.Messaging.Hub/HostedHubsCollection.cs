@@ -95,10 +95,12 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         catch (OperationCanceledException)
         {
             logger.LogError("Hub {address} disposal timed out after 5 seconds", address);
+            throw;
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error during disposal of hub {address}", address);
+            throw;
         }
     }
 
