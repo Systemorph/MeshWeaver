@@ -151,12 +151,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         activeItems.Should().HaveCount(2);
         activeItems.Should().AllSatisfy(item => item.IsActive.Should().BeTrue());
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Tests that updating an item triggers observable changes in the workspace
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
     public async Task Workspace_UpdateItem_ShouldTriggerObservableChanges()
     {
         // arrange
@@ -199,12 +197,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         currentData.Should().Contain(x => x.Id == "1" && x.Name == "Updated First Item");
 
         subscription.Dispose();
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Tests that deleting an item removes it from the workspace collection
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
     public async Task Workspace_DeleteItem_ShouldRemoveFromCollection()
     {
         // arrange
@@ -300,12 +296,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         item.Should().NotBeNull();
         item.Id.Should().Be("2");
         item.Name.Should().Be("Second Item");
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Tests that multiple clients can synchronize data changes across the workspace
     /// </summary>
-    [Fact]
+    [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
     public async Task Workspace_MultipleClients_ShouldSynchronizeData()
     {
         // arrange

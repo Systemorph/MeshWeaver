@@ -10,14 +10,25 @@ namespace MeshWeaver.Activities;
 public abstract record ActivityBase: IDisposable
 {
 
-    protected readonly ILogger Logger;
-
-    protected ActivityBase(string category, IMessageHub hub)
+    protected readonly ILogger Logger;    protected ActivityBase(string category, IMessageHub hub)
     {
         this.Hub = hub;
         this.Logger = hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         Log = new(category);
-        SyncHub = hub.GetHostedHub(new ActivityAddress(), x => x);
+        
+        try
+        {
+            SyncHub = hub.GetHostedHub(new ActivityAddress(), x => x);
+            if (SyncHub == null)
+            {
+                Logger.LogWarning("GetHostedHub returned null for ActivityAddress in activity {category}. Check if ActivityAddress is registered in address types.", category);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create SyncHub for activity {category}", category);
+            throw;
+        }
     }
 
     protected readonly IMessageHub SyncHub;
@@ -35,9 +46,7 @@ public abstract record ActivityBase: IDisposable
     protected readonly ImmutableList<IDisposable> Disposables = [];
     private bool isDisposed;
     private readonly object disposeLock = new();
-    protected readonly IMessageHub Hub;
-
-    public void Dispose()
+    protected readonly IMessageHub Hub;    public void Dispose()
     {
         lock (disposeLock)
         {
@@ -47,7 +56,16 @@ public abstract record ActivityBase: IDisposable
         }
 
         foreach (var disposable in Disposables)
-            disposable.Dispose();
+        {
+            try
+            {
+                disposable.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Error disposing resource in activity {ActivityId}", Id);
+            }
+        }
     }
 
 
@@ -77,15 +95,36 @@ public abstract record ActivityBase<TActivity> : ActivityBase, ILogger
         }, _ => { });
     }
 
-    private TActivity current;
-
-    public void Update(Func<TActivity, TActivity> update, Action<Exception> exceptionCallback)
+    private TActivity current;    public void Update(Func<TActivity, TActivity> update, Action<Exception> exceptionCallback)
     {
-        SyncHub.InvokeAsync(() =>
+        if (SyncHub == null)
         {
-            current = update.Invoke(current);
-            Stream.OnNext(current);
-        }, exceptionCallback);
+            Logger.LogWarning("SyncHub is null in Update for activity {ActivityId}. Activity may have been created after hub disposal.", Id);
+            exceptionCallback?.Invoke(new InvalidOperationException("SyncHub is null. Activity was likely created after hub disposal."));
+            return;
+        }
+
+        // Check if hub is disposing to avoid hanging
+        if (SyncHub.IsDisposing)
+        {
+            Logger.LogWarning("SyncHub is disposing, skipping update for activity {ActivityId}", Id);
+            exceptionCallback?.Invoke(new InvalidOperationException("SyncHub is disposing, cannot process update."));
+            return;
+        }
+
+        try
+        {
+            SyncHub.InvokeAsync(() =>
+            {
+                current = update.Invoke(current);
+                Stream.OnNext(current);
+            }, exceptionCallback);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error in Update for activity {ActivityId}", Id);
+            exceptionCallback?.Invoke(ex);
+        }
     }
 
     void ILogger.Log<TState>(
@@ -175,25 +214,50 @@ public record Activity(string category, IMessageHub hub) : ActivityBase<Activity
 
     private readonly List<Action<ActivityLog>> completedActions = new();
     private readonly object completionLock = new();
-    private TaskCompletionSource taskCompletionSource ;
-    public Task Complete(Action<ActivityLog> completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
+    private TaskCompletionSource taskCompletionSource ;    public async Task Complete(Action<ActivityLog> completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
     {
         if (completedAction != null)
             completedActions.Add(completedAction);
+        
+        Task completionTask;
         lock (completionLock)
         {
             if (taskCompletionSource != null)
-                return taskCompletionSource.Task;
+            {
+                completionTask = taskCompletionSource.Task;
+            }
+            else
+            {
+                taskCompletionSource = new(cancellationToken);
 
-            taskCompletionSource = new(cancellationToken);
+                Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
+                    .Subscribe(a =>
+                    {
+                        if(a.Log.Status == ActivityStatus.Running)
+                            CompleteMyself(null);
+                    });
+                completionTask = taskCompletionSource.Task;
+            }
+        }
 
-            Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
-                .Subscribe(a =>
-                {
-                    if(a.Log.Status == ActivityStatus.Running)
-                        CompleteMyself(null);
-                });
-            return taskCompletionSource.Task;
+        // Add timeout to prevent hanging - default 10 seconds unless cancellation token has shorter timeout
+        var timeout = TimeSpan.FromSeconds(10);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!cancellationToken.CanBeCanceled || cancellationToken == CancellationToken.None)
+        {
+            timeoutCts.CancelAfter(timeout);
+        }
+
+        try
+        {
+            await completionTask.WaitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogWarning("Activity {ActivityId} completion timed out after {Timeout} seconds", Id, timeout.TotalSeconds);
+            // Force completion with failed status
+            CompleteMyself(ActivityStatus.Failed);
+            throw new TimeoutException($"Activity {Id} completion timed out after {timeout.TotalSeconds} seconds");
         }
     }
 

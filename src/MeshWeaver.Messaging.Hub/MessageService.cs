@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
@@ -17,9 +18,9 @@ public class MessageService : IMessageService
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
-
-
     private readonly DeferralContainer deferralContainer;
+    private readonly Timer hangDetectionTimer;
+    private readonly CancellationTokenSource hangDetectionCts = new();
 
 
     public MessageService(
@@ -38,10 +39,19 @@ public class MessageService : IMessageService
         deliveryAction =
             new(x => x.Invoke());
 
-        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
-        hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });        hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
+          // Initialize hang detection timer only when not debugging
+        if (!Debugger.IsAttached)
+        {
+            hangDetectionTimer = new Timer(OnHangDetected, null, 10000, Timeout.Infinite);
+            logger.LogDebug("Hang detection timer started for {Address} with 10 second timeout", Address);
+        }
+        else
+        {
+            logger.LogDebug("Debugger attached - hang detection disabled for {Address}", Address);
+        }
     }
 
     void IMessageService.Start()
@@ -70,11 +80,22 @@ public class MessageService : IMessageService
         deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
-        ScheduleNotify(delivery, cancellationToken);
-
-    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
+        ScheduleNotify(delivery, cancellationToken);    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
+
+        // Reset hang detection timer on activity (if not debugging)
+        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing)
+        {
+            try
+            {
+                hangDetectionTimer.Change(10000, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Timer already disposed, ignore
+            }
+        }
 
         lock (locker)
         {
@@ -97,11 +118,23 @@ public class MessageService : IMessageService
 
         return await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
 
-    }
-
-    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
+    }    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         delivery = UnpackIfNecessary(delivery);
+        
+        // Reset hang detection timer on execution activity
+        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing)
+        {
+            try
+            {
+                hangDetectionTimer.Change(10000, Timeout.Infinite);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Timer already disposed, ignore
+            }
+        }
+        
         executionBuffer.Post(async _ =>
         {
             logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
@@ -182,8 +215,6 @@ public class MessageService : IMessageService
         ScheduleNotify(postPipeline.Invoke(delivery), default);
         return delivery;
     }
-
-
     private readonly Lock locker = new(); public async ValueTask DisposeAsync()
     {
         lock (locker)
@@ -194,6 +225,18 @@ public class MessageService : IMessageService
         }
 
         logger.LogDebug("Starting disposal of message service in {Address}", Address);
+
+        // Dispose hang detection timer first
+        try
+        {
+            hangDetectionTimer?.Dispose();
+            hangDetectionCts?.Cancel();
+            hangDetectionCts?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error disposing hang detection timer in {Address}", Address);
+        }
 
         // Complete the buffers to stop accepting new messages
         buffer.Complete();
@@ -228,5 +271,36 @@ public class MessageService : IMessageService
         }
 
         logger.LogDebug("Finished disposing message service in {Address}", Address);
+    }
+
+    private void OnHangDetected(object state)
+    {
+        if (isDisposing || hangDetectionCts.Token.IsCancellationRequested)
+            return;
+
+        logger.LogError("Potential hang detected in MessageService for {Address} - forcing cancellation", Address);
+        
+        try
+        {
+            // Cancel any ongoing operations
+            hangDetectionCts.Cancel();
+            
+            // Force completion of buffers if they're still accepting messages
+            if (!buffer.Completion.IsCompleted)
+            {
+                buffer.Complete();
+                logger.LogWarning("Forced buffer completion due to hang detection in {Address}", Address);
+            }
+            
+            if (!executionBuffer.Completion.IsCompleted)
+            {
+                executionBuffer.Complete();
+                logger.LogWarning("Forced execution buffer completion due to hang detection in {Address}", Address);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error during hang detection recovery in {Address}", Address);
+        }
     }
 }
