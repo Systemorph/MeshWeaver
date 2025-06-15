@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
+using System.Reflection;
 using System.Text.Json;
 using Json.Patch;
 using MeshWeaver.Activities;
@@ -9,6 +11,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
@@ -213,12 +216,18 @@ public static class DataExtensions
             ["type"] = "string",
             ["description"] = "Type discriminator for polymorphic serialization",
             ["default"] = typeRegistry.GetOrAddType(type)
-        };
-
-        foreach (var prop in type.GetProperties())
+        }; foreach (var prop in type.GetProperties())
         {
             var propType = prop.PropertyType;
             var propertySchema = new Dictionary<string, object>();
+
+            // Extract property description from XML documentation or attributes
+            var xmlDocsSettings = new XmlDocsSettings();
+            var description = GetPropertyDescription(prop, xmlDocsSettings);
+            if (!string.IsNullOrEmpty(description))
+            {
+                propertySchema["description"] = description;
+            }
 
             // Handle nullable types
             var underlyingType = Nullable.GetUnderlyingType(propType) ?? propType;
@@ -264,12 +273,17 @@ public static class DataExtensions
             else
             {
                 propertySchema["type"] = "object";
-                propertySchema["description"] = $"Complex type: {propType.Name}";
 
                 // For complex types, try to get the registered type name
                 if (typeRegistry.TryGetCollectionName(propType, out var complexTypeName))
                 {
                     propertySchema["$ref"] = $"#/definitions/{complexTypeName}";
+                }
+
+                // Always add a description for complex types
+                if (!propertySchema.ContainsKey("description"))
+                {
+                    propertySchema["description"] = $"Complex type: {propType.Name}";
                 }
             }
 
@@ -382,5 +396,78 @@ public static class DataExtensions
         // Check if it implements IEnumerable (but not string)
         return type != typeof(string) &&
                typeof(System.Collections.IEnumerable).IsAssignableFrom(type);
+    }
+
+    /// <summary>
+    /// Simple XML documentation settings interface similar to NJsonSchema's IXmlDocsSettings
+    /// </summary>
+    private interface IXmlDocsSettings
+    {
+        bool UseXmlDocumentation { get; }
+        bool ResolveExternalXmlDocumentation { get; }
+        XmlDocsFormattingMode XmlDocumentationFormatting { get; }
+    }
+
+    /// <summary>
+    /// Simple implementation of XML documentation settings
+    /// </summary>
+    private class XmlDocsSettings : IXmlDocsSettings
+    {
+        public bool UseXmlDocumentation => true;
+        public bool ResolveExternalXmlDocumentation => true;
+        public XmlDocsFormattingMode XmlDocumentationFormatting => XmlDocsFormattingMode.None;
+    }
+
+    /// <summary>
+    /// Get XML documentation options similar to NJsonSchema's extension method
+    /// </summary>
+    private static XmlDocsOptions GetXmlDocsOptions(this IXmlDocsSettings settings)
+    {
+        return new XmlDocsOptions
+        {
+            ResolveExternalXmlDocs = settings.ResolveExternalXmlDocumentation,
+            FormattingMode = settings.XmlDocumentationFormatting
+        };
+    }    /// <summary>
+         /// Extract property description from XML documentation or attributes, following NJsonSchema pattern
+         /// </summary>
+    private static string GetPropertyDescription(PropertyInfo propertyInfo, IXmlDocsSettings xmlDocsSettings)
+    {
+        // First check for Description attribute
+        var descriptionAttribute = propertyInfo.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
+        if (descriptionAttribute != null && !string.IsNullOrEmpty(descriptionAttribute.Description))
+        {
+            return descriptionAttribute.Description;
+        }
+
+        // Check for DisplayAttribute description
+        var displayAttribute = propertyInfo.GetCustomAttribute<System.ComponentModel.DataAnnotations.DisplayAttribute>();
+        if (displayAttribute != null)
+        {
+            var description = displayAttribute.GetDescription();
+            if (!string.IsNullOrEmpty(description))
+            {
+                return description;
+            }
+        }
+
+        // Extract from XML documentation using Namotion.Reflection
+        if (xmlDocsSettings.UseXmlDocumentation)
+        {
+            try
+            {
+                var summary = propertyInfo.GetXmlDocsSummary(xmlDocsSettings.GetXmlDocsOptions());
+                if (!string.IsNullOrEmpty(summary))
+                {
+                    return summary;
+                }
+            }
+            catch
+            {
+                // Ignore XML documentation extraction errors
+            }
+        }
+
+        return null;
     }
 }

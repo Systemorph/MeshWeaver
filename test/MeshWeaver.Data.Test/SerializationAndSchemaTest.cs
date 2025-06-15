@@ -18,26 +18,80 @@ namespace MeshWeaver.Data.Test;
 /// <summary>
 /// Complex test model for serialization testing
 /// </summary>
-public record SerializationTestData(
-    [property: Required] string Name,
-    int? NullableNumber,
-    DateTime CreatedAt,
-    SerializationTestEnum Status,
-    List<string> Tags,
-    NestedData Details
-)
+public record SerializationTestData
 {
+    /// <summary>
+    /// The name identifier for this test data
+    /// </summary>
+    [Required, Key]
+    public string Name { get; init; }
+
+    /// <summary>
+    /// Optional numeric value that can be null
+    /// </summary>
+    public int? NullableNumber { get; init; }
+
+    /// <summary>
+    /// Timestamp when this data was created
+    /// </summary>
+    public DateTime CreatedAt { get; init; }
+
+    /// <summary>
+    /// Current status of the test data
+    /// </summary>
+    public SerializationTestEnum Status { get; init; }
+
+    /// <summary>
+    /// List of tags associated with this data
+    /// </summary>
+    public List<string> Tags { get; init; }
+
+    /// <summary>
+    /// Nested complex data structure
+    /// </summary>
+    public NestedData Details { get; init; }
+
+    public SerializationTestData(string name, int? nullableNumber, DateTime createdAt, SerializationTestEnum status, List<string> tags, NestedData details)
+    {
+        Name = name;
+        NullableNumber = nullableNumber;
+        CreatedAt = createdAt;
+        Status = status;
+        Tags = tags;
+        Details = details;
+    }
+
     public static SerializationTestData CreateSample() => new(
-        Name: "Test Item",
-        NullableNumber: 42,
-        CreatedAt: new DateTime(2023, 1, 1, 12, 0, 0, DateTimeKind.Utc),
-        Status: SerializationTestEnum.Active,
-        Tags: new List<string> { "tag1", "tag2" },
-        Details: new NestedData("Nested Value", true)
+        name: "Test Item",
+        nullableNumber: 42,
+        createdAt: new DateTime(2023, 1, 1, 12, 0, 0, DateTimeKind.Utc),
+        status: SerializationTestEnum.Active,
+        tags: new List<string> { "tag1", "tag2" },
+        details: new NestedData("Nested Value", true)
     );
 }
 
-public record NestedData(string Value, bool Flag);
+/// <summary>
+/// Nested data structure for testing complex object serialization
+/// </summary>
+public record NestedData
+{
+    /// <summary>
+    /// String value contained in the nested data
+    /// </summary>
+    public string Value { get; init; }
+
+    /// <summary>
+    /// Boolean flag indicating some state
+    /// </summary>
+    public bool Flag { get; init; }
+
+    public NestedData(string value, bool flag)
+    {
+        Value = value;
+        Flag = flag;
+    }
+}
 
 public enum SerializationTestEnum
 {
@@ -262,14 +316,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     public async Task DataSerialization_ShouldPreserveComplexObjects()
     {
         // arrange
-        var client = GetClient();
-        var testData = new SerializationTestData(
-            Name: "Serialization Test",
-            NullableNumber: null,
-            CreatedAt: DateTime.UtcNow,
-            Status: SerializationTestEnum.Pending,
-            Tags: new List<string> { "serialization", "test" },
-            Details: new NestedData("Serialized Value", false)
+        var client = GetClient(); var testData = new SerializationTestData(
+            name: "Serialization Test",
+            nullableNumber: null,
+            createdAt: DateTime.UtcNow,
+            status: SerializationTestEnum.Pending,
+            tags: new List<string> { "serialization", "test" },
+            details: new NestedData("Serialized Value", false)
         );
 
         // act
@@ -350,12 +403,12 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var updatedData = originalData with
         {
             Details = originalData.Details with { Flag = false },
-            Tags = new List<string> { "updated", "complex" }
+            Tags = ["updated", "complex"]
         };
 
         // act
         var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updatedData }),
+            DataChangeRequest.Update([updatedData]),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
@@ -543,20 +596,22 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     {
         // arrange
         var client = GetClient();
-        var container = new PolymorphicContainer(
-            Id: "poly-test",
-            ContainerName: "Polymorphic Test",
-            PrimaryShape: new Triangle("Primary Triangle", "Blue", 10.0, 8.0),
-            Shapes: new List<BaseShape>
+        var container = new PolymorphicContainer()
+        {
+            Id= "poly-test",
+            ContainerName= "Polymorphic Test",
+            PrimaryShape= new Triangle{Name = "Primary Triangle", Color = "Blue", Height = 10.0,Base = 8.0},
+            Shapes= new List<BaseShape>
             {
-                new Circle("Test Circle", "Red", 5.0),
-                new Rectangle("Test Rectangle", "Green", 3.0, 4.0)
+                new Circle{Name = "Test Circle", Color = "Red", Radius = 5.0},
+                new Rectangle{Name = "Test Rectangle", Color = "Green", Height = 3.0, Width = 4.0}
             },
-            NamedShapes: new Dictionary<string, BaseShape>
+            NamedShapes= new Dictionary<string, BaseShape>
             {
-                ["main"] = new Circle("Main Shape", "Purple", 7.0)
+                ["main"] = new Circle {Name = "Main Shape", Color = "Purple", Radius = 7.0}
             }
-        );
+
+        };
 
         // act
         var response = await client.AwaitResponse(
@@ -579,8 +634,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // Verify primary shape preserved type and properties
         item.PrimaryShape.Should().BeOfType<Triangle>();
         var triangle = (Triangle)item.PrimaryShape;
-        triangle.Base.Should().Be(10.0);
-        triangle.Height.Should().Be(8.0);
+        triangle.Height.Should().Be(10.0);
+        triangle.Base.Should().Be(8.0);
         triangle.Area.Should().Be(40.0); // 0.5 * 10 * 8
 
         // Verify shapes collection preserved types
@@ -593,8 +648,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         circle.Area.Should().BeApproximately(Math.PI * 25, 0.001); // π * r²
 
         var rectangle = item.Shapes.OfType<Rectangle>().First();
-        rectangle.Width.Should().Be(3.0);
-        rectangle.Height.Should().Be(4.0);
+        rectangle.Height.Should().Be(3.0);
+        rectangle.Width.Should().Be(4.0);
         rectangle.Area.Should().Be(12.0);
 
         // Verify named shapes dictionary
@@ -705,65 +760,194 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         properties.TryGetProperty("namedShapes", out var namedShapesProperty).Should().BeTrue();
         namedShapesProperty.GetProperty("type").GetString().Should().Be("object");
     }
+
+    [Fact]
+    public async Task GetSchemaRequest_ShouldReadActualXmlDocumentation()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(PolymorphicContainer).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var properties = schemaJson.RootElement.GetProperty("properties");
+
+        // Verify that actual XML documentation is being read, not generic fallbacks
+        if (properties.TryGetProperty("id", out var idProperty) && idProperty.TryGetProperty("description", out var idDescription))
+        {
+            var description = idDescription.GetString();
+            description.Should().Contain("Unique identifier").And.NotContain("Complex type");
+        }
+
+        if (properties.TryGetProperty("containerName", out var nameProperty) && nameProperty.TryGetProperty("description", out var nameDescription))
+        {
+            var description = nameDescription.GetString();
+            description.Should().Contain("Display name").And.NotContain("Complex type");
+        }
+
+        if (properties.TryGetProperty("primaryShape", out var shapeProperty) && shapeProperty.TryGetProperty("description", out var shapeDescription))
+        {
+            var description = shapeDescription.GetString();
+            description.Should().Contain("Primary shape associated").And.NotContain("Complex type");
+        }
+
+        if (properties.TryGetProperty("shapes", out var shapesProperty) && shapesProperty.TryGetProperty("description", out var shapesDesc))
+        {
+            var description = shapesDesc.GetString();
+            description.Should().Contain("Collection of shapes").And.NotContain("Complex type");
+        }
+
+        if (properties.TryGetProperty("namedShapes", out var namedProperty) && namedProperty.TryGetProperty("description", out var namedDesc))
+        {
+            var description = namedDesc.GetString();
+            description.Should().Contain("Dictionary of named shapes").And.NotContain("Complex type");
+        }
+    }
 }
 
 /// <summary>
 /// Base class for polymorphic testing
 /// </summary>
-public abstract record BaseShape(string Name, string Color)
+public abstract record BaseShape
 {
+    /// <summary>
+    /// Name of the shape
+    /// </summary>
+    public string Name { get; init; }
+
+    /// <summary>
+    /// Color of the shape
+    /// </summary>
+    public string Color { get; init; }
+
+    /// <summary>
+    /// Calculated area of the shape
+    /// </summary>
     public abstract double Area { get; }
+
 }
 
 /// <summary>
 /// Circle implementation of BaseShape
 /// </summary>
-public record Circle(string Name, string Color, double Radius) : BaseShape(Name, Color)
+public record Circle : BaseShape
 {
+    /// <summary>
+    /// Radius of the circle
+    /// </summary>
+    public double Radius { get; init; }
+
+    /// <summary>
+    /// Calculated area of the circle (π × r²)
+    /// </summary>
     public override double Area => Math.PI * Radius * Radius;
+
 }
 
 /// <summary>
 /// Rectangle implementation of BaseShape
 /// </summary>
-public record Rectangle(string Name, string Color, double Width, double Height) : BaseShape(Name, Color)
+public record Rectangle : BaseShape
 {
+    /// <summary>
+    /// Width of the rectangle
+    /// </summary>
+    public double Width { get; init; }
+
+    /// <summary>
+    /// Height of the rectangle
+    /// </summary>
+    public double Height { get; init; }
+
+    /// <summary>
+    /// Calculated area of the rectangle (width × height)
+    /// </summary>
     public override double Area => Width * Height;
+
 }
 
 /// <summary>
 /// Triangle implementation of BaseShape
 /// </summary>
-public record Triangle(string Name, string Color, double Base, double Height) : BaseShape(Name, Color)
+public record Triangle : BaseShape
 {
+    /// <summary>
+    /// Base length of the triangle
+    /// </summary>
+    public double Base { get; init; }
+
+    /// <summary>
+    /// Height of the triangle
+    /// </summary>
+    public double Height { get; init; }
+
+    /// <summary>
+    /// Calculated area of the triangle (0.5 × base × height)
+    /// </summary>
     public override double Area => 0.5 * Base * Height;
+
 }
 
 /// <summary>
 /// Container class that has polymorphic properties
 /// </summary>
-public record PolymorphicContainer(
-    string Id,
-    [property: Required] string ContainerName,
-    BaseShape PrimaryShape,
-    List<BaseShape> Shapes,
-    Dictionary<string, BaseShape> NamedShapes
-)
+public record PolymorphicContainer
 {
-    public static PolymorphicContainer CreateSample() => new(
-        Id: "container1",
-        ContainerName: "Test Container",
-        PrimaryShape: new Circle("Main Circle", "Blue", 5.0),
-        Shapes: new List<BaseShape>
+    /// <summary>
+    /// Unique identifier for the container
+    /// </summary>
+    public string Id { get; init; } 
+
+    /// <summary>
+    /// Display name of the container
+    /// </summary>
+    [Required]
+    public string ContainerName { get; init; } 
+
+    /// <summary>
+    /// Primary shape associated with this container
+    /// </summary>
+    public BaseShape PrimaryShape { get; init; } 
+
+    /// <summary>
+    /// Collection of shapes contained within this container
+    /// </summary>
+    public List<BaseShape> Shapes { get; init; } 
+
+    /// <summary>
+    /// Dictionary of named shapes for quick lookup
+    /// </summary>
+    public Dictionary<string, BaseShape> NamedShapes { get; init; } 
+
+    public static PolymorphicContainer CreateSample() => new()
+    {
+        Id= "container1",
+        ContainerName= "Test Container",
+        PrimaryShape= new Circle { Name = "Main Circle", Color = "Blue", Radius = 5 },
+        Shapes=
+        [
+            new Circle { Name = "Circle1", Color = "Red", Radius = 3 },
+            new Rectangle
+            {
+                Color = "Green",
+                Height = 4,
+                Name = "Rect1",
+                Width = 6
+            },
+            new Triangle{Name = "Triangle1", Color = "Yellow", Height = 8.0, Base= 5.0}
+        ],
+        NamedShapes= new Dictionary<string, BaseShape>
         {
-            new Circle("Circle1", "Red", 3.0),
-            new Rectangle("Rect1", "Green", 4.0, 6.0),
-            new Triangle("Triangle1", "Yellow", 8.0, 5.0)
-        },
-        NamedShapes: new Dictionary<string, BaseShape>
-        {
-            ["primary"] = new Circle("Primary", "Purple", 2.5),
-            ["secondary"] = new Rectangle("Secondary", "Orange", 3.0, 3.0)
+            ["primary"] = new Circle{Name = "Primary" , Color = "Purple", Radius = 2.5 },
+            ["secondary"] = new Rectangle{ Name = "Secondary", Color = "Orange", Height = 3.0, Width = 3.0 }
         }
-    );
+    };
 }
