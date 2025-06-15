@@ -168,9 +168,7 @@ public static class DataExtensions
                 var types = GetDomainTypes(hub);
                 hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
                 return request.Processed();
-            });
-
-    private static string GenerateJsonSchema(IMessageHub hub, string typeName)
+            }); private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
@@ -188,22 +186,34 @@ public static class DataExtensions
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
+        // Get the type name from registry for consistent naming
+        var registryTypeName = typeRegistry.GetOrAddType(type);
+
         // Create a simple schema representation
         var schema = new
         {
             @type = "object",
             title = type.Name,
             description = $"Schema for {type.FullName}",
-            properties = GetPropertiesSchema(type),
-            required = GetRequiredProperties(type)
+            properties = GetPropertiesSchema(type, typeRegistry),
+            required = GetRequiredProperties(type),
+            @default = new { @type = registryTypeName }, // Default $type property
+            oneOf = GetPotentialInheritors(type, typeRegistry) // Add potential inheritors
         };
 
         return JsonSerializer.Serialize(schema, options);
     }
-
-    private static object GetPropertiesSchema(Type type)
+    private static object GetPropertiesSchema(Type type, ITypeRegistry typeRegistry)
     {
         var properties = new Dictionary<string, object>();
+
+        // Always include $type property for polymorphic support
+        properties["$type"] = new Dictionary<string, object>
+        {
+            ["type"] = "string",
+            ["description"] = "Type discriminator for polymorphic serialization",
+            ["default"] = typeRegistry.GetOrAddType(type)
+        };
 
         foreach (var prop in type.GetProperties())
         {
@@ -246,7 +256,7 @@ public static class DataExtensions
                 propertySchema["type"] = "string";
                 propertySchema["enum"] = Enum.GetNames(underlyingType);
             }
-            else if (propType.IsGenericType && propType.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            else if (IsArrayOrCollection(propType))
             {
                 propertySchema["type"] = "array";
                 // Could add items schema here for more complex types
@@ -255,6 +265,12 @@ public static class DataExtensions
             {
                 propertySchema["type"] = "object";
                 propertySchema["description"] = $"Complex type: {propType.Name}";
+
+                // For complex types, try to get the registered type name
+                if (typeRegistry.TryGetCollectionName(propType, out var complexTypeName))
+                {
+                    propertySchema["$ref"] = $"#/definitions/{complexTypeName}";
+                }
             }
 
             properties[JsonNamingPolicy.CamelCase.ConvertName(prop.Name)] = propertySchema;
@@ -262,10 +278,12 @@ public static class DataExtensions
 
         return properties;
     }
-
     private static string[] GetRequiredProperties(Type type)
     {
         var required = new List<string>();
+
+        // Always require $type property for polymorphic support
+        required.Add("$type");
 
         foreach (var prop in type.GetProperties())
         {
@@ -279,6 +297,46 @@ public static class DataExtensions
         }
 
         return required.ToArray();
+    }
+
+    private static object[] GetPotentialInheritors(Type baseType, ITypeRegistry typeRegistry)
+    {
+        var inheritors = new List<object>();
+
+        // Find all registered types that inherit from or implement the base type
+        foreach (var kvp in typeRegistry.Types)
+        {
+            var registeredType = kvp.Value.Type;
+
+            // Skip the base type itself
+            if (registeredType == baseType)
+                continue;
+
+            // Check if this type is assignable to the base type (inheritance/implementation)
+            if (baseType.IsAssignableFrom(registeredType))
+            {
+                inheritors.Add(new
+                {
+                    @type = "object",
+                    title = registeredType.Name,
+                    description = $"Inheritor: {registeredType.FullName}",
+                    allOf = new[]
+                    {
+                        new { @ref = $"#/definitions/{kvp.Key}" }
+                    },
+                    properties = new
+                    {
+                        @type = new
+                        {
+                            @type = "string",
+                            @const = kvp.Key // The specific type name for this inheritor
+                        }
+                    }
+                });
+            }
+        }
+
+        return inheritors.ToArray();
     }
 
     private static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
@@ -303,6 +361,26 @@ public static class DataExtensions
         return types.OrderBy(t => t.DisplayName ?? t.Name);
     }
 
+    private static bool IsArrayOrCollection(Type type)
+    {
+        // Check for arrays
+        if (type.IsArray)
+            return true;
 
+        // Check for generic collections
+        if (type.IsGenericType)
+        {
+            var genericTypeDef = type.GetGenericTypeDefinition();
+            return genericTypeDef == typeof(IEnumerable<>) ||
+                   genericTypeDef == typeof(ICollection<>) ||
+                   genericTypeDef == typeof(IList<>) ||
+                   genericTypeDef == typeof(List<>) ||
+                   genericTypeDef == typeof(IReadOnlyCollection<>) ||
+                   genericTypeDef == typeof(IReadOnlyList<>);
+        }
 
+        // Check if it implements IEnumerable (but not string)
+        return type != typeof(string) &&
+               typeof(System.Collections.IEnumerable).IsAssignableFrom(type);
+    }
 }
