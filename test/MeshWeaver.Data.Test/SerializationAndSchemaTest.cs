@@ -532,7 +532,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // Verify primary shape is recognized as object (polymorphic)
         var primaryShapeProperty = properties.GetProperty("primaryShape");
         primaryShapeProperty.GetProperty("type").GetString().Should().Be("object");
-        primaryShapeProperty.GetProperty("description").GetString().Should().Contain("Complex type");
+        primaryShapeProperty.GetProperty("description").GetString().Should().Contain("Primary shape");
 
         // Verify shapes array
         var shapesProperty = properties.GetProperty("shapes");

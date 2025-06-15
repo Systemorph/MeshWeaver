@@ -174,7 +174,7 @@ public static class DataExtensions
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-        if (!typeRegistry.TryGetType(typeName, out var typeDefinition))
+        if (typeName is null || !typeRegistry.TryGetType(typeName, out var typeDefinition))
         {
             return "{}"; // Return empty schema if type not found
         }
