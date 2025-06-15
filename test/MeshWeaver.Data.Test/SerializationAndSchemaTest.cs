@@ -598,17 +598,17 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var client = GetClient();
         var container = new PolymorphicContainer()
         {
-            Id= "poly-test",
-            ContainerName= "Polymorphic Test",
-            PrimaryShape= new Triangle{Name = "Primary Triangle", Color = "Blue", Height = 10.0,Base = 8.0},
-            Shapes= new List<BaseShape>
+            Id = "poly-test",
+            ContainerName = "Polymorphic Test",
+            PrimaryShape = new Triangle { Name = "Primary Triangle", Color = "Blue", Height = 10.0, Base = 8.0 },
+            Shapes = new List<BaseShape>
             {
                 new Circle{Name = "Test Circle", Color = "Red", Radius = 5.0},
                 new Rectangle{Name = "Test Rectangle", Color = "Green", Height = 3.0, Width = 4.0}
             },
-            NamedShapes= new Dictionary<string, BaseShape>
+            NamedShapes = new Dictionary<string, BaseShape>
             {
-                ["main"] = new Circle {Name = "Main Shape", Color = "Purple", Radius = 7.0}
+                ["main"] = new Circle { Name = "Main Shape", Color = "Purple", Radius = 7.0 }
             }
 
         };
@@ -811,6 +811,31 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             description.Should().Contain("Dictionary of named shapes").And.NotContain("Complex type");
         }
     }
+
+    [Fact]
+    public async Task DebugSchemaGeneration_OutputActualSchema()
+    {
+        // arrange
+        var client = GetClient();
+        var typeName = typeof(PolymorphicContainer).FullName;
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetSchemaRequest(typeName),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        // assert
+        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+
+        // Output the schema for debugging
+        output.WriteLine("Generated Schema:");
+        output.WriteLine(schemaResponse.Schema);
+
+        // This test is for debugging - always pass
+        Assert.True(true);
+    }
 }
 
 /// <summary>
@@ -904,35 +929,35 @@ public record PolymorphicContainer
     /// <summary>
     /// Unique identifier for the container
     /// </summary>
-    public string Id { get; init; } 
+    public string Id { get; init; }
 
     /// <summary>
     /// Display name of the container
     /// </summary>
     [Required]
-    public string ContainerName { get; init; } 
+    public string ContainerName { get; init; }
 
     /// <summary>
     /// Primary shape associated with this container
     /// </summary>
-    public BaseShape PrimaryShape { get; init; } 
+    public BaseShape PrimaryShape { get; init; }
 
     /// <summary>
     /// Collection of shapes contained within this container
     /// </summary>
-    public List<BaseShape> Shapes { get; init; } 
+    public List<BaseShape> Shapes { get; init; }
 
     /// <summary>
     /// Dictionary of named shapes for quick lookup
     /// </summary>
-    public Dictionary<string, BaseShape> NamedShapes { get; init; } 
+    public Dictionary<string, BaseShape> NamedShapes { get; init; }
 
     public static PolymorphicContainer CreateSample() => new()
     {
-        Id= "container1",
-        ContainerName= "Test Container",
-        PrimaryShape= new Circle { Name = "Main Circle", Color = "Blue", Radius = 5 },
-        Shapes=
+        Id = "container1",
+        ContainerName = "Test Container",
+        PrimaryShape = new Circle { Name = "Main Circle", Color = "Blue", Radius = 5 },
+        Shapes =
         [
             new Circle { Name = "Circle1", Color = "Red", Radius = 3 },
             new Rectangle
@@ -944,10 +969,10 @@ public record PolymorphicContainer
             },
             new Triangle{Name = "Triangle1", Color = "Yellow", Height = 8.0, Base= 5.0}
         ],
-        NamedShapes= new Dictionary<string, BaseShape>
+        NamedShapes = new Dictionary<string, BaseShape>
         {
-            ["primary"] = new Circle{Name = "Primary" , Color = "Purple", Radius = 2.5 },
-            ["secondary"] = new Rectangle{ Name = "Secondary", Color = "Orange", Height = 3.0, Width = 3.0 }
+            ["primary"] = new Circle { Name = "Primary", Color = "Purple", Radius = 2.5 },
+            ["secondary"] = new Rectangle { Name = "Secondary", Color = "Orange", Height = 3.0, Width = 3.0 }
         }
     };
 }
