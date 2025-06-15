@@ -30,7 +30,7 @@ public record SchemaResponse(string Type, string Schema);
 /// <summary>
 /// Gets the list of domain types available in the data context.
 /// </summary>
-public record GetDomainTypesRequest() : IRequest<DomainTypesResponse>;
+public record GetDomainTypesRequest : IRequest<DomainTypesResponse>;
 
 /// <summary>
 /// Returns the list of domain types with their descriptions.
@@ -147,13 +147,14 @@ public static class DataExtensions
 
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
-            .WithHandler<DataChangeRequest>((hub, request) =>
+            .WithHandler<DataChangeRequest>(async (hub, request, cancellationToken) =>
             {
                 var activity = new Activity(ActivityCategory.DataUpdate, hub);
                 hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity, request);
-                activity.Complete(log =>
-                    hub.Post(new DataChangeResponse(hub.Version, log), o => o.ResponseFor(request))
-                );
+                await activity.Complete(log =>
+                    hub.Post(new DataChangeResponse(hub.Version, log), 
+                        o => o.ResponseFor(request)), 
+                    cancellationToken: cancellationToken);
                 return request.Processed();
             }).WithHandler<SubscribeRequest>((hub, request) =>
             {

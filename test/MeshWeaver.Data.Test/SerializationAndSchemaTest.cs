@@ -933,8 +933,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
 
         // Output the schema for debugging
-        output.WriteLine("Generated Schema:");
-        output.WriteLine(schemaResponse.Schema);
+        Output.WriteLine("Generated Schema:");
+        Output.WriteLine(schemaResponse.Schema);
 
         // This test is for debugging - always pass
         Assert.True(true);
