@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
@@ -107,7 +108,6 @@ public class MessageService : IMessageService
     }
 
 
-
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         if (delivery.Target is null || delivery.Target.Equals(hub.Address))
@@ -121,7 +121,7 @@ public class MessageService : IMessageService
     }    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         delivery = UnpackIfNecessary(delivery);
-        
+
         // Reset hang detection timer on execution activity
         if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing)
         {
@@ -134,16 +134,22 @@ public class MessageService : IMessageService
                 // Timer already disposed, ignore
             }
         }
-        
+
         executionBuffer.Post(async _ =>
         {
             logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
             try
             {
                 delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
+
+                logger.LogDebug("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address}",
+                    delivery.Message?.GetType().Name ?? "null", Address);
             }
             catch (Exception e)
             {
+                logger.LogError("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error}",
+                    delivery.Message?.GetType().Name ?? "null", Address, e.Message);
+
                 if (delivery.Message is ExecutionRequest er)
                     er.ExceptionCallback?.Invoke(e);
                 else
@@ -272,35 +278,37 @@ public class MessageService : IMessageService
 
         logger.LogDebug("Finished disposing message service in {Address}", Address);
     }
-
     private void OnHangDetected(object state)
     {
         if (isDisposing || hangDetectionCts.Token.IsCancellationRequested)
             return;
 
-        logger.LogError("Potential hang detected in MessageService for {Address} - forcing cancellation", Address);
-        
+        logger.LogError("HANG_DETECTED: Potential hang detected in MessageService for {Address} - forcing cancellation", Address);
+
+        // Log current state for debugging
+        logger.LogError("HANG_STATE: Buffer completed: {BufferCompleted}, Execution buffer completed: {ExecutionCompleted}, IsDisposing: {IsDisposing}",
+            buffer.Completion.IsCompleted, executionBuffer.Completion.IsCompleted, isDisposing);
+
         try
         {
             // Cancel any ongoing operations
             hangDetectionCts.Cancel();
-            
+
             // Force completion of buffers if they're still accepting messages
             if (!buffer.Completion.IsCompleted)
             {
                 buffer.Complete();
-                logger.LogWarning("Forced buffer completion due to hang detection in {Address}", Address);
+                logger.LogWarning("HANG_RECOVERY: Forced buffer completion due to hang detection in {Address}", Address);
             }
-            
+
             if (!executionBuffer.Completion.IsCompleted)
             {
                 executionBuffer.Complete();
-                logger.LogWarning("Forced execution buffer completion due to hang detection in {Address}", Address);
+                logger.LogWarning("HANG_RECOVERY: Forced execution buffer completion due to hang detection in {Address}", Address);
             }
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during hang detection recovery in {Address}", Address);
-        }
+            logger.LogError(ex, "HANG_RECOVERY_ERROR: Error during hang detection recovery in {Address}", Address);        }
     }
 }

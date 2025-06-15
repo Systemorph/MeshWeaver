@@ -20,17 +20,23 @@ public class HubTestBase : TestBase
     [Inject]
     protected IMessageHub Router;
     [Inject]
-    protected ILogger<HubTestBase> Logger;
-
-    protected HubTestBase(ITestOutputHelper output)
+    protected ILogger<HubTestBase> Logger; protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
+        // Add debug file logging for message flow tracking
+        Services.AddLogging(logging =>
+        {
+            logging.AddProvider(new DebugFileLoggerProvider());
+            logging.SetMinimumLevel(LogLevel.Debug);
+        });
+
         Services.AddSingleton(
             (Func<IServiceProvider, IMessageHub>)(
                 sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
             )
         );
-    }    private static readonly Dictionary<string, Type> AddressTypes = new()
+    }
+    private static readonly Dictionary<string, Type> AddressTypes = new()
     {
         { new ClientAddress().Type, typeof(ClientAddress) },
         { new HostAddress().Type, typeof(HostAddress) },
@@ -62,24 +68,30 @@ public class HubTestBase : TestBase
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
     {
         return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
-    }    public override async Task DisposeAsync()
+    }
+    public override async Task DisposeAsync()
     {
         Logger.LogInformation("Starting disposal of router");
-        
+
+        // Log debug file location
+        var tempDir = Environment.GetEnvironmentVariable("TEMP") ?? ".";
+        var debugLogDir = Path.Combine(tempDir, "MeshWeaverDebugLogs");
+        Logger.LogInformation("Debug logs are written to: {DebugLogDir}", debugLogDir);
+
         try
         {
             // Force dispose the router synchronously first
             Router.Dispose();
-            
+
             // Add aggressive 5 second timeout to prevent hanging
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            
+
             // If Router.Disposal is null, don't wait
             if (Router.Disposal != null)
             {
                 await Router.Disposal.WaitAsync(timeout.Token);
             }
-            
+
             Logger.LogInformation("Finished disposal of router");
         }
         catch (OperationCanceledException)
