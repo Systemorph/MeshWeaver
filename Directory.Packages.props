@@ -123,8 +123,8 @@
     <PackageVersion Include="Roslynator.CodeFixes" Version="4.13.1" />
     <PackageVersion Include="Roslynator.CodeAnalysis.Analyzers" Version="4.13.1" />
     <PackageVersion Include="Roslynator.Refactorings" Version="4.13.1" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.11.7" />
-    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.7" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.11.7" />    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.11.7" />
+    <PackageVersion Include="Namotion.Reflection" Version="3.1.0" />
     <PackageVersion Include="System.Text.RegularExpressions" Version="4.3.1" />
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="9.1.2" />
