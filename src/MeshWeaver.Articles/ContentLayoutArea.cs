@@ -15,7 +15,7 @@ public static class ContentLayoutArea
     private static UiControl GetControl(string path, object content)
     {
         if(content is Article)
-            return new ArticleControl(content);
+            return Template.Bind(content, c => new ArticleControl(c));
         if (content is MarkdownElement md)
             return new MarkdownControl(md.Content){Html = md.PrerenderedHtml};
         if (content is string str)
