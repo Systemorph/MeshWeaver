@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
@@ -12,6 +11,7 @@ public class MessageService : IMessageService
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
     private bool isDisposing;
+    private bool hangDetectionTriggered;
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
@@ -40,10 +40,10 @@ public class MessageService : IMessageService
         deliveryAction =
             new(x => x.Invoke());
 
-        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });        hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true }); hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
-          // Initialize hang detection timer only when not debugging
+        // Initialize hang detection timer only when not debugging
         if (!Debugger.IsAttached)
         {
             hangDetectionTimer = new Timer(OnHangDetected, null, 10000, Timeout.Infinite);
@@ -64,11 +64,27 @@ public class MessageService : IMessageService
             buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
         });
     }
-
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
         logger.LogWarning("An exception occurred processing {@Delivery} in {Address}", delivery, Address);
-        Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
+
+        // Prevent recursive failure reporting - don't report failures for DeliveryFailure messages
+        if (delivery.Message is not DeliveryFailure)
+        {
+            try
+            {
+                Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to post DeliveryFailure message for {@Delivery} in {Address} - breaking error cascade", delivery, Address);
+            }
+        }
+        else
+        {
+            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {@Delivery} in {Address}", delivery, Address);
+        }
+
         return delivery;
     }
 
@@ -81,12 +97,12 @@ public class MessageService : IMessageService
         deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
-        ScheduleNotify(delivery, cancellationToken);    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
+        ScheduleNotify(delivery, cancellationToken); private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
 
-        // Reset hang detection timer on activity (if not debugging)
-        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing)
+        // Reset hang detection timer on activity (if not debugging and not already triggered)
+        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing && !hangDetectionTriggered)
         {
             try
             {
@@ -118,7 +134,8 @@ public class MessageService : IMessageService
 
         return await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
 
-    }    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
+    }
+    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         delivery = UnpackIfNecessary(delivery);
 
@@ -183,16 +200,17 @@ public class MessageService : IMessageService
         {
             delivery = DeserializeDelivery(delivery);
         }
-        catch
+        catch (Exception ex)
         {
-            logger.LogWarning("Failed to deserialize delivery {@Delivery} in {Address}", delivery, Address);
-            // failed unpack delivery, returning original delivery with message type RawJson
+            logger.LogWarning(ex, "Failed to deserialize delivery {@Delivery} in {Address} - marking as failed to prevent endless propagation", delivery, Address);
+            // Return a failed delivery instead of continuing with malformed data
+            return delivery.Failed($"Deserialization failed: {ex.Message}");
         }
 
         return delivery;
     }
 
-    public IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
+    private IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
     {
         if (delivery.Message is not RawJson rawJson)
             return delivery;
@@ -280,8 +298,11 @@ public class MessageService : IMessageService
     }
     private void OnHangDetected(object state)
     {
-        if (isDisposing || hangDetectionCts.Token.IsCancellationRequested)
+        if (isDisposing || hangDetectionCts.Token.IsCancellationRequested || hangDetectionTriggered)
             return;
+
+        // Set flag to prevent recursive hang detection
+        hangDetectionTriggered = true;
 
         logger.LogError("HANG_DETECTED: Potential hang detected in MessageService for {Address} - forcing cancellation", Address);
 
@@ -309,6 +330,7 @@ public class MessageService : IMessageService
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "HANG_RECOVERY_ERROR: Error during hang detection recovery in {Address}", Address);        }
+            logger.LogError(ex, "HANG_RECOVERY_ERROR: Error during hang detection recovery in {Address}", Address);
+        }
     }
 }

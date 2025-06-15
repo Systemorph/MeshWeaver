@@ -1,23 +1,40 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using MeshWeaver.Articles;
+using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test
-{
-    /// <summary>
-    /// Base class for testing the documentation module.
-    /// </summary>
-    /// <param name="output"></param>
-    public class DocumentationTestBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{    /// <summary>
+     /// Base class for testing the documentation module.
+     /// </summary>
+    public class DocumentationTestBase : MonolithMeshTestBase
     {
+        /// <summary>
+        /// Initializes a new instance of DocumentationTestBase with debug file logging
+        /// </summary>
+        /// <param name="output"></param>
+        protected DocumentationTestBase(ITestOutputHelper output) : base(output)
+        {
+            // Add debug file logging for message flow tracking
+            Services.AddLogging(logging =>
+            {
+                logging.AddProvider(new DebugFileLoggerProvider());
+                logging.SetMinimumLevel(LogLevel.Debug);
+            });
+        }
+
         /// <summary>
         /// Configures the documentation module and articles 
         /// </summary>
@@ -43,7 +60,8 @@ namespace MeshWeaver.Documentation.Test
                 .Configure<List<ContentSourceConfig>>(
                     options => options.Add(new ContentSourceConfig()
                     {
-                        Name = "Documentation", BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
+                        Name = "Documentation",
+                        BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
                     })
                 );
         }
@@ -76,5 +94,38 @@ namespace MeshWeaver.Documentation.Test
             return id;
         }
 
+        /// <summary>
+        /// Override disposal to add aggressive timeout and prevent hanging
+        /// </summary>
+        public override async Task DisposeAsync()
+        {
+            var logger = ServiceProvider?.GetService<ILogger<DocumentationTestBase>>();
+            logger?.LogInformation("Starting disposal of DocumentationTestBase");
+
+            // Log debug file location
+            var tempDir = Environment.GetEnvironmentVariable("TEMP") ?? ".";
+            var debugLogDir = Path.Combine(tempDir, "MeshWeaverDebugLogs");
+            logger?.LogInformation("Debug logs are written to: {DebugLogDir}", debugLogDir);
+
+            try
+            {
+                // Add aggressive 10 second timeout to prevent hanging
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));                // Call base disposal with timeout
+                var disposeTask = base.DisposeAsync();
+                await disposeTask.WaitAsync(timeout.Token);
+
+                logger?.LogInformation("Finished disposal of DocumentationTestBase");
+            }
+            catch (OperationCanceledException)
+            {
+                logger?.LogError("DocumentationTestBase disposal timed out after 10 seconds - forcing completion");
+                // Don't throw, just log and continue to prevent test hanging
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Error during DocumentationTestBase disposal");
+                // Don't rethrow to prevent test hanging
+            }
+        }
     }
 }

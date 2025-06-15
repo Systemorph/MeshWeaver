@@ -82,14 +82,19 @@ public static class DataExtensions
                                     serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                                 )
                             );
-                    })
-                ).WithTypes(
+                    })).WithTypes(
                     typeof(EntityStore),
                     typeof(InstanceCollection),
+                    typeof(WorkspaceReference),
                     typeof(EntityReference),
+                    typeof(InstanceReference),
                     typeof(CollectionReference),
                     typeof(CollectionsReference),
                     typeof(JsonPointerReference),
+                    typeof(LayoutAreaReference),
+                    typeof(AggregateWorkspaceReference),
+                    typeof(CombinedStreamReference),
+                    typeof(StreamIdentity),
                     typeof(JsonPatch),
                     typeof(DataChangedEvent),
                     typeof(DataChangeRequest),
@@ -152,8 +157,8 @@ public static class DataExtensions
                 var activity = new Activity(ActivityCategory.DataUpdate, hub);
                 hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity, request);
                 await activity.Complete(log =>
-                    hub.Post(new DataChangeResponse(hub.Version, log), 
-                        o => o.ResponseFor(request)), 
+                    hub.Post(new DataChangeResponse(hub.Version, log),
+                        o => o.ResponseFor(request)),
                     cancellationToken: cancellationToken);
                 return request.Processed();
             }).WithHandler<SubscribeRequest>((hub, request) =>
