@@ -14,8 +14,7 @@ public static class WorkspaceExtensions
 
     public static IObservable<T> GetObservable<T>(this IWorkspace workspace, object id) =>
         workspace.GetStream(typeof(T))
-            .Select(ws => ws.Value.GetData<T>(id))
-            .Where(x => x != null);
+            .Select(ws => ws.Value.GetData<T>(id));
 
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
