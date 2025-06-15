@@ -49,8 +49,15 @@ public record SerializationTestData
     /// <summary>
     /// Nested complex data structure
     /// </summary>
-    public NestedData Details { get; init; }
-
+    public NestedData Details { get; init; }    /// <summary>
+    /// Initializes a new instance of the SerializationTestData record
+    /// </summary>
+    /// <param name="name">The name identifier for this test data</param>
+    /// <param name="nullableNumber">Optional numeric value that can be null</param>
+    /// <param name="createdAt">Timestamp when this data was created</param>
+    /// <param name="status">Current status of the test data</param>
+    /// <param name="tags">List of tags associated with this data</param>
+    /// <param name="details">Nested complex data structure</param>
     public SerializationTestData(string name, int? nullableNumber, DateTime createdAt, SerializationTestEnum status, List<string> tags, NestedData details)
     {
         Name = name;
@@ -61,6 +68,10 @@ public record SerializationTestData
         Details = details;
     }
 
+    /// <summary>
+    /// Creates a sample instance of SerializationTestData for testing purposes
+    /// </summary>
+    /// <returns>A sample SerializationTestData instance</returns>
     public static SerializationTestData CreateSample() => new(
         name: "Test Item",
         nullableNumber: 42,
@@ -86,6 +97,11 @@ public record NestedData
     /// </summary>
     public bool Flag { get; init; }
 
+    /// <summary>
+    /// Initializes a new instance of the NestedData record
+    /// </summary>
+    /// <param name="value">String value contained in the nested data</param>
+    /// <param name="flag">Boolean flag indicating some state</param>
     public NestedData(string value, bool flag)
     {
         Value = value;
@@ -93,10 +109,22 @@ public record NestedData
     }
 }
 
+/// <summary>
+/// Enumeration representing different status values for serialization testing
+/// </summary>
 public enum SerializationTestEnum
 {
+    /// <summary>
+    /// Represents an active status
+    /// </summary>
     Active,
+    /// <summary>
+    /// Represents an inactive status
+    /// </summary>
     Inactive,
+    /// <summary>
+    /// Represents a pending status
+    /// </summary>
     Pending
 }
 
@@ -105,6 +133,11 @@ public enum SerializationTestEnum
 /// </summary>
 public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Configures the host message hub for serialization and schema testing
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -137,6 +170,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             );
     }
 
+    /// <summary>
+    /// Configures the client message hub for serialization and schema testing
+    /// </summary>
+    /// <param name="configuration">The message hub configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
@@ -149,8 +187,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
                         .WithType<Circle>()
                         .WithType<Rectangle>()
                         .WithType<Triangle>())
-            );
-
+            );    /// <summary>
+    /// Tests that schema generation includes all properties for complex types
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForComplexType_ShouldIncludeAllProperties()
     {
@@ -186,6 +225,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         requiredArray.Should().Contain("name");
     }
 
+    /// <summary>
+    /// Tests that schema generation properly handles enum types with their values
+    /// </summary>    /// <summary>
+    /// Tests that schema generation properly handles enum types with their values
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldHandleEnumTypes()
     {
@@ -216,6 +260,11 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         enumValues.Should().Contain(["Active", "Inactive", "Pending"]);
     }
 
+    /// <summary>
+    /// Tests that schema generation properly handles DateTime types with correct format
+    /// </summary>    /// <summary>
+    /// Tests that schema generation properly handles DateTime types with correct format
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldHandleDateTimeTypes()
     {
@@ -240,6 +289,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         createdAtProperty.GetProperty("format").GetString().Should().Be("date-time");
     }
 
+    /// <summary>
+    /// Tests that schema generation properly handles nullable types
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldHandleNullableTypes()
     {
@@ -267,6 +319,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         requiredArray.Should().NotContain("nullableNumber");
     }
 
+    /// <summary>
+    /// Tests that schema generation properly handles array and collection types
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldHandleArrayTypes()
     {
@@ -290,6 +345,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         tagsProperty.GetProperty("type").GetString().Should().Be("array");
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns all registered types
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldIncludeAllRegisteredTypes()
     {
@@ -312,6 +370,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         typeNames.Should().Contain(name => name.Contains("NestedData"));
     }
 
+    /// <summary>
+    /// Tests that data serialization preserves complex object structures
+    /// </summary>
     [Fact]
     public async Task DataSerialization_ShouldPreserveComplexObjects()
     {
@@ -349,6 +410,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         item.Details.Flag.Should().BeFalse();
     }
 
+    /// <summary>
+    /// Tests that schema generation handles invalid property types gracefully
+    /// </summary>
     [Fact]
     public async Task SchemaGeneration_WithInvalidPropertyTypes_ShouldHandleGracefully()
     {
@@ -369,6 +433,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         schemaResponse.Schema.Should().Be("{}");
     }
 
+    /// <summary>
+    /// Tests that type descriptions provide useful metadata
+    /// </summary>
     [Fact]
     public async Task TypeDescription_ShouldProvideUsefulMetadata()
     {
@@ -394,6 +461,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         }
     }
 
+    /// <summary>
+    /// Tests that complex type updates preserve nested structure
+    /// </summary>
     [Fact]
     public async Task ComplexTypeUpdate_ShouldPreserveNestedStructure()
     {
@@ -428,6 +498,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         item.Details.Value.Should().Be("Nested Value"); // Should preserve unchanged nested values
     }
 
+    /// <summary>
+    /// Tests that schema generation handles polymorphic container inheritance properly
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleInheritance()
     {
@@ -466,6 +539,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         shapesProperty.GetProperty("type").GetString().Should().Be("array");
     }
 
+    /// <summary>
+    /// Tests that schema generation shows abstract properties for base shapes
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForBaseShape_ShouldShowAbstractProperties()
     {
@@ -497,6 +573,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         areaProperty.GetProperty("type").GetString().Should().Be("number");
     }
 
+    /// <summary>
+    /// Tests that schema generation includes inherited and own properties for Circle
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForCircle_ShouldIncludeInheritedAndOwnProperties()
     {
@@ -529,6 +608,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         radiusProperty.GetProperty("type").GetString().Should().Be("number");
     }
 
+    /// <summary>
+    /// Tests that schema generation includes width and height for Rectangle
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForRectangle_ShouldIncludeWidthAndHeight()
     {
@@ -566,6 +648,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         heightProperty.GetProperty("type").GetString().Should().Be("number");
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest includes polymorphic types
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldIncludePolymorphicTypes()
     {
@@ -591,6 +676,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         typeNames.Should().Contain(name => name.Contains("Triangle"));
     }
 
+    /// <summary>
+    /// Tests that polymorphic data serialization preserves type information
+    /// </summary>
     [Fact]
     public async Task PolymorphicDataSerialization_ShouldPreserveTypeInformation()
     {
@@ -659,6 +747,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         namedCircle.Radius.Should().Be(7.0);
     }
 
+    /// <summary>
+    /// Tests that schema generation includes $type property and default value
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldIncludeTypePropertyAndDefault()
     {
@@ -692,6 +783,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         defaultObj.GetProperty("type").GetString().Should().Be(typeName);
     }
 
+    /// <summary>
+    /// Tests that schema generation includes inheritors for base shape
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForBaseShape_ShouldIncludeInheritors()
     {
@@ -728,6 +822,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         }
     }
 
+    /// <summary>
+    /// Tests that schema generation handles complex polymorphic properties
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForPolymorphicContainer_ShouldHandleComplexPolymorphicProperties()
     {
@@ -761,6 +858,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         namedShapesProperty.GetProperty("type").GetString().Should().Be("object");
     }
 
+    /// <summary>
+    /// Tests that schema generation reads actual XML documentation comments
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldReadActualXmlDocumentation()
     {
@@ -812,6 +912,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         }
     }
 
+    /// <summary>
+    /// Debug test to output the actual generated schema for inspection
+    /// </summary>
     [Fact]
     public async Task DebugSchemaGeneration_OutputActualSchema()
     {
@@ -952,6 +1055,10 @@ public record PolymorphicContainer
     /// </summary>
     public Dictionary<string, BaseShape> NamedShapes { get; init; }
 
+    /// <summary>
+    /// Creates a sample instance of PolymorphicContainer for testing purposes
+    /// </summary>
+    /// <returns>A sample PolymorphicContainer instance with various shape types</returns>
     public static PolymorphicContainer CreateSample() => new()
     {
         Id = "container1",

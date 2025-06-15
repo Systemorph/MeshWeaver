@@ -29,15 +29,35 @@ public record TestSchemaData(
     string[] Tags
 );
 
+/// <summary>
+/// Test enumeration with various status values for schema testing
+/// </summary>
 public enum TestEnum
 {
+    /// <summary>
+    /// Active status
+    /// </summary>
     Active,
+    /// <summary>
+    /// Inactive status
+    /// </summary>
     Inactive,
+    /// <summary>
+    /// Pending status
+    /// </summary>
     Pending
 }
 
+/// <summary>
+/// Tests for schema generation and validation functionality
+/// </summary>
 public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Configures the host with test schema data for testing
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -62,12 +82,20 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
             );
     }
 
+    /// <summary>
+    /// Configures the client to connect to host schema data sources
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
                 data.AddHubSource(new HostAddress(), dataSource => dataSource.WithType<TestSchemaData>())
             );
 
+    /// <summary>
+    /// Tests that GetSchemaRequest returns a valid JSON schema for complex types with all properties and metadata
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ShouldReturnValidJsonSchemaForComplexType()
     {
@@ -136,6 +164,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         requiredArray.Should().Contain("requiredText"); // Because it has [Required] attribute
     }
 
+    /// <summary>
+    /// Tests that GetSchemaRequest returns an empty schema for unknown/unregistered types
+    /// </summary>
     [Fact]
     public async Task GetSchemaRequest_ForUnknownType_ShouldReturnEmptySchema()
     {
@@ -156,6 +187,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         schemaResponse.Schema.Should().Be("{}");
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns all available registered types in the data workspace
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldReturnAvailableTypes()
     {
@@ -181,6 +215,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         testType.Description.Should().Contain("TestSchemaData");
     }
 
+    /// <summary>
+    /// Tests that GetDomainTypesRequest returns types in sorted order for consistent results
+    /// </summary>
     [Fact]
     public async Task GetDomainTypesRequest_ShouldReturnSortedTypes()
     {
@@ -208,6 +245,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
+    /// <summary>
+    /// Tests that schema generation properly handles nullable types and optional properties
+    /// </summary>
     [Fact]
     public async Task SchemaGeneration_ShouldHandleNullableTypes()
     {
@@ -232,6 +272,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         properties.EnumerateObject().Should().NotBeEmpty();
     }
 
+    /// <summary>
+    /// Tests that type descriptions provide useful information about registered types
+    /// </summary>
     [Fact]
     public async Task TypeDescription_ShouldProvideUsefulInformation()
     {
@@ -262,6 +305,9 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
+    /// <summary>
+    /// Debug test to show all registered types for troubleshooting purposes
+    /// </summary>
     [Fact]
     public async Task DebugAvailableTypes_ShouldShowRegisteredTypes()
     {

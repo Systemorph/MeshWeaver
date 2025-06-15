@@ -10,8 +10,14 @@ using Xunit;
 
 namespace MeshWeaver.Data.Test;
 
+/// <summary>
+/// Playground class for testing various JSON operations, patches, and reactive streams
+/// </summary>
 public class Playground
 {
+    /// <summary>
+    /// Tests reactive stream subscription and merging behavior with replay subjects
+    /// </summary>
     [Fact]
     public void ChangeStreamSubscriptionTest()
     {
@@ -26,8 +32,16 @@ public class Playground
         lastValue.Should().Be(1);
     }
 
+    /// <summary>
+    /// Test data record for JSON patch operations
+    /// </summary>
+    /// <param name="Id">The unique identifier</param>
+    /// <param name="Value">The numeric value</param>
     private record MyData(string Id, double Value);
 
+    /// <summary>
+    /// Tests JSON patch creation and application functionality
+    /// </summary>
     [Fact]
     public void JsonPatchTest()
     {
@@ -39,6 +53,9 @@ public class Playground
         applied.Should().BeEquivalentTo(altered);
     }
 
+    /// <summary>
+    /// Tests reactive stream changes with combine latest operations
+    /// </summary>
     [Fact]
     public void Changes()
     {
@@ -54,6 +71,9 @@ public class Playground
         lastValue.Should().Be(3);
     }
 
+    /// <summary>
+    /// Tests JSON pointer navigation and element evaluation
+    /// </summary>
     [Fact]
     public void Equality()
     {
@@ -66,11 +86,14 @@ public class Playground
         child.Value.GetProperty("name").GetString().Should().Be("John");
     }
 
+    /// <summary>
+    /// Tests enumerable extraction from JSON elements using pointers
+    /// </summary>
     [Fact]
     public void ExtractEnumerableTest()
     {
-        var data = new []{ new {Label = "Label1", Value = true } };
-        var dict = new Dictionary<string, object> {{"DataContext", data}};
+        var data = new[] { new { Label = "Label1", Value = true } };
+        var dict = new Dictionary<string, object> { { "DataContext", data } };
 
         var element = JsonSerializer.SerializeToElement(dict);
 
