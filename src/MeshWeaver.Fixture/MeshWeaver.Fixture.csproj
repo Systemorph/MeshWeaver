@@ -11,8 +11,8 @@
     <PackageReference Include="xunit.abstractions" />
     <PackageReference Include="xunit.extensibility.core" />
   </ItemGroup>
-
   <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Activities\MeshWeaver.Activities.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
