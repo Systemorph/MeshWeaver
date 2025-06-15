@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.IO;
 using System.Reflection;
 using System.Text.Json;
 using Json.Patch;
@@ -449,17 +450,39 @@ public static class DataExtensions
             {
                 return description;
             }
-        }
-
-        // Extract from XML documentation using Namotion.Reflection
+        }        // Extract from XML documentation using Namotion.Reflection
         if (xmlDocsSettings.UseXmlDocumentation)
         {
             try
             {
-                var summary = propertyInfo.GetXmlDocsSummary(xmlDocsSettings.GetXmlDocsOptions());
+                // Create options that include the assembly's location for XML file discovery
+                var options = xmlDocsSettings.GetXmlDocsOptions();
+
+                // Try to get the XML docs directly from the property
+                var summary = propertyInfo.GetXmlDocsSummary(options);
                 if (!string.IsNullOrEmpty(summary))
                 {
                     return summary;
+                }
+
+                // If that fails, try with the declaring type's assembly
+                var assembly = propertyInfo.DeclaringType?.Assembly;
+                if (assembly != null)
+                {
+                    var assemblyLocation = assembly.Location;
+                    if (!string.IsNullOrEmpty(assemblyLocation))
+                    {
+                        var xmlPath = Path.ChangeExtension(assemblyLocation, ".xml");
+                        if (File.Exists(xmlPath))
+                        {
+                            // Try again with explicit XML path resolution
+                            summary = propertyInfo.GetXmlDocsSummary(options);
+                            if (!string.IsNullOrEmpty(summary))
+                            {
+                                return summary;
+                            }
+                        }
+                    }
                 }
             }
             catch
