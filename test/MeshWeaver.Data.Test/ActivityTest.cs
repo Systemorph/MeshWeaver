@@ -61,6 +61,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
             log.SubActivities.Should().HaveCount(1);
             activityLog.Should().Be(log);
         });
+        await DisposeAsync();
         taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
         taskComplete2.Status.Should().Be(TaskStatus.RanToCompletion);
     }
