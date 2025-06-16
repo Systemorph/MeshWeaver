@@ -1026,7 +1026,159 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         exception.Message.Should().Contain("WorkspaceReference");
         exception.Message.Should().Contain("type discriminator");
         Output.WriteLine($"Expected exception occurred: {exception.Message}");
+    }    /// <summary>
+         /// Tests that SubscribeRequest serializes correctly with WorkspaceReference discriminators
+         /// and can be round-trip serialized/deserialized successfully
+         /// </summary>
+    [Fact]
+    public void SubscribeRequest_WithWorkspaceReference_SerializesAndDeserializesCorrectly()
+    {
+        // arrange
+        var client = GetClient();
+        var entityRef = new EntityReference("TestCollection", "test-id");
+        var subscribeRequest = new SubscribeRequest("test-stream-id", entityRef);
+
+        // act - serialize the SubscribeRequest
+        var serializedJson = JsonSerializer.Serialize(subscribeRequest, client.JsonSerializerOptions);
+        Output.WriteLine($"Serialized SubscribeRequest: {serializedJson}");
+
+        // assert - verify both SubscribeRequest and WorkspaceReference have $type discriminators
+        serializedJson.Should().Contain("$type");
+        serializedJson.Should().Contain("SubscribeRequest");
+        serializedJson.Should().Contain("EntityReference");
+        serializedJson.Should().Contain("test-stream-id");
+        serializedJson.Should().Contain("TestCollection");
+        serializedJson.Should().Contain("test-id");
+
+        // act - deserialize back to SubscribeRequest
+        var deserializedRequest = JsonSerializer.Deserialize<SubscribeRequest>(serializedJson, client.JsonSerializerOptions);
+
+        // assert - verify deserialization worked correctly
+        deserializedRequest.Should().NotBeNull();
+        deserializedRequest.StreamId.Should().Be("test-stream-id");
+        deserializedRequest.Reference.Should().NotBeNull();
+        deserializedRequest.Reference.Should().BeOfType<EntityReference>();
+
+        var deserializedEntityRef = deserializedRequest.Reference.Should().BeOfType<EntityReference>().Which;
+        deserializedEntityRef.Collection.Should().Be("TestCollection");
+        deserializedEntityRef.Id.Should().Be("test-id");
+        deserializedEntityRef.Pointer.Should().Be("/TestCollection/'test-id'");
     }
+
+    /// <summary>
+    /// Tests that SubscribeRequest with various WorkspaceReference types serializes correctly
+    /// Similar to the boomerang test pattern from SerializationTest.cs
+    /// </summary>
+    [Fact]
+    public void SubscribeRequest_WithVariousReferenceTypes_SerializesCorrectly()
+    {
+        // arrange
+        var client = GetClient();
+        var testCases = new[]
+        {
+            new { Name = "EntityReference", Reference = (WorkspaceReference)new EntityReference("Users", "user123") },
+            new { Name = "JsonPointerReference", Reference = (WorkspaceReference)new JsonPointerReference("/data/items/0") },
+            new { Name = "CollectionReference", Reference = (WorkspaceReference)new CollectionReference("Products") },
+            new { Name = "InstanceReference", Reference = (WorkspaceReference)new InstanceReference("instance456") }
+        };
+
+        foreach (var testCase in testCases)
+        {
+            // act - create SubscribeRequest with different reference types
+            var subscribeRequest = new SubscribeRequest($"stream-{testCase.Name.ToLower()}", testCase.Reference);
+
+            var serializedJson = JsonSerializer.Serialize(subscribeRequest, client.JsonSerializerOptions);
+            Output.WriteLine($"Serialized SubscribeRequest with {testCase.Name}: {serializedJson}");
+
+            // assert - verify both types have discriminators
+            serializedJson.Should().Contain("$type");
+            serializedJson.Should().Contain("SubscribeRequest");
+            serializedJson.Should().Contain(testCase.Name);
+
+            // act - deserialize and verify round trip
+            var deserializedRequest = JsonSerializer.Deserialize<SubscribeRequest>(serializedJson, client.JsonSerializerOptions);
+
+            // assert - verify deserialization integrity
+            deserializedRequest.Should().NotBeNull();
+            deserializedRequest.StreamId.Should().Be($"stream-{testCase.Name.ToLower()}");
+            deserializedRequest.Reference.Should().NotBeNull();
+            deserializedRequest.Reference.Should().BeOfType(testCase.Reference.GetType());
+            deserializedRequest.Reference.Should().Be(testCase.Reference);
+        }
+    }
+
+    /// <summary>
+    /// Tests SubscribeRequest with malformed reference (reproduces the original issue)
+    /// This test demonstrates the fix for the polymorphic deserialization issue
+    /// </summary>
+    [Fact]
+    public void SubscribeRequest_WithMalformedReference_HandlesGracefully()
+    {
+        // arrange
+        var client = GetClient();
+        // This is the exact JSON payload that was causing the original issue
+        var malformedJson = "{\"$type\":\"MeshWeaver.Data.SubscribeRequest\",\"streamId\":\"VfaMBa-Wj0CD2GtCvfrV2Q\",\"reference\":{}}";
+
+        // act & assert - should handle the malformed reference gracefully
+        var exception = Assert.Throws<NotSupportedException>(() =>
+        {
+            JsonSerializer.Deserialize<SubscribeRequest>(malformedJson, client.JsonSerializerOptions);
+        });
+
+        // assert - verify exception contains helpful information about the polymorphic issue
+        exception.Message.Should().Contain("polymorphic");
+        exception.Message.Should().Contain("WorkspaceReference");
+        exception.Message.Should().Contain("type discriminator");
+        Output.WriteLine($"Handled malformed reference gracefully: {exception.Message}");
+    }
+
+    /// <summary>
+    /// Tests that SubscribeRequest with LayoutAreaReference serializes correctly with polymorphic discriminators
+    /// This verifies that LayoutAreaReference, being a WorkspaceReference inheritor, works properly in SubscribeRequest
+    /// </summary>
+    [Fact]
+    public void SubscribeRequest_WithLayoutAreaReference_SerializesAndDeserializesCorrectly()
+    {
+        // arrange
+        var client = GetClient();
+        var layoutRef = new LayoutAreaReference("main-area")
+        {
+            Id = "layout-123",
+            Layout = "dashboard-layout"
+        };
+        var subscribeRequest = new SubscribeRequest("layout-stream-id", layoutRef);
+
+        // act - serialize the SubscribeRequest with LayoutAreaReference
+        var serializedJson = JsonSerializer.Serialize(subscribeRequest, client.JsonSerializerOptions);
+        Output.WriteLine($"Serialized SubscribeRequest with LayoutAreaReference: {serializedJson}");
+
+        // assert - verify both SubscribeRequest and LayoutAreaReference have $type discriminators
+        serializedJson.Should().Contain("$type");
+        serializedJson.Should().Contain("SubscribeRequest");
+        serializedJson.Should().Contain("LayoutAreaReference");
+        serializedJson.Should().Contain("main-area");
+        serializedJson.Should().Contain("layout-123");
+        serializedJson.Should().Contain("dashboard-layout");
+
+        // act - deserialize back to SubscribeRequest
+        var deserializedRequest = JsonSerializer.Deserialize<SubscribeRequest>(serializedJson, client.JsonSerializerOptions);
+
+        // assert - verify deserialization integrity
+        deserializedRequest.Should().NotBeNull();
+        deserializedRequest.StreamId.Should().Be("layout-stream-id");
+        deserializedRequest.Reference.Should().NotBeNull();
+        deserializedRequest.Reference.Should().BeOfType<LayoutAreaReference>();
+
+        var deserializedLayoutRef = (LayoutAreaReference)deserializedRequest.Reference;
+        deserializedLayoutRef.Area.Should().Be("main-area");
+        deserializedLayoutRef.Id.Should().Be("layout-123");
+        deserializedLayoutRef.Layout.Should().Be("dashboard-layout");
+
+        // verify round-trip equality
+        deserializedRequest.Should().Be(subscribeRequest);
+    }
+
+    // ...existing code...
 }
 
 /// <summary>
