@@ -1,6 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
@@ -12,7 +10,6 @@ public class MessageService : IMessageService
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
     private bool isDisposing;
-    private bool hangDetectionTriggered;
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
@@ -21,12 +18,7 @@ public class MessageService : IMessageService
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
     private readonly DeferralContainer deferralContainer;
-    private readonly Timer hangDetectionTimer;
     private readonly CancellationTokenSource hangDetectionCts = new();
-
-    // Hub initialization tracking to prevent race conditions during message deserialization
-    private readonly TaskCompletionSource hubInitialized = new();
-    private readonly ConcurrentQueue<IMessageDelivery> deferredRawJsonMessages = new();
 
 
     public MessageService(
@@ -48,42 +40,15 @@ public class MessageService : IMessageService
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true }); hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
-        // Initialize hang detection timer only when not debugging
-        if (!Debugger.IsAttached)
-        {
-            hangDetectionTimer = new Timer(OnHangDetected, null, 10000, Timeout.Infinite);
-            logger.LogDebug("Hang detection timer started for {Address} with 10 second timeout", Address);
-        }
-        else
-        {
-            logger.LogDebug("Debugger attached - hang detection disabled for {Address}", Address);
-        }
-    }    void IMessageService.Start()
+        startupDeferral = Defer(x => x.Message is not ExecutionRequest);
+    }
+    void IMessageService.Start()
     {
         executionBuffer.Post(async ct =>
         {
-            try
-            {
-                await hub.StartAsync(ct);
-
-                // Signal that hub initialization is complete
-                hubInitialized.SetResult();
-                
-                // Process any deferred RawJson messages
-                await ProcessDeferredRawJsonMessages(ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Hub initialization failed for {Address}", Address);
-                
-                // Signal initialization failure
-                hubInitialized.SetException(ex);
-                
-                // Fail all deferred messages
-                await FailAllDeferredMessages(ex);
-            }
-
+            await hub.StartAsync(ct);
             buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+            startupDeferral.Dispose();
         });
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
@@ -121,20 +86,7 @@ public class MessageService : IMessageService
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken); private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);
-
-        // Reset hang detection timer on activity (if not debugging and not already triggered)
-        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing && !hangDetectionTriggered)
-        {
-            try
-            {
-                hangDetectionTimer.Change(10000, Timeout.Infinite);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Timer already disposed, ignore
-            }
-        }
+        logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
         lock (locker)
         {
@@ -159,20 +111,7 @@ public class MessageService : IMessageService
     }
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        delivery = UnpackIfNecessary(delivery);
-
-        // Reset hang detection timer on execution activity
-        if (!Debugger.IsAttached && hangDetectionTimer != null && !isDisposing)
-        {
-            try
-            {
-                hangDetectionTimer.Change(10000, Timeout.Infinite);
-            }
-            catch (ObjectDisposedException)
-            {
-                // Timer already disposed, ignore
-            }
-        }
+        delivery = UnpackIfNecessary(delivery);        // Reset hang detection timer on execution activity
 
         executionBuffer.Post(async _ =>
         {
@@ -215,22 +154,9 @@ public class MessageService : IMessageService
             logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
             return ret;
         }
-    }    private IMessageDelivery UnpackIfNecessary(IMessageDelivery delivery)
+    }
+    private IMessageDelivery UnpackIfNecessary(IMessageDelivery delivery)
     {
-        // Check if this is a RawJson message that needs deserialization
-        if (delivery.Message is RawJson)
-        {
-            // If hub initialization is not complete, defer the message
-            if (!hubInitialized.Task.IsCompleted)
-            {
-                logger.LogDebug("Deferring RawJson deserialization until hub initialization completes: {Delivery}", delivery);
-                deferredRawJsonMessages.Enqueue(delivery);
-                
-                // Return a forwarded delivery to indicate the message was accepted but will be processed later
-                return delivery.Forwarded();
-            }
-        }
-
         try
         {
             delivery = DeserializeDelivery(delivery);
@@ -274,7 +200,10 @@ public class MessageService : IMessageService
         ScheduleNotify(postPipeline.Invoke(delivery), default);
         return delivery;
     }
-    private readonly Lock locker = new(); public async ValueTask DisposeAsync()
+    private readonly Lock locker = new();
+    private readonly IDisposable startupDeferral;
+
+    public async ValueTask DisposeAsync()
     {
         lock (locker)
         {
@@ -288,7 +217,6 @@ public class MessageService : IMessageService
         // Dispose hang detection timer first
         try
         {
-            hangDetectionTimer?.Dispose();
             hangDetectionCts?.Cancel();
             hangDetectionCts?.Dispose();
         }
@@ -331,98 +259,5 @@ public class MessageService : IMessageService
 
         logger.LogDebug("Finished disposing message service in {Address}", Address);
     }
-    private void OnHangDetected(object state)
-    {
-        if (isDisposing || hangDetectionCts.Token.IsCancellationRequested || hangDetectionTriggered)
-            return;
-
-        // Set flag to prevent recursive hang detection
-        hangDetectionTriggered = true;
-
-        logger.LogError("HANG_DETECTED: Potential hang detected in MessageService for {Address} - forcing cancellation", Address);
-
-        // Log current state for debugging
-        logger.LogError("HANG_STATE: Buffer completed: {BufferCompleted}, Execution buffer completed: {ExecutionCompleted}, IsDisposing: {IsDisposing}",
-            buffer.Completion.IsCompleted, executionBuffer.Completion.IsCompleted, isDisposing);
-
-        try
-        {
-            // Cancel any ongoing operations
-            hangDetectionCts.Cancel();
-
-            // Force completion of buffers if they're still accepting messages
-            if (!buffer.Completion.IsCompleted)
-            {
-                buffer.Complete();
-                logger.LogWarning("HANG_RECOVERY: Forced buffer completion due to hang detection in {Address}", Address);
-            }
-
-            if (!executionBuffer.Completion.IsCompleted)
-            {
-                executionBuffer.Complete();
-                logger.LogWarning("HANG_RECOVERY: Forced execution buffer completion due to hang detection in {Address}", Address);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "HANG_RECOVERY_ERROR: Error during hang detection recovery in {Address}", Address);
-        }
-    }
-
-    /// <summary>
-    /// Processes any RawJson messages that were deferred during hub initialization.
-    /// This ensures that all messages are properly deserialized with complete type information.
-    /// </summary>
-    private async Task ProcessDeferredRawJsonMessages(CancellationToken cancellationToken)
-    {
-        while (deferredRawJsonMessages.TryDequeue(out var deferredDelivery))
-        {
-            try
-            {
-                logger.LogDebug("Processing deferred RawJson message: {Delivery}", deferredDelivery);
-                
-                // Now that hub is initialized, we can safely deserialize
-                var deserializedDelivery = DeserializeDelivery(deferredDelivery);
-                
-                // Route the properly deserialized message
-                await deliveryPipeline(deserializedDelivery, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to process deferred RawJson message: {Delivery}", deferredDelivery);
-                
-                // Mark the message as failed
-                try
-                {
-                    var failedDelivery = deferredDelivery.Failed($"Deferred deserialization failed: {ex.Message}");
-                    await deliveryPipeline(failedDelivery, cancellationToken);
-                }
-                catch (Exception innerEx)
-                {
-                    logger.LogError(innerEx, "Failed to report failure for deferred message: {Delivery}", deferredDelivery);
-                }
-            }
-        }
-    }
-    /// <summary>
-    /// Fails all deferred RawJson messages when hub initialization fails.
-    /// This prevents messages from being stuck in the queue indefinitely.
-    /// </summary>
-    private async Task FailAllDeferredMessages(Exception initializationException)
-    {
-        while (deferredRawJsonMessages.TryDequeue(out var deferredDelivery))
-        {
-            try
-            {
-                logger.LogWarning("Failing deferred RawJson message due to hub initialization failure: {Delivery}", deferredDelivery);
-                
-                var failedDelivery = deferredDelivery.Failed($"Hub initialization failed: {initializationException.Message}");
-                await deliveryPipeline(failedDelivery, default);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Failed to report failure for deferred message during initialization failure: {Delivery}", deferredDelivery);
-            }
-        }
-    }
+    
 }
