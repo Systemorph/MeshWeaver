@@ -62,11 +62,11 @@ public static class ContentLayoutArea
     public static IObservable<UiControl> RenderArticle(this IMessageHub hub, string collection, string id) =>
         hub.GetArticle(collection, id)
             ?.Select(a => a is null ? 
-                (UiControl)new MarkdownControl($"No article {id} found in collection {collection}") 
+                new MarkdownControl($"No article {id} found in collection {collection}") 
                 : RenderContent(id, a))
         ?? Observable.Return(new MarkdownControl($":warning: Article {id} not found in collection {collection}."));
 
-    public static IObservable<Article> GetArticle(this IMessageHub hub, string collection, string id)
+    public static IObservable<object> GetArticle(this IMessageHub hub, string collection, string id)
         => hub.GetArticleService().GetArticle(collection, id);
 
 }
