@@ -1,333 +1,333 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Column",
       "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName",
-      "$type": "MeshWeaver.Pivot.Models.Column"
+      "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C"
         ],
         "id": "C",
         "displayName": "C",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C",
           "B"
         ],
         "id": "C.B",
         "displayName": "B",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C",
           "C"
         ],
         "id": "C.C",
         "displayName": "C",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C",
           "E"
         ],
         "id": "C.E",
         "displayName": "E",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C",
           "P"
         ],
         "id": "C.P",
         "displayName": "P",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "H"
         ],
         "id": "H",
         "displayName": "H",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "H",
           "B"
         ],
         "id": "H.B",
         "displayName": "B",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "H",
           "C"
         ],
         "id": "H.C",
         "displayName": "C",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "H",
           "E"
         ],
         "id": "H.E",
         "displayName": "E",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "H",
           "P"
         ],
         "id": "H.P",
         "displayName": "P",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "L"
         ],
         "id": "L",
         "displayName": "L",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "L",
           "B"
         ],
         "id": "L.B",
         "displayName": "B",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "L",
           "C"
         ],
         "id": "L.C",
         "displayName": "C",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "L",
           "E"
         ],
         "id": "L.E",
         "displayName": "E",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "L",
           "P"
         ],
         "id": "L.P",
         "displayName": "P",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P"
         ],
         "id": "P",
         "displayName": "P",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P",
           "B"
         ],
         "id": "P.B",
         "displayName": "B",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P",
           "C"
         ],
         "id": "P.C",
         "displayName": "C",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P",
           "E"
         ],
         "id": "P.E",
         "displayName": "E",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P",
           "P"
         ],
         "id": "P.P",
         "displayName": "P",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

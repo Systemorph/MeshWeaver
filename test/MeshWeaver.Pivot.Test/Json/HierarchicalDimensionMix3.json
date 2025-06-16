@@ -1,49 +1,52 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Column",
       "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName",
-      "$type": "MeshWeaver.Pivot.Models.Column"
+      "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D1"
         ],
         "id": "D1",
         "displayName": "D1",
-        "grouperName": "DimD",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimD"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D1",
           "A1"
         ],
         "id": "D1.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA0"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D1",
           "A1",
@@ -51,16 +54,16 @@
         ],
         "id": "D1.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA1"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D1",
           "A1",
@@ -69,16 +72,16 @@
         ],
         "id": "D1.A1.A11.A111",
         "displayName": "A 111",
-        "grouperName": "DimA2",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA2"
       },
       "data": {
         "Value": 1
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D1",
           "A1",
@@ -87,47 +90,47 @@
         ],
         "id": "D1.A1.A11.A112",
         "displayName": "A 112",
-        "grouperName": "DimA2",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA2"
       },
       "data": {
         "Value": 2
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D2"
         ],
         "id": "D2",
         "displayName": "D2",
-        "grouperName": "DimD",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimD"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D2",
           "A1"
         ],
         "id": "D2.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA0"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D2",
           "A1",
@@ -135,16 +138,16 @@
         ],
         "id": "D2.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA1"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D2",
           "A1",
@@ -153,47 +156,47 @@
         ],
         "id": "D2.A1.A11.A111",
         "displayName": "A 111",
-        "grouperName": "DimA2",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA2"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D3"
         ],
         "id": "D3",
         "displayName": "D3",
-        "grouperName": "DimD",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimD"
       },
       "data": {
         "Value": 4
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D3",
           "A1"
         ],
         "id": "D3.A1",
         "displayName": "A 1",
-        "grouperName": "DimA0",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA0"
       },
       "data": {
         "Value": 4
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D3",
           "A1",
@@ -201,16 +204,16 @@
         ],
         "id": "D3.A1.A11",
         "displayName": "A 11",
-        "grouperName": "DimA1",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA1"
       },
       "data": {
         "Value": 4
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D3",
           "A1",
@@ -219,15 +222,12 @@
         ],
         "id": "D3.A1.A11.A112",
         "displayName": "A 112",
-        "grouperName": "DimA2",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA2"
       },
       "data": {
         "Value": 4
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

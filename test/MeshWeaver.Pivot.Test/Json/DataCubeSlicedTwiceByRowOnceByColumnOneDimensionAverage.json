@@ -1,16 +1,18 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "E.Value",
           "displayName": "Value",
           "coordinates": [
             "E",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "E",
@@ -18,20 +20,20 @@
       "coordinates": [
         "E"
       ],
-      "grouperName": "AmountType",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AmountType"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "P.Value",
           "displayName": "Value",
           "coordinates": [
             "P",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "P",
@@ -39,20 +41,20 @@
       "coordinates": [
         "P"
       ],
-      "grouperName": "AmountType",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AmountType"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "C.Value",
           "displayName": "Value",
           "coordinates": [
             "C",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "C",
@@ -60,20 +62,20 @@
       "coordinates": [
         "C"
       ],
-      "grouperName": "AmountType",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AmountType"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "B.Value",
           "displayName": "Value",
           "coordinates": [
             "B",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "B",
@@ -81,20 +83,20 @@
       "coordinates": [
         "B"
       ],
-      "grouperName": "AmountType",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AmountType"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR"
         ],
         "id": "EUR",
         "displayName": "Euro",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "E": {
@@ -109,19 +111,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D"
         ],
         "id": "EUR.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -136,11 +138,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -148,8 +151,7 @@
         ],
         "id": "EUR.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -164,11 +166,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -176,8 +179,7 @@
         ],
         "id": "EUR.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -192,11 +194,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -204,8 +207,7 @@
         ],
         "id": "EUR.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -220,11 +222,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -232,8 +235,7 @@
         ],
         "id": "EUR.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -248,19 +250,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT"
         ],
         "id": "EUR.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -275,11 +277,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -287,8 +290,7 @@
         ],
         "id": "EUR.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -303,11 +305,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -315,8 +318,7 @@
         ],
         "id": "EUR.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -331,11 +333,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -343,8 +346,7 @@
         ],
         "id": "EUR.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -359,11 +361,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -371,8 +374,7 @@
         ],
         "id": "EUR.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -387,19 +389,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU"
         ],
         "id": "EUR.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -414,11 +416,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -426,8 +429,7 @@
         ],
         "id": "EUR.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -442,11 +444,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -454,8 +457,7 @@
         ],
         "id": "EUR.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -470,11 +472,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -482,8 +485,7 @@
         ],
         "id": "EUR.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -498,11 +500,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -510,8 +513,7 @@
         ],
         "id": "EUR.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -526,19 +528,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH"
         ],
         "id": "EUR.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -553,11 +555,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -565,8 +568,7 @@
         ],
         "id": "EUR.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -581,11 +583,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -593,8 +596,7 @@
         ],
         "id": "EUR.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -609,11 +611,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -621,8 +624,7 @@
         ],
         "id": "EUR.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -637,11 +639,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -649,8 +652,7 @@
         ],
         "id": "EUR.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -665,18 +667,18 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB"
         ],
         "id": "RUB",
         "displayName": "Russian rouble",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "E": {
@@ -691,19 +693,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D"
         ],
         "id": "RUB.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -718,11 +720,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -730,8 +733,7 @@
         ],
         "id": "RUB.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -746,11 +748,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -758,8 +761,7 @@
         ],
         "id": "RUB.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -774,11 +776,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -786,8 +789,7 @@
         ],
         "id": "RUB.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -802,11 +804,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -814,8 +817,7 @@
         ],
         "id": "RUB.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -830,19 +832,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT"
         ],
         "id": "RUB.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -857,11 +859,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -869,8 +872,7 @@
         ],
         "id": "RUB.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -885,11 +887,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -897,8 +900,7 @@
         ],
         "id": "RUB.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -913,11 +915,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -925,8 +928,7 @@
         ],
         "id": "RUB.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -941,11 +943,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -953,8 +956,7 @@
         ],
         "id": "RUB.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -969,19 +971,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU"
         ],
         "id": "RUB.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -996,11 +998,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1008,8 +1011,7 @@
         ],
         "id": "RUB.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1024,11 +1026,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1036,8 +1039,7 @@
         ],
         "id": "RUB.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1052,11 +1054,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1064,8 +1067,7 @@
         ],
         "id": "RUB.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1080,11 +1082,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1092,8 +1095,7 @@
         ],
         "id": "RUB.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1108,19 +1110,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH"
         ],
         "id": "RUB.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1135,11 +1137,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1147,8 +1150,7 @@
         ],
         "id": "RUB.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1163,11 +1165,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1175,8 +1178,7 @@
         ],
         "id": "RUB.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1191,11 +1193,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1203,8 +1206,7 @@
         ],
         "id": "RUB.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1219,11 +1221,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1231,8 +1234,7 @@
         ],
         "id": "RUB.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1247,18 +1249,18 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF"
         ],
         "id": "CHF",
         "displayName": "Swiss Franc",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "E": {
@@ -1273,19 +1275,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D"
         ],
         "id": "CHF.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1300,11 +1302,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1312,8 +1315,7 @@
         ],
         "id": "CHF.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1328,11 +1330,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1340,8 +1343,7 @@
         ],
         "id": "CHF.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1356,11 +1358,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1368,8 +1371,7 @@
         ],
         "id": "CHF.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1384,11 +1386,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1396,8 +1399,7 @@
         ],
         "id": "CHF.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1412,19 +1414,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT"
         ],
         "id": "CHF.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1439,11 +1441,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -1451,8 +1454,7 @@
         ],
         "id": "CHF.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1467,11 +1469,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -1479,8 +1482,7 @@
         ],
         "id": "CHF.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1495,11 +1497,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -1507,8 +1510,7 @@
         ],
         "id": "CHF.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1523,11 +1525,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -1535,8 +1538,7 @@
         ],
         "id": "CHF.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1551,19 +1553,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU"
         ],
         "id": "CHF.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1578,11 +1580,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -1590,8 +1593,7 @@
         ],
         "id": "CHF.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1606,11 +1608,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -1618,8 +1621,7 @@
         ],
         "id": "CHF.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1634,11 +1636,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -1646,8 +1649,7 @@
         ],
         "id": "CHF.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1662,11 +1664,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -1674,8 +1677,7 @@
         ],
         "id": "CHF.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1690,19 +1692,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH"
         ],
         "id": "CHF.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1717,11 +1719,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -1729,8 +1732,7 @@
         ],
         "id": "CHF.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1745,11 +1747,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -1757,8 +1760,7 @@
         ],
         "id": "CHF.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1773,11 +1775,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -1785,8 +1788,7 @@
         ],
         "id": "CHF.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1801,11 +1803,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -1813,8 +1816,7 @@
         ],
         "id": "CHF.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1829,18 +1831,18 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD"
         ],
         "id": "USD",
         "displayName": "US Dollar",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "E": {
@@ -1855,19 +1857,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D"
         ],
         "id": "USD.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -1882,11 +1884,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -1894,8 +1897,7 @@
         ],
         "id": "USD.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1910,11 +1912,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -1922,8 +1925,7 @@
         ],
         "id": "USD.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1938,11 +1940,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -1950,8 +1953,7 @@
         ],
         "id": "USD.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1966,11 +1968,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -1978,8 +1981,7 @@
         ],
         "id": "USD.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -1994,19 +1996,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT"
         ],
         "id": "USD.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -2021,11 +2023,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -2033,8 +2036,7 @@
         ],
         "id": "USD.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2049,11 +2051,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -2061,8 +2064,7 @@
         ],
         "id": "USD.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2077,11 +2079,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -2089,8 +2092,7 @@
         ],
         "id": "USD.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2105,11 +2107,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -2117,8 +2120,7 @@
         ],
         "id": "USD.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2133,19 +2135,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU"
         ],
         "id": "USD.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -2160,11 +2162,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -2172,8 +2175,7 @@
         ],
         "id": "USD.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2188,11 +2190,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -2200,8 +2203,7 @@
         ],
         "id": "USD.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2216,11 +2218,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -2228,8 +2231,7 @@
         ],
         "id": "USD.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2244,11 +2246,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -2256,8 +2259,7 @@
         ],
         "id": "USD.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2272,19 +2274,19 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH"
         ],
         "id": "USD.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "E": {
@@ -2299,11 +2301,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -2311,8 +2314,7 @@
         ],
         "id": "USD.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2327,11 +2329,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -2339,8 +2342,7 @@
         ],
         "id": "USD.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2355,11 +2357,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -2367,8 +2370,7 @@
         ],
         "id": "USD.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2383,11 +2385,12 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -2395,8 +2398,7 @@
         ],
         "id": "USD.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "E": {
@@ -2411,10 +2413,8 @@
         "B": {
           "Value": 1
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

@@ -1,77 +1,77 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Column",
       "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName",
-      "$type": "MeshWeaver.Pivot.Models.Column"
+      "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "B"
         ],
         "id": "B",
         "displayName": "B",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "C"
         ],
         "id": "C",
         "displayName": "C",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "E"
         ],
         "id": "E",
         "displayName": "E",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "P"
         ],
         "id": "P",
         "displayName": "P",
-        "grouperName": "AmountType",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "AmountType"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

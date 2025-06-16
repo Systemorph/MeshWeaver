@@ -1,77 +1,77 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Column",
       "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName",
-      "$type": "MeshWeaver.Pivot.Models.Column"
+      "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "A111"
         ],
         "id": "A111",
         "displayName": "A 111",
-        "grouperName": "DimA",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA"
       },
       "data": {
         "Value": 1
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "A112"
         ],
         "id": "A112",
         "displayName": "A 112",
-        "grouperName": "DimA",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA"
       },
       "data": {
         "Value": 2
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "A12"
         ],
         "id": "A12",
         "displayName": "A 12",
-        "grouperName": "DimA",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA"
       },
       "data": {
         "Value": 3
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "A2"
         ],
         "id": "A2",
         "displayName": "A 2",
-        "grouperName": "DimA",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "DimA"
       },
       "data": {
         "Value": 4
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

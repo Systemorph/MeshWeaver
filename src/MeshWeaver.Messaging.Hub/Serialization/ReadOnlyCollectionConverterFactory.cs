@@ -1,5 +1,4 @@
-using System.Collections.ObjectModel;
-using System.Linq;
+﻿using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -56,12 +55,11 @@ public class ReadOnlyCollectionConverterFactory : JsonConverterFactory
 /// </summary>
 /// <typeparam name="T">The element type of the collection</typeparam>
 public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<T>>
-{
-    public override IReadOnlyCollection<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+{    public override IReadOnlyCollection<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        // For abstract types or interfaces, we need to deserialize each element individually
+        // For abstract types, interfaces, or types with polymorphic attributes, we need to deserialize each element individually
         // using the polymorphic resolver to handle the actual concrete types
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
+        if (typeof(T).IsAbstract || typeof(T).IsInterface || HasPolymorphicAttributes(typeof(T)))
         {
             using var jsonDoc = JsonDocument.ParseValue(ref reader);
             if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
@@ -94,8 +92,7 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
             var array = JsonSerializer.Deserialize<T[]>(ref reader, options);
             return array == null ? new ReadOnlyCollection<T>(Array.Empty<T>()) : new ReadOnlyCollection<T>(array);
         }
-    }
-    public override void Write(Utf8JsonWriter writer, IReadOnlyCollection<T> value, JsonSerializerOptions options)
+    }public override void Write(Utf8JsonWriter writer, IReadOnlyCollection<T> value, JsonSerializerOptions options)
     {
         if (value == null)
         {
@@ -103,9 +100,9 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
             return;
         }
 
-        // For abstract types or interfaces, serialize each element individually
+        // For abstract types, interfaces, or types with polymorphic attributes, serialize each element individually
         // so the polymorphic converter can add $type information
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
+        if (typeof(T).IsAbstract || typeof(T).IsInterface || HasPolymorphicAttributes(typeof(T)))
         {
             writer.WriteStartArray();
             foreach (var item in value)
@@ -120,6 +117,11 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
             JsonSerializer.Serialize(writer, value.ToArray(), typeof(T[]), options);
         }
     }
+    
+    private static bool HasPolymorphicAttributes(Type type)
+    {
+        return type.GetCustomAttributes(typeof(JsonPolymorphicAttribute), inherit: true).Any();
+    }
 }
 
 /// <summary>
@@ -127,12 +129,11 @@ public class ReadOnlyCollectionConverter<T> : JsonConverter<IReadOnlyCollection<
 /// </summary>
 /// <typeparam name="T">The element type of the list</typeparam>
 public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
-{
-    public override IReadOnlyList<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+{    public override IReadOnlyList<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        // For abstract types or interfaces, we need to deserialize each element individually
+        // For abstract types, interfaces, or types with polymorphic attributes, we need to deserialize each element individually
         // using the polymorphic resolver to handle the actual concrete types
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
+        if (typeof(T).IsAbstract || typeof(T).IsInterface || HasPolymorphicAttributes(typeof(T)))
         {
             using var jsonDoc = JsonDocument.ParseValue(ref reader);
             if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
@@ -152,8 +153,7 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
             var array = JsonSerializer.Deserialize<T[]>(ref reader, options);
             return array == null ? new ReadOnlyCollection<T>(Array.Empty<T>()) : new ReadOnlyCollection<T>(array);
         }
-    }
-    public override void Write(Utf8JsonWriter writer, IReadOnlyList<T> value, JsonSerializerOptions options)
+    }    public override void Write(Utf8JsonWriter writer, IReadOnlyList<T> value, JsonSerializerOptions options)
     {
         if (value == null)
         {
@@ -161,9 +161,9 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
             return;
         }
 
-        // For abstract types or interfaces, serialize each element individually
+        // For abstract types, interfaces, or types with polymorphic attributes, serialize each element individually
         // so the polymorphic converter can add $type information
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
+        if (typeof(T).IsAbstract || typeof(T).IsInterface || HasPolymorphicAttributes(typeof(T)))
         {
             writer.WriteStartArray();
             foreach (var item in value)
@@ -172,11 +172,15 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
                 JsonSerializer.Serialize(writer, item, item?.GetType() ?? typeof(T), options);
             }
             writer.WriteEndArray();
-        }
-        else
+        }        else
         {
             JsonSerializer.Serialize(writer, value.ToArray(), typeof(T[]), options);
         }
+    }
+    
+    private static bool HasPolymorphicAttributes(Type type)
+    {
+        return type.GetCustomAttributes(typeof(JsonPolymorphicAttribute), inherit: true).Any();
     }
 }
 
@@ -185,16 +189,13 @@ public class ReadOnlyListConverter<T> : JsonConverter<IReadOnlyList<T>>
 /// </summary>
 /// <typeparam name="T">The element type of the enumerable</typeparam>
 public class EnumerableConverter<T> : JsonConverter<IEnumerable<T>>
-{
-    public override IEnumerable<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+{    public override IEnumerable<T> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        // For abstract types or interfaces, we need to deserialize each element individually
+        // For abstract types, interfaces, or types with polymorphic attributes, we need to deserialize each element individually
         // using the polymorphic resolver to handle the actual concrete types
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
-        {
             using var jsonDoc = JsonDocument.ParseValue(ref reader);
             if (jsonDoc.RootElement.ValueKind != JsonValueKind.Array)
-                return Array.Empty<T>();
+                return [];
 
             var list = new List<T>();
             foreach (var element in jsonDoc.RootElement.EnumerateArray())
@@ -204,14 +205,7 @@ public class EnumerableConverter<T> : JsonConverter<IEnumerable<T>>
                     list.Add(item);
             }
             return list.ToArray();
-        }
-        else
-        {
-            var array = JsonSerializer.Deserialize<T[]>(ref reader, options);
-            return array ?? Array.Empty<T>();
-        }
-    }
-    public override void Write(Utf8JsonWriter writer, IEnumerable<T> value, JsonSerializerOptions options)
+    }    public override void Write(Utf8JsonWriter writer, IEnumerable<T> value, JsonSerializerOptions options)
     {
         if (value == null)
         {
@@ -219,21 +213,13 @@ public class EnumerableConverter<T> : JsonConverter<IEnumerable<T>>
             return;
         }
 
-        // For abstract types or interfaces, serialize each element individually
-        // so the polymorphic converter can add $type information
-        if (typeof(T).IsAbstract || typeof(T).IsInterface)
+        writer.WriteStartArray();
+        foreach (var item in value)
         {
-            writer.WriteStartArray();
-            foreach (var item in value)
-            {
-                // Use the actual type of the item instead of T to ensure polymorphic serialization
-                JsonSerializer.Serialize(writer, item, item?.GetType() ?? typeof(T), options);
-            }
-            writer.WriteEndArray();
+            // Use the actual type of the item instead of T to ensure polymorphic serialization
+            JsonSerializer.Serialize(writer, item, item?.GetType() ?? typeof(T), options);
         }
-        else
-        {
-            JsonSerializer.Serialize(writer, value.ToArray(), typeof(T[]), options);
-        }
+        writer.WriteEndArray();
     }
+
 }

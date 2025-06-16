@@ -1,16 +1,18 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "1.Value",
           "displayName": "Value",
           "coordinates": [
             1,
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "1",
@@ -18,20 +20,20 @@
       "coordinates": [
         1
       ],
-      "grouperName": "AutomaticNumber",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AutomaticNumber"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "2.Value",
           "displayName": "Value",
           "coordinates": [
             2,
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "2",
@@ -39,20 +41,20 @@
       "coordinates": [
         2
       ],
-      "grouperName": "AutomaticNumber",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AutomaticNumber"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "3.Value",
           "displayName": "Value",
           "coordinates": [
             3,
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "3",
@@ -60,20 +62,20 @@
       "coordinates": [
         3
       ],
-      "grouperName": "AutomaticNumber",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "AutomaticNumber"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "BoP"
         ],
         "id": "BoP",
         "displayName": "Beginning of Period",
-        "grouperName": "PropertyName",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "PropertyName"
       },
       "data": {
         "1": {
@@ -85,18 +87,18 @@
         "3": {
           "Value": 0
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "Delta"
         ],
         "id": "Delta",
         "displayName": "Delta",
-        "grouperName": "PropertyName",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "PropertyName"
       },
       "data": {
         "1": {
@@ -108,18 +110,18 @@
         "3": {
           "Value": 2
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EoP"
         ],
         "id": "EoP",
         "displayName": "End of Period",
-        "grouperName": "PropertyName",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "PropertyName"
       },
       "data": {
         "1": {
@@ -131,10 +133,8 @@
         "3": {
           "Value": 2
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

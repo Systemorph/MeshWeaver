@@ -90,7 +90,8 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
         }
 
         return derivedTypes;
-    }    private static bool IsValidDerivedTypeForBase(Type baseType, Type derivedType)
+    }
+    private static bool IsValidDerivedTypeForBase(Type baseType, Type derivedType)
     {
         // For object type, include all registered types that can be serialized polymorphically
         if (baseType == typeof(object))
@@ -135,7 +136,8 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
 
         return incompatibleTypes.Contains(type.FullName) ||
                type.FullName?.StartsWith("System.Text.Json.Nodes.") == true;
-    }    private static bool CanBeSerializedPolymorphically(Type type)
+    }
+    private static bool CanBeSerializedPolymorphically(Type type)
     {
         // Must not be generic type definition (but allow constructed generic types)
         if (type.IsGenericTypeDefinition)
