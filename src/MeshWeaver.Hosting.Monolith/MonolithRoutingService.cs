@@ -55,7 +55,8 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         if (node.HubConfiguration is not null)
         {
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
-            hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
+            if(hub is not null)
+                hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
             return hub;
         }
         return null;
