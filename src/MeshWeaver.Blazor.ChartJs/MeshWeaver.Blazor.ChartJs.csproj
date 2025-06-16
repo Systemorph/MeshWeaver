@@ -3,8 +3,6 @@
     <ProjectGuid>{0dfd08b8-7fd8-4834-8222-f998a68575b0}</ProjectGuid>
       <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.ChartJs</StaticWebAssetBasePath>
   </PropertyGroup>
-
-  <Import Project="StaticAssets\StaticAssets.targets" />
     
   <ItemGroup>
       <SupportedPlatform Include="browser" />
@@ -19,8 +17,4 @@
     <ProjectReference Include="..\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
   </ItemGroup>
-
-    <ItemGroup>
-        <Content Update="StaticAssets\**" Pack="true" CopyToPublishDirectory="false"/>
-    </ItemGroup>
 </Project>
