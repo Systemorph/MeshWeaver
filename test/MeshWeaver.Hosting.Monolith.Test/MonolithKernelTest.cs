@@ -100,8 +100,9 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         const string Code = @"using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using static MeshWeaver.Layout.Controls;
+using static MeshWeaver.Layout.EditorExtensions;
 record Calculator(double Summand1, double Summand2);
-static object CalculatorSum(Calculator c) => Markdown($""**Sum**: {c.Summand1 + c.Summand2}"");
+static UiControl CalculatorSum(Calculator c) => Markdown($""**Sum**: {c.Summand1 + c.Summand2}"");
 Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ";
         var kernel = new KernelAddress();

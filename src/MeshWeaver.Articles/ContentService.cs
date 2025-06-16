@@ -72,9 +72,9 @@ public class ContentService : IContentService
         };
     }
 
-    public IObservable<Article> GetArticle(string collection, string article)
+    public IObservable<object> GetArticle(string collection, string article)
     {
-        return GetCollection(collection)?.GetMarkdown(article).OfType<Article>();
+        return GetCollection(collection)?.GetMarkdown(article);
     }
 
     public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)
