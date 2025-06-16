@@ -167,6 +167,7 @@ SystemName2,DisplayName2
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
+        await Task.Delay(100);
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(2);

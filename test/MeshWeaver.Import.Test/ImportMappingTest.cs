@@ -84,6 +84,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         _ = await DoImport(content);
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
+        await Task.Delay(100);
         var ret2 = await workspace.GetObservable<MyRecord2>()
             .Timeout(10.Seconds())
             .FirstAsync();
