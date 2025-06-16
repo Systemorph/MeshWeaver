@@ -5,9 +5,13 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace MeshWeaver.BusinessRules.Generator;
 
+/// <summary>
+/// Source generator that creates proxy classes for IScope interface implementations.
+/// </summary>
 [Generator]
 public class ScopeCodeGenerator : IIncrementalGenerator
 {
+    /// <inheritdoc/>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterSourceOutput(context.CompilationProvider, (context, compilation) =>
@@ -16,6 +20,11 @@ public class ScopeCodeGenerator : IIncrementalGenerator
         });
     }
 
+    /// <summary>
+    /// Executes the source generation process for the given compilation.
+    /// </summary>
+    /// <param name="context">The source production context.</param>
+    /// <param name="compilation">The compilation to process.</param>
     private void Execute(SourceProductionContext context, Compilation compilation)
     {
         context.ReportDiagnostic(Diagnostic.Create(new DiagnosticDescriptor(
@@ -69,6 +78,12 @@ public class ScopeCodeGenerator : IIncrementalGenerator
             "SourceGenerator", DiagnosticSeverity.Info, true), Location.None));
     }
 
+    /// <summary>
+    /// Generates proxy class properties for the specified scope type and interface.
+    /// </summary>
+    /// <param name="typeSymbol">The type symbol representing the scope interface.</param>
+    /// <param name="interfaceType">The constructed IScope interface type.</param>
+    /// <returns>A tuple containing the generated class name and source code.</returns>
     private (string className, string code) GenerateProperties(INamedTypeSymbol typeSymbol, INamedTypeSymbol interfaceType)
     {
         var builder = new StringBuilder();
@@ -76,9 +91,10 @@ public class ScopeCodeGenerator : IIncrementalGenerator
         var className = $"{typeSymbol.Name}Proxy";
 
         var identityType = interfaceType.TypeArguments[0];
-        var stateType = interfaceType.TypeArguments[1];
-        builder.AppendLine($"using {typeof(Lazy<>).Namespace};");
+        var stateType = interfaceType.TypeArguments[1]; builder.AppendLine($"using {typeof(Lazy<>).Namespace};");
         builder.AppendLine($"namespace {namespaceName};");
+        builder.AppendLine();
+        builder.AppendLine("/// <inheritdoc/>");
         builder.AppendLine($"public partial class {className} : MeshWeaver.BusinessRules.ScopeBase<{typeSymbol}, {identityType}, {stateType}>, {typeSymbol}");
         builder.AppendLine("{");
 
@@ -96,12 +112,13 @@ public class ScopeCodeGenerator : IIncrementalGenerator
             var getterName = $"__G_{fieldName}";
 
             builder.AppendLine($"    private static readonly System.Reflection.MethodInfo {getterName} = typeof({typeSymbol}).GetProperty(nameof({typeSymbol}.{propertyName})).GetMethod;");
-            builder.AppendLine($"    private readonly Lazy<{propertyType}> {fieldName};");
+            builder.AppendLine($"    private readonly Lazy<{propertyType}> {fieldName};"); constructorInitializations.Add($"       {fieldName} = new(() => Evaluate<{propertyType}>({getterName}));");
 
-            constructorInitializations.Add($"       {fieldName} = new(() => Evaluate<{propertyType}>({getterName}));");
-
+            builder.AppendLine($"    /// <inheritdoc/>");
             builder.AppendLine($"    {propertyType} {typeSymbol}.{propertyName} => {fieldName}.Value;");
         }
+        builder.AppendLine();
+        builder.AppendLine("    /// <inheritdoc/>");
         builder.AppendLine($"    public {className}({identityType} identity, MeshWeaver.BusinessRules.ScopeRegistry<{stateType}> state) : base(identity, state)");
         builder.AppendLine("    {");
         foreach (var initialization in constructorInitializations)
