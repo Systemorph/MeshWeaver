@@ -6,8 +6,10 @@ MeshWeaver.Blazor.ChartJs provides Blazor UI components and services for ChartJs
 The components in this library implement the `ChartControl` class from the MeshWeaver.Charting project using Chart.js technology, providing rich data visualization capabilities with the standard MeshWeaver UI behavior and styling.
 
 ## Features
-- Blazor implementation of the `ChartControl` class using Chart.js
+- Blazor implementation of the `ChartControl` class using Chart.js loaded from CDN
 - Advanced chart visualization with various chart types and customization options
+- CDN-based Chart.js loading with automatic dependency management
+- No build process required - JavaScript dependencies are loaded at runtime
 
 ## Usage
 ```csharp
@@ -21,6 +23,15 @@ builder.ConfigureWebPortal()
 - Various chart types (bar, line, pie, etc.)
 - Interactive data visualization
 - Responsive chart layouts
+
+## Chart.js Dependencies
+This library loads Chart.js and its dependencies from CDN at runtime:
+- Chart.js v4.4.0
+- Chart.js Data Labels Plugin v2.2.0
+- Chart.js Moment Adapter v1.0.1
+- Moment.js v2.29.4
+
+No npm build process or static assets compilation is required.
 
 ## Installation
 The MeshWeaver.Blazor.ChartJs package can be added to your project using the `AddChartJs()` extension method when configuring your application:

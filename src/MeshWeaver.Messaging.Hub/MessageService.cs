@@ -48,7 +48,7 @@ public class MessageService : IMessageService
         {
             await hub.StartAsync(ct);
             buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
-            startupDeferral.Dispose();
+            startupDeferral?.Dispose();
         });
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
