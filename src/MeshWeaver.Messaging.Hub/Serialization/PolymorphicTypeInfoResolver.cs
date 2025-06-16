@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -59,7 +60,6 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
     {
         return _derivedTypesCache.GetOrAdd(baseType, ComputeDerivedTypes);
     }
-
     private List<JsonDerivedType> ComputeDerivedTypes(Type baseType)
     {
         var derivedTypes = new List<JsonDerivedType>();
@@ -73,6 +73,33 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
             derivedTypes.Add(new JsonDerivedType(baseType, typeName));
         }
 
+        // First, check if the base type has JsonPolymorphic and JsonDerivedType attributes
+        var jsonPolymorphicAttr = baseType.GetCustomAttributes(typeof(JsonPolymorphicAttribute), false).FirstOrDefault();
+        if (jsonPolymorphicAttr != null)
+        {
+            var jsonDerivedTypeAttrs = baseType.GetCustomAttributes(typeof(JsonDerivedTypeAttribute), false)
+                .Cast<JsonDerivedTypeAttribute>();
+
+            foreach (var attr in jsonDerivedTypeAttrs)
+            {
+                // Skip if it's the same type (already added above if applicable)
+                if (attr.DerivedType == baseType)
+                    continue;
+
+                // Use the type discriminator from the attribute if available, otherwise use the type name
+                var typeDiscriminator = attr.TypeDiscriminator?.ToString() ?? attr.DerivedType.FullName;
+
+                // Only add if it's a valid derived type for the base
+                if (IsValidDerivedTypeForBase(baseType, attr.DerivedType))
+                {
+                    derivedTypes.Add(new JsonDerivedType(attr.DerivedType, typeDiscriminator));
+
+                    // Also register in the type registry for consistency
+                    typeRegistry.GetOrAddType(attr.DerivedType);
+                }
+            }
+        }
+
         // Find all derived types from the registry for ANY type
         foreach (var registeredType in typeRegistry.Types)
         {
@@ -80,6 +107,10 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
 
             // Skip if it's the same type (already added above if applicable)
             if (derivedType == baseType)
+                continue;
+
+            // Skip if we already added this type from JsonDerivedType attributes
+            if (derivedTypes.Any(dt => dt.DerivedType == derivedType))
                 continue;
 
             // Check if this registered type inherits from or implements the base type

@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Charting.Models.Options.Scales
+﻿using System.Text.Json.Serialization;
+
+namespace MeshWeaver.Charting.Models.Options.Scales
 {
     public record CartesianScale : Scale
     {

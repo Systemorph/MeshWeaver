@@ -1,52 +1,55 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet",
         "type": "scatter",
         "xAxisID": "x2",
         "pointRadius": 4,
         "pointStyle": "rect",
         "data": [
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 0.8,
-            "y": 0.19999999999999973,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 0.19999999999999973
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 1.8,
-            "y": 7.4,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 7.4
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 2.8,
-            "y": 1,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 1
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 3.8,
-            "y": 6.7,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 6.7
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 4.8,
-            "y": 3,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 3
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 5.8,
-            "y": 4,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 4
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 6.8,
-            "y": 4,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 4
           }
         ],
-        "label": "Alessandro",
-        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet"
+        "label": "Alessandro"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "stack": "A",
         "xAxisID": "x1",
         "type": "bar",
@@ -59,10 +62,10 @@
           null,
           null
         ],
-        "label": "Alessandro.Italy",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "Alessandro.Italy"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "stack": "A",
         "xAxisID": "x1",
         "type": "bar",
@@ -75,55 +78,55 @@
           4,
           4
         ],
-        "label": "Alessandro.Russia",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "Alessandro.Russia"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet",
         "type": "scatter",
         "xAxisID": "x2",
         "pointRadius": 4,
         "pointStyle": "rect",
         "data": [
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 1.2000000000000002,
-            "y": 1.1,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 1.1
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 2.2,
-            "y": 2.2,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 2.2
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 3.2,
-            "y": 3.3,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 3.3
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 4.2,
-            "y": 4.4,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 4.4
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 5.2,
-            "y": 0,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 0
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 6.2,
-            "y": 0,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 0
           },
           {
+            "$type": "MeshWeaver.Charting.Models.PointData",
             "x": 7.2,
-            "y": 0,
-            "$type": "MeshWeaver.Charting.Models.PointData"
+            "y": 0
           }
         ],
-        "label": "Paolo",
-        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet"
+        "label": "Paolo"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "stack": "P",
         "xAxisID": "x1",
         "type": "bar",
@@ -136,8 +139,7 @@
           null,
           null
         ],
-        "label": "Paolo.Italy",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "Paolo.Italy"
       }
     ],
     "labels": [
@@ -148,25 +150,25 @@
       "5.Value",
       "6.Value",
       "7.Value"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "responsive": true,
     "scales": {
       "x2": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianLinearScale",
         "type": "linear",
         "display": false,
         "min": 1,
         "max": 7,
         "stacked": "false",
         "ticks": {
-          "stepSize": 1,
-          "$type": "MeshWeaver.Charting.Models.Options.Scales.Ticks.CartesianLinearTick"
-        },
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianLinearScale"
+          "$type": "MeshWeaver.Charting.Models.Options.Scales.Ticks.Tick"
+        }
       },
       "x1": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale",
         "labels": [
           "1.Value",
           "2.Value",
@@ -177,26 +179,23 @@
           "7.Value"
         ],
         "display": true,
-        "stacked": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
+        "stacked": true
       },
       "y": {
-        "stacked": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
+        "stacked": true
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "colorschemes": {
-        "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
+        "scheme": "brewer.PastelOne9"
+      }
+    }
+  }
 }

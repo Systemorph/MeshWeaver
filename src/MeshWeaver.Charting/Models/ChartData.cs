@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Charting.Models;
 
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(ChartData), typeDiscriminator: "MeshWeaver.Charting.Models.ChartData")]
 public record ChartData
 {
     // ReSharper disable once StringLiteralTypo
@@ -14,7 +16,7 @@ public record ChartData
 
     public IEnumerable<string> YLabels { get; init; }
 
-    public ChartData WithLabels(params IEnumerable<string> labels) => 
+    public ChartData WithLabels(params IEnumerable<string> labels) =>
         (this with { Labels = labels.ToArray(), AutoLabels = false })
         .WithAutoUpdatedLabels();
 
@@ -26,16 +28,16 @@ public record ChartData
     }
 
 
-    private bool? AutoLabels { get; init; } 
+    private bool? AutoLabels { get; init; }
 
-    
+
     protected IReadOnlyCollection<string> GetUpdatedLabels()
     {
         if (AutoLabels == true || (AutoLabels is null && DataSets.Count > 1))
         {
             var maxLen = DataSets.Select(ds => ds.Data?.Count() ?? 0).DefaultIfEmpty(1).Max();
 
-            return DataSets.Take(maxLen).Select((x,i) => x.Label ?? (i+1).ToString()).ToArray();
+            return DataSets.Take(maxLen).Select((x, i) => x.Label ?? (i + 1).ToString()).ToArray();
         }
         return Labels;
     }

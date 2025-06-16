@@ -1,10 +1,13 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Charting.Models;
 
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(ChartModel), typeDiscriminator: "MeshWeaver.Charting.Models.ChartModel")]
 public record ChartModel : IRenderableObject
 {
     public ChartModel()
@@ -33,7 +36,7 @@ public record ChartModel : IRenderableObject
             .WithAutoLegend();
 
     public virtual ChartModel WithLabels(params IEnumerable<string> labels) =>
-        (this with {Data = Data.WithLabels(labels)})
+        (this with { Data = Data.WithLabels(labels) })
             .WithAutoLegend();
 
 

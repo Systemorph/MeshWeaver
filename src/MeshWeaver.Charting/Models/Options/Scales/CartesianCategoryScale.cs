@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Charting.Models.Options.Scales
+﻿using System.Text.Json.Serialization;
+
+namespace MeshWeaver.Charting.Models.Options.Scales
 {
     public record CartesianCategoryScale : CartesianScale
     {
@@ -15,6 +17,7 @@
         /// <summary>
         /// An array of labels to display. When an individual label is an array of strings, each item is rendered on a new line.
         /// </summary>
+        [JsonPropertyName("labels")]
         public IEnumerable<string> Labels { get; init; }
     }
 }
