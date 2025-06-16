@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.TimeLineDataSet",
+        "type": "Line",
         "data": [
           {
             "x": "2019-09-18T00:00:00.0000000",
@@ -19,18 +23,26 @@
             "x": "2019-11-10T00:00:00.0000000",
             "y": 4
           }
-        ],
-        "type": "Line"
+        ]
       }
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "scales": {
       "x": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.TimeScale",
+        "time": {
+          "displayFormats": {
+            "day": "D MMM YYYY"
+          },
+          "unit": "Day"
+        },
         "type": "time"
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "title": {
         "display": true,
         "position": "Bottom",
@@ -43,6 +55,7 @@
         "text": "Timed Chart"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

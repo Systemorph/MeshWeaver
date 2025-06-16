@@ -1,14 +1,17 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Segmented.PieDataSet",
+        "type": "Pie",
         "data": [
           1,
           2,
           3,
           4
-        ],
-        "type": "Pie"
+        ]
       }
     ],
     "labels": [
@@ -19,11 +22,14 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": [
           "#00ff00",
           "#0000ff",
