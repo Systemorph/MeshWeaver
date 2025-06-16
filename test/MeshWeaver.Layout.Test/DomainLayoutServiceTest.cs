@@ -109,6 +109,13 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
+        controlFromStream = await stream
+            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
+        dataContext = control.DataContext;
         value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext)
             .Timeout(10.Seconds())
