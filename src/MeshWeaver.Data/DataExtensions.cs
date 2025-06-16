@@ -75,10 +75,10 @@ public static class DataExtensions
                                     serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                                 )
                             );
-                        if (!options.Converters.Any(c => c is InstancesInCollectionConverter))
+                        if (!options.Converters.Any(c => c is InstanceCollectionConverter))
                             options.Converters.Insert(
                                 0,
-                                new InstancesInCollectionConverter(
+                                new InstanceCollectionConverter(
                                     serialization.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
                                 )
                             );

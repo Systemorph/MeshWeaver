@@ -8,7 +8,7 @@ using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data.Serialization;
 
-public class InstancesInCollectionConverter(ITypeRegistry typeRegistry)
+public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
     : JsonConverter<InstanceCollection>
 {
     public const string CollectionProperty = "$type";
