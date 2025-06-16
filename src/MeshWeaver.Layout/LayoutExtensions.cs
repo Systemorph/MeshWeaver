@@ -14,13 +14,13 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Layout.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
 
 public static class LayoutExtensions
-{
-    public static MessageHubConfiguration AddLayout(
+{    public static MessageHubConfiguration AddLayout(
         this MessageHubConfiguration config,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
@@ -43,8 +43,14 @@ public static class LayoutExtensions
                                     .RenderLayoutArea()
                         )
                 )
+            )            .AddLayoutTypes()
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    // Add the dedicated Option converter to ensure $type discriminators are always included
+                    options.Converters.Add(new OptionConverter());
+                })
             )
-            .AddLayoutTypes()
             .Set(config.GetListOfLambdas().Add(layoutDefinition));
     }
 
@@ -236,9 +242,7 @@ public static class LayoutExtensions
                 x.Value.ValueKind == JsonValueKind.Undefined 
                     ? default(T) 
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
-            );
-
-    public static MessageHubConfiguration AddLayoutClient(
+            );    public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     )
@@ -248,7 +252,13 @@ public static class LayoutExtensions
             .AddLayoutTypes()
             .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
             .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
-            .WithSerialization(serialization => serialization);
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    // Add the dedicated Option converter to ensure $type discriminators work on client side
+                    options.Converters.Add(new OptionConverter());
+                })
+            );
     }
 
     internal static ImmutableList<

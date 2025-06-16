@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Generic;
+using System.Text.Json;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -50,7 +51,7 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
         var serializerOptions = host.JsonSerializerOptions;
 
         // Create a collection of options
-        var options = new[]
+        var options = new object[]
         {
             new Option<string>("One", "One"),
             new Option<string>("Two", "Two")

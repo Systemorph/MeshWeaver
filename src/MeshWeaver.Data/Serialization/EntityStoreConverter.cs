@@ -53,7 +53,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
 
     private KeyValuePair<string, InstanceCollection> DeserializeCollection(string collection, JsonNode node, JsonSerializerOptions options)
     {
-        node[InstancesInCollectionConverter.CollectionProperty] = collection;
+        node[InstanceCollectionConverter.CollectionProperty] = collection;
         return
             new(
                 collection,
