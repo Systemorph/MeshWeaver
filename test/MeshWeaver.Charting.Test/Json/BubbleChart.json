@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bubble.BubbleDataSet",
+        "type": "Bubble",
         "data": [
           {
             "x": 20,
@@ -26,14 +30,16 @@
           "blue": 132,
           "alpha": 1
         },
-        "label": "Bubble Dataset",
-        "type": "Bubble"
+        "label": "Bubble Dataset"
       }
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

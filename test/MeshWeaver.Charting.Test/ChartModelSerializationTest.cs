@@ -116,10 +116,10 @@ public class ChartModelSerializationTest(ITestOutputHelper toh) : HubTestBase(to
         Assert.Contains("\"$type\":", linearJson);
 
         // Verify they all contain the base Scale type discriminator at minimum
-        Assert.Contains("MeshWeaver.Charting.Models.Options.Scales.Scale", cartesianJson);
-        Assert.Contains("MeshWeaver.Charting.Models.Options.Scales.Scale", cartesianLinearJson);
-        Assert.Contains("MeshWeaver.Charting.Models.Options.Scales.Scale", timeJson);
-        Assert.Contains("MeshWeaver.Charting.Models.Options.Scales.Scale", linearJson);
+        Assert.Contains(typeof(CartesianScale).FullName!, cartesianJson);
+        Assert.Contains(typeof(CartesianLinearScale).FullName!, cartesianLinearJson);
+        Assert.Contains(typeof(TimeScale).FullName!, timeJson);
+        Assert.Contains(typeof(Linear).FullName!, linearJson);
     }
     [Fact]
     public void Plugins_Serialization_ShouldIncludeTypeDiscriminator()

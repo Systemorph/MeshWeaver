@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bubble.BubbleDataSet",
+        "type": "Bubble",
         "data": [
           {
             "x": 1,
@@ -24,10 +28,11 @@
             "r": 18
           }
         ],
-        "label": "First",
-        "type": "Bubble"
+        "label": "First"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bubble.BubbleDataSet",
+        "type": "Bubble",
         "data": [
           {
             "x": 10,
@@ -50,8 +55,7 @@
             "r": 18
           }
         ],
-        "label": "Second",
-        "type": "Bubble"
+        "label": "Second"
       }
     ],
     "labels": [
@@ -60,7 +64,9 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true
       },
@@ -75,6 +81,7 @@
         "text": "Bubble Chart"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.DarkTwo8"
       }
     }

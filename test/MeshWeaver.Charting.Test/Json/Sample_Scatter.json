@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet",
+        "type": "Scatter",
         "data": [
           {
             "x": 1,
@@ -20,10 +24,11 @@
             "y": 3
           }
         ],
-        "label": "First",
-        "type": "Scatter"
+        "label": "First"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet",
+        "type": "Scatter",
         "data": [
           {
             "x": 10,
@@ -42,8 +47,7 @@
             "y": 3
           }
         ],
-        "label": "Second",
-        "type": "Scatter"
+        "label": "Second"
       }
     ],
     "labels": [
@@ -52,7 +56,9 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true
       },
@@ -67,6 +73,7 @@
         "text": "Scatter Chart"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.DarkTwo8"
       }
     }

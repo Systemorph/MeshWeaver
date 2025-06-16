@@ -1,25 +1,29 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
+        "type": "Radar",
         "data": [
           -1,
           4,
           3,
           2
         ],
-        "label": "First",
-        "type": "Radar"
+        "label": "First"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
+        "type": "Radar",
         "data": [
           4,
           5,
           6,
           3
         ],
-        "label": "Second",
-        "type": "Radar"
+        "label": "Second"
       }
     ],
     "labels": [
@@ -30,7 +34,9 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true
       },
@@ -45,6 +51,7 @@
         "text": "Radar Chart"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }
