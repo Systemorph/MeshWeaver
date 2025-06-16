@@ -305,7 +305,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x is HtmlControl { Data: not "0" })
             .Timeout(TimeSpan.FromSeconds(3))
             ;
-        content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be("1");
+        content.Should().BeOfType<HtmlControl>().Which.Data.Should().Be(1);
     }
 
     private UiControl DataGrid(LayoutAreaHost area, RenderingContext ctx)

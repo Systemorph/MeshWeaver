@@ -45,9 +45,11 @@ public static class SerializationExtensions
         var addressConverter = new AddressConverter(hub.TypeRegistry);
         var objectConverter = new ObjectPolymorphicConverter(typeRegistry);
         var messageDeliveryConverter = new MessageDeliveryConverter(typeRegistry);
+        var readOnlyCollectionConverterFactory = new ReadOnlyCollectionConverterFactory();
         options.Converters.Add(addressConverter);
         options.Converters.Add(objectConverter);
         options.Converters.Add(messageDeliveryConverter);
+        options.Converters.Add(readOnlyCollectionConverterFactory);
         options.Converters.Add(new JsonNodeConverter());
         options.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
         options.Converters.Add(new RawJsonConverter());
@@ -61,6 +63,10 @@ public static class SerializationExtensions
         {
             o.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
             o.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
+            o.UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip;
+            o.ReferenceHandler = null; // Completely disable reference handling
+            o.ReadCommentHandling = JsonCommentHandling.Skip;
+            o.AllowTrailingCommas = true;
             o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
     }
