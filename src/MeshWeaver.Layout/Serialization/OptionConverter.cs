@@ -39,14 +39,14 @@ public class OptionConverter : JsonConverter<Option>
 
         // Parse the type name to determine the concrete Option<T> type
         Type concreteType = null;
-        
+
         // Handle both simple type names and full type names
         if (typeName.StartsWith("MeshWeaver.Layout.Option`1[") && typeName.EndsWith("]"))
         {
             // Extract the generic type argument from the type name
             var genericArg = typeName.Substring("MeshWeaver.Layout.Option`1[".Length);
             genericArg = genericArg.Substring(0, genericArg.Length - 1); // Remove the closing ]
-            
+
             // Map common type names
             var itemType = genericArg switch
             {
@@ -57,7 +57,7 @@ public class OptionConverter : JsonConverter<Option>
                 "System.Decimal" or "Decimal" => typeof(decimal),
                 _ => Type.GetType(genericArg) ?? typeof(object)
             };
-            
+
             concreteType = typeof(Option<>).MakeGenericType(itemType);
         }
         else if (typeName == "MeshWeaver.Layout.Option" || typeName == "Option")
@@ -85,7 +85,7 @@ public class OptionConverter : JsonConverter<Option>
                 converterOptions.Converters.RemoveAt(i);
             }
         }
-        
+
         return (Option)JsonSerializer.Deserialize(jsonObject.GetRawText(), concreteType, converterOptions);
     }
 
@@ -99,7 +99,7 @@ public class OptionConverter : JsonConverter<Option>
 
         // Always serialize with the concrete runtime type to ensure $type is included
         var concreteType = value.GetType();
-          var converterOptions = new JsonSerializerOptions(options);
+        var converterOptions = new JsonSerializerOptions(options);
         // Remove this converter to prevent infinite recursion
         for (int i = converterOptions.Converters.Count - 1; i >= 0; i--)
         {
@@ -108,7 +108,7 @@ public class OptionConverter : JsonConverter<Option>
                 converterOptions.Converters.RemoveAt(i);
             }
         }
-        
+
         // Serialize as the concrete type, which will include the $type discriminator
         JsonSerializer.Serialize(writer, value, concreteType, converterOptions);
     }

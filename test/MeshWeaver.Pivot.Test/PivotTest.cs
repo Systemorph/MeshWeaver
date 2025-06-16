@@ -144,7 +144,7 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
 
-    [Fact(Skip ="Not clear what the use case should be for this")]
+    [Fact(Skip = "Not clear what the use case should be for this")]
     public async Task NullQuerySourceShouldFlatten()
     {
         PivotModel qs = null;
@@ -870,7 +870,7 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
 
         public static implicit operator object[](
             ScopeDataCubeTestCase<TScope, TElement, TAggregate> testCase
-        ) => [testCase.benchmarkFile,  testCase.pivotBuilder];
+        ) => [testCase.benchmarkFile, testCase.pivotBuilder];
     }
 
     private async Task ExecuteDataCubeTest<TElement>(

@@ -1,49 +1,52 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Column",
       "id": "Value",
       "displayName": "Value",
       "coordinates": [
         "Value"
       ],
-      "grouperName": "ColumnName",
-      "$type": "MeshWeaver.Pivot.Models.Column"
+      "grouperName": "ColumnName"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR"
         ],
         "id": "EUR",
         "displayName": "Euro",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "Value": 384
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D"
         ],
         "id": "EUR.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -51,16 +54,16 @@
         ],
         "id": "EUR.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -69,16 +72,16 @@
         ],
         "id": "EUR.D.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -87,16 +90,16 @@
         ],
         "id": "EUR.D.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -104,16 +107,16 @@
         ],
         "id": "EUR.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -122,16 +125,16 @@
         ],
         "id": "EUR.D.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -140,16 +143,16 @@
         ],
         "id": "EUR.D.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -157,16 +160,16 @@
         ],
         "id": "EUR.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -175,16 +178,16 @@
         ],
         "id": "EUR.D.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -193,16 +196,16 @@
         ],
         "id": "EUR.D.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -210,16 +213,16 @@
         ],
         "id": "EUR.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -228,16 +231,16 @@
         ],
         "id": "EUR.D.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "D",
@@ -246,32 +249,32 @@
         ],
         "id": "EUR.D.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT"
         ],
         "id": "EUR.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -279,16 +282,16 @@
         ],
         "id": "EUR.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -297,16 +300,16 @@
         ],
         "id": "EUR.PT.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -315,16 +318,16 @@
         ],
         "id": "EUR.PT.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -332,16 +335,16 @@
         ],
         "id": "EUR.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -350,16 +353,16 @@
         ],
         "id": "EUR.PT.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -368,16 +371,16 @@
         ],
         "id": "EUR.PT.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -385,16 +388,16 @@
         ],
         "id": "EUR.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -403,16 +406,16 @@
         ],
         "id": "EUR.PT.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -421,16 +424,16 @@
         ],
         "id": "EUR.PT.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -438,16 +441,16 @@
         ],
         "id": "EUR.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -456,16 +459,16 @@
         ],
         "id": "EUR.PT.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "PT",
@@ -474,32 +477,32 @@
         ],
         "id": "EUR.PT.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU"
         ],
         "id": "EUR.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -507,16 +510,16 @@
         ],
         "id": "EUR.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -525,16 +528,16 @@
         ],
         "id": "EUR.RU.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -543,16 +546,16 @@
         ],
         "id": "EUR.RU.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -560,16 +563,16 @@
         ],
         "id": "EUR.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -578,16 +581,16 @@
         ],
         "id": "EUR.RU.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -596,16 +599,16 @@
         ],
         "id": "EUR.RU.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -613,16 +616,16 @@
         ],
         "id": "EUR.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -631,16 +634,16 @@
         ],
         "id": "EUR.RU.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -649,16 +652,16 @@
         ],
         "id": "EUR.RU.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -666,16 +669,16 @@
         ],
         "id": "EUR.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -684,16 +687,16 @@
         ],
         "id": "EUR.RU.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "RU",
@@ -702,32 +705,32 @@
         ],
         "id": "EUR.RU.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH"
         ],
         "id": "EUR.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -735,16 +738,16 @@
         ],
         "id": "EUR.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -753,16 +756,16 @@
         ],
         "id": "EUR.CH.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -771,16 +774,16 @@
         ],
         "id": "EUR.CH.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -788,16 +791,16 @@
         ],
         "id": "EUR.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -806,16 +809,16 @@
         ],
         "id": "EUR.CH.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -824,16 +827,16 @@
         ],
         "id": "EUR.CH.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -841,16 +844,16 @@
         ],
         "id": "EUR.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -859,16 +862,16 @@
         ],
         "id": "EUR.CH.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -877,16 +880,16 @@
         ],
         "id": "EUR.CH.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -894,16 +897,16 @@
         ],
         "id": "EUR.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -912,16 +915,16 @@
         ],
         "id": "EUR.CH.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "EUR",
           "CH",
@@ -930,47 +933,47 @@
         ],
         "id": "EUR.CH.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB"
         ],
         "id": "RUB",
         "displayName": "Russian rouble",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "Value": 384
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D"
         ],
         "id": "RUB.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -978,16 +981,16 @@
         ],
         "id": "RUB.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -996,16 +999,16 @@
         ],
         "id": "RUB.D.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1014,16 +1017,16 @@
         ],
         "id": "RUB.D.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1031,16 +1034,16 @@
         ],
         "id": "RUB.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1049,16 +1052,16 @@
         ],
         "id": "RUB.D.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1067,16 +1070,16 @@
         ],
         "id": "RUB.D.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1084,16 +1087,16 @@
         ],
         "id": "RUB.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1102,16 +1105,16 @@
         ],
         "id": "RUB.D.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1120,16 +1123,16 @@
         ],
         "id": "RUB.D.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1137,16 +1140,16 @@
         ],
         "id": "RUB.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1155,16 +1158,16 @@
         ],
         "id": "RUB.D.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "D",
@@ -1173,32 +1176,32 @@
         ],
         "id": "RUB.D.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT"
         ],
         "id": "RUB.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1206,16 +1209,16 @@
         ],
         "id": "RUB.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1224,16 +1227,16 @@
         ],
         "id": "RUB.PT.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1242,16 +1245,16 @@
         ],
         "id": "RUB.PT.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1259,16 +1262,16 @@
         ],
         "id": "RUB.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1277,16 +1280,16 @@
         ],
         "id": "RUB.PT.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1295,16 +1298,16 @@
         ],
         "id": "RUB.PT.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1312,16 +1315,16 @@
         ],
         "id": "RUB.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1330,16 +1333,16 @@
         ],
         "id": "RUB.PT.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1348,16 +1351,16 @@
         ],
         "id": "RUB.PT.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1365,16 +1368,16 @@
         ],
         "id": "RUB.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1383,16 +1386,16 @@
         ],
         "id": "RUB.PT.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "PT",
@@ -1401,32 +1404,32 @@
         ],
         "id": "RUB.PT.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU"
         ],
         "id": "RUB.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1434,16 +1437,16 @@
         ],
         "id": "RUB.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1452,16 +1455,16 @@
         ],
         "id": "RUB.RU.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1470,16 +1473,16 @@
         ],
         "id": "RUB.RU.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1487,16 +1490,16 @@
         ],
         "id": "RUB.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1505,16 +1508,16 @@
         ],
         "id": "RUB.RU.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1523,16 +1526,16 @@
         ],
         "id": "RUB.RU.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1540,16 +1543,16 @@
         ],
         "id": "RUB.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1558,16 +1561,16 @@
         ],
         "id": "RUB.RU.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1576,16 +1579,16 @@
         ],
         "id": "RUB.RU.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1593,16 +1596,16 @@
         ],
         "id": "RUB.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1611,16 +1614,16 @@
         ],
         "id": "RUB.RU.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "RU",
@@ -1629,32 +1632,32 @@
         ],
         "id": "RUB.RU.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH"
         ],
         "id": "RUB.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1662,16 +1665,16 @@
         ],
         "id": "RUB.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1680,16 +1683,16 @@
         ],
         "id": "RUB.CH.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1698,16 +1701,16 @@
         ],
         "id": "RUB.CH.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1715,16 +1718,16 @@
         ],
         "id": "RUB.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1733,16 +1736,16 @@
         ],
         "id": "RUB.CH.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1751,16 +1754,16 @@
         ],
         "id": "RUB.CH.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1768,16 +1771,16 @@
         ],
         "id": "RUB.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1786,16 +1789,16 @@
         ],
         "id": "RUB.CH.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1804,16 +1807,16 @@
         ],
         "id": "RUB.CH.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1821,16 +1824,16 @@
         ],
         "id": "RUB.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1839,16 +1842,16 @@
         ],
         "id": "RUB.CH.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RUB",
           "CH",
@@ -1857,47 +1860,47 @@
         ],
         "id": "RUB.CH.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF"
         ],
         "id": "CHF",
         "displayName": "Swiss Franc",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "Value": 384
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D"
         ],
         "id": "CHF.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1905,16 +1908,16 @@
         ],
         "id": "CHF.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1923,16 +1926,16 @@
         ],
         "id": "CHF.D.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1941,16 +1944,16 @@
         ],
         "id": "CHF.D.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1958,16 +1961,16 @@
         ],
         "id": "CHF.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1976,16 +1979,16 @@
         ],
         "id": "CHF.D.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -1994,16 +1997,16 @@
         ],
         "id": "CHF.D.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2011,16 +2014,16 @@
         ],
         "id": "CHF.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2029,16 +2032,16 @@
         ],
         "id": "CHF.D.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2047,16 +2050,16 @@
         ],
         "id": "CHF.D.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2064,16 +2067,16 @@
         ],
         "id": "CHF.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2082,16 +2085,16 @@
         ],
         "id": "CHF.D.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "D",
@@ -2100,32 +2103,32 @@
         ],
         "id": "CHF.D.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT"
         ],
         "id": "CHF.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2133,16 +2136,16 @@
         ],
         "id": "CHF.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2151,16 +2154,16 @@
         ],
         "id": "CHF.PT.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2169,16 +2172,16 @@
         ],
         "id": "CHF.PT.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2186,16 +2189,16 @@
         ],
         "id": "CHF.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2204,16 +2207,16 @@
         ],
         "id": "CHF.PT.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2222,16 +2225,16 @@
         ],
         "id": "CHF.PT.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2239,16 +2242,16 @@
         ],
         "id": "CHF.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2257,16 +2260,16 @@
         ],
         "id": "CHF.PT.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2275,16 +2278,16 @@
         ],
         "id": "CHF.PT.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2292,16 +2295,16 @@
         ],
         "id": "CHF.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2310,16 +2313,16 @@
         ],
         "id": "CHF.PT.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "PT",
@@ -2328,32 +2331,32 @@
         ],
         "id": "CHF.PT.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU"
         ],
         "id": "CHF.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2361,16 +2364,16 @@
         ],
         "id": "CHF.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2379,16 +2382,16 @@
         ],
         "id": "CHF.RU.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2397,16 +2400,16 @@
         ],
         "id": "CHF.RU.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2414,16 +2417,16 @@
         ],
         "id": "CHF.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2432,16 +2435,16 @@
         ],
         "id": "CHF.RU.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2450,16 +2453,16 @@
         ],
         "id": "CHF.RU.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2467,16 +2470,16 @@
         ],
         "id": "CHF.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2485,16 +2488,16 @@
         ],
         "id": "CHF.RU.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2503,16 +2506,16 @@
         ],
         "id": "CHF.RU.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2520,16 +2523,16 @@
         ],
         "id": "CHF.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2538,16 +2541,16 @@
         ],
         "id": "CHF.RU.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "RU",
@@ -2556,32 +2559,32 @@
         ],
         "id": "CHF.RU.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH"
         ],
         "id": "CHF.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2589,16 +2592,16 @@
         ],
         "id": "CHF.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2607,16 +2610,16 @@
         ],
         "id": "CHF.CH.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2625,16 +2628,16 @@
         ],
         "id": "CHF.CH.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2642,16 +2645,16 @@
         ],
         "id": "CHF.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2660,16 +2663,16 @@
         ],
         "id": "CHF.CH.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2678,16 +2681,16 @@
         ],
         "id": "CHF.CH.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2695,16 +2698,16 @@
         ],
         "id": "CHF.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2713,16 +2716,16 @@
         ],
         "id": "CHF.CH.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2731,16 +2734,16 @@
         ],
         "id": "CHF.CH.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2748,16 +2751,16 @@
         ],
         "id": "CHF.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2766,16 +2769,16 @@
         ],
         "id": "CHF.CH.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CHF",
           "CH",
@@ -2784,47 +2787,47 @@
         ],
         "id": "CHF.CH.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD"
         ],
         "id": "USD",
         "displayName": "US Dollar",
-        "grouperName": "Currency",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Currency"
       },
       "data": {
         "Value": 384
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D"
         ],
         "id": "USD.D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2832,16 +2835,16 @@
         ],
         "id": "USD.D.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2850,16 +2853,16 @@
         ],
         "id": "USD.D.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2868,16 +2871,16 @@
         ],
         "id": "USD.D.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2885,16 +2888,16 @@
         ],
         "id": "USD.D.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2903,16 +2906,16 @@
         ],
         "id": "USD.D.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2921,16 +2924,16 @@
         ],
         "id": "USD.D.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2938,16 +2941,16 @@
         ],
         "id": "USD.D.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2956,16 +2959,16 @@
         ],
         "id": "USD.D.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2974,16 +2977,16 @@
         ],
         "id": "USD.D.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -2991,16 +2994,16 @@
         ],
         "id": "USD.D.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -3009,16 +3012,16 @@
         ],
         "id": "USD.D.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "D",
@@ -3027,32 +3030,32 @@
         ],
         "id": "USD.D.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT"
         ],
         "id": "USD.PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3060,16 +3063,16 @@
         ],
         "id": "USD.PT.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3078,16 +3081,16 @@
         ],
         "id": "USD.PT.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3096,16 +3099,16 @@
         ],
         "id": "USD.PT.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3113,16 +3116,16 @@
         ],
         "id": "USD.PT.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3131,16 +3134,16 @@
         ],
         "id": "USD.PT.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3149,16 +3152,16 @@
         ],
         "id": "USD.PT.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3166,16 +3169,16 @@
         ],
         "id": "USD.PT.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3184,16 +3187,16 @@
         ],
         "id": "USD.PT.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3202,16 +3205,16 @@
         ],
         "id": "USD.PT.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3219,16 +3222,16 @@
         ],
         "id": "USD.PT.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3237,16 +3240,16 @@
         ],
         "id": "USD.PT.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "PT",
@@ -3255,32 +3258,32 @@
         ],
         "id": "USD.PT.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU"
         ],
         "id": "USD.RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3288,16 +3291,16 @@
         ],
         "id": "USD.RU.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3306,16 +3309,16 @@
         ],
         "id": "USD.RU.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3324,16 +3327,16 @@
         ],
         "id": "USD.RU.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3341,16 +3344,16 @@
         ],
         "id": "USD.RU.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3359,16 +3362,16 @@
         ],
         "id": "USD.RU.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3377,16 +3380,16 @@
         ],
         "id": "USD.RU.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3394,16 +3397,16 @@
         ],
         "id": "USD.RU.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3412,16 +3415,16 @@
         ],
         "id": "USD.RU.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3430,16 +3433,16 @@
         ],
         "id": "USD.RU.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3447,16 +3450,16 @@
         ],
         "id": "USD.RU.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3465,16 +3468,16 @@
         ],
         "id": "USD.RU.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "RU",
@@ -3483,32 +3486,32 @@
         ],
         "id": "USD.RU.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH"
         ],
         "id": "USD.CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "Value": 96
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3516,16 +3519,16 @@
         ],
         "id": "USD.CH.C",
         "displayName": "Casualty",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3534,16 +3537,16 @@
         ],
         "id": "USD.CH.C.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3552,16 +3555,16 @@
         ],
         "id": "USD.CH.C.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3569,16 +3572,16 @@
         ],
         "id": "USD.CH.H",
         "displayName": "Health",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3587,16 +3590,16 @@
         ],
         "id": "USD.CH.H.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3605,16 +3608,16 @@
         ],
         "id": "USD.CH.H.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3622,16 +3625,16 @@
         ],
         "id": "USD.CH.L",
         "displayName": "Life",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3640,16 +3643,16 @@
         ],
         "id": "USD.CH.L.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3658,16 +3661,16 @@
         ],
         "id": "USD.CH.L.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3675,16 +3678,16 @@
         ],
         "id": "USD.CH.P",
         "displayName": "Property",
-        "grouperName": "LineOfBusiness",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "LineOfBusiness"
       },
       "data": {
         "Value": 24
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3693,16 +3696,16 @@
         ],
         "id": "USD.CH.P.B",
         "displayName": "Broked",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "USD",
           "CH",
@@ -3711,15 +3714,12 @@
         ],
         "id": "USD.CH.P.D",
         "displayName": "Direct",
-        "grouperName": "Split",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Split"
       },
       "data": {
         "Value": 12
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

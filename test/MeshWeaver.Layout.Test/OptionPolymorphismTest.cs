@@ -11,7 +11,8 @@ using Xunit.Abstractions;
 namespace MeshWeaver.Layout.Test;
 
 public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(output)
-{    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) => 
+{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration) =>
         configuration.AddLayout(x => x).AddLayoutTypes();
 
     [Fact]
