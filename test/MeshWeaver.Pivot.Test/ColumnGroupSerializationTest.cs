@@ -16,7 +16,7 @@ namespace MeshWeaver.Pivot.Test;
 /// </summary>
 public class ColumnGroupSerializationTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    JsonSerializerOptions Options => GetHost().JsonSerializerOptions;    [Fact]
+    JsonSerializerOptions Options => GetHost().JsonSerializerOptions; [Fact]
     public void ColumnGroup_SerializesWithCorrectTypeDiscriminator()
     {
         // Arrange
@@ -28,7 +28,7 @@ public class ColumnGroupSerializationTest(ITestOutputHelper output) : HubTestBas
 
         // Act
         var json = JsonSerializer.Serialize(columnGroup, Options);
-        
+
         // Debug output
         Output.WriteLine($"Direct ColumnGroup JSON: {json}");
 
@@ -64,7 +64,8 @@ public class ColumnGroupSerializationTest(ITestOutputHelper output) : HubTestBas
         deserializedColumnGroup.Children.Should().HaveCount(2, "ColumnGroup should preserve its children");
         deserializedColumnGroup.Children.First().Id.Should().Be("child1");
         deserializedColumnGroup.Children.Last().Id.Should().Be("child2");
-    }    [Fact]
+    }
+    [Fact]
     public void PivotModel_SerializesColumnGroupWithChildren()
     {
         // Arrange
@@ -80,7 +81,7 @@ public class ColumnGroupSerializationTest(ITestOutputHelper output) : HubTestBas
 
         // Act: Serialize the model
         var json = JsonSerializer.Serialize(pivotModel, Options);
-        
+
         // Debug output
         Output.WriteLine($"PivotModel with ColumnGroup JSON: {json}");
 

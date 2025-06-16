@@ -1,8 +1,16 @@
-﻿using MeshWeaver.Charting.Models.Options.Scales.Ticks;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 
 namespace MeshWeaver.Charting.Models.Options.Scales
-{
-    // https://www.chartjs.org/docs/3.7.1/axes/#common-options-to-all-axes
+{    // https://www.chartjs.org/docs/3.7.1/axes/#common-options-to-all-axes
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+    [JsonDerivedType(typeof(Scale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.Scale")]
+    [JsonDerivedType(typeof(Linear), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.Linear")]
+    [JsonDerivedType(typeof(CartesianScale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.CartesianScale")]
+    [JsonDerivedType(typeof(CartesianLinearScale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.CartesianLinearScale")]
+    [JsonDerivedType(typeof(CartesianCategoryScale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale")]
+    [JsonDerivedType(typeof(TimeScale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.TimeScale")]
+    [JsonDerivedType(typeof(RadialScale), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Scales.RadialScale")]
     public record Scale
     {
         /// <summary>

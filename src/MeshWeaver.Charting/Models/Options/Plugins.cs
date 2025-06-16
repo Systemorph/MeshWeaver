@@ -3,6 +3,8 @@ using MeshWeaver.Charting.Models.Options.Tooltips;
 
 namespace MeshWeaver.Charting.Models.Options
 {
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+    [JsonDerivedType(typeof(Plugins), typeDiscriminator: "MeshWeaver.Charting.Models.Options.Plugins")]
     public record Plugins
     {
         /// <summary>
@@ -37,9 +39,9 @@ namespace MeshWeaver.Charting.Models.Options
         [JsonPropertyName("datalabels")]
         public DataLabels DataLabels { get; set; }
 
-        public Plugins WithLegend (Func<Legend, Legend> builder = null)
+        public Plugins WithLegend(Func<Legend, Legend> builder = null)
         {
-            var legend = Legend ?? new Legend() {Display = true};
+            var legend = Legend ?? new Legend() { Display = true };
 
             if (builder != null)
             {
@@ -48,8 +50,8 @@ namespace MeshWeaver.Charting.Models.Options
 
             return this with { Legend = legend };
         }
-        
-        public Plugins WithTitle (Func<Title, Title> builder = null)
+
+        public Plugins WithTitle(Func<Title, Title> builder = null)
         {
             var title = Title ?? new Title();
 
@@ -61,10 +63,10 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Title = title };
         }
 
-        public Plugins WithSubtitle (Func<Title, Title> builder = null)
+        public Plugins WithSubtitle(Func<Title, Title> builder = null)
         {
             var subtitle = Subtitle ?? new Title();
-            
+
             if (builder != null)
             {
                 builder(subtitle);
@@ -73,9 +75,9 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Subtitle = subtitle };
         }
 
-        public Plugins WithTooltip (Func<ToolTip, ToolTip> builder = null)
+        public Plugins WithTooltip(Func<ToolTip, ToolTip> builder = null)
         {
-            var tooltip = Tooltip ?? new ToolTip() {Enabled = true};
+            var tooltip = Tooltip ?? new ToolTip() { Enabled = true };
 
             if (builder != null)
             {
@@ -85,7 +87,7 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Tooltip = tooltip };
         }
 
-        public Plugins WithColorSchemes (Func<ColorSchemes, ColorSchemes> builder = null)
+        public Plugins WithColorSchemes(Func<ColorSchemes, ColorSchemes> builder = null)
         {
             var colorSchemes = ColorSchemes ?? new ColorSchemes();
 
@@ -97,10 +99,10 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { ColorSchemes = colorSchemes };
         }
 
-        public Plugins WithDataLabels (Func<DataLabels, DataLabels> builder = null)
+        public Plugins WithDataLabels(Func<DataLabels, DataLabels> builder = null)
         {
-            var dataLabels = DataLabels ?? new DataLabels() { Display = true};
-            
+            var dataLabels = DataLabels ?? new DataLabels() { Display = true };
+
             if (builder != null)
             {
                 dataLabels = builder(dataLabels);

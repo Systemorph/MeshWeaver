@@ -7,9 +7,9 @@
 		<PackageReference Include="Newtonsoft.Json" />
 		<PackageReference Include="Verify.Xunit" />
 	</ItemGroup>
-
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />
+	  <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
 	  <ProjectReference Include="..\MeshWeaver.Json.Assertions\MeshWeaver.Json.Assertions.csproj" />
 	</ItemGroup>
 </Project>
