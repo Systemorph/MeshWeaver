@@ -51,13 +51,18 @@ public record MeshBuilder
             .AddSingleton<AccessService>()
             );
 
-        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
-
-        ConfigureHub(conf => conf.WithRoutes(routes =>
+        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;        ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, ct) =>
-                    delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address)
-                        ? Task.FromResult(delivery)
-                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(routes.Hub.JsonSerializerOptions), ct)))
+                {
+                    if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address))
+                        return Task.FromResult(delivery);
+
+                    // Get the sender hub from hosted hubs to use its JsonSerializerOptions for proper polymorphic serialization
+                    var senderHub = routes.Hub.GetHostedHub(delivery.Sender, HostedHubCreation.Never);
+                    var jsonOptions = senderHub?.JsonSerializerOptions ?? routes.Hub.JsonSerializerOptions;
+                    
+                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(jsonOptions), ct);
+                }))
             .Set(meshConfig)
         );
 

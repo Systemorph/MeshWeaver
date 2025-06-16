@@ -18,11 +18,10 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         {
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
-            return create switch
-            {
-                HostedHubCreation.Always => messageHubs[address] = CreateHub(address, config ?? (x => x)),
-                _ => null
-            };
+            if (create == HostedHubCreation.Always)
+                return messageHubs[address] = CreateHub(address, config ?? (x => x));
+
+            return null;
         }
     }
 
@@ -88,7 +87,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         {
             hub.Dispose();
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await hub.Disposal.WaitAsync(cts.Token);
             logger.LogDebug("Hub {address} disposed successfully", address);
         }

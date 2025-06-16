@@ -47,7 +47,6 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                 throw new JsonException($"Unexpected token type: {reader.TokenType}");
         }
     }
-
     private object ReadObject(ref Utf8JsonReader reader, JsonSerializerOptions options)
     {
         using var doc = JsonDocument.ParseValue(ref reader);
@@ -59,9 +58,18 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
             var typeName = typeElement.GetString();
             if (!string.IsNullOrEmpty(typeName) && typeRegistry.TryGetType(typeName, out var typeInfo))
             {
-                // Deserialize to the specific type
-                var json = root.GetRawText();
-                return JsonSerializer.Deserialize(json, typeInfo.Type, options);
+                try
+                {
+                    // Deserialize to the specific type
+                    var json = root.GetRawText();
+                    return JsonSerializer.Deserialize(json, typeInfo.Type, options);
+                }
+                catch (NotSupportedException ex) when (ex.Message.Contains("polymorphic interface or abstract type"))
+                {
+                    // If the target type is abstract/interface and requires polymorphic deserialization,
+                    // but the JSON is missing proper discriminator, return as JsonElement
+                    return root.Clone();
+                }
             }
         }
 
