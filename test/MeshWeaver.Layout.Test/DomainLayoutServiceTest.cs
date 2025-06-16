@@ -142,7 +142,12 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
-        dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
+        var pointer = dataGrid.Data.Should().BeAssignableTo<JsonPointerReference>().Which;
+        var dataStream = await stream
+            .GetDataStream<IEnumerable<object>>(pointer)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
+        dataStream.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
 
     }
 }

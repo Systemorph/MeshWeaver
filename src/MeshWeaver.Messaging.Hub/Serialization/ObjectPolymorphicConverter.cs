@@ -52,29 +52,72 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
         using var doc = JsonDocument.ParseValue(ref reader);
         var root = doc.RootElement;
 
+        // Strip metadata properties like $id that can cause positioning issues
+        var cleanedElement = StripMetadataProperties(root);
+
         // Check if this object has a type discriminator
-        if (root.TryGetProperty(EntitySerializationExtensions.TypeProperty, out var typeElement))
+        if (cleanedElement.TryGetProperty(EntitySerializationExtensions.TypeProperty, out var typeElement))
         {
             var typeName = typeElement.GetString();
             if (!string.IsNullOrEmpty(typeName) && typeRegistry.TryGetType(typeName, out var typeInfo))
             {
                 try
                 {
-                    // Deserialize to the specific type
-                    var json = root.GetRawText();
+                    // Deserialize to the specific type using cleaned JSON
+                    var json = cleanedElement.GetRawText();
                     return JsonSerializer.Deserialize(json, typeInfo.Type, options);
                 }
                 catch (NotSupportedException ex) when (ex.Message.Contains("polymorphic interface or abstract type"))
                 {
                     // If the target type is abstract/interface and requires polymorphic deserialization,
                     // but the JSON is missing proper discriminator, return as JsonElement
-                    return root.Clone();
+                    return cleanedElement.Clone();
                 }
             }
         }
 
         // If no type discriminator or unknown type, return as JsonElement
-        return root.Clone();
+        return cleanedElement.Clone();
+    }
+
+    private static JsonElement StripMetadataProperties(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return element;
+
+        var metadataProps = new[] { "$id", "$ref", "$values", "$defs" };
+        var hasMetadata = false;
+
+        foreach (var prop in metadataProps)
+        {
+            if (element.TryGetProperty(prop, out _))
+            {
+                hasMetadata = true;
+                break;
+            }
+        }
+
+        if (!hasMetadata)
+            return element;
+
+        // Create a new object without metadata properties
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+
+        writer.WriteStartObject();
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!metadataProps.Contains(property.Name))
+            {
+                property.WriteTo(writer);
+            }
+        }
+        writer.WriteEndObject();
+        writer.Flush();
+
+        var jsonBytes = stream.ToArray();
+        using var doc = JsonDocument.Parse(jsonBytes);
+        return doc.RootElement.Clone();
     }
 
     public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
