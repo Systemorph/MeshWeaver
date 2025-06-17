@@ -243,7 +243,9 @@ public static class LayoutExtensions
                 x.Value.ValueKind == JsonValueKind.Undefined
                     ? default(T)
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
-            ); public static MessageHubConfiguration AddLayoutClient(
+            ); 
+    
+    public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     )
@@ -252,7 +254,7 @@ public static class LayoutExtensions
             .AddData()
             .AddLayoutTypes()
             .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
-            .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
+            .AddViews(configuration ?? (x => x))
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -261,6 +263,11 @@ public static class LayoutExtensions
                 })
             );
     }
+
+    public static MessageHubConfiguration AddViews(
+        this MessageHubConfiguration config,
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration) =>
+        config.Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)));
 
     internal static ImmutableList<
         Func<LayoutClientConfiguration, LayoutClientConfiguration>
