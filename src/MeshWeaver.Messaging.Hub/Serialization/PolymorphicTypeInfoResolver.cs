@@ -217,7 +217,6 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
         // Configure polymorphism for all other non-primitive types to ensure $type discriminators
         return true;
     }
-
     private static bool IsPrimitiveOrSystemType(Type type)
     {
         return type.IsPrimitive ||
@@ -227,6 +226,24 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                type == typeof(DateTimeOffset) ||
                type == typeof(Guid) ||
                type == typeof(TimeSpan) ||
-               type.IsEnum || (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string));
+               type.IsEnum ||               (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string)) ||
+               type.IsValueType || // All structs cannot support polymorphism
+               type.IsSealed ||    // Sealed types cannot support polymorphism
+               (type.IsGenericType && !type.IsGenericTypeDefinition && !ShouldAllowPolymorphismForGenericType(type)); // Some generic types can support polymorphism
+    }
+    private static bool ShouldAllowPolymorphismForGenericType(Type type)
+    {
+        if (!type.IsGenericType)
+            return false;
+            
+        var genericTypeDefinition = type.GetGenericTypeDefinition();
+        
+        // Allow polymorphism for Option<T> types
+        if (genericTypeDefinition.FullName == "MeshWeaver.Layout.Option`1")
+            return true;
+            
+        // Add other generic types that should support polymorphism here as needed
+        
+        return false;
     }
 }

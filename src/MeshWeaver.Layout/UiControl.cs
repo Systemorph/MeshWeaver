@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Linq;
+using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
@@ -35,9 +37,15 @@ public abstract record UiControl : IUiControl
     /// <summary>
     /// Whether the control is readonly.
     /// </summary>
-    public object Readonly { get; init; } 
+    public object Readonly { get; init; }
+    private ImmutableList<Skin> _skins = [];
 
-    public ImmutableList<Skin> Skins { get; init; } = [];
+    [JsonConverter(typeof(SkinListConverter))]
+    public ImmutableList<Skin> Skins
+    {
+        get => _skins;
+        init => _skins = value?.Where(s => s != null).ToImmutableList() ?? ImmutableList<Skin>.Empty;
+    }
     public object Class { get; init; }
 
 
@@ -49,7 +57,7 @@ public abstract record UiControl : IUiControl
     internal Func<UiActionContext, Task> ClickAction { get; init; }
 
 
-    public string DataContext { get; init; } 
+    public string DataContext { get; init; }
 
     public UiControl PopSkin(out object skin)
     {
@@ -61,9 +69,14 @@ public abstract record UiControl : IUiControl
         skin = Skins[^1];
         return this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
     }
-
     public UiControl AddSkin(Skin skin)
-    => this with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
+    {
+        // Don't add null skins to prevent serialization issues
+        if (skin == null)
+            return this;
+
+        return this with { Skins = Skins.Add(skin) };
+    }
 
 
     protected ImmutableList<Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates>> Buildup { get; init; } = [];
@@ -192,9 +205,14 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             return Task.CompletedTask;
         });
 
+    public new TControl AddSkin(Skin skin)
+    {
+        // Don't add null skins to prevent serialization issues
+        if (skin == null)
+            return This;
 
-
-    public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
+        return This with { Skins = Skins.Add(skin) };
+    }
 
     public new TControl WithClass(object @class) => This with { Class = @class };
 
@@ -207,7 +225,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
                 return new(updated.Store, r.Updates.Concat(updated.Updates), host.Stream.StreamId);
             });
     protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
-        =>store.UpdateControl(context.Area, PrepareRendering(context));
+        => store.UpdateControl(context.Area, PrepareRendering(context));
 
     protected virtual TControl PrepareRendering(RenderingContext context)
         => This;

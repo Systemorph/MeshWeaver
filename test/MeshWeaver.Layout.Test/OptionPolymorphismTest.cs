@@ -29,10 +29,8 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
         // Check if the type is registered
         var hasTypeName = typeRegistry.TryGetCollectionName(optionType, out var typeName);
         hasTypeName.Should().BeTrue();
-        typeName.Should().NotBeNullOrEmpty();
-
-        // Serialize the option
-        var json = JsonSerializer.Serialize(option, serializerOptions);
+        typeName.Should().NotBeNullOrEmpty();        // Serialize the option
+        var json = JsonSerializer.Serialize((Option)option, serializerOptions);
         output.WriteLine($"Serialized Option<string>: {json}");
 
         // Check if the JSON contains $type

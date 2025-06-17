@@ -20,7 +20,8 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Layout;
 
 public static class LayoutExtensions
-{    public static MessageHubConfiguration AddLayout(
+{
+    public static MessageHubConfiguration AddLayout(
         this MessageHubConfiguration config,
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
@@ -34,19 +35,19 @@ public static class LayoutExtensions
                             (workspace, reference, configuration) =>
                                 reference is not LayoutAreaReference layoutArea ? null :
                                 new LayoutAreaHost(
-                                        workspace, 
-                                        layoutArea, 
+                                        workspace,
+                                        layoutArea,
                                         workspace.Hub.GetLayoutDefinition(),
                                         workspace.Hub.ServiceProvider
                                             .GetRequiredService<IUiControlService>(),
                                         configuration)
                                     .RenderLayoutArea()
                         )
-                )
-            )            .AddLayoutTypes()
-            .WithSerialization(serialization =>
-                serialization.WithOptions(options =>
+                )).AddLayoutTypes().WithSerialization(serialization => serialization.WithOptions(options =>
                 {
+                    // Add converters in order of priority
+                    // SkinListConverter to handle ImmutableList<Skin> specifically
+                    options.Converters.Add(new SkinListConverter(config.TypeRegistry));
                     // Add the dedicated Option converter to ensure $type discriminators are always included
                     options.Converters.Add(new OptionConverter());
                 })
@@ -145,7 +146,7 @@ public static class LayoutExtensions
         string area,
         string id = null
     ) => hub.GetWorkspace()
-        .GetRemoteStream(address, new LayoutAreaReference(area){Id = id})
+        .GetRemoteStream(address, new LayoutAreaReference(area) { Id = id })
         .GetControlStream(area)
 ;
 
@@ -215,7 +216,7 @@ public static class LayoutExtensions
 
     private static void FailRendering(this ISynchronizationStream stream, Exception exception)
     {
-        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception,"Rendering failed");
+        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception, "Rendering failed");
     }
 
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
@@ -239,10 +240,10 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)
             .Select(x =>
-                x.Value.ValueKind == JsonValueKind.Undefined 
-                    ? default(T) 
+                x.Value.ValueKind == JsonValueKind.Undefined
+                    ? default(T)
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
-            );    public static MessageHubConfiguration AddLayoutClient(
+            ); public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
     )

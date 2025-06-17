@@ -161,8 +161,39 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
         }
         else
         {
+            // Special handling for ValueTuple types - they need type information for proper deserialization
+            if (IsValueTuple(valueType))
+            {
+                // Register the ValueTuple type and serialize with type information
+                var typeName = typeRegistry.GetOrAddType(valueType);
+                var json = JsonSerializer.Serialize(value, valueType, options);
+                using var doc = JsonDocument.Parse(json);
+
+                writer.WriteStartObject();
+                writer.WriteString(EntitySerializationExtensions.TypeProperty, typeName);
+
+                // For ValueTuple, copy the properties from the serialized JSON
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in doc.RootElement.EnumerateObject())
+                    {
+                        if (property.Name != EntitySerializationExtensions.TypeProperty)
+                        {
+                            property.WriteTo(writer);
+                        }
+                    }
+                }
+                else
+                {
+                    // If it's not an object (shouldn't happen for ValueTuple), serialize as value
+                    writer.WritePropertyName("Value");
+                    doc.WriteTo(writer);
+                }
+
+                writer.WriteEndObject();
+            }
             // Check if this type has a specific converter that should handle it
-            if (HasSpecificConverter(valueType, options))
+            else if (HasSpecificConverter(valueType, options))
             {
                 // Let the specific converter handle it without adding type information
                 JsonSerializer.Serialize(writer, value, valueType, options);
@@ -203,7 +234,6 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
             }
         }
     }
-
     private static bool HasSpecificConverter(Type valueType, JsonSerializerOptions options)
     {
         // Check if there's a specific converter for this type
@@ -215,5 +245,21 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
             }
         }
         return false;
+    }
+
+    private static bool IsValueTuple(Type type)
+    {
+        if (!type.IsGenericType)
+            return false;
+
+        var genericTypeDefinition = type.GetGenericTypeDefinition();
+        return genericTypeDefinition == typeof(ValueTuple<>) ||
+               genericTypeDefinition == typeof(ValueTuple<,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,,,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,,,,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,,,,,>) ||
+               genericTypeDefinition == typeof(ValueTuple<,,,,,,,>);
     }
 }
