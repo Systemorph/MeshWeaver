@@ -1,6 +1,4 @@
 ﻿using System.Collections;
-using System.Collections.Concurrent;
-using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -14,7 +12,6 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJsonTypeInfoResolver
 {
-    private readonly ConcurrentDictionary<Type, List<JsonDerivedType>> _derivedTypesCache = new();
     public override JsonTypeInfo GetTypeInfo(Type type, JsonSerializerOptions options)
     {
         var jsonTypeInfo = base.GetTypeInfo(type, options);        // Only configure polymorphism for supported types that need it
@@ -58,7 +55,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
     }
     private List<JsonDerivedType> GetDerivedTypes(Type baseType)
     {
-        return _derivedTypesCache.GetOrAdd(baseType, ComputeDerivedTypes);
+        return ComputeDerivedTypes(baseType);
     }
     private List<JsonDerivedType> ComputeDerivedTypes(Type baseType)
     {

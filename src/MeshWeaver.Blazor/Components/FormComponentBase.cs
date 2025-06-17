@@ -132,9 +132,9 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         try
         {
             if (v is IConvertible && typeof(TValue).IsAssignableFrom(v.GetType()))
-            {
                 return (TValue)Convert.ChangeType(v, typeof(TValue));
-            }
+
+            return (TValue)Convert.ChangeType(v, typeof(TValue));
         }
         catch
         {
