@@ -1,5 +1,6 @@
 @inherits FormComponentBase<RadioGroupControl, RadioGroupView<TValue>, TValue>
 @using System.Collections
+@using System.Text.Json
 
 @typeparam TValue
 <FluentRadioGroup Name="@Name" @bind-Value="@Value" Label="@Label" >
@@ -26,10 +27,17 @@
             ViewModel.Options,
             x => x.Options,
             (o,_) =>
-                (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
-                    new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
-                .ToArray()
+                ParseOptions(o)
         );
+    }
+
+    private Option[] ParseOptions(object o)
+    {
+        if (o is JsonElement je)
+            return je.Deserialize<Option[]>(Hub.JsonSerializerOptions);
+        return (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
+                new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
+            .ToArray();
     }
 
 }

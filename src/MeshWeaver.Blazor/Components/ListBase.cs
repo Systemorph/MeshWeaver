@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -17,18 +18,19 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
 
     protected override void BindData()
     {
-        base.BindData();
         DataBind(
             ViewModel.Options,
             x => x.Options,
             ConvertOptions
         );
+        base.BindData();
     }
 
     private object lastParsedOptions;
     private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
-
+        if (options is JsonElement je)
+            return je.Deserialize<IReadOnlyCollection<Option>>(Hub.JsonSerializerOptions);
         if(options is IReadOnlyCollection<object> optionsEnum && lastParsedOptions is IReadOnlyCollection<object> lastOptionsEnumerable && optionsEnum.Count == lastOptionsEnumerable.Count && optionsEnum.Zip(lastOptionsEnumerable, (x,y) => x.Equals(y)).All(x => x))
             return Options;
         lastParsedOptions = options;
