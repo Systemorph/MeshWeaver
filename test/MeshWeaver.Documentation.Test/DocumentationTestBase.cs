@@ -73,7 +73,7 @@ namespace MeshWeaver.Documentation.Test
         /// <returns></returns>
         protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         {
-            return base.ConfigureClient(configuration).AddLayoutClient().AddLayout(x => x.AddArticleLayouts());
+            return base.ConfigureClient(configuration).AddLayoutClient().AddArticles();
         }
 
         /// <summary>
