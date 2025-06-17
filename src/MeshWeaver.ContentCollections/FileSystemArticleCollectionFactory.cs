@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public class FileSystemContentCollectionFactory(IMessageHub hub) : IContentCollectionFactory
 {

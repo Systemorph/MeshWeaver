@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Layout.Views;
+﻿using MeshWeaver.Layout;
+
+namespace MeshWeaver.ContentCollections;
 
 public record ArticleCatalogItemControl(object Article)
     : UiControl<ArticleCatalogItemControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);

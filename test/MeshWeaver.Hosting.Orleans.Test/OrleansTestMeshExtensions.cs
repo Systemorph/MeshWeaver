@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Articles;
-using MeshWeaver.Kernel.Hub;
+﻿using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 

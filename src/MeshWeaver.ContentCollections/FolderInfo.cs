@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Articles;
+﻿namespace MeshWeaver.ContentCollections;
 
 // Base class for collection items
 public abstract record CollectionItem(string Path, string Name);

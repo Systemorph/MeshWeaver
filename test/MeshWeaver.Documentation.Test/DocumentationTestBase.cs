@@ -4,7 +4,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
@@ -44,7 +44,7 @@ namespace MeshWeaver.Documentation.Test
             base.ConfigureMesh(builder)
                 .AddKernel()
                 .ConfigureServices(ConfigureArticles)
-                .ConfigureServices(services => services.AddArticles())
+                .ConfigureServices(services => services.AddContentCollections())
                 .ConfigureMesh(config => config.InstallAssemblies(DocumentationAssemblyLocation)
                 );
 

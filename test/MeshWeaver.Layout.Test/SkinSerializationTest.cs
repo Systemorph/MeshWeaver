@@ -100,4 +100,40 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
         var deserialized = JsonSerializer.Deserialize<UiControl>(serialized, client.JsonSerializerOptions);
         deserialized.Should().NotBeNull();
     }
+
+    [Fact]
+    public void DeserializeToBaseUiControlTypeShouldWork()
+    {
+        var client = GetClient();
+
+        // Create a StackControl with skins
+        var stackControl = new StackControl();
+        var validSkin = new LayoutStackSkin { Orientation = "Horizontal" };
+        var stackWithSkin = stackControl with { Skins = ImmutableList<Skin>.Empty.Add(validSkin) };
+
+        // Serialize the StackControl
+        var serialized = JsonSerializer.Serialize(stackWithSkin, client.JsonSerializerOptions);
+
+        Output.WriteLine($"Serialized StackControl: {serialized}");
+
+        // The JSON should contain type discriminators for polymorphic deserialization
+        serialized.Should().Contain("$type");
+        serialized.Should().Contain("MeshWeaver.Layout.StackControl");
+
+        // Deserialize explicitly to the base UiControl type
+        var deserializedAsBase = JsonSerializer.Deserialize<UiControl>(serialized, client.JsonSerializerOptions);
+
+        // Should successfully deserialize to the correct concrete type
+        deserializedAsBase.Should().NotBeNull();
+        deserializedAsBase.Should().BeOfType<StackControl>();
+
+        // Cast to StackControl and verify properties
+        var deserializedStack = (StackControl)deserializedAsBase;
+        deserializedStack.Skins.Should().NotBeNull();
+        deserializedStack.Skins.Should().HaveCount(1);
+        deserializedStack.Skins[0].Should().BeOfType<LayoutStackSkin>();
+
+        var deserializedSkin = (LayoutStackSkin)deserializedStack.Skins[0];
+        deserializedSkin.Orientation.Should().Be("Horizontal");
+    }
 }

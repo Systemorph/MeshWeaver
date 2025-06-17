@@ -1,11 +1,11 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using MeshWeaver.AI;
-using MeshWeaver.Articles;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Layout;
@@ -21,6 +21,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
 using MeshWeaver.Documentation.AI;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
@@ -109,8 +110,8 @@ public static class SharedPortalConfiguration
                         .AddChartJs()
                         .AddAgGrid()
                         .WithPortalConfiguration(c =>
-                            c.AddLayout(layout => layout
-                                .AddArticleLayouts()))
+                            c.AddArticles()
+                        )
                 )
                 .AddSignalRHubs();
 

@@ -7,7 +7,7 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public abstract class ContentCollection : IDisposable
 {

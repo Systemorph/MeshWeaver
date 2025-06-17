@@ -2,7 +2,7 @@
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public record MarkdownElement
 {

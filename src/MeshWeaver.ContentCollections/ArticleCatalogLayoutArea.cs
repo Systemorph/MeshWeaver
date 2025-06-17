@@ -1,10 +1,9 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Utils;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public static class ArticleCatalogLayoutArea
 {
@@ -17,7 +16,7 @@ public static class ArticleCatalogLayoutArea
     /// <returns></returns>
     public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
-        var articleService = host.Hub.GetArticleService();
+        var articleService = host.Hub.GetContentService();
         var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Reference), ct);
         return articles.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))

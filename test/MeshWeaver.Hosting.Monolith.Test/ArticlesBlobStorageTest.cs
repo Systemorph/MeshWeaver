@@ -3,7 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.AzureBlob;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;

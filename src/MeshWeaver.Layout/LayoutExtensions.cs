@@ -85,7 +85,7 @@ public static class LayoutExtensions
                     .Assembly.GetTypes()
                     .Where(t =>
                         (typeof(IUiControl).IsAssignableFrom(t) || typeof(Skin).IsAssignableFrom(t))
-                        && !t.IsAbstract
+                        //&& !t.IsAbstract
                     )
             )
             .WithTypes(
