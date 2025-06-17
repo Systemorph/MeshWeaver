@@ -118,7 +118,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .AddLayout(x => x.AddArticleLayouts());
+            .AddArticles();
     }
 
     /// <summary>

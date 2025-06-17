@@ -142,8 +142,6 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             return defaultValue;
         }
 
-        // If we reached here, we couldn't convert the value
-        return defaultValue;
     }
 
     protected virtual object ConvertToData(TValue v) => v;

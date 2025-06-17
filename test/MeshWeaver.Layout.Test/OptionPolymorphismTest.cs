@@ -31,7 +31,7 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
         hasTypeName.Should().BeTrue();
         typeName.Should().NotBeNullOrEmpty();        // Serialize the option
         var json = JsonSerializer.Serialize((Option)option, serializerOptions);
-        output.WriteLine($"Serialized Option<string>: {json}");
+        Output.WriteLine($"Serialized Option<string>: {json}");
 
         // Check if the JSON contains $type
         json.Should().Contain("$type");
@@ -58,7 +58,7 @@ public class OptionPolymorphismTest(ITestOutputHelper output) : HubTestBase(outp
 
         // Serialize the collection
         var json = JsonSerializer.Serialize(options, serializerOptions);
-        output.WriteLine($"Serialized Option<string>[]: {json}");
+        Output.WriteLine($"Serialized Option<string>[]: {json}");
 
         // Check if the JSON contains $type for each option
         json.Should().Contain("$type");
