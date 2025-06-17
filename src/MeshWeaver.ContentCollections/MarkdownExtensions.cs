@@ -3,26 +3,25 @@ using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public static class MarkdownExtensions
 {
-    public static LayoutDefinition AddArticleLayouts(this LayoutDefinition layout)
-    {
-        return layout
-            .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
-            .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog);
-    }
+    public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
+        config
+            .WithTypes(typeof(Article), typeof(ArticleControl))
+            .AddLayout(layout => layout
+                .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
+                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog));
 
-    internal static IContentService GetArticleService(this IMessageHub hub)
+    internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    public static IServiceCollection AddArticles(this IServiceCollection services)
+    public static IServiceCollection AddContentCollections(this IServiceCollection services)
         => services
                 .AddSingleton<IContentService, ContentService>()
                 .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)

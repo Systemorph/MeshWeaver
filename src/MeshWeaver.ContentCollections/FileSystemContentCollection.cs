@@ -1,7 +1,7 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub hub) : ContentCollection(config, hub)
 {

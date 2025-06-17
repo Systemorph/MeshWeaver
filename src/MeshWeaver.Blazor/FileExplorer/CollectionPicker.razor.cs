@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Articles;
+﻿using MeshWeaver.ContentCollections;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 

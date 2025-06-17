@@ -1,6 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
 using MeshWeaver.Kernel;
 using Microsoft.EntityFrameworkCore.Migrations;

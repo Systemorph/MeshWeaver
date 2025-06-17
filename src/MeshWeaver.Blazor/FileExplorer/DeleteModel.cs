@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Articles;
+﻿using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor.FileExplorer;
 

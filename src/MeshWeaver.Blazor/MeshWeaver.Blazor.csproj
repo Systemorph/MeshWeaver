@@ -23,7 +23,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
+        <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     </ItemGroup>

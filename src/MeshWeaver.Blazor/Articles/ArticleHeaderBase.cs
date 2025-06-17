@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Articles;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout.Client;
 using Microsoft.AspNetCore.Components;
 

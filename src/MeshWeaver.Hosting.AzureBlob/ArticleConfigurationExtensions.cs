@@ -1,7 +1,7 @@
 ﻿// In an appropriate extensions class (e.g., ArticleConfigurationExtensions.cs)
 
 using Azure.Storage.Blobs;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,7 +14,7 @@ public static class ArticleConfigurationExtensions
         this IServiceCollection services)
     {
         return services
-            .AddArticles()
+            .AddContentCollections()
             .AddKeyedSingleton<IContentCollectionFactory, AzureBlobContentCollectionFactory>(
                 AzureBlobContentCollectionFactory.SourceType);
     }

@@ -1,7 +1,7 @@
 ﻿@page "/collections/{**FullPath}"
-@using MeshWeaver.Articles
 @using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.FileExplorer
+@using MeshWeaver.ContentCollections
 
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">

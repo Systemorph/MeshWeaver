@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.Articles;
+﻿namespace MeshWeaver.ContentCollections;
 
 public record ArticleOptions
 {

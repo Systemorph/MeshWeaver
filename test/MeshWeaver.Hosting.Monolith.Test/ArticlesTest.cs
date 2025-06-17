@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
@@ -30,7 +30,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         base.ConfigureMesh(builder)
             .AddKernel()
             .ConfigureServices(ConfigureArticles)
-            .ConfigureServices(services => services.AddArticles())
+            .ConfigureServices(services => services.AddContentCollections())
             .ConfigureMesh(config => config.AddMeshNodes(
                     TestHubExtensions.Node
                 )

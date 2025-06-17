@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Articles;
-using MeshWeaver.Documentation;
+﻿using MeshWeaver.Documentation;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.Application;

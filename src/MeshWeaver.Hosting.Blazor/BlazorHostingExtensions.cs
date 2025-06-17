@@ -1,6 +1,6 @@
-﻿using MeshWeaver.Articles;
-using MeshWeaver.Blazor;
+﻿using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;

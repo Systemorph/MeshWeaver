@@ -12,7 +12,7 @@
     <PackageReference Include="Azure.Storage.Blobs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
   </ItemGroup>

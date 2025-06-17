@@ -3,7 +3,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Articles;
+namespace MeshWeaver.ContentCollections;
 
 public static class ContentLayoutArea
 {
@@ -46,7 +46,7 @@ public static class ContentLayoutArea
         if (split is null || split.Length < 2)
             return Observable.Return(new MarkdownControl("Path must be specified in the form of /collection/article"));
 
-        var articleService = host.Hub.GetArticleService();
+        var articleService = host.Hub.GetContentService();
         var collection = articleService.GetCollection(split[0]);
         var path = string.Join('/', split.Skip(1));
 
@@ -67,6 +67,6 @@ public static class ContentLayoutArea
         ?? Observable.Return(new MarkdownControl($":warning: Article {id} not found in collection {collection}."));
 
     public static IObservable<object> GetArticle(this IMessageHub hub, string collection, string id)
-        => hub.GetArticleService().GetArticle(collection, id);
+        => hub.GetContentService().GetArticle(collection, id);
 
 }
