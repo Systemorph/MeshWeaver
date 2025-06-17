@@ -107,7 +107,7 @@ public static class DataExtensions
                     typeof(DomainTypesResponse),
                     typeof(TypeDescription)
                 )
-                .WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
+                //.WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
                 .RegisterDataEvents()
             ;
 
