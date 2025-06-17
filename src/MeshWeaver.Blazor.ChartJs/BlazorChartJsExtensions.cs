@@ -14,7 +14,4 @@ public static class BlazorChartJsExtensions
     }
 
     private static readonly Type[] ChartTypes = [typeof(ChartControl)];
-    //typeof(ChartModel).Assembly.GetTypes()
-    //.Where(t => t.IsAssignableTo(typeof(ChartModel)) || t.IsAssignableTo(typeof(DataSet)) || t.IsAssignableTo(typeof(ChartControl)))
-    //.ToArray();
 }
