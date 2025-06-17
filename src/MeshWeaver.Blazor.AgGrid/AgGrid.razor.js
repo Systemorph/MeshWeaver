@@ -28,7 +28,8 @@ function deserialize(data) {
         } else if (value !== null && typeof value === 'object') {
             const result = {};
             for (const key in value) {
-                result[key] = processValue(value[key]);
+                if(key !== '$type')
+                    result[key] = processValue(value[key]);
             }
             return result;
         }
