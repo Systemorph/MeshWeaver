@@ -53,10 +53,9 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
         // JsonTypeInfoKind.None will throw InvalidOperationException when setting PolymorphismOptions
         return jsonTypeInfo.Kind == JsonTypeInfoKind.Object;
     }
-    private List<JsonDerivedType> GetDerivedTypes(Type baseType)
-    {
-        return ComputeDerivedTypes(baseType);
-    }
+    private List<JsonDerivedType> GetDerivedTypes(Type baseType) => 
+        ComputeDerivedTypes(baseType);
+
     private List<JsonDerivedType> ComputeDerivedTypes(Type baseType)
     {
         var derivedTypes = new List<JsonDerivedType>();

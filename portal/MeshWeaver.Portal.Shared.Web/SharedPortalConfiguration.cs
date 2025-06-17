@@ -106,11 +106,10 @@ public static class SharedPortalConfiguration
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
+                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs())
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                            c.AddAgGrid()
-                            .AddArticles()
-                            .AddChartJs()
+                            c.AddArticles()
                         )
                 )
                 .AddSignalRHubs();
