@@ -56,8 +56,7 @@ public static class SerializationExtensions
         options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
 
         return options;
-    }
-    private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)
+    }    private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)
     {
         return new SerializationConfiguration(hub).WithOptions(o =>
         {
@@ -67,6 +66,7 @@ public static class SerializationExtensions
             o.ReferenceHandler = null; // Completely disable reference handling
             o.ReadCommentHandling = JsonCommentHandling.Skip;
             o.AllowTrailingCommas = true;
+            o.IncludeFields = true; // Enable field serialization for ValueTuple support
             o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
     }
