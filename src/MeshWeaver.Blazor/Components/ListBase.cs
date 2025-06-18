@@ -30,7 +30,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
         if (options is JsonElement je)
-            return je.Deserialize<IReadOnlyCollection<Option>>(Hub.JsonSerializerOptions);
+            options = je.Deserialize<IReadOnlyCollection<object>>(Hub.JsonSerializerOptions);
         if(options is IReadOnlyCollection<object> optionsEnum && lastParsedOptions is IReadOnlyCollection<object> lastOptionsEnumerable && optionsEnum.Count == lastOptionsEnumerable.Count && optionsEnum.Zip(lastOptionsEnumerable, (x,y) => x.Equals(y)).All(x => x))
             return Options;
         lastParsedOptions = options;

@@ -29,7 +29,7 @@ public partial class DataGridView
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            (o, _) => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
+            (o, _) => ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>().AsQueryable()
         );
     }
 

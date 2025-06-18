@@ -18,7 +18,7 @@ public partial class EditFormView
         DataBind(
             new JsonPointerReference(ViewModel.DataContext), 
             x => x.model,
-            (jsonObject,_) => Convert((JsonObject)jsonObject)
+            (jsonObject,_) => jsonObject == null ? null: Convert((JsonElement)jsonObject)
             );
     }
 
@@ -38,12 +38,9 @@ public partial class EditFormView
         }
     }
 
-    private ModelParameter<JsonElement> Convert(JsonObject jsonObject)
+    private ModelParameter<JsonElement> Convert(JsonElement jsonObject)
     {
-        if (jsonObject == null)
-            return null;
-        var jsonModel = jsonObject.ToJsonString();
-        var ret = new ModelParameter<JsonElement>(JsonDocument.Parse(jsonModel).RootElement, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
+        var ret = new ModelParameter<JsonElement>(jsonObject, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
         ret.ElementChanged += OnModelChanged;
         return ret;
     }

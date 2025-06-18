@@ -58,7 +58,7 @@ public record Activity(string Category, IMessageHub Hub) : ActivityBase<Activity
         }
 
         // Add timeout to prevent hanging - default 10 seconds unless cancellation token has shorter timeout
-        var timeout = TimeSpan.FromSeconds(10);
+        var timeout = TimeSpan.FromSeconds(100);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (!cancellationToken.CanBeCanceled || cancellationToken == CancellationToken.None)
         {
