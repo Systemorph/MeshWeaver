@@ -139,7 +139,7 @@ public static class LayoutClientExtensions
             // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
             string s => ConvertString<T>(s),
-            _ => throw new InvalidOperationException($"Cannot convert {value} to {typeof(T)}")
+            _ => (T)Convert.ChangeType(value, typeof(T))
         };
     }
 
