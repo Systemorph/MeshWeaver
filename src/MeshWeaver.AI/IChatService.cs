@@ -1,98 +1,40 @@
-﻿using System.Collections.Concurrent;
-using Azure;
-using Azure.AI.OpenAI;
-using MeshWeaver.Application.Styles;
-using MeshWeaver.Domain;
-using MeshWeaver.Messaging;
-using MeshWeaver.Reinsurance.AI;
-using MeshWeaver.Utils;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Options;
-using OpenAI;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
+/// <summary>
+/// Service for managing chat operations with AI
+/// </summary>
 public interface IChatService
 {
-    IChatClient Get(string model = null);
-    ChatOptions GetOptions(IMessageHub hub, string uri, string selectedModel = null);
-
-    public ProgressMessage GetProgressMessage(FunctionCallContent content);
+    /// <summary>
+    /// Gets the system prompt for chat conversations
+    /// </summary>
     string SystemPrompt { get; }
 
+    /// <summary>
+    /// Gets an AI chat client
+    /// </summary>
+    IChatClient Get();
+
+    /// <summary>
+    /// Gets chat options for the specified context
+    /// </summary>
+    ChatOptions GetOptions(IMessageHub hub, string path);
+
+    /// <summary>
+    /// Gets progress message for function calls
+    /// </summary>
+    ProgressMessage GetProgressMessage(object functionCall);
 }
 
-public class ChatService : IChatService
+/// <summary>
+/// Represents a progress message for AI operations
+/// </summary>
+public class ProgressMessage
 {
-    private readonly AIConfiguration configuration;
-    private readonly OpenAIClient client;
-
-    public ChatService(IOptions<AICredentialsConfiguration> options, AIConfiguration configuration)
-    {
-        this.configuration = configuration;
-        credentialsConfiguration = options.Value;
-        if (credentialsConfiguration is null)
-            throw new InvalidOperationException(
-                "Need to configure an AI section in the credentialsConfiguration with Url and ApiKey");
-        var url = credentialsConfiguration.Url;
-        if (url is null)
-            throw new InvalidOperationException(
-                "Need to configure an Url within the AI section. Example: https://models.inference.ai.azure.com");
-        var apiKey = credentialsConfiguration.ApiKey;
-
-        if (apiKey is null)
-            throw new InvalidOperationException("Need to configure an ApiKey inside the AI credentialsConfiguration section");
-        var openAIOptions = new OpenAIClientOptions()
-        {
-            Endpoint = new Uri(url)
-        };
-
-        var credential = new AzureKeyCredential(apiKey);
-        client = new AzureOpenAIClient(new Uri(url), credential);
-    }
-
-    private readonly ConcurrentDictionary<string, IChatClient> clients = new();
-    private readonly AICredentialsConfiguration credentialsConfiguration;
-
-    public IChatClient Get(string model)
-    {
-        if (string.IsNullOrWhiteSpace(model))
-            model = credentialsConfiguration.Models.First();
-        return clients.GetOrAdd(model, _ => new ChatClientBuilder(client.GetChatClient(model).AsIChatClient())
-            .UseFunctionInvocation()
-            .Build());
-    }
-
-    public ProgressMessage GetProgressMessage(FunctionCallContent content)
-    {
-        return content switch
-        {
-            { Name: "Update" } => new ProgressMessage()
-            {
-                Icon = FluentIcons.ClipboardTextEdit(IconSize.Size20),
-                Message = "Editing pricing..."
-            },
-            { Name: var name } when name.StartsWith("Get") => new ProgressMessage()
-            {
-                Icon = FluentIcons.Search(IconSize.Size20),
-                Message = $"Retrieving {name.Substring(3).Wordify()}..."
-            },
-            _ => new ProgressMessage()
-            {
-                Icon = FluentIcons.ChatSettings(IconSize.Size20),
-                Message = $"{content.Name.Wordify()} ..."
-            }
-        };
-    }
-
-    public string SystemPrompt 
-    => configuration.SystemPrompt;
-
-    public ChatOptions GetOptions(IMessageHub hub, string uri, string selectedModel)
-    {
-        var options = new ChatOptions();
-        configuration.EnrichOptions(options, new(hub, uri, selectedModel));
-        return options;
-    }
-
+    public string Icon { get; set; } = "⏳";
+    public string Message { get; set; } = "";
+    public int Progress { get; set; } = 0;
 }
