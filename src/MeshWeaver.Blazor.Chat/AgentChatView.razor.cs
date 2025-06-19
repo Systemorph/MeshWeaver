@@ -1,0 +1,455 @@
+﻿using MeshWeaver.AI;
+using MeshWeaver.Data;
+using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.AI;
+using TextContent = Microsoft.Extensions.AI.TextContent;
+
+namespace MeshWeaver.Blazor.Chat;
+
+public partial class AgentChatView
+{
+    private Lazy<Task<IAgentChat>> lazyChat;
+    private CancellationTokenSource currentResponseCancellation = new();
+    private ChatMessage? currentResponseMessage;
+    private ChatInput? chatInput;
+    private ChatHistorySelector? chatHistorySelector;
+    private readonly List<ChatMessage> messages = new();
+    // Chat persistence properties
+    private string? currentConversationId;
+    private ChatConversation? currentConversation;
+    private bool isLoadingConversation;
+    private bool isGeneratingResponse;
+
+    [Parameter] public bool UseStreaming { get; set; } = true;
+    // Chat history panel state
+    private bool showChatHistory;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Try to load the most recent conversation on startup
+        try
+        {
+            var conversations = await ChatPersistenceService.GetConversationsAsync();
+            var mostRecent = conversations.OrderByDescending(c => c.LastModifiedAt).FirstOrDefault();
+
+            if (mostRecent != null)
+            {
+                await LoadConversation(mostRecent.Id);
+            }
+            else
+            {
+                await StartNewConversationAsync();
+            }
+        }
+        catch
+        {
+            // If there's an error loading conversations, start fresh
+            await StartNewConversationAsync();
+        }
+    }
+
+    public AgentChatView()
+    {
+        lazyChat = GetLazyChat();
+    }
+
+    private Lazy<Task<IAgentChat>> GetLazyChat()
+    {
+        return new(() => AgentChatFactory.CreateAsync());
+    }
+
+    // Public method to allow parent components to reset the conversation
+    public async Task ResetConversationAsync()
+    {
+        await StartNewConversationAsync();
+    }
+    private async Task StartNewConversationAsync()
+    {
+        CancelAnyCurrentResponse();
+        // Clear current state
+        currentConversationId = null;
+        currentConversation = null;
+        messages.Clear();
+        lazyChat = GetLazyChat();
+
+        if (chatInput != null)
+        {
+            await chatInput.FocusAsync();
+        }
+
+        // Close chat history when starting new conversation
+        showChatHistory = false;
+        StateHasChanged();
+    }
+
+    private void ToggleChatHistory()
+    {
+        showChatHistory = !showChatHistory;
+        StateHasChanged();
+    }
+
+    private void CloseChatHistory()
+    {
+        showChatHistory = false;
+        StateHasChanged();
+    }
+    private async Task OnConversationSelectionChanged(string conversationId)
+    {
+        if (conversationId != currentConversationId)
+        {
+            if (string.IsNullOrEmpty(conversationId))
+            {
+                await StartNewConversationAsync();
+            }
+            else
+            {
+                await LoadConversation(conversationId);
+            }
+
+            // Close the chat history panel after selection
+            showChatHistory = false;
+            StateHasChanged();
+        }
+    }
+    private async Task LoadConversation(string conversationId)
+    {
+        if (isLoadingConversation) return; try
+        {
+            isLoadingConversation = true;
+            StateHasChanged(); // Show loading spinner immediately
+            CancelAnyCurrentResponse();
+
+            var conversation = await ChatPersistenceService.LoadConversationAsync(conversationId);
+            if (conversation != null)
+            {
+                currentConversationId = conversationId;
+                currentConversation = conversation;
+
+                // Load messages from the conversation
+                messages.Clear();
+                foreach (var persistedMessage in conversation.Messages)
+                {
+                    messages.Add(persistedMessage);
+                } // Restore AgentChat with proper conversation history using the new persistence method
+                var restoredChat = await ChatPersistenceService.RestoreAgentChatAsync(conversationId);
+                lazyChat = new Lazy<Task<IAgentChat>>(() => Task.FromResult(restoredChat));
+
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading conversation: {ex.Message}");
+            await StartNewConversationAsync();
+        }
+        finally
+        {
+            isLoadingConversation = false;
+            StateHasChanged();
+        }
+    }
+    private async Task SaveCurrentConversation()
+    {
+        if (messages.Any())
+        {
+
+            try
+            {
+                if (currentConversation == null)
+                {
+                    AgentContext? agentContext = null;
+
+                    // Try to extract AgentContext from current conversation if there are any messages
+                    if (lazyChat.IsValueCreated)
+                    {
+                        // TODO: Find a way to extract current context from the chat
+                        // For now, we'll use the current URL-based context
+                        agentContext = GetCurrentAgentContext();
+                    }
+
+                    currentConversation = new ChatConversation
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        Messages = messages,
+                        CreatedAt = DateTime.UtcNow,
+                        LastModifiedAt = DateTime.UtcNow,
+                        AgentContext = agentContext
+                    };
+                    currentConversationId = currentConversation.Id;
+                }
+                else
+                {
+                    AgentContext? agentContext = null;
+
+                    // Try to extract AgentContext from current conversation if there are any messages
+                    if (lazyChat.IsValueCreated)
+                    {
+                        // TODO: Find a way to extract current context from the chat
+                        // For now, we'll use the current URL-based context
+                        agentContext = GetCurrentAgentContext();
+                    }
+                    currentConversation = currentConversation with
+                    {
+                        Messages = messages,
+                        LastModifiedAt = DateTime.UtcNow,
+                        AgentContext = agentContext
+                    };
+                }
+
+                // Get the current AgentChat instance
+                var agentChat = lazyChat.IsValueCreated ? await lazyChat.Value : null;
+
+                await ChatPersistenceService.SaveConversationAsync(currentConversation, agentChat);
+
+                // Refresh the conversation list in the sidebar
+                if (chatHistorySelector != null)
+                {
+                    await chatHistorySelector.RefreshConversations();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving conversation: {ex.Message}");
+            }
+        }
+    }
+    private async Task AddUserMessageAsync(ChatMessage userMessage)
+    {
+        // Cancel any existing response
+        CancelAnyCurrentResponse();
+
+        var chat = await lazyChat.Value;
+        SetAgentContext(chat);
+
+        // Add the user message to the conversation
+        messages.Add(userMessage);
+        var lastRole = "Assistant";
+        var responseText = new TextContent(string.Empty);
+        currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
+
+        currentResponseCancellation = new();
+        isGeneratingResponse = true;
+        StateHasChanged(); // Ensure the UI updates to show the loading indicator
+
+
+
+
+        try
+        {
+            if (UseStreaming)
+                await InvokeStreamingAsync(userMessage, chat, lastRole, responseText);
+            else
+                await InvokeAsync(userMessage, chat, lastRole, responseText);
+        }
+        catch (Exception e)
+        {
+            if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+                // Store the final response in the conversation
+                messages.Add(currentResponseMessage!);
+            lastRole = "Assistant";
+            responseText = new("An error has occurred during processing: " + e.Message);
+            currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
+            ChatMessageItem.NotifyChanged(currentResponseMessage);
+            CancelAnyCurrentResponse();
+        }
+        finally
+        {
+            // Store the final response in the conversation
+            if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+            {
+                messages.Add(currentResponseMessage!);
+                currentResponseMessage = null;
+                await SaveCurrentConversation();
+
+            }
+            // Re-enable the input and focus it
+            if (chatInput != null)
+            {
+                await chatInput.FocusAsync();
+            }
+
+            isGeneratingResponse = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InvokeAsync(ChatMessage userMessage, IAgentChat chat, string lastRole, TextContent responseText)
+    {
+        // Stream and display a new response from the IChatClient
+        await foreach (var update in chat.GetResponseAsync([userMessage], currentResponseCancellation.Token))
+        {
+            if (lastRole == update.AuthorName)
+            {
+                messages.AddMessages(new ChatResponseUpdate(new(update.AuthorName ?? update.Role.Value), update.Text), filter: c => c is not TextContent);
+                responseText.Text += update.Text;
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+                    // Store the final response in the conversation
+                    messages.Add(currentResponseMessage!);
+                lastRole = update.AuthorName ?? "Assistant";
+                responseText = new TextContent(update.Text);
+                currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
+            }
+
+            if (currentResponseMessage != null)
+                ChatMessageItem.NotifyChanged(currentResponseMessage);
+
+            StateHasChanged();
+        }
+
+    }
+    private async Task InvokeStreamingAsync(ChatMessage userMessage, IAgentChat chat, string lastRole, TextContent responseText)
+    {
+        // Stream and display a new response from the IChatClient
+        await foreach (var update in chat.GetStreamingResponseAsync([userMessage], currentResponseCancellation.Token))
+        {
+            var currentAuthor = update.AuthorName ?? "Assistant";
+
+            if (lastRole == currentAuthor)
+            {
+                // Same author - concatenate to existing message
+                responseText.Text += update.Text;
+                messages.AddMessages(update, filter: c => c is not TextContent);
+            }
+            else
+            {
+                // Different author - finalize previous message and start new one
+                if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+                {
+                    // Store the final response in the conversation
+                    messages.Add(currentResponseMessage!);
+                }
+
+                // Start new message with new author
+                lastRole = currentAuthor;
+                responseText = new TextContent(update.Text);
+                currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
+            }
+
+            if (currentResponseMessage != null)
+                ChatMessageItem.NotifyChanged(currentResponseMessage);
+
+            StateHasChanged();
+        }
+    }
+
+    private void SetAgentContext(IAgentChat chat)
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+        // Skip if path is empty or just "lazyChat"
+        if (string.IsNullOrEmpty(path) || path == "lazyChat")
+            return;
+
+        // Split the path into segments
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Need at least addressType and addressId
+        if (segments.Length < 2)
+            return;
+
+        var addressType = segments[0];
+        var addressId = segments[1];
+
+        // Create the Address with the extracted values
+        var address = new Address(addressType, addressId);
+
+        var layoutArea = segments.Length == 2 ? null : new LayoutAreaReference(segments[2])
+        {
+            Id =
+        string.Join('/', segments.Skip(3))
+        };
+
+        // Create a new AgentContext with the extracted values
+        chat.SetContext(new AgentContext
+        {
+            AddressType = address.Type,
+            Id = address.Id,
+            LayoutArea = layoutArea
+        });
+    }
+
+    private AgentContext? GetCurrentAgentContext()
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+        // Skip if path is empty or just "chat"
+        if (string.IsNullOrEmpty(path) || path == "chat")
+            return null;
+
+        // Split the path into segments
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        // Need at least addressType and addressId
+        if (segments.Length < 2)
+            return null;
+
+        var addressType = segments[0];
+        var addressId = segments[1];
+
+        // Create the Address with the extracted values
+        var address = new Address(addressType, addressId);
+
+        var layoutArea = segments.Length == 2 ? null : new LayoutAreaReference(segments[2])
+        {
+            Id = string.Join('/', segments.Skip(3))
+        };
+
+        // Create a new AgentContext with the extracted values
+        return new AgentContext
+        {
+            AddressType = address.Type,
+            Id = address.Id,
+            LayoutArea = layoutArea
+        };
+    }
+
+
+    private void CancelAnyCurrentResponse()
+    {
+        // If a response was cancelled while streaming, include it in the conversation so it's not lost
+        if (currentResponseMessage is not null)
+        {
+            messages.Add(currentResponseMessage);
+        }
+
+        currentResponseCancellation.Cancel();
+        currentResponseCancellation = new();
+        currentResponseMessage = null;
+        isGeneratingResponse = false;
+        StateHasChanged();
+    }
+
+    private async Task CancelCurrentResponse()
+    {
+        CancelAnyCurrentResponse();
+
+        // Re-enable the input and focus it
+        if (chatInput != null)
+        {
+            await chatInput.FocusAsync();
+        }
+    }
+    [Parameter] public EventCallback OnCloseRequested { get; set; }
+
+    private async Task CloseChatAsync()
+    {
+        // If parent component provided a close callback, use it
+        if (OnCloseRequested.HasDelegate)
+        {
+            await OnCloseRequested.InvokeAsync();
+        }
+        else
+        {
+            // Otherwise, navigate away from the chat page
+            NavigationManager.NavigateTo("/");
+        }
+    }
+
+    public void Dispose()
+    => currentResponseCancellation.Cancel();
+
+}
