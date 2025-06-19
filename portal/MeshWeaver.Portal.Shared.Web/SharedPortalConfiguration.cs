@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Portal.AI;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -48,8 +49,8 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            });
-        services.AddAI(conf => conf.AddDocumentationAI());
+            }); services.AddAI(conf => conf.AddDocumentationAI());
+        services.AddPortalAI();
         services.Configure<AICredentialsConfiguration>(builder.Configuration.GetSection("AI"));
 
         services.AddScoped<CacheStorageAccessor>();
