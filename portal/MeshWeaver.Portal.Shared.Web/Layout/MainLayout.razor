@@ -87,7 +87,7 @@
     {
         <div class="ai-chat-overlay">
             <div class="ai-chat-container">
-                <div class="ai-chat-resizer" @onmousedown="@(e => StartResize(e))"></div>
+                <div class="ai-chat-resizer" @onmousedown="@(e => StartResize())"></div>
                 <div class="ai-chat-content">
                     <div class="ai-chat-header">
                         <span>AI Chat</span>
@@ -100,7 +100,7 @@
                             </FluentButton>
                         </div>
                     </div>
-                    <Chat @ref="chatComponent"></Chat>
+                    <AgentChatView @ref="chatComponent"></AgentChatView>
                 </div>
             </div>
         </div>

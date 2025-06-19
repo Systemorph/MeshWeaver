@@ -1,5 +1,5 @@
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
@@ -27,14 +27,4 @@ public interface IChatService
     /// Gets progress message for function calls
     /// </summary>
     ProgressMessage GetProgressMessage(object functionCall);
-}
-
-/// <summary>
-/// Represents a progress message for AI operations
-/// </summary>
-public class ProgressMessage
-{
-    public string Icon { get; set; } = "⏳";
-    public string Message { get; set; } = "";
-    public int Progress { get; set; } = 0;
 }

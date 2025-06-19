@@ -1,4 +1,4 @@
-using Microsoft.Extensions.AI;
+﻿using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -50,9 +50,6 @@ public static class AIConfigurationExtensions
 
         // Store the configuration for later use
         services.AddSingleton(config);
-
-        // Register the ChatService
-        services.AddSingleton<IChatService, ChatService>();
 
         return services;
     }

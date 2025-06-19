@@ -1,4 +1,4 @@
-@using Microsoft.FluentUI.AspNetCore.Components
+@using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @inject IJSRuntime JS
 
 <div class="message-list-container">
@@ -25,10 +25,10 @@
     public required IEnumerable<ChatMessage> Messages { get; set; }
 
     [Parameter]
-    public ChatMessage InProgressMessage { get; set; }
+    public ChatMessage? InProgressMessage { get; set; }
 
     [Parameter]
-    public RenderFragment NoMessagesContent { get; set; }
+    public RenderFragment? NoMessagesContent { get; set; }
 
     private bool IsEmpty => !Messages.Any(m => (m.Role == ChatRole.User || m.Role == ChatRole.Assistant) && !string.IsNullOrEmpty(m.Text));
 
@@ -37,7 +37,7 @@
         if (firstRender)
         {
             // Activates the auto-scrolling behavior
-            await JS.InvokeVoidAsync("import", "./_content/MeshWeaver.Blazor.Chat/ChatMessageList.razor.js");
+            await JS.InvokeVoidAsync("import", "./_content/MeshWeaver.Blazor.Chat.Agent/ChatMessageList.razor.js");
         }
     }
 }
