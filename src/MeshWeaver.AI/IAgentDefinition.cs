@@ -20,4 +20,8 @@ public interface IAgentDefinition
     /// </summary>
     string Instructions { get; }
 
+    /// <summary>
+    /// Gets the plugins for the agent
+    /// </summary>
+    IEnumerable<object> GetPlugins() => [];
 }

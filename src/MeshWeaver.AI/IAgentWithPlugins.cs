@@ -7,7 +7,7 @@ public interface IAgentWithPlugins : IAgentDefinition
     /// <summary>
     /// Gets the plugins for the agent
     /// </summary>
-    IEnumerable<KernelPlugin> GetPlugins();
+    new IEnumerable<KernelPlugin> GetPlugins();
 }
 
 /// <summary>

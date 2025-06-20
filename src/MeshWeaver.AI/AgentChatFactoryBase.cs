@@ -2,6 +2,7 @@
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 
@@ -47,13 +48,11 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                 var existingAgent = agentsByName.GetValueOrDefault(provider.AgentName);
                 var agent = await CreateOrUpdateAgentAsync(
                     provider,
-                    existingAgent);
-
-                // Configure plugins for this agent
-                if (provider is IAgentWithPlugins pluginProvider)
+                    existingAgent);                // Configure plugins for this agent
+                foreach (var pluginObject in provider.GetPlugins())
                 {
-                    foreach (var plugin in pluginProvider.GetPlugins())
-                        agent.Kernel.Plugins.Add(plugin);
+                    var plugin = KernelPluginFactory.CreateFromObject(pluginObject, pluginObject.GetType().Name);
+                    agent.Kernel.Plugins.Add(plugin);
                 }
 
                 // Handle file uploads for agents that implement IAgentDefinitionWithFiles

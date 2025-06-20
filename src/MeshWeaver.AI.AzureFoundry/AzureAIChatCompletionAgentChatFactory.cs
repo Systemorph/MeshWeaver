@@ -16,7 +16,7 @@ public class AzureAIChatCompletionAgentChatFactory(
 {
     private readonly AIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 
-    protected override async Task<Kernel> CreateKernelAsync(IAgentDefinition agentDefinition)
+    protected override async Task<Microsoft.SemanticKernel.Kernel> CreateKernelAsync(IAgentDefinition agentDefinition)
     {
         // Validate credentials
         if (string.IsNullOrEmpty(credentials.Url))
@@ -25,7 +25,7 @@ public class AzureAIChatCompletionAgentChatFactory(
             throw new InvalidOperationException("Azure OpenAI API key is required in AI configuration");
 
         // Create a new kernel for this agent with Azure OpenAI chat completion
-        var kernelBuilder = Kernel.CreateBuilder()
+        var kernelBuilder = Microsoft.SemanticKernel.Kernel.CreateBuilder()
             .AddAzureOpenAIChatCompletion(
                 deploymentName: credentials.Models.First(),
                 endpoint: credentials.Url,
