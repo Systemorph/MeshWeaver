@@ -3,11 +3,10 @@
 @using System.Linq
 @inject IJSRuntime JS
 
-<EditForm Model="@this" OnValidSubmit="@SendMessageAsync">
-    <label class="input-box page-width">
-        <div class="input-container">
-            <textarea @ref="@TextArea" @bind="@MessageText" @oninput="@OnInputChanged" @onkeydown="@OnKeyDown"
-                placeholder="Type your message..." rows="1" disabled="@IsDisabled"></textarea>
+<div class="input-box page-width">
+    <div class="input-container">
+        <textarea @ref="@TextArea" @bind="@MessageText" @oninput="@OnInputChanged"
+            @onkeydown="@OnKeyDown" placeholder="Type your message..." rows="1" disabled="@IsDisabled"></textarea>
 
             @if (ShowAgentDropdown && FilteredAgents.Any())
             {
@@ -21,13 +20,12 @@
                             <div class="agent-name">@@@agent.AgentName</div>
                             <div class="agent-description">@agent.Description</div>
                         </div>
-                    }
-                </div>
+                    }                </div>
             }
         </div>
 
         <div class="tools">
-            <button type="submit" title="Send" class="send-button"
+            <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
                 disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
                     stroke="currentColor" class="tool-icon">
@@ -36,8 +34,7 @@
                 </svg>
             </button>
         </div>
-    </label>
-</EditForm>
+    </div>
 
 @code {
     private ElementReference TextArea;
@@ -59,7 +56,9 @@
     public List<IAgentDefinition> AvailableAgents { get; set; } = new();
 
     public ValueTask FocusAsync()
-    => TextArea.FocusAsync(); private Task OnInputChanged(ChangeEventArgs e)
+    => TextArea.FocusAsync();
+
+    private Task OnInputChanged(ChangeEventArgs e)
     {
         MessageText = e.Value?.ToString();
         return CheckForAgentAutocomplete();
@@ -84,12 +83,18 @@
                     {
                         await SelectAgent(FilteredAgents[SelectedAgentIndex]);
                     }
+                    // Don't submit the form when agent dropdown is open
                     break;
                 case "Escape":
                     ShowAgentDropdown = false;
                     StateHasChanged();
                     break;
             }
+        }
+        else if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            // Only submit when agent dropdown is not showing and Shift is not held
+            await SendMessageAsync();
         }
     }
     private Task CheckForAgentAutocomplete()
