@@ -1,13 +1,13 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Messaging.Serialization
 {
     public record TypeDefinition : ITypeDefinition
     {
-
         public TypeDefinition(Type elementType, string typeName, KeyFunctionBuilder keyFunctionBuilder)
         {
             Type = elementType;
@@ -23,6 +23,12 @@ namespace MeshWeaver.Messaging.Serialization
                 Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
 
             Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
+        }
+
+        public TypeDefinition(Type elementType, string typeName, KeyFunctionBuilder keyFunctionBuilder, Address address)
+            : this(elementType, typeName, keyFunctionBuilder)
+        {
+            Address = address;
         }
 
         private string GetFromXmlComments(MemberInfo member, Func<string, string> getMemberComment)
@@ -43,6 +49,7 @@ namespace MeshWeaver.Messaging.Serialization
         public string DisplayName { get; init; }
         public string CollectionName { get; init; }
         public object Icon { get; init; }
+        public Address Address { get; init; }
 
         public int? Order { get; }
         public string GroupName { get; }

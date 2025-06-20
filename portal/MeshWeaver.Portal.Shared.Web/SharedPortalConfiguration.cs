@@ -48,7 +48,7 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             }); services.AddPortalAI();
         services.AddMemoryChatPersistence();
-        services.Configure<AIConfiguration>(builder.Configuration.GetSection("AI"));
+        services.Configure<AIConfiguration>(builder.Configuration.GetSection("AzureOpenAI"));
 
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
