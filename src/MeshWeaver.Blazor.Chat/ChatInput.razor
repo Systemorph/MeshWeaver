@@ -167,7 +167,7 @@
             try
             {
                 var module = await JS.InvokeAsync<IJSObjectReference>("import",
-                "./_content/MeshWeaver.Blazor.Chat.Agent/ChatInput.razor.js");
+                "./_content/MeshWeaver.Blazor.Chat/ChatInput.razor.js");
                 await module.InvokeVoidAsync("init", TextArea);
                 await module.DisposeAsync();
             }
