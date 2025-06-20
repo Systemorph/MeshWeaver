@@ -1,15 +1,35 @@
 ﻿using System.Collections.Concurrent;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
 /// <summary>
 /// In-memory implementation of chat persistence service
 /// Stores conversations and agent chat states in memory for the duration of the application
+/// Supports per-user conversation isolation
 /// </summary>
-public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) : IChatPersistenceService
+public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory, AccessService accessService) : IChatPersistenceService
 {
-    private readonly ConcurrentDictionary<string, ChatConversation> conversations = new();
-    private readonly ConcurrentDictionary<string, IAgentChat> agentChatStates = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ChatConversation>> userConversations = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, IAgentChat>> userAgentChatStates = new();
+
+    private string GetCurrentUserId()
+    {
+        var context = accessService.Context;
+        return context?.ObjectId ?? "anonymous";
+    }
+
+    private ConcurrentDictionary<string, ChatConversation> GetUserConversations()
+    {
+        var userId = GetCurrentUserId();
+        return userConversations.GetOrAdd(userId, _ => new ConcurrentDictionary<string, ChatConversation>());
+    }
+
+    private ConcurrentDictionary<string, IAgentChat> GetUserAgentChatStates()
+    {
+        var userId = GetCurrentUserId();
+        return userAgentChatStates.GetOrAdd(userId, _ => new ConcurrentDictionary<string, IAgentChat>());
+    }
     public Task<ChatConversation> SaveConversationAsync(ChatConversation conversation, IAgentChat? agentChat = null)
     {
         if (conversation == null)
@@ -18,7 +38,8 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) 
         // Update the last modified time
         var updatedConversation = conversation with { LastModifiedAt = DateTime.UtcNow };
 
-        // Store the conversation
+        // Store the conversation for the current user
+        var conversations = GetUserConversations();
         conversations.AddOrUpdate(updatedConversation.Id, updatedConversation, (_, _) => updatedConversation);
 
         // Store agent chat state if provided
@@ -35,23 +56,26 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) 
         if (string.IsNullOrEmpty(conversationId))
             throw new ArgumentException("Conversation ID cannot be null or empty", nameof(conversationId));
 
+        var conversations = GetUserConversations();
         conversations.TryGetValue(conversationId, out var conversation);
         return Task.FromResult(conversation);
     }
 
     public async Task<IAgentChat> RestoreAgentChatAsync(string conversationId)
     {
+        var agentChatStates = GetUserAgentChatStates();
         if (agentChatStates.TryGetValue(conversationId, out var ret))
             return ret;
 
+        var conversations = GetUserConversations();
         return conversations.TryGetValue(conversationId, out var conv)
             ? await agentChatFactory.ResumeAsync(conv!)
             : await agentChatFactory.CreateAsync();
     }
-
     public Task<List<ChatConversation>> GetConversationsAsync()
     {
-        var ret = this.conversations.Values
+        var conversations = GetUserConversations();
+        var ret = conversations.Values
             .OrderByDescending(c => c?.LastModifiedAt)
             .ToList();
 
@@ -62,6 +86,9 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) 
     {
         if (string.IsNullOrEmpty(conversationId))
             return Task.FromResult(false);
+
+        var conversations = GetUserConversations();
+        var agentChatStates = GetUserAgentChatStates();
 
         var conversationRemoved = conversations.TryRemove(conversationId, out _);
         agentChatStates.TryRemove(conversationId, out _);
@@ -98,8 +125,11 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) 
     {
         try
         {
-            if(agentChat is not null)
+            if (agentChat is not null)
+            {
+                var agentChatStates = GetUserAgentChatStates();
                 agentChatStates[conversationId] = agentChat;
+            }
         }
         catch (Exception)
         {
@@ -109,17 +139,26 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory) 
     }
 
     /// <summary>
-    /// Clears all stored conversations and agent states
+    /// Clears all stored conversations and agent states for the current user
     /// Useful for testing or when starting fresh
     /// </summary>
     public void ClearAll()
     {
+        var conversations = GetUserConversations();
+        var agentChatStates = GetUserAgentChatStates();
         conversations.Clear();
         agentChatStates.Clear();
     }
 
     /// <summary>
-    /// Gets the current number of stored conversations
+    /// Gets the current number of stored conversations for the current user
     /// </summary>
-    public int ConversationCount => conversations.Count;
+    public int ConversationCount
+    {
+        get
+        {
+            var conversations = GetUserConversations();
+            return conversations.Count;
+        }
+    }
 }

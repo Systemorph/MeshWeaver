@@ -8,7 +8,6 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
-using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.AI;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
@@ -21,8 +20,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
-using MeshWeaver.Documentation.AI;
-using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Portal.Shared.Web;
 
@@ -49,9 +46,9 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            }); services.AddAI(conf => conf.AddDocumentationAI());
-        services.AddPortalAI();
-        services.Configure<AICredentialsConfiguration>(builder.Configuration.GetSection("AI"));
+            }); services.AddPortalAI();
+        services.AddMemoryChatPersistence();
+        services.Configure<AIConfiguration>(builder.Configuration.GetSection("AI"));
 
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
@@ -92,6 +89,7 @@ public static class SharedPortalConfiguration
 
             builder.Services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
+
             builder.Services.AddAuthorization();
         }
 
