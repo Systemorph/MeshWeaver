@@ -44,7 +44,8 @@ public record DomainTypesResponse(IEnumerable<TypeDescription> Types);
 /// <param name="Name">The name of the type</param>
 /// <param name="DisplayName">The display name of the type</param>
 /// <param name="Description">Optional description of the type</param>
-public record TypeDescription(string Name, string DisplayName = null, string Description = null);
+/// <param name="Address">Address where the type is defined </param>
+public record TypeDescription(string Name, string DisplayName, string Description, Address Address);
 
 public static class DataExtensions
 {
@@ -373,7 +374,8 @@ public static class DataExtensions
             types.Add(new TypeDescription(
                 Name: kvp.Key,
                 DisplayName: typeDefinition.DisplayName ?? type.Name,
-                Description: $"Domain type for {type.FullName}"
+                Description: $"Domain type for {type.FullName}",
+                hub.Address
             ));
         }
 
