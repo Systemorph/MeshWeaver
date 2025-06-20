@@ -68,4 +68,13 @@ public partial class MainLayout
         }
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (firstRender)
+        {
+            // Ensure the MainLayout.razor.js file is loaded
+            await JSRuntime.InvokeVoidAsync("import", "./_content/MeshWeaver.Portal.Shared.Web/Layout/MainLayout.razor.js");
+        }
+    }
 }

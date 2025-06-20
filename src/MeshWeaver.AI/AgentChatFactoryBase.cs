@@ -35,7 +35,7 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         try
         {
             // Initialize all initializable agent definitions first
-            foreach (var provider in AgentDefinitions.OfType<IInitializableAgentDefinition>())
+            foreach (var provider in AgentDefinitions.OfType<IInitializableAgent>())
             {
                 await provider.InitializeAsync();
             }
@@ -77,8 +77,8 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
 
     protected abstract Task<IEnumerable<TAgent>> GetExistingAgentsAsync();
-    protected abstract string GetAgentName(TAgent agent); 
-    
+    protected abstract string GetAgentName(TAgent agent);
+
     protected abstract Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent); protected virtual SelectionStrategy CreateSelectionStrategy(AgentGroupChat chat)
     {
         // Find the agent marked with [DefaultAgent] attribute
@@ -172,6 +172,60 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
             // Append delegation guidelines to the base instructions
             return baseInstructions + delegationGuidelines;
+        }
+
+        // Check if this agent supports delegations (new interface)
+        if (agentDefinition is IAgentWithDelegations delegationsAgent)
+        {
+            var delegationAgents = delegationsAgent.GetDelegationAgents().ToList();
+
+            if (delegationAgents.Any())
+            {
+                var agentList = string.Join('\n', delegationAgents.Select(d => $"@{d.AgentName}"));
+                var delegationInstructions = string.Join('\n', delegationAgents.Select(d => $"{d.AgentName}: {d.Description}"));
+
+                var delegationGuidelines =
+                    $$$"""
+                       **Delegation Guidelines:**
+                       When users need specialized help, delegate to the appropriate agent based on their needs.
+                       
+                       **AVAILABLE AGENT NAMES (use these EXACTLY):**
+                       {{{agentList}}}
+                       
+                       **Available Agents:**
+                       {{{delegationInstructions}}}
+                       
+                       **DELEGATION METHOD - USE CODE BLOCK FORMAT:**
+                       
+                       When you need to delegate immediately, use this format:
+                       ```delegate_to "EXACT_AGENT_NAME"
+                       Your message content for the agent goes here.
+                       ```
+                       
+                       
+                       **Important:** The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
+                       
+                       **Examples:**
+                       
+                       For immediate delegation:
+                       ```delegate_to "NorthwindDataAgent"
+                       Please analyze the customer data and provide insights.
+                       ```
+                       
+                       **Step-by-step delegation process:**
+                       1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
+                       2. Copy it EXACTLY as written (including all letters)
+                       3. Use code block format with delegate_to
+                       4. No newline between the backticks, the delegate_to and the agent name. 
+                          All must be on one line. 
+                       5. Include your message content inside the code block
+                       6. DO NOT INCLUDE THE CONTEXT in your message
+                       
+                       """;
+
+                // Append delegation guidelines to the base instructions
+                return baseInstructions + delegationGuidelines;
+            }
         }
 
         return baseInstructions;

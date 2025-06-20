@@ -10,8 +10,8 @@ namespace MeshWeaver.Portal.AI;
 /// </summary>
 public static class PortalAIExtensions
 {    /// <summary>
-    /// Adds Portal AI services including the MeshNavigator agent and Azure AI Foundry
-    /// </summary>
+     /// Adds Portal AI services including the MeshNavigator agent and Azure AI Foundry
+     /// </summary>
     public static IServiceCollection AddPortalAI(this IServiceCollection services)
     {
         return services

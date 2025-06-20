@@ -1,12 +1,11 @@
-using MeshWeaver.AI;
-
-namespace MeshWeaver.Portal.AI;
+﻿namespace MeshWeaver.AI;
 
 /// <summary>
 /// Default agent for portal navigation and assistance
 /// </summary>
 [DefaultAgent]
-public class MeshNavigator : IAgentDefinition
+public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
+    : IAgentDefinition, IAgentWithDelegations
 {
     public string AgentName => "MeshNavigator";
 
@@ -24,4 +23,12 @@ public class MeshNavigator : IAgentDefinition
 
         Always be friendly, helpful, and professional. If you don't know something specific about the portal, be honest about it and suggest alternatives or ways to find the information.
         """;
+
+    public IEnumerable<DelegationAgent> GetDelegationAgents()
+    {
+        return agentDefinitions.Value
+            .Where(agent => agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
+            .Where(agent => agent != this) // Exclude self
+            .Select(agent => new DelegationAgent(agent.AgentName, agent.Description));
+    }
 }

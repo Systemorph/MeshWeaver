@@ -1,7 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Messaging.Serialization

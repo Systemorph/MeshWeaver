@@ -3,7 +3,7 @@
 /// <summary>
 /// Interface for agent definitions that require asynchronous initialization.
 /// </summary>
-public interface IInitializableAgentDefinition : IAgentDefinition
+public interface IInitializableAgent : IAgentDefinition
 {
     /// <summary>
     /// Initializes the agent definition asynchronously.

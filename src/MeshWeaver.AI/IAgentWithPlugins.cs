@@ -7,7 +7,7 @@ public interface IAgentWithPlugins : IAgentDefinition
     /// <summary>
     /// Gets the plugins for the agent
     /// </summary>
-    new IEnumerable<KernelPlugin> GetPlugins();
+    new IEnumerable<object> GetPlugins();
 }
 
 /// <summary>
@@ -18,5 +18,5 @@ public interface IAgentWithVersion : IAgentDefinition
     /// <summary>
     /// The version of the agent
     /// </summary>
-    public string AgentVersion {get;}
+    public string AgentVersion { get; }
 }

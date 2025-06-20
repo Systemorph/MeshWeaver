@@ -12,7 +12,7 @@ namespace MeshWeaver.AI;
 /// Plugin that provides access to data from a specified address.
 /// Supports retrieving data, listing available types, and getting schemas.
 /// </summary>
-public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDefinition> typeDefinitionMap)
+public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescription> typeDefinitionMap)
 {
     private readonly IWorkspace workspace = hub.GetWorkspace();
 
