@@ -9,11 +9,11 @@ namespace MeshWeaver.Northwind.AI;
 public static class NorthwindAIExtensions
 {
     /// <summary>
-    /// Adds Northwind AI services including the NorthwindDataAgent
+    /// Adds Northwind AI services including the NorthwindAgent
     /// </summary>
     public static IServiceCollection AddNorthwindAI(this IServiceCollection services)
     {
         return services
-            .AddSingleton<IAgentDefinition, NorthwindDataAgent>();
+            .AddSingleton<IAgentDefinition, NorthwindAgent>();
     }
 }

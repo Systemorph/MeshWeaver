@@ -24,6 +24,10 @@ public partial class DesktopNavMenu : ComponentBase
         => active
             ? new Icons.Filled.Size24.DocumentFolder()
             : new Icons.Regular.Size24.DocumentFolder();
+    public static Icon AgentsIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Bot()
+            : new Icons.Regular.Size24.Bot();
 
     public static Icon DocumentationLayoutAreaIcon(bool active = false)
         => active
