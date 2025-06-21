@@ -19,8 +19,7 @@
         <PackageReference Include="Microsoft.Identity.Web" />
         <PackageReference Include="Microsoft.Identity.Web.Ui" />
         <PackageReference Include="System.Composition.AttributedModel" />
-    </ItemGroup>
-
+    </ItemGroup>    
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
