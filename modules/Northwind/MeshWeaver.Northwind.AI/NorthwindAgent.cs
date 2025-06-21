@@ -9,19 +9,19 @@ namespace MeshWeaver.Northwind.AI;
 /// Northwind data agent that provides access to Northwind domain data and collections
 /// </summary>
 [ExposedInNavigator]
-public class NorthwindDataAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
+public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     /// <inheritdoc cref="IAgentDefinition"/>
-    public string AgentName => "NorthwindDataAgent";
+    public string AgentName => "NorthwindAgent";
 
     /// <inheritdoc cref="IAgentDefinition"/>
-    public string Description => "Provides access to Northwind domain data including customers, orders, products, and other business entities. Can query and analyze Northwind business data.";
+    public string Description => "Any question around the Northwind domain should direct here. Provides access to Northwind domain data including customers, orders, products, and other business entities. Can query and analyze Northwind business data.";
 
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Instructions =>
         """
-        You are the NorthwindDataAgent, specialized in working with Northwind business data. You have access to:
+        You are the NorthwindAgent, specialized in working with Northwind business data. You have access to:
         
         - Customer data: information about companies, contacts, and addresses
         - Order data: sales orders, order details, and order history

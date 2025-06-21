@@ -13,6 +13,11 @@
                       IconRest="DocumentationIcon()"
                       IconActive="DocumentationIcon(active: true)"
                       Text="Areas" />
+    <FluentAppBarItem Href="/app/Agents/Overview" 
+                      Match="NavLinkMatch.All" 
+                      IconRest="AgentsIcon()" 
+                      IconActive="AgentsIcon(true)"
+                      Text="Agents"/>
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
             <FluentAppBarItem

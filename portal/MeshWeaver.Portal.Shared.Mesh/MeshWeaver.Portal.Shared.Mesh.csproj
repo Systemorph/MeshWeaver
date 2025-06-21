@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\modules\Documentation\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
