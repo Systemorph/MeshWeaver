@@ -36,13 +36,12 @@ public record LayoutAreaHost : IDisposable
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
-        LayoutDefinition layoutDefinition,
         IUiControlService uiControlService,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration)
     {
         this.uiControlService = uiControlService;
         Workspace = workspace;
-        LayoutDefinition = layoutDefinition;
+        LayoutDefinition = uiControlService.LayoutDefinition;
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             workspace.Hub,

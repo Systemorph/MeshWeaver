@@ -10,6 +10,7 @@ public interface ITypeDefinition
     object GetKey(object instance);
     int? Order { get; }
     string GroupName { get; }
+    string Description { get; }
     Type GetKeyType();
 
 }
