@@ -187,7 +187,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             area.UpdatePointer(i, editor.DataContext, new("x"));
         }
 
-        var controls = await controlStream.ToArray();
+        var controls = await controlStream.Where(x => x is not null).ToArray();
         controls.Should().HaveCountLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }

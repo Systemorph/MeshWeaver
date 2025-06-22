@@ -52,7 +52,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     [HubFact]
     public async Task TestEntityView()
     {
-        var reference = DomainViews.GetDetailsReference(typeof(DataRecord).FullName, "Hello");
+        var reference = DomainViews.GetDetailsReference(nameof(DataRecord), "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -129,7 +129,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestCatalog()
     {
         var host = GetHost();
-        var reference = DomainViews.GetCatalogReference(typeof(DataRecord).FullName);
+        var reference = DomainViews.GetCatalogReference(nameof(DataRecord));
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
