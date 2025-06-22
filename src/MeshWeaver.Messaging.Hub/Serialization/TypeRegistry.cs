@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -54,7 +53,6 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
 
     private readonly KeyFunctionBuilder keyFunctionBuilder = new();
-    private readonly ConcurrentDictionary<Type, List<JsonDerivedType>> derivedTypesCache = new();
 
     public ITypeRegistry WithType(Type type) => WithType(type, FormatType(type));
 
@@ -169,7 +167,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return this;
     }
 
-    public ITypeDefinition GetTypeDefinition(Type type, bool create)
+    public ITypeDefinition GetTypeDefinition(Type type, bool create = true, string typeName = null)
     {
         if (nameByType.TryGetValue(type, out var name))
             return typeByName.GetValueOrDefault(name);
@@ -179,7 +177,8 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
         if (create)
         {
-            ret = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
+            typeName ??= FormatType(type);
+            ret = new TypeDefinition(type, typeName, keyFunctionBuilder);
             typeByName[ret.CollectionName] = (TypeDefinition)ret;
             nameByType[type] = ret.CollectionName;
         }

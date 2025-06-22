@@ -21,7 +21,7 @@ public interface ITypeRegistry
     ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string,Type>> types);
     string GetOrAddType(Type valueType);
     ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key);
-    ITypeDefinition GetTypeDefinition(Type type, bool create = true);
+    ITypeDefinition GetTypeDefinition(Type type, bool create = true, string typeName = null);
     ITypeDefinition GetTypeDefinition(string collection);
     
     IEnumerable<KeyValuePair<string, ITypeDefinition>> Types { get; }

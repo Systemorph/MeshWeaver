@@ -230,10 +230,10 @@ public static class WorkspaceOperations
     }
 
     public static IReadOnlyCollection<T> GetData<T>(this EntityStore store)
-        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName).Get<T>().ToArray();
+        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name).Get<T>().ToArray();
 
     public static T GetData<T>(this EntityStore store, object id)
-        => (T)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).FullName)?.Instances
+        => (T)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Instances
             .GetValueOrDefault(id);
 
 

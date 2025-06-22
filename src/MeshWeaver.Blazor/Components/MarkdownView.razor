@@ -1,8 +1,6 @@
 @using Microsoft.JSInterop
 @inherits BlazorView<MarkdownControl, MarkdownView>
 
-@inject IJSRuntime JsRuntime;
-
 <HeadContent>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
     @if (Mode == DesignThemeModes.Light)
@@ -16,10 +14,7 @@
 
 </HeadContent>
 
-<article @ref="Element" class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="@Style">
+<article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="@Style">
     @((RenderFragment)RenderHtml)
 </article>
 
-@code {
-    private ElementReference Element;
-}

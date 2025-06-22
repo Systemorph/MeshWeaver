@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -101,12 +101,12 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var typeName = typeof(TestSchemaData).FullName;
+        var typeName = nameof(TestSchemaData);
 
         // act
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(new HostAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;

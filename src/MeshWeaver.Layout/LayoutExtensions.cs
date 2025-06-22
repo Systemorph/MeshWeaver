@@ -26,24 +26,28 @@ public static class LayoutExtensions
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
     {
+        var lambdas = config.GetListOfLambdas();
+        if (!lambdas.Any())
+            config = config.WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>());
         return config
             .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
             .AddData(data =>
-                data.Configure(reduction =>
+            {
+                return data.Configure(reduction =>
                     reduction
-                        .AddWorkspaceReferenceStream<EntityStore>(
-                            (workspace, reference, configuration) =>
-                                reference is not LayoutAreaReference layoutArea ? null :
-                                new LayoutAreaHost(
+                        .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
+                            reference is not LayoutAreaReference layoutArea
+                                ? null
+                                : new LayoutAreaHost(
                                         workspace,
                                         layoutArea,
-                                        workspace.Hub.GetLayoutDefinition(),
                                         workspace.Hub.ServiceProvider
                                             .GetRequiredService<IUiControlService>(),
                                         configuration)
                                     .RenderLayoutArea()
                         )
-                )).AddLayoutTypes().WithSerialization(serialization => serialization.WithOptions(options =>
+                );
+            }).AddLayoutTypes().WithSerialization(serialization => serialization.WithOptions(options =>
                 {
                     // Add converters in order of priority
                     // SkinListConverter to handle ImmutableList<Skin> specifically
@@ -52,11 +56,11 @@ public static class LayoutExtensions
                     options.Converters.Add(new OptionConverter());
                 })
             )
-            .Set(config.GetListOfLambdas().Add(layoutDefinition));
+            .Set(lambdas.Add(layoutDefinition));
     }
 
 
-    private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
+    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
         hub
             .Configuration.GetListOfLambdas()
             .Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));

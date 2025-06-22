@@ -11,8 +11,8 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
     private readonly ITypeRegistry typeRegistry;
     protected TypeSource(IWorkspace workspace, object dataSource, Type type)
     {
-        typeRegistry = workspace.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        TypeDefinition = typeRegistry.GetTypeDefinition(type);
+        typeRegistry = workspace.Hub.TypeRegistry;
+        TypeDefinition = typeRegistry.GetTypeDefinition(type, typeName:type.Name);
     }
 
     public ITypeDefinition TypeDefinition { get; init; } 
