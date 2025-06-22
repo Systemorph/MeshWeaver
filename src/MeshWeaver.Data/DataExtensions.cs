@@ -249,7 +249,7 @@ public static class DataExtensions
             }
         });
 
-        return schema.ToJsonString();
+        return schema?.ToJsonString() ?? "{}";
     }
 
     private static object[] GetPotentialInheritors(Type baseType, ITypeRegistry typeRegistry)
