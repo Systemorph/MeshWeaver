@@ -1,7 +1,10 @@
-﻿using MeshWeaver.AI;
+﻿using System.ComponentModel;
+using System.Reflection;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.SemanticKernel;
 
 namespace MeshWeaver.Northwind.AI;
 
@@ -39,9 +42,11 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
 
-    IEnumerable<object> IAgentWithPlugins.GetPlugins()
+    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins()
     {
-        yield return new DataPlugin(hub, typeDefinitionMap ?? []);
+        typeDefinitionMap ??= new Dictionary<string, TypeDescription>();
+        var data = new DataPlugin(hub, typeDefinitionMap, _ => NorthwindAddress, hub.JsonSerializerOptions);
+        yield return data.CreateKernelPlugin();
     }
 
     private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");

@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using Microsoft.SemanticKernel;
 
 namespace MeshWeaver.AI;
@@ -12,7 +13,7 @@ namespace MeshWeaver.AI;
 /// Plugin that provides access to data from a specified address.
 /// Supports retrieving data, listing available types, and getting schemas.
 /// </summary>
-public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescription> typeDefinitionMap)
+public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescription> typeDefinitionMap, Func<string, Address?> addressMap, JsonSerializerOptions options)
 {
     private readonly IWorkspace workspace = hub.GetWorkspace();
 
@@ -26,13 +27,10 @@ public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescrip
             return $"Invalid data type: {typeName}. Valid types are: {string.Join(", ", typeDefinitionMap.Keys)}";
         }
 
-        var typeDefinition = typeDefinitionMap[typeName];
-        var address = typeDefinition.Address;
+        var address = addressMap.Invoke(typeName);
 
         if (address == null)
-        {
             return $"No address defined for type: {typeName}";
-        }
 
         if (!string.IsNullOrEmpty(entityId))
         {
@@ -47,18 +45,16 @@ public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescrip
         }
     }
 
-    [KernelFunction, Description($"List all data types available in the {nameof(GetData)} function")]
-    public IEnumerable<string> GetDataTypes([Description("Optional address to get data types from. If null, returns types from constructor")] Address? address = null)
+    [KernelFunction, Description($"List all data types available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
+    public async Task<string> GetDataTypes([Description("Optional address to get data types from. If null, returns types from constructor")] string? address = null)
     {
         if (address == null)
-        {
             // Return types from constructor
-            return typeDefinitionMap.Keys;
-        }
+            return JsonSerializer.Serialize(typeDefinitionMap, options);
 
         // Return types that match the specified address
-        return typeDefinitionMap.Where(kvp => kvp.Value.Address?.Equals(address) == true)
-                                .Select(kvp => kvp.Key);
+        var ret = await hub.AwaitResponse<DomainTypesResponse>(new GetDomainTypesRequest(), o => o.WithTarget(address));
+        return JsonSerializer.Serialize(ret.Message.Types, options);
     }
 
     public static string GetTools() =>
@@ -68,22 +64,37 @@ public class DataPlugin(IMessageHub hub, IReadOnlyDictionary<string, TypeDescrip
         );
 
     [KernelFunction, Description($"Gets the JSON schema for a particular type. Use these schemas to validate edited JSON data.")]
-    public async Task<string> GetSchema([Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type)
+    public async Task<string> GetSchema([Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type, [Description("Address where to retrieve the schema.")]string? address = null)
     {
-        if (!typeDefinitionMap.ContainsKey(type))
-        {
+        var addressType = address is null ? addressMap.Invoke(type) : (Address)address;
+        if (addressType is null)
             return $"Unknown type: {type}. Valid types are: {string.Join(", ", typeDefinitionMap.Keys)}";
-        }
-
-        var typeDefinition = typeDefinitionMap[type];
-        var address = typeDefinition.Address;
-
-        if (address == null)
-        {
-            return $"No address defined for type: {type}";
-        }
 
         var response = await hub.AwaitResponse<SchemaResponse>(new GetSchemaRequest(type), o => o.WithTarget(address));
         return response.Message.Schema ?? $"No schema defined for type '{type}'";
+    }
+
+    public KernelPlugin CreateKernelPlugin()
+    {
+        var plugin = KernelPluginFactory.CreateFromObject(this);
+        KernelPluginFactory.CreateFromFunctions(nameof(DataPlugin),
+            plugin.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .Where(m => m.HasAttribute<KernelFunctionAttribute>())
+                .Select(m =>
+                    KernelFunctionFactory.CreateFromMethod(m, this,
+                        new KernelFunctionFromMethodOptions()
+                        {
+                            FunctionName = m.Name, Description = CreateDescription(m)
+                        })));
+        return plugin;
+    }
+
+    private string CreateDescription(MethodInfo methodInfo)
+    {
+        var desc = methodInfo.GetCustomAttribute<DescriptionAttribute>();
+        var ret = desc?.Description ?? "";
+        if(typeDefinitionMap.Any())
+            return ret + "\nAvailable types: " + string.Join(", ", typeDefinitionMap.Keys);
+        return ret;
     }
 }

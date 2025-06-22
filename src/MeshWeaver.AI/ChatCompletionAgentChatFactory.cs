@@ -36,6 +36,10 @@ public abstract class ChatCompletionAgentChatFactory(
         // Create a new kernel for this agent using the derived class implementation
         var agentKernel = await CreateKernelAsync(agentDefinition);
 
+        if (agentDefinition is IAgentWithPlugins agentWithPlugins)
+            foreach (var plugin in agentWithPlugins.GetPlugins())
+                agentKernel.Plugins.Add(plugin);
+
         // Create ChatCompletionAgent
         var agent = new ChatCompletionAgent()
         {
@@ -45,6 +49,7 @@ public abstract class ChatCompletionAgentChatFactory(
             Kernel = agentKernel,
             Arguments = new KernelArguments(new PromptExecutionSettings() { FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() }),
         };
+
 
         return agent;
     }    /// <summary>
