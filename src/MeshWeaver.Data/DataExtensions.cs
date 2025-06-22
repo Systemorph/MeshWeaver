@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
 using MeshWeaver.Activities;
@@ -12,6 +14,7 @@ using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
@@ -188,50 +191,65 @@ public static class DataExtensions
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-        if (typeName is null || !typeRegistry.TryGetType(typeName, out var typeDefinition))
+        if (typeName is null)
         {
-            return "{}"; // Return empty schema if type not found
+            return "{}";
+        }
+
+        // Try to find the type by the given name first
+        if (!typeRegistry.TryGetType(typeName, out var typeDefinition))
+        {
+            // If not found, try to find by simple name (without namespace)
+            var simpleTypeName = typeName.Contains('.') ? typeName.Split('.').Last() : typeName;
+            if (!typeRegistry.TryGetType(simpleTypeName, out typeDefinition))
+            {
+                return "{}"; // Return empty schema if type not found
+            }
         }
 
         var type = typeDefinition.Type;
 
-        // Simple JSON schema generation using System.Text.Json
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        };
-
+        // Use System.Text.Json schema generation first
+        var options = hub.JsonSerializerOptions;
         var schema = options.GetJsonSchemaAsNode(type, new()
         {
             TransformSchemaNode = (ctx, node) =>
             {
+                // Add documentation from XML docs
+                if (ctx.TypeInfo.Type == type)
+                {
+                    // Add title for the main type
+                    node["title"] = type.Name;
+
+                    // Add description for the main type
+                    var typeDescription = type.GetXmlDocsSummary();
+                    if (!string.IsNullOrEmpty(typeDescription))
+                    {
+                        node["description"] = typeDescription;
+                    }
+                }
+
+                // Add descriptions for properties
+                if (ctx.PropertyInfo != null && node is JsonObject jsonObj)
+                {
+                    // Get the actual PropertyInfo from the declaring type
+                    var declaringType = ctx.PropertyInfo.DeclaringType;
+                    var propertyName = ctx.PropertyInfo.Name;
+                    var actualPropertyInfo = declaringType?.GetProperty(propertyName); if (actualPropertyInfo != null)
+                    {
+                        var propertyDescription = actualPropertyInfo.GetXmlDocsSummary();
+                        if (!string.IsNullOrEmpty(propertyDescription))
+                        {
+                            jsonObj["description"] = propertyDescription;
+                        }
+                    }
+                }
+
                 return node;
             }
         });
 
-
         return schema.ToJsonString();
-    }
-    private static string[] GetRequiredProperties(Type type)
-    {
-        var required = new List<string>();
-
-        // Always require $type property for polymorphic support
-        required.Add("$type");
-
-        foreach (var prop in type.GetProperties())
-        {
-            // Check for Required attribute or non-nullable reference types
-            var isRequired = prop.GetCustomAttributes(typeof(System.ComponentModel.DataAnnotations.RequiredAttribute), false).Any();
-
-            if (isRequired)
-            {
-                required.Add(JsonNamingPolicy.CamelCase.ConvertName(prop.Name));
-            }
-        }
-
-        return required.ToArray();
     }
 
     private static object[] GetPotentialInheritors(Type baseType, ITypeRegistry typeRegistry)
@@ -273,7 +291,6 @@ public static class DataExtensions
 
         return inheritors.ToArray();
     }
-
     private static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
     {
         var workspace = hub.GetWorkspace();
@@ -285,37 +302,24 @@ public static class DataExtensions
         {
             var typeDefinition = typeSource.TypeDefinition;
 
+            // Ensure description contains the type name for discoverability
+            var description = typeDefinition.Description;
+            if (!string.IsNullOrEmpty(description) && !description.Contains(typeDefinition.CollectionName))
+            {
+                description = $"{description} (Type: {typeDefinition.CollectionName})";
+            }
+            else if (string.IsNullOrEmpty(description))
+            {
+                description = $"Type: {typeDefinition.CollectionName}";
+            }
+
             types.Add(new TypeDescription(
                 Name: typeDefinition.CollectionName,
                 DisplayName: typeDefinition.DisplayName ?? typeDefinition.CollectionName.Wordify(),
-                Description: typeDefinition.Description
+                Description: description
             ));
         }
 
         return types.OrderBy(t => t.DisplayName ?? t.Name);
     }
-
-    private static bool IsArrayOrCollection(Type type)
-    {
-        // Check for arrays
-        if (type.IsArray)
-            return true;
-
-        // Check for generic collections
-        if (type.IsGenericType)
-        {
-            var genericTypeDef = type.GetGenericTypeDefinition();
-            return genericTypeDef == typeof(IEnumerable<>) ||
-                   genericTypeDef == typeof(ICollection<>) ||
-                   genericTypeDef == typeof(IList<>) ||
-                   genericTypeDef == typeof(List<>) ||
-                   genericTypeDef == typeof(IReadOnlyCollection<>) ||
-                   genericTypeDef == typeof(IReadOnlyList<>);
-        }
-
-        // Check if it implements IEnumerable (but not string)
-        return type != typeof(string) &&
-               typeof(System.Collections.IEnumerable).IsAssignableFrom(type);
-    }
-
 }
