@@ -250,9 +250,6 @@ public sealed class MessageHub : IMessageHub
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
 
-        // Complete startup and allow deferred messages to flow
-        messageService.CompleteStartup();
-
         RunLevel = MessageHubRunLevel.Started;
         hasStarted.SetResult();
 

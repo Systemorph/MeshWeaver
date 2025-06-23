@@ -56,9 +56,11 @@ public class MessageService : IMessageService
           {
               // Add a timeout to prevent startup hangs
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); await hub.StartAsync(combinedCts.Token);
 
-              await hub.StartAsync(combinedCts.Token);
+              // Dispose the startup deferral now that initialization is complete
+              startupDeferral?.Dispose();
+              logger.LogDebug("Startup deferral disposed for {Address}", Address);
 
               // Mark as started and complete the startup task
               isStarted = true;
@@ -120,16 +122,8 @@ public class MessageService : IMessageService
 
     public Address Address { get; }
     public IMessageHub ParentHub { get; }
-
-
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         deferralContainer.Defer(deferredFilter);
-
-    public void CompleteStartup()
-    {
-        logger.LogDebug("Completing startup and disposing startup deferral for {Address}", Address);
-        startupDeferral?.Dispose();
-    }
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken); private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
