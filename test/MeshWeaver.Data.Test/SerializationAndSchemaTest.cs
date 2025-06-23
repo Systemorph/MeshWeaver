@@ -49,15 +49,17 @@ public record SerializationTestData
     /// <summary>
     /// Nested complex data structure
     /// </summary>
-    public NestedData Details { get; init; }    /// <summary>
-                                                /// Initializes a new instance of the SerializationTestData record
-                                                /// </summary>
-                                                /// <param name="name">The name identifier for this test data</param>
-                                                /// <param name="nullableNumber">Optional numeric value that can be null</param>
-                                                /// <param name="createdAt">Timestamp when this data was created</param>
-                                                /// <param name="status">Current status of the test data</param>
-                                                /// <param name="tags">List of tags associated with this data</param>
-                                                /// <param name="details">Nested complex data structure</param>
+    public NestedData Details { get; init; }    
+    
+    /// <summary>
+    /// Initializes a new instance of the SerializationTestData record
+    /// </summary>
+    /// <param name="name">The name identifier for this test data</param>
+    /// <param name="nullableNumber">Optional numeric value that can be null</param>
+    /// <param name="createdAt">Timestamp when this data was created</param>
+    /// <param name="status">Current status of the test data</param>
+    /// <param name="tags">List of tags associated with this data</param>
+    /// <param name="details">Nested complex data structure</param>
     public SerializationTestData(string name, int? nullableNumber, DateTime createdAt, SerializationTestEnum status, List<string> tags, NestedData details)
     {
         Name = name;

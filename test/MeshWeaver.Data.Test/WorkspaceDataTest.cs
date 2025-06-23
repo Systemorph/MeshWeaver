@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -261,7 +261,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
-        var collectionRef = new CollectionReference(typeof(WorkspaceTestData).FullName);
+        var collectionRef = new CollectionReference(nameof(WorkspaceTestData));
 
         // act
         var stream = workspace.GetStream(collectionRef, null);
@@ -283,7 +283,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var workspace = GetHost().GetWorkspace();
-        var entityRef = new EntityReference(typeof(WorkspaceTestData).FullName, "2");
+        var entityRef = new EntityReference(nameof(WorkspaceTestData), "2");
 
         // act
         var stream = workspace.GetStream(entityRef, null);
