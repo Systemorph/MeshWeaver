@@ -12,8 +12,7 @@ const chartInstances = new Map();
  */
 export async function renderChart(element, config) {
     console.log("Starting Chart.js loading and rendering process");
-
-    // Check if Chart.js is already loaded
+    console.log("Config received:", config);    // Check if Chart.js is already loaded
     if (!window.Chart) {
         // Load Chart.js from CDN
         const loaded = await loadChartJs();
@@ -21,22 +20,41 @@ export async function renderChart(element, config) {
             console.error("Failed to load Chart.js");
             return;
         }
-    }
-
-    // Configure Chart.js defaults
-    configureChartDefaults();    // Render or update the chart
+    } else {
+        // If Chart.js is already loaded, just configure defaults safely
+        configureChartDefaults();
+    }    // Render or update the chart
     const existingChart = window.Chart.getChart(element);
     const chartConfig = deserialize(config);
 
-    if (existingChart) {
-        existingChart.config.data = chartConfig.data;
-        existingChart.config.options = chartConfig.options;
+    console.log("Deserialized config:", chartConfig);
+    console.log("Chart options:", chartConfig.options);
+    console.log("Legend config:", chartConfig.options?.plugins?.legend);
+
+    // Ensure the chart config has the correct structure for Chart.js
+    // Chart.js expects { type, data, options } but we might have a nested structure
+    let finalConfig;
+    if (chartConfig.data && chartConfig.options) {
+        // Extract type from the first dataset if not at root level
+        const chartType = chartConfig.data.datasets?.[0]?.type || 'bar';
+        finalConfig = {
+            type: chartType,
+            data: chartConfig.data,
+            options: chartConfig.options
+        };
+    } else {
+        finalConfig = chartConfig;
+    }
+
+    console.log("Final config for Chart.js:", finalConfig); if (existingChart) {
+        existingChart.config.data = finalConfig.data;
+        existingChart.config.options = finalConfig.options;
         existingChart.update();
         // Update our tracking
         chartInstances.set(element.id || element, existingChart);
     } else {
         const ctx = element.getContext("2d");
-        const newChart = new window.Chart(ctx, chartConfig);
+        const newChart = new window.Chart(ctx, finalConfig);
         // Track this chart instance
         chartInstances.set(element.id || element, newChart);
     }
@@ -49,18 +67,32 @@ export async function renderChart(element, config) {
 async function loadChartJs() {
     try {
         // Load Chart.js core
-        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');
-
-        // Load Chart.js plugins
+        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');        // Load Chart.js plugins
         await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js', 'chartjs-datalabels-script');
         await loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js', 'chartjs-moment-script');
 
-        // Load moment.js for the adapter
-        await loadScript('https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js', 'moment-script');
+        // Try to load colorschemes plugin (may cause issues, so load it last)
+        try {
+            await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-colorschemes@0.4.0/dist/chartjs-plugin-colorschemes.min.js', 'chartjs-colorschemes-script');
+            console.log('ColorSchemes plugin loaded successfully');
+        } catch (error) {
+            console.warn('Failed to load ColorSchemes plugin:', error);
+        }
 
-        // Register plugins
+        // Load moment.js for the adapter
+        await loadScript('https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js', 'moment-script');        // Register plugins
         if (window.Chart && window.ChartDataLabels) {
             window.Chart.register(window.ChartDataLabels);
+            console.log('Chart.js DataLabels plugin registered successfully');
+        } else {
+            console.warn('Chart.js DataLabels plugin not available for registration');
+        }
+
+        // Configure defaults after plugins are registered
+        if (window.Chart) {
+            configureChartDefaults();
+        } else {
+            console.warn('Chart.js not available for configuration');
         }
 
         // Set up theme change callback once Chart.js is loaded
@@ -108,25 +140,30 @@ function loadScript(src, id) {
 function configureChartDefaults() {
     if (!window.Chart) return;
 
-    const Chart = window.Chart;
-
-    // Set default configurations
+    const Chart = window.Chart;    // Set default configurations
     Chart.defaults.scales.linear.suggestedMin = 0; // all linear Scales start at 0
     Chart.defaults.elements.line.fill = false; // lines default to line, not area
     Chart.defaults.elements.line.tension = 0; // lines default to straight lines instead of bezier curves
-    Chart.defaults.plugins.legend.display = false; // default is no Legend
-    Chart.defaults.plugins.datalabels.display = false; // default is no DataLabels
+    // Note: Don't set legend.display globally as it should be configurable per chart
+
+    // Only configure datalabels if the plugin is registered
+    if (Chart.defaults.plugins.datalabels) {
+        Chart.defaults.plugins.datalabels.display = false; // default is no DataLabels
+        Chart.defaults.plugins.datalabels.formatter = (value, context) =>
+            typeof value == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
+    } else {
+        console.warn('DataLabels plugin not registered, skipping datalabels configuration');
+    }
+
     Chart.defaults.plugins.tooltip.enabled = false;
 
     Chart.defaults.font.family = "roboto, \"sans-serif\"";
     Chart.defaults.font.size = 12;
 
-    // Update theme-dependent colors
-    updateChartTheme();
+    // Use the standard Fluent UI text color that updates with theme
+    Chart.defaults.color = getComputedStyle(document.documentElement).getPropertyValue('--neutral-foreground-rest');
 
-    // Configure data labels formatter
-    Chart.defaults.plugins.datalabels.formatter = (value, context) =>
-        typeof value == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
+    console.log('Chart.js defaults configured');
 }
 
 /**
@@ -151,7 +188,7 @@ function updateChartTheme() {
 }
 
 /**
- * Deserialize chart configuration, evaluating function strings
+ * Deserialize chart configuration, evaluating function strings and removing $type properties
  * @param {Object} data - The configuration data
  * @returns {Object} - The deserialized configuration
  */
@@ -165,6 +202,7 @@ function deserialize(data) {
                 return null;
             }
         }
+        // Let cloneDeepWith handle the rest, but we'll filter $type in the cloneDeep function
     });
 }
 
@@ -191,12 +229,10 @@ function cloneDeepWith(value, customizer) {
 
         if (val instanceof Date) {
             return new Date(val.getTime());
-        }
-
-        if (typeof val === 'object') {
+        } if (typeof val === 'object') {
             const cloned = {};
             for (const key in val) {
-                if (val.hasOwnProperty(key)) {
+                if (val.hasOwnProperty(key) && key !== '$type') {
                     cloned[key] = cloneDeep(val[key]);
                 }
             }
