@@ -48,6 +48,7 @@ public class MessageService : IMessageService
 
         // Link the delivery buffer to the action block immediately to avoid race conditions
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+
         executionBuffer.Post(async ct =>
       {
           CancellationTokenSource timeoutCts = null;
@@ -57,7 +58,9 @@ public class MessageService : IMessageService
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
               using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
-              await hub.StartAsync(combinedCts.Token);              // Mark as started and complete the startup task
+              await hub.StartAsync(combinedCts.Token);
+
+              // Mark as started and complete the startup task
               isStarted = true;
               startupCompletionSource.SetResult(true);
 
@@ -65,20 +68,9 @@ public class MessageService : IMessageService
               if (pendingStartupMessages == 0)
               {
                   startupProcessingCompletionSource.TrySetResult(true);
-
-                  // Now it's safe to dispose the startup deferral
-                  try
-                  {
-                      startupDeferral?.Dispose();
-                      logger.LogDebug("Startup deferral disposed immediately (no pending messages) in {Address}", Address);
-                  }
-                  catch (Exception ex)
-                  {
-                      logger.LogWarning(ex, "Error disposing startup deferral in {Address}", Address);
-                  }
+                  logger.LogDebug("No pending startup messages in {Address}", Address);
               }
 
-              // Don't dispose the startup deferral yet - wait for all startup processing to complete
               logger.LogDebug("MessageService startup completed for {Address}", Address);
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
@@ -132,6 +124,12 @@ public class MessageService : IMessageService
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         deferralContainer.Defer(deferredFilter);
+
+    public void CompleteStartup()
+    {
+        logger.LogDebug("Completing startup and disposing startup deferral for {Address}", Address);
+        startupDeferral?.Dispose();
+    }
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken); private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
@@ -195,11 +193,15 @@ public class MessageService : IMessageService
         {
             try
             {
-                // Wait for parent hub to complete startup before routing
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+                // Wait for parent hub to complete startup before routing, but only if it has been initialized
+                if (parentMessageHub.HasStarted != null)
+                {
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
-                await parentMessageHub.HasStarted.WaitAsync(timeoutCts.Token);
+                    await parentMessageHub.HasStarted.WaitAsync(timeoutCts.Token);
+                    logger.LogDebug("Parent hub startup completed before routing message {Delivery} in {Address}", delivery, Address);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -276,7 +278,6 @@ public class MessageService : IMessageService
 
         return delivery;
     }
-
     private IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
     {
         if (delivery.Message is not RawJson rawJson)
@@ -407,7 +408,6 @@ public class MessageService : IMessageService
 
         logger.LogDebug("Finished disposing message service in {Address}", Address);
     }
-
     private async Task<IMessageDelivery> WrapDeliveryWithStartupTracking(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         try
@@ -422,17 +422,7 @@ public class MessageService : IMessageService
             {
                 // All startup-related messages have been processed
                 startupProcessingCompletionSource.TrySetResult(true);
-
-                // Now it's safe to dispose the startup deferral
-                try
-                {
-                    startupDeferral?.Dispose();
-                    logger.LogDebug("Startup deferral disposed after all startup messages processed in {Address}", Address);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Error disposing startup deferral in {Address}", Address);
-                }
+                logger.LogDebug("All startup messages processed in {Address}, remaining: {Remaining}", Address, remaining);
             }
         }
     }

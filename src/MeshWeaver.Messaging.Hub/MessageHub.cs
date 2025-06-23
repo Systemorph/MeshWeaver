@@ -24,7 +24,7 @@ public sealed class MessageHub : IMessageHub
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
-    private readonly IDisposable deferral;
+
     public long Version { get; private set; }
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
@@ -32,7 +32,6 @@ public sealed class MessageHub : IMessageHub
     private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
     private ILogger Logger { get; }
-
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -40,22 +39,19 @@ public sealed class MessageHub : IMessageHub
         IMessageHub parentHub
     )
     {
-
         serviceProvider.Buildup(this);
         Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
+        logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
+
+        logger.LogDebug("Starting MessageHub construction for address {Address}", configuration.Address);
+
         TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         InitializeTypes(this);
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
-        logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
-        Configuration = configuration;
-
-        messageService = new MessageService(configuration.Address,
+        Configuration = configuration; messageService = new MessageService(configuration.Address,
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
-        deferral = messageService.Defer(d => d.Message is not ExecutionRequest);
-
-
 
         foreach (var disposeAction in configuration.DisposeActions)
             disposeActions.Add(disposeAction);
@@ -69,9 +65,7 @@ public sealed class MessageHub : IMessageHub
             Register(
                 messageHandler.MessageType,
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
-            );
-
-        Register(HandleCallbacks);
+            ); Register(HandleCallbacks);
         Register(ExecuteRequest);
 
         messageService.Start();
@@ -102,9 +96,12 @@ public sealed class MessageHub : IMessageHub
             WithTypeAndRelatedTypesFor(registry.Type);
         }
     }
-
     private void WithTypeAndRelatedTypesFor(Type typeToRegister)
     {
+        if (typeToRegister == null) return;
+
+        logger.LogDebug("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
+
         TypeRegistry.WithType(typeToRegister);
 
         var types = typeToRegister
@@ -122,6 +119,8 @@ public sealed class MessageHub : IMessageHub
             foreach (var genericType in typeToRegister.GetGenericArguments())
                 TypeRegistry.WithType(genericType);
         }
+
+        logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
     }
 
     private TypeAndHandler GetTypeAndHandler(Type type, object instance)
@@ -243,21 +242,21 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly TaskCompletionSource hasStarted = new();
-    public Task HasStarted => hasStarted.Task;
-
-    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
+    public Task HasStarted => hasStarted.Task; async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Message hub {address} initialized", Address);
-
+        logger.LogInformation("Message hub {address} initializing", Address);
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
 
-        deferral.Dispose();
-        RunLevel = MessageHubRunLevel.Started;
+        // Complete startup and allow deferred messages to flow
+        messageService.CompleteStartup();
 
+        RunLevel = MessageHubRunLevel.Started;
         hasStarted.SetResult();
+
+        logger.LogInformation("Message hub {address} fully initialized", Address);
     }
 
 
