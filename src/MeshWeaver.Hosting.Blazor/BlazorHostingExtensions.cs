@@ -1,6 +1,6 @@
-﻿using MeshWeaver.Articles;
-using MeshWeaver.Blazor;
+﻿using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
@@ -23,15 +23,15 @@ public static class BlazorHostingExtensions
 
     public static void MapMeshWeaver(this WebApplication app)
     {
-        app.MapStaticContent(app.Services.GetRequiredService<IArticleService>());
+        app.MapStaticContent(app.Services.GetRequiredService<IContentService>());
         app.UseMiddleware<UserContextMiddleware>();
 
         //app.MapRazorComponents<ApplicationPage>();
     }
-    private static void MapStaticContent(this IEndpointRouteBuilder app, IArticleService articleService)
+    private static void MapStaticContent(this IEndpointRouteBuilder app, IContentService contentService)
         => app.MapGet("/static/{collection}/{**path}", async (HttpContext context, string collection, string path) =>
         {
-            var stream = await articleService.GetContentAsync(collection, path);
+            var stream = await contentService.GetContentAsync(collection, path);
 
             if (stream is null)
             {

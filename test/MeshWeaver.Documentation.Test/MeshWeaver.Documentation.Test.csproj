@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\modules\Documentation\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />

@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using MeshWeaver.Articles;
 using MeshWeaver.Blazor.Articles;
 using MeshWeaver.Data;
 using Microsoft.DotNet.Interactive.Formatting;
@@ -12,6 +11,8 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.FileExplorer;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Layout.Views;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,6 +71,8 @@ public static class BlazorViewRegistry
             ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
             IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
             BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
+            FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream,area),
+            ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
             CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),

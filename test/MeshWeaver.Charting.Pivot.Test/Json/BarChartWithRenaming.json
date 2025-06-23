@@ -1,7 +1,10 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
@@ -13,10 +16,10 @@
           null,
           null
         ],
-        "label": "Country1",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "Country1"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
@@ -28,8 +31,7 @@
           4,
           4
         ],
-        "label": "Country2",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "Country2"
       }
     ],
     "labels": [
@@ -40,13 +42,14 @@
       "E",
       "F",
       "G"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "responsive": true,
     "scales": {
       "x1": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale",
         "labels": [
           "A",
           "B",
@@ -57,26 +60,23 @@
           "G"
         ],
         "display": true,
-        "stacked": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
+        "stacked": false
       },
       "y": {
-        "stacked": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
+        "stacked": false
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "colorschemes": {
-        "scheme": "brewer.Blues3",
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
+        "scheme": "brewer.Blues3"
+      }
+    }
+  }
 }

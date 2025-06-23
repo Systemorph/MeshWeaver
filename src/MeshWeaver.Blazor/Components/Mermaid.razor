@@ -1,27 +1,34 @@
 ﻿@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
+
 <div @ref="Element" @attributes="AdditionalAttributes" class="mermaid">
 </div>
-
 @code {
     [Parameter] public string Diagram { get; set; }
-    [Parameter] public bool IsDark { get; set; }
     [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
-    private IJSObjectReference MermaidJs;
     private ElementReference Element;
+    private IJSObjectReference jsModule;
+    [Parameter]public DesignThemeModes Mode { get; set; }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
         {
-            MermaidJs ??= await JsRuntime.Import("mermaid.js");
-        }
+            if (firstRender)
+            {
+                jsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
+                "./_content/MeshWeaver.Blazor/Components/Mermaid.razor.js");
+            }
 
-        if (MermaidJs is not null)
+            if (jsModule is not null)
+            {
+                await jsModule.InvokeVoidAsync("renderMermaid", Mode, Element, Diagram);
+            }
+        }
+        catch (Exception ex)
         {
-            await MermaidJs.InvokeVoidAsync("renderMermaid", IsDark, Element, Diagram);
+            Console.WriteLine($"Error rendering mermaid diagram: {ex.Message}");
         }
     }
-
 }

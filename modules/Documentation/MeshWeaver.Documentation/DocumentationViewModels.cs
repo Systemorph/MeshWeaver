@@ -22,6 +22,8 @@ public static class DocumentationViewModels
             .AddCounter()
             .AddCalculator()
             .AddDistributionStatistics()
+            .AddProgress()
+            .AddFileBrowser()
         );
 
 }

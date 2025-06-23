@@ -1,0 +1,184 @@
+@using Microsoft.AspNetCore.Components
+@using ChatMessage = Microsoft.Extensions.AI.ChatMessage
+@using System.Linq
+@inject IJSRuntime JS
+
+<div class="input-box page-width">
+    <div class="input-container">
+        <textarea @ref="@TextArea" @bind="@MessageText" @oninput="@OnInputChanged"
+            @onkeydown="@OnKeyDown" placeholder="Type your message..." rows="1" disabled="@IsDisabled"></textarea>
+
+            @if (ShowAgentDropdown && FilteredAgents.Any())
+            {
+                <div class="agent-dropdown">
+                    @for (int i = 0; i < FilteredAgents.Count; i++)
+                    {
+                        var index = i;
+                        var agent = FilteredAgents[i];
+                        <div class="agent-option @(index == SelectedAgentIndex ? "selected" : "")"
+                            @onclick="() => SelectAgent(agent)" @onclick:preventDefault="true">
+                            <div class="agent-name">@@@agent.AgentName</div>
+                            <div class="agent-description">@agent.Description</div>
+                        </div>
+                    }                </div>
+            }
+        </div>
+
+        <div class="tools">
+            <button type="button" title="Send" class="send-button" @onclick="@SendMessageAsync"
+                disabled="@(IsDisabled || string.IsNullOrWhiteSpace(MessageText))">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                    stroke="currentColor" class="tool-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                        d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                </svg>
+            </button>
+        </div>
+    </div>
+
+@code {
+    private ElementReference TextArea;
+    private string? MessageText;
+    private bool ShowAgentDropdown;
+    private List<IAgentDefinition> FilteredAgents = new();
+    private int SelectedAgentIndex;
+
+    [Parameter]
+    public EventCallback<ChatMessage> OnSend { get; set; }
+
+    [Parameter]
+    public bool IsDisabled { get; set; }
+
+    /// <summary>
+    /// List of available agents for autocomplete when typing @AgentName
+    /// </summary>
+    [Parameter]
+    public List<IAgentDefinition> AvailableAgents { get; set; } = new();
+
+    public ValueTask FocusAsync()
+    => TextArea.FocusAsync();
+
+    private Task OnInputChanged(ChangeEventArgs e)
+    {
+        MessageText = e.Value?.ToString();
+        return CheckForAgentAutocomplete();
+    }
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (ShowAgentDropdown)
+        {
+            switch (e.Key)
+            {
+                case "ArrowDown":
+                    SelectedAgentIndex = Math.Min(SelectedAgentIndex + 1, FilteredAgents.Count - 1);
+                    StateHasChanged();
+                    break;
+                case "ArrowUp":
+                    SelectedAgentIndex = Math.Max(SelectedAgentIndex - 1, 0);
+                    StateHasChanged();
+                    break;
+                case "Enter":
+                case "Tab":
+                    if (FilteredAgents.Count > 0 && SelectedAgentIndex < FilteredAgents.Count)
+                    {
+                        await SelectAgent(FilteredAgents[SelectedAgentIndex]);
+                    }
+                    // Don't submit the form when agent dropdown is open
+                    break;
+                case "Escape":
+                    ShowAgentDropdown = false;
+                    StateHasChanged();
+                    break;
+            }
+        }
+        else if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            // Only submit when agent dropdown is not showing and Shift is not held
+            await SendMessageAsync();
+        }
+    }
+    private Task CheckForAgentAutocomplete()
+    {
+        if (string.IsNullOrEmpty(MessageText))
+        {
+            ShowAgentDropdown = false;
+            return Task.CompletedTask;
+        }
+
+        // Check if the message starts with @ and potentially an agent name
+        // Only show autocomplete if @ is at the very beginning
+        if (MessageText.StartsWith("@"))
+        {
+            var parts = MessageText.Split(' ');
+            var agentQuery = parts[0].Substring(1).ToLowerInvariant();
+
+            // If there's already a space after the @AgentName, don't show dropdown
+            if (parts.Length > 1 && !string.IsNullOrEmpty(agentQuery))
+            {
+                ShowAgentDropdown = false;
+            }
+            else
+            {
+                FilteredAgents = AvailableAgents
+                .Where(a => a.AgentName.ToLowerInvariant().Contains(agentQuery))
+                .ToList();
+
+                ShowAgentDropdown = FilteredAgents.Any();
+                SelectedAgentIndex = 0;
+            }
+        }
+        else
+        {
+            ShowAgentDropdown = false;
+        }
+
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+    private async Task SelectAgent(IAgentDefinition agent)
+    {
+        var restOfMessage = "";
+        if (MessageText != null)
+        {
+            var spaceIndex = MessageText.IndexOf(' ');
+            if (spaceIndex > 0)
+            {
+                restOfMessage = MessageText.Substring(spaceIndex);
+            }
+        }
+
+        MessageText = $"@{agent.AgentName} {restOfMessage}".TrimEnd();
+        ShowAgentDropdown = false;
+        SelectedAgentIndex = 0;
+
+        await TextArea.FocusAsync();
+        StateHasChanged();
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (MessageText is { Length: > 0 } text && !IsDisabled)
+        {
+            MessageText = null;
+            ShowAgentDropdown = false;
+            await OnSend.InvokeAsync(new ChatMessage(ChatRole.User, text));
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var module = await JS.InvokeAsync<IJSObjectReference>("import",
+                "./_content/MeshWeaver.Blazor.Chat/ChatInput.razor.js");
+                await module.InvokeVoidAsync("init", TextArea);
+                await module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+}

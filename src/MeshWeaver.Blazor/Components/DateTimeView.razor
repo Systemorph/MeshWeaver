@@ -1,9 +1,4 @@
 @inherits FormComponentBase<DateTimeControl, DateTimeView, DateTime?>
 
-<FluentDatePicker bind-Value="Value"></FluentDatePicker>
+<FluentDatePicker bind-Value="Value" Disabled="@Disabled" Required="@Required" ReadOnly="@Readonly"></FluentDatePicker>
 
-@code
-{
-    protected override Func<object, DateTime?> ConversionToValue 
-        => o => o is null ? null : DateTime.Parse(o.ToString()!);
-}

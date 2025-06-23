@@ -1,4 +1,4 @@
-﻿@using MeshWeaver.Articles
+﻿@using MeshWeaver.ContentCollections
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 
 
@@ -10,27 +10,53 @@
             <div class="toolbar-row">
                 <FluentBreadcrumb>
                     @{
-                        var accumulatedPath = "/collections/" + @Collection.Collection;
-                        <FluentBreadcrumbItem Href="@accumulatedPath">@Root</FluentBreadcrumbItem>
+                        var accumulatedPath = Embed ? "/" : "/collections/" + @Collection.Collection;
+                            if (Embed)
+                            {
+                                var topPath = Path.Combine(accumulatedPath, TopLevelPath);
+                                <FluentBreadcrumbItem @onclick="@(() => ChangePath(topPath))" class="breadcrumb-clickable">@Root</FluentBreadcrumbItem>
+                            }
+                            else
+                            {
+                                <FluentBreadcrumbItem Href="@accumulatedPath">@Root</FluentBreadcrumbItem>
+                            }
+
                         @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
                         {
                             accumulatedPath += '/' + folder;
-                            <FluentBreadcrumbItem Href="@accumulatedPath">@folder</FluentBreadcrumbItem>
-                        }
+                            if (accumulatedPath.TrimStart('/').Length > (TopLevelPath.TrimStart('/').Length))
+                            {
+                                if (Embed)
+                                {
+                                    var path = accumulatedPath;
+                                    <FluentBreadcrumbItem @onclick="@(() => ChangePath(path))" class="breadcrumb-clickable">@Path.GetFileName(folder)</FluentBreadcrumbItem>
+                                }
+                                else
+                                {
+                                    <FluentBreadcrumbItem Href="@accumulatedPath">@Path.GetFileName(folder)</FluentBreadcrumbItem>
+                                }
+                            }
 
+                        }
                     }
                 </FluentBreadcrumb>
             </div>
         }
         <div class="toolbar-row">
-            <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
+            @if (ShowCollectionSelection)
+            {
+                <CollectionPicker CollectionChanged="CollectionChanged"></CollectionPicker>
+            }
             <FluentSpacer></FluentSpacer>
             @if (Collection is not null)
             {
                 <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
-                <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+                if (ShowNewArticle)
+                {
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+                }
             }
         </div>
     </FluentToolbar>
@@ -60,18 +86,31 @@
                       @bind-SelectedItems="SelectedItems"/>
         <TemplateColumn TGridItem="CollectionItem" Title="Name">
             <div class="grid-item">
-                <a href="@GetLink(context)" class="file-browser-link">
-                    @if (context is FolderItem)
+                @if (context is FolderItem folder)
+                {
+                    @if (Embed)
                     {
-                        <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
+                        <a href="javascript:void(0)" @onclick="() => ChangePath(folder.Path)" class="file-browser-link">
+                            <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
+                            <span>@context.Name</span>
+                        </a>
                     }
                     else
                     {
-                        <FluentIcon Value="@(new Icons.Regular.Size20.Document())"/>
+                        <a href="@GetLink(context)" class="file-browser-link">
+                            <FluentIcon Value="@(new Icons.Filled.Size20.Folder())"/>
+                            <span>@context.Name</span>
+                        </a>
                     }
-                    <span>@context.Name</span>
-                </a>
-            </div>
+                }
+                else
+                {
+                    <a href="@GetLink(context)" class="file-browser-link">
+                        <FluentIcon Value="@(new Icons.Regular.Size20.Document())"/>
+                        <span>@context.Name</span>
+                    </a>
+                }
+             </div>
         </TemplateColumn>
         <TemplateColumn TGridItem="CollectionItem" Title="Details">
             @if (context is FolderItem folder)

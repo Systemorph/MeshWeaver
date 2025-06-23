@@ -1,10 +1,6 @@
 @using Microsoft.JSInterop
 @inherits BlazorView<MarkdownControl, MarkdownView>
 
-@inject IJSRuntime JsRuntime;
-<FluentDesignTheme @bind-Mode="@Mode"
-                   StorageName="theme" />
-
 <HeadContent>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
     @if (Mode == DesignThemeModes.Light)
@@ -15,14 +11,10 @@
     {
         <link href="_content/MeshWeaver.Blazor/css/github-dark.min.css" rel="stylesheet" />
     }
-    
+
 </HeadContent>
 
-<article @ref="Element" class="markdown-body" data-theme="@Mode.ToString().ToLower()">
+<article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="@Style">
     @((RenderFragment)RenderHtml)
 </article>
 
-@code {
-    private DesignThemeModes Mode;
-    private ElementReference Element;
-}

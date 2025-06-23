@@ -29,12 +29,12 @@ public static class ProductOverviewArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An object representing the product overview layout.</returns>
-    public static object ProductOverview(this LayoutAreaHost layoutArea, RenderingContext context) =>
+    public static UiControl ProductOverview(this LayoutAreaHost layoutArea, RenderingContext context) =>
         Controls.Stack
             .WithView(ProductOverviewToolbarArea.ProductOverviewToolbar)
             .WithView(ProductGrid);
 
-    private static IObservable<object> ProductGrid(this LayoutAreaHost layoutArea, RenderingContext context)
+    private static IObservable<UiControl> ProductGrid(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.ProductOverviewData()
             // .Select(data => data.ToMarkdown())
             .Select(data => 

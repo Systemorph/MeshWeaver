@@ -1,7 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
 
-    <Import Project="StaticAssets\StaticAssets.targets" />
-
     <PropertyGroup>
         <ProjectGuid>{ce297aa3-047e-49f5-9b04-e02385772a5b}</ProjectGuid>
         <RazorCompileOnBuild>true</RazorCompileOnBuild>
@@ -9,16 +7,11 @@
         <StaticWebAssetBasePath>_content/MeshWeaver.Blazor</StaticWebAssetBasePath>
     </PropertyGroup>
 
-
-
     <ItemGroup>
         <SupportedPlatform Include="browser" />
-        <None Include="wwwroot\**\*" Pack="true" PackagePath="contentFiles/any/net9.0/wwwroot/" />
-        <Content Update="StaticAssets\**" Pack="false" CopyToPublishDirectory="false" />
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="BlazorMonaco" />
         <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
         <PackageReference Include="Microsoft.EntityFrameworkCore" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
@@ -26,17 +19,12 @@
         <PackageReference Include="Microsoft.Identity.Web" />
         <PackageReference Include="Microsoft.Identity.Web.Ui" />
         <PackageReference Include="System.Composition.AttributedModel" />
-    </ItemGroup>
-
+    </ItemGroup>    
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
-        <ProjectReference Include="..\MeshWeaver.Articles\MeshWeaver.Articles.csproj" />
+        <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
         <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <Folder Include="Serialization\" />
     </ItemGroup>
 
 

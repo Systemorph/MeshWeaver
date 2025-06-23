@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
+        "type": "Bar",
         "data": [
           {
             "range": [
@@ -78,10 +82,11 @@
         "parsing": {
           "xAxisKey": "range",
           "yAxisKey": "label"
-        },
-        "type": "Bar"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
+        "type": "Bar",
         "data": [
           {
             "label": "Jan",
@@ -150,10 +155,11 @@
         "parsing": {
           "xAxisKey": "range",
           "yAxisKey": "label"
-        },
-        "type": "Bar"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
+        "type": "Bar",
         "data": [
           {
             "label": "Jan",
@@ -218,10 +224,12 @@
         "parsing": {
           "xAxisKey": "range",
           "yAxisKey": "label"
-        },
-        "type": "Bar"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
+        "type": "Line",
+        "pointRadius": 0,
         "data": [
           1,
           1,
@@ -235,10 +243,12 @@
         "label": "hidden",
         "datalabels": {
           "display": false
-        },
-        "type": "Line"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
+        "type": "Line",
+        "pointRadius": 0,
         "data": [
           null,
           5,
@@ -252,10 +262,12 @@
         "label": "hidden",
         "datalabels": {
           "display": false
-        },
-        "type": "Line"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
+        "type": "Line",
+        "pointRadius": 0,
         "data": [
           null,
           null,
@@ -269,8 +281,7 @@
         "label": "hidden",
         "datalabels": {
           "display": false
-        },
-        "type": "Line"
+        }
       }
     ],
     "labels": [
@@ -284,16 +295,21 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "scales": {
       "y": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
         "stacked": true
       },
       "x": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianLinearScale",
+        "grace": "10%",
         "suggestedMax": 10,
         "ticks": {}
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true,
         "labels": {
@@ -315,6 +331,7 @@
         "enabled": false
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": [
           "#66B7FF",
           "#F56295",

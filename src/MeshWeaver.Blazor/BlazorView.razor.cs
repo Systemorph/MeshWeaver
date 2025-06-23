@@ -1,14 +1,17 @@
 ﻿using System.Linq.Expressions;
-using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Blazor.Infrastructure;
-using Microsoft.AspNetCore.Components;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
+using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor;
 
@@ -18,14 +21,17 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 {
     [Inject] protected ILogger<TView> Logger { get; set; }
     [Inject] protected PortalApplication PortalApplication { get; set; }
+    [Inject] protected IJSRuntime JSRuntime { get; set; }
     protected IMessageHub Hub => PortalApplication.Hub;
-    [Parameter]
-    public TViewModel ViewModel { get; set; }
+    [Parameter] public TViewModel ViewModel { get; set; }
 
-    [Parameter]
-    public ISynchronizationStream<JsonElement> Stream { get; set; }
-    [Parameter]
-    public string Area { get; set; }
+    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; }
+    [Parameter] public string Area { get; set; }
+
+    [CascadingParameter(Name = "Context")] public object Context { get; set; }
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
 
     [CascadingParameter(Name = nameof(DataContext))]
     public string DataContext { get; set; }
@@ -72,7 +78,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected void DataBind<T>(
         object value, 
-        Expression<Func<TView, T>> propertySelector, Func<object, T> conversion = null)
+        Expression<Func<TView, T>> propertySelector, 
+        Func<object,T, T> conversion = null,
+        T defaultValue = default(T))
     {
         var expr = propertySelector?.Body as MemberExpression;
         Action<object> setter = expr?.Member is PropertyInfo pi 
@@ -86,10 +94,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
         if (value is JsonPointerReference reference)
         {
-            if (Model is not null)
-                setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion));
+            if (Model is not null && !reference.Pointer.StartsWith('/'))
+                setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue));
             else
-                bindings.Add(Stream.DataBind(reference, DataContext, conversion)
+                bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
                     .Subscribe(v =>
                         {
                             Logger.LogTrace("Binding property in Area {area}", Area);
@@ -103,9 +111,18 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                 );
 
         }
+        else if (value is ContextProperty contextProperty)
+        {
+            var val = 
+                Context is JsonObject jo 
+                    ? jo[contextProperty.Property]
+                    : Context?.GetType().GetProperty(contextProperty.Property)?.GetValue(Context);
+            setter(Hub.ConvertSingle(val, conversion, defaultValue));
+
+        }
         else
         {
-            setter(Hub.ConvertSingle(value, conversion));
+            setter(Hub.ConvertSingle(value, conversion, defaultValue));
         }
     }
 
@@ -113,24 +130,13 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     {
         StateHasChanged();
     }
-    protected IObservable<T> Convert<T>(object value, Func<object, T> conversion = null)
-    {
-        if (value is JsonPointerReference reference)
-        {
-            if (Model != null)
-                return Observable.Return(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion));
-            return Stream.DataBind(reference, DataContext, conversion);
-        }
-
-        return Observable.Return(Hub.ConvertSingle(value, conversion));
-    }
 
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-    protected void UpdatePointer(object value, JsonPointerReference reference)
+    protected virtual void UpdatePointer(object value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, DataContext, reference, (ModelParameter<JsonElement>)Model);
+        Stream.UpdatePointer(value, DataContext, reference, Model);
     }
 
 
@@ -152,8 +158,21 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         bindings.Clear();
     }
 
-    protected void OnClick()
+    protected virtual void OnClick()
     {
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
+
+
+    protected async Task<bool> IsDarkModeAsync()
+    {
+        return Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => await JSRuntime.InvokeAsync<bool>("themeHandler.isDarkMode")
+        };
+
+    }
 }
+

@@ -28,7 +28,7 @@ public static class EmployeesOverviewArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence containing the bar chart object.</returns>
-    public static IObservable<object> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
                 layoutArea.Workspace
@@ -40,7 +40,7 @@ public static class EmployeesOverviewArea
                             .AsHorizontal()
                             .WithDataLabels()
                         )
-                    )
+                    ).Select(x => x.ToControl())
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

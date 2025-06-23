@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -23,17 +23,16 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 /// <param name="output"></param>
 public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(output)
-{
-    /// <summary>
-    /// Tests the calculator area by means of the article
-    /// </summary>
-    /// <returns></returns>
-    [Fact]
+{    /// <summary>
+     /// Tests the calculator area by means of the article
+     /// </summary>
+     /// <returns></returns>
+    [Fact(Timeout = 60000)] // 60 second timeout
     public async Task CalculatorThroughArticle()
     {
 
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content"){Id= "Documentation/Calculator" });
+        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content") { Id = "Documentation/Calculator" });
 
         var control = await articleStream
             .GetControlStream("Content")

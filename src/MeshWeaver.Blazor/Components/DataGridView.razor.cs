@@ -1,11 +1,9 @@
 ﻿using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging.Serialization;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.FluentUI.AspNetCore.Components;
 using System.Linq.Expressions;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 
 namespace MeshWeaver.Blazor.Components;
@@ -31,7 +29,7 @@ public partial class DataGridView
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            o => ((IEnumerable<object>)o)?.Cast<JsonObject>().AsQueryable()
+            (o, _) => ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>().AsQueryable()
         );
     }
 
@@ -55,6 +53,12 @@ public partial class DataGridView
         if (column.Tooltip is not null)
             builder.AddAttribute(5, nameof(PropertyColumn<object, object>.TooltipText),
                 (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext)));
+        if (column.IsDefaultSortColumn is not null)
+            builder.AddAttribute(6, nameof(PropertyColumn<object, object>.IsDefaultSortColumn), Stream.GetDataBoundValue<bool>(column.IsDefaultSortColumn, ViewModel.DataContext));
+        if (column.InitialSortDirection is not null)
+            builder.AddAttribute(7, nameof(PropertyColumn<object, object>.InitialSortDirection), Stream.GetDataBoundValue<SortDirection>(column.InitialSortDirection, ViewModel.DataContext));
+        if (column.Align is not null)
+            builder.AddAttribute(8, nameof(PropertyColumn<object, object>.Align), Stream.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext));
 
         builder.CloseComponent();
 
@@ -66,10 +70,5 @@ public partial class DataGridView
     }
 
     private const string Details = nameof(Details);
-    private void NavigateToUrl(JsonObject obj, string area)
-    {
-        var reference = new LayoutAreaReference(area) { Id = $"{obj[EntitySerializationExtensions.TypeProperty]}/{obj[EntitySerializationExtensions.IdProperty]}" };
-        NavigationManager.NavigateTo(reference.ToHref(Stream.Owner));
-    }
 
 }

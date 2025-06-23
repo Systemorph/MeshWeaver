@@ -37,8 +37,8 @@ public class LayoutSynchronizationTest(ITestOutputHelper output) : HubTestBase(o
         instance.Equals(instance2).Should().BeTrue();
     }
 
-    private StackControl CreateStack => Controls.Stack.WithView("1", "1")
-        .WithView("2", "2");
+    private StackControl CreateStack => Controls.Stack.WithView(Controls.Html("1"), "1")
+        .WithView(Controls.Html("2"), "2");
 
 
 }

@@ -43,6 +43,7 @@ public static class JsonSynchronizationStream
         reduced.RegisterForDisposal(
                 reduced
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
+                .Where(x => x is not null)
         .Subscribe(e =>
         {
             logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -152,6 +153,7 @@ public static class JsonSynchronizationStream
         reduced.RegisterForDisposal(
             reduced
                 .ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))
+                .Where(x => x is not null)
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
@@ -233,7 +235,10 @@ public static class JsonSynchronizationStream
                 var currentJson = stream.Get<JsonElement?>();
                 if (currentJson is null || x.ChangeType == ChangeType.Full)
                 {
+                    var previousJson = currentJson;
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value.GetType(), stream.Hub.JsonSerializerOptions);
+                    if (Equals(previousJson, currentJson))
+                        return null;
                     stream.Set(currentJson);
                     return new(
                         stream.ClientId,
@@ -244,6 +249,8 @@ public static class JsonSynchronizationStream
                 }
                 else
                 {
+                    if (x.Updates.Count == 0)
+                        return null;
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions);
                     currentJson = patch.Apply(currentJson.Value);
                     stream.Set(currentJson);

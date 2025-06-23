@@ -30,7 +30,7 @@ public static class DiscountSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the discount summary view.</returns>
-    public static IObservable<object> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
                 layoutArea.Workspace
@@ -45,7 +45,7 @@ public static class DiscountSummaryArea
                                         .WithAlign(DataLabelsAlign.End)
                                 )
                             )
-                    )
+                    ).Select(x => x.ToControl())
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

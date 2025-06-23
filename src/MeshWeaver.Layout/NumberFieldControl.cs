@@ -6,7 +6,7 @@
 /// <param name="Data">The data associated with the number field control.</param>
 /// <param name="Type">The type of the number field control.</param>
 public record NumberFieldControl(object Data, object Type)
-    : FormControlBase<NumberFieldControl>(Data), IFormControl
+    : InputFormControlBase<NumberFieldControl>(Data)
 {
     /// <summary>
     /// Gets or initializes the state to hide the step value for the number field control.
@@ -17,21 +17,6 @@ public record NumberFieldControl(object Data, object Type)
     /// Gets or initializes the data list for the number field control.
     /// </summary>
     public object DataList { get; init; }
-
-    /// <summary>
-    /// Gets or initializes the maximum length for the number field control.
-    /// </summary>
-    public object MaxLength { get; init; }
-
-    /// <summary>
-    /// Gets or initializes the minimum length for the number field control.
-    /// </summary>
-    public object MinLength { get; init; }
-
-    /// <summary>
-    /// Gets or initializes the size of the number field control.
-    /// </summary>
-    public object Size { get; init; }
 
     /// <summary>
     /// Gets or initializes the step value for the number field control.

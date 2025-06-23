@@ -2,10 +2,10 @@
   <PropertyGroup>
     <ProjectGuid>{591793ca-2312-49df-ad09-4be05c40d65c}</ProjectGuid>
   </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="JsonPath.Net" />
+    <PackageReference Include="Namotion.Reflection" />
   </ItemGroup>
 
   <ItemGroup>

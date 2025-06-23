@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -27,12 +28,12 @@ public class KernelContainer : IDisposable
     private IMeshCatalog meshCatalog;
     private IMessageHub executionHub;
     private ILogger<KernelContainer> logger;
-
+    private IUiControlService uiControlService;
     private void Initialize(IMessageHub hub)
     {
         this.meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
-
+        uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
         Hub = hub;
         Kernel = CreateKernel();
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
@@ -72,7 +73,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => a.Value.GetValueOrDefault(ctx.Area))
+                        .Select(a => uiControlService.Convert(a.Value.GetValueOrDefault(ctx.Area)))
                 )
             )
             .AddMeshTypes()

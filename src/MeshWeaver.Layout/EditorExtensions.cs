@@ -10,6 +10,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Messaging;
+using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,32 +21,32 @@ public static class EditorExtensions
 {
     #region editor overloads
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
-    public static UiControl Edit(this LayoutAreaHost host, Type type, string id)
+    public static UiControl Edit(this LayoutAreaHost host, Type type, string id) 
         => host.Hub.ServiceProvider.Edit(type, id);
-    public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id)
+    public static UiControl Edit<T>(this LayoutAreaHost host, T instance, string id) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), id);
     public static UiControl Edit<T>(this LayoutAreaHost host, T instance,
-        Func<T, IObservable<object>> result)
+        Func<T, IObservable<UiControl>> result) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
-    public static UiControl Edit<T>(this LayoutAreaHost host, T instance)
+    public static UiControl Edit<T>(this LayoutAreaHost host, T instance) 
         => host.Hub.ServiceProvider.Edit(Observable.Return(instance));
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => hub.ServiceProvider.Edit(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, object> result)
+        Func<T, UiControl> result) 
         => hub.ServiceProvider.Edit(observable, (i, _, _) => result(i));
     public static UiControl Edit<T>(this IMessageHub hub, T instance,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result) 
         => hub.ServiceProvider.Edit(Observable.Return(instance), result);
     public static UiControl Edit<T>(this IServiceProvider serviceProvider, T instance,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result) 
         => serviceProvider.Edit(Observable.Return(instance), result);
 
     public static UiControl Edit<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        Func<T,LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Edit(observable, result);
 
     public static UiControl Edit<T>(
@@ -84,8 +85,8 @@ public static class EditorExtensions
 
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
-            IObservable<T> observable,
-        Func<T,LayoutAreaHost, RenderingContext, object> result)
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     {
         var id = Guid.NewGuid().AsString();
         var editor = serviceProvider.Edit(observable, id);
@@ -95,40 +96,57 @@ public static class EditorExtensions
             .Stack
             .WithView(editor)
             .WithView((host, ctx) =>
-            host.Stream.GetDataStream<T>(id)
-                .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
-                .Select(x => result.Invoke(x,host, ctx)));
+                host.Stream.GetDataStream<T>(id)
+                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .Select(x => result.Invoke(x, host, ctx)));
+    }
+    public static UiControl Edit<T>(
+        this IServiceProvider serviceProvider,
+        IObservable<T> observable,
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
+    {
+        var id = Guid.NewGuid().AsString();
+        var editor = serviceProvider.Edit(observable, id);
+        if (result == null)
+            return editor;
+        return Controls
+            .Stack
+            .WithView(editor)
+            .WithView((host, ctx) =>
+                host.Stream.GetDataStream<T>(id)
+                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
     #endregion
     #region Toolbar overloads
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, IObservable<object>> result)
+        Func<T, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this LayoutAreaHost host, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, IObservable<object>> result)
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result)
         => host.Hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, object> result)
+        Func<T, UiControl> result)
         => hub.ServiceProvider.Toolbar(observable, (i, _, _) => result(i));
     public static UiControl Toolbar<T>(this IMessageHub hub, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), result);
     public static UiControl Toolbar<T>(this IServiceProvider serviceProvider, T instance,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(Observable.Return(instance), result);
 
     public static UiControl Toolbar<T>(this IMessageHub hub, IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
     => hub.ServiceProvider.Toolbar(observable, result);
 
     public static UiControl Toolbar<T>(
@@ -170,12 +188,12 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, object> result)
+        Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
         => serviceProvider.Toolbar(observable, (t, host, ctx) => Observable.Return(result.Invoke(t, host, ctx)));
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
-        Func<T, LayoutAreaHost, RenderingContext, IObservable<object>> result)
+        Func<T, LayoutAreaHost, RenderingContext, IObservable<UiControl>> result) 
     {
         var id = Guid.NewGuid().AsString();
         var editor = serviceProvider.Toolbar(observable, id);
@@ -207,32 +225,33 @@ public static class EditorExtensions
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         if (uiControlAttribute != null)
-            return editor.WithView(RenderControl(uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options));
+            return editor.WithView((host, _) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options));
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         if (dimensionAttribute != null)
         {
             if (dimensionAttribute.Options is not null)
-                return editor.WithView(RenderListControl(Controls.Select, jsonPointerReference, dimensionAttribute.Options));
+                return editor.WithView((host, _) => RenderListControl(host,Controls.Select, jsonPointerReference, dimensionAttribute.Options));
             return editor.WithView((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
-                    GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
-                return RenderListControl(Controls.Select,  jsonPointerReference, id);
+                    GetStream(host, dimensionAttribute)
+                        .Subscribe(x => host.UpdateData(id, x)));
+                return Controls.Select(jsonPointerReference, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)));
             });
         }
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
+            return editor.WithView((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)));
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_, _) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference));
+            return editor.WithView((host, _) => RenderControl(host, typeof(TextFieldControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => RenderControl(typeof(DateTimeControl), propertyInfo, label, jsonPointerReference));
+            return editor.WithView((host, _) => RenderControl(host, typeof(DateTimeControl), propertyInfo, label, jsonPointerReference));
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference));
+            return editor.WithView((host, _) => RenderControl(host,typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference));
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
@@ -265,32 +284,32 @@ public static class EditorExtensions
 
         var uiControlAttribute = propertyInfo.GetCustomAttribute<UiControlAttribute>();
         if(uiControlAttribute != null)
-            return editor.WithView(RenderControl(uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
+            return editor.WithView((host,_) => RenderControl(host, uiControlAttribute.ControlType, propertyInfo, label, jsonPointerReference, uiControlAttribute.Options), skinConfiguration);
 
 
         var dimensionAttribute = propertyInfo.GetCustomAttribute<DimensionAttribute>();
         if (dimensionAttribute != null)
         {
             if(dimensionAttribute.Options is not null)
-                return editor.WithView(RenderListControl(Controls.Select, jsonPointerReference, dimensionAttribute.Options));
+                return editor.WithView((host, _) => RenderListControl(host, Controls.Select, jsonPointerReference, dimensionAttribute.Options), skinConfiguration);
             return editor.WithView((host, ctx) =>
             {
                 var id = Guid.NewGuid().AsString();
                 host.RegisterForDisposal(ctx.Area,
                     GetStream(host, dimensionAttribute).Subscribe(x => host.UpdateData(id, x)));
-                return RenderListControl(Controls.Select, jsonPointerReference, id);
-            });
+                return RenderListControl(host, Controls.Select, jsonPointerReference, id);
+            }, skinConfiguration);
         }
 
 
         if (propertyInfo.PropertyType.IsNumber())
-            return editor.WithView((host, _) => RenderControl(typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(host, typeof(NumberFieldControl), propertyInfo, label, jsonPointerReference, host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetOrAddType(propertyInfo.PropertyType)), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(string))
-            return editor.WithView((_,_) => RenderControl(typeof(TextFieldControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((host,_) => RenderControl(host, typeof(TextFieldControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(DateTime) || propertyInfo.PropertyType == typeof(DateTime?))
-            return editor.WithView((_, _) => RenderControl(typeof(DateTimeControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(host, typeof(DateTimeControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
         if (propertyInfo.PropertyType == typeof(bool) || propertyInfo.PropertyType == typeof(bool?))
-            return editor.WithView((_, _) => RenderControl(typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
+            return editor.WithView((host, _) => RenderControl(host,typeof(CheckBoxControl), propertyInfo, label, jsonPointerReference), skinConfiguration);
 
         // TODO V10: Need so see if we can at least return some readonly display (20.09.2024, Roland Bürgi)
         return editor;
@@ -329,30 +348,33 @@ public static class EditorExtensions
         new(propertyInfo.Name.ToCamelCase());
 
 
-    private static IUiControl RenderControl(Type controlType,
+    private static UiControl RenderControl(
+        LayoutAreaHost host,
+        Type controlType,
         PropertyInfo propertyInfo,
         string label,
         JsonPointerReference reference,
         object parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return ((IFormControl)factory.Invoke(reference, parameter)).WithLabel(label);
+            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return ((IListControl)factory2.Invoke(propertyInfo, reference, parameter)).WithLabel(label);
+            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter)).WithLabel(label);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }
-    private static readonly Dictionary<Type, Func<PropertyInfo, JsonPointerReference, object, UiControl>>
+    private static readonly Dictionary<Type, Func<LayoutAreaHost, PropertyInfo, JsonPointerReference, object, UiControl>>
         ListControls = new()
         {
-            {typeof(SelectControl), (_, reference,options)=> RenderListControl(Controls.Select,  reference, options)},
-            {typeof(RadioGroupControl), (propertyInfo, reference,options)=> RenderListControl((d,o)=>Controls.RadioGroup(d,o, propertyInfo.PropertyType.Name), reference, options)},
-            {typeof(ComboboxControl), (_, reference,options)=> RenderListControl(Controls.Combobox, reference, options)},
-            {typeof(ListboxControl), (_, reference,options)=> RenderListControl(Controls.Listbox, reference, options)},
+            {typeof(SelectControl), (host,property, reference,options)=> RenderListControl(host, (r,o)=>new SelectControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false },  reference, options)},
+            {typeof(RadioGroupControl), (host,property, reference,options)=> RenderListControl(host, (d,o)=>Controls.RadioGroup(d,o, property.PropertyType.Name), reference, options)},
+            {typeof(ComboboxControl), (host,property, reference,options)=> RenderListControl(host, (r,o)=>new ComboboxControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false }, reference, options)},
+            {typeof(ListboxControl), (host,property, reference,options)=> RenderListControl(host, (r,o) =>new ListboxControl(r,o){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false }, reference, options)},
         };
 
 
     private static TControl RenderListControl<TControl>(
+        LayoutAreaHost host,
         Func<object, object, TControl> controlFactory,
        object data, 
         object options)
@@ -366,21 +388,21 @@ public static class EditorExtensions
         if (options is ICollection collection)
         {
             id = Guid.NewGuid().AsString();
-            return controlFactory.Invoke(data, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
-                .WithBuildup((_,_,es) => es.UpdateData(id, ConvertToOptions(collection)));
+            host.UpdateData(id, ConvertToOptions(collection));
+            return controlFactory.Invoke(data, new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)));
         }
 
         throw new ArgumentException(
             $"No implementation to parse dimension options of type {options.GetType().FullName}.");
     }
 
-    private static readonly Dictionary<Type, Func<JsonPointerReference, object, UiControl>> 
+    private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>> 
         BasicControls = new()
     {
-        {typeof(DateTimeControl), (reference,_) => Controls.DateTime(reference)},
-        {typeof(TextFieldControl), (reference,_)=> Controls.Text(reference)},
-        {typeof(NumberFieldControl), Controls.Number},
-        {typeof(CheckBoxControl), (reference,_) => Controls.CheckBox(reference)},
+        {typeof(DateTimeControl), (reference,property,_) => new DateTimeControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
+        {typeof(TextFieldControl), (reference,property,_)=> new TextFieldControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
+        {typeof(NumberFieldControl), (reference, property, type)=> new NumberFieldControl(reference,type) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>()}},
+        { typeof(CheckBoxControl), (reference, property, _) => new CheckBoxControl(reference) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>() }},
     };
 
 

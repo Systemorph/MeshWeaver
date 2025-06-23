@@ -1,0 +1,16 @@
+﻿/* Theme-specific styles for NumberFieldView */
+::deep .control {
+    color: var(--neutral-foreground-rest);
+}
+
+/* Ensure proper text color in dark mode */
+:root[data-prefers-color-scheme='dark'] ::deep .control {
+    color: var(--neutral-foreground-rest);
+}
+
+/* Handle input text color when system theme is dark */
+@media (prefers-color-scheme: dark) {
+    ::deep .control {
+        color: var(--neutral-foreground-rest) !important;
+    }
+}

@@ -22,7 +22,7 @@ public static class DocumentationLayout
                 _ => true,
                 (tabs, host, ctx) => tabs.WithView(NamedArea(host.Reference.Area), ctx.DisplayName)
                 )
-            .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<object>>)Doc);
+            .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>>)Doc);
 
 
 
@@ -108,7 +108,7 @@ public static class DocumentationLayout
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 
-    public static async Task<object> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
+    public static async Task<UiControl> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
         if (area.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");

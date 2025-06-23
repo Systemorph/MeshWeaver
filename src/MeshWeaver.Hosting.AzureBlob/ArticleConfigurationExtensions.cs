@@ -1,8 +1,7 @@
 ﻿// In an appropriate extensions class (e.g., ArticleConfigurationExtensions.cs)
 
 using Azure.Storage.Blobs;
-using MeshWeaver.Articles;
-using MeshWeaver.Mesh;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,22 +14,22 @@ public static class ArticleConfigurationExtensions
         this IServiceCollection services)
     {
         return services
-            .AddArticles()
-            .AddKeyedSingleton<IArticleCollectionFactory, AzureBlobArticleCollectionFactory>(
-                AzureBlobArticleCollectionFactory.SourceType);
+            .AddContentCollections()
+            .AddKeyedSingleton<IContentCollectionFactory, AzureBlobContentCollectionFactory>(
+                AzureBlobContentCollectionFactory.SourceType);
     }
 }
 
-public class AzureBlobArticleCollectionFactory(IMessageHub hub, IServiceProvider serviceProvider) : IArticleCollectionFactory
+public class AzureBlobContentCollectionFactory(IMessageHub hub, IServiceProvider serviceProvider) : IContentCollectionFactory
 {
     public const string SourceType = "AzureBlob";
 
-    public ArticleCollection Create(ArticleSourceConfig config)
+    public ContentCollection Create(ContentSourceConfig config)
     {
 
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
         var blobServiceClient = factory.CreateClient(config.BasePath);
 
-        return new AzureBlobArticleCollection(config, hub, blobServiceClient);
+        return new AzureBlobContentCollection(config, hub, blobServiceClient);
     }
 }

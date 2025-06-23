@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+        <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    </ItemGroup>
+
+</Project>

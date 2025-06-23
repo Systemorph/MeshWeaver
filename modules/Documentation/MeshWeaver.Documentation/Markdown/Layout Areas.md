@@ -5,9 +5,9 @@ Abstract: >
   This is also true for data reports: Very often, the same data is presented in different ways to different audiences.
   This article shows how to use layout areas to personalize data reports.
 Thumbnail: "images/Layout Areas.jpeg"
-VideoUrl: "https://www.youtube.com/embed/1TY8p0cEX9M?si=9ZrvNVqXRw2noQg5"
+VideoUrl: "https://www.youtube.com/embed/q1MKJ-8R2yM?si=dLCU50EDhYvELID3"
 VideoDuration: "00:15:00"
-Published: "2025-02-02"
+Published: "2025-04-21"
 Authors:
   - "Roland Bürgi"
 Tags:
@@ -62,7 +62,7 @@ For each type in the data model, you can access its catalog using the pattern
 `{addressType}/{addressId}/Catalog/{TypeName}`:
 
 ```csharp --render Catalog --show-code
-LayoutArea(new ApplicationAddress("Northwind"), "Catalog", "MeshWeaver.Northwind.Domain.Territory")
+LayoutArea(new ApplicationAddress("Northwind"), "Catalog", "Territory")
 ```
 
 We can see that all the catalogs are nice data grids, which can, e.g., be paged and sorted. Also, we link all
@@ -74,7 +74,7 @@ Furthermore, we have standard views for
 single instances in form of `{addressType}/{addressId}/Details/{TypeName}/{Id}`. Example for a territory:
 
 ```csharp --render Details --show-code
-LayoutArea(new ApplicationAddress("Northwind"), "Details", "MeshWeaver.Northwind.Domain.Territory/06897")
+LayoutArea(new ApplicationAddress("Northwind"), "Details", "Territory/06897")
 ```
 
 Please note that data is editable wherever the user has edit rights. This means, that 

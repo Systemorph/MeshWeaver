@@ -57,7 +57,7 @@ public partial class MarkdownView
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);
-                    builder.AddAttribute(2, nameof(Mermaid.IsDark), Mode is DesignThemeModes.Dark);
+                    builder.AddAttribute(2, nameof(Mermaid.Mode), Mode);
                     builder.AddAttribute(3, nameof(Mermaid.Diagram), node.InnerHtml);
                     builder.CloseComponent();
                     break;
@@ -101,5 +101,12 @@ public partial class MarkdownView
         builder.CloseElement();
     }
 
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        IsNotPrerender = true;
+    }
+
+    private bool IsNotPrerender { get; set; }
     private string ComponentContainerId(string id) => $"component-container-{id}";
 }

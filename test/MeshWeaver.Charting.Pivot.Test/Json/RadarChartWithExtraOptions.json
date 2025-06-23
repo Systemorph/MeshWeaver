@@ -1,7 +1,10 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
         "fill": true,
         "tension": 0.2,
         "type": "radar",
@@ -14,10 +17,10 @@
           null,
           null
         ],
-        "label": "Alessandro.Italy",
-        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
+        "label": "Alessandro.Italy"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
         "fill": true,
         "type": "radar",
         "data": [
@@ -29,8 +32,7 @@
           null,
           null
         ],
-        "label": "Paolo.Italy",
-        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
+        "label": "Paolo.Italy"
       }
     ],
     "labels": [
@@ -41,38 +43,36 @@
       "5",
       "6",
       "7"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "title": {
+        "$type": "MeshWeaver.Charting.Models.Options.Title",
         "align": "start",
         "display": true,
         "font": {
+          "$type": "MeshWeaver.Charting.Models.Options.Font",
           "family": "Ov\u0435rpass",
           "size": 15,
           "weight": "600",
-          "lineHeight": "24px",
-          "$type": "MeshWeaver.Charting.Models.Options.Font"
+          "lineHeight": "24px"
         },
-        "text": "Two lines radar plot",
-        "$type": "MeshWeaver.Charting.Models.Options.Title"
+        "text": "Two lines radar plot"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": [
           "#1ECBE1",
           "#E1341E"
-        ],
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        ]
+      }
+    }
+  }
 }

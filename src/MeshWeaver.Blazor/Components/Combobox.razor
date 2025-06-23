@@ -2,7 +2,7 @@
 @using SelectPosition = Microsoft.FluentUI.AspNetCore.Components.SelectPosition
 @inherits ListBase<ComboboxControl,Combobox>
 
-<FluentCombobox 
+<FluentCombobox
     Label="@Label"
     Items="@Options"
     TOption="Option"
@@ -14,25 +14,30 @@
     Position="@Position"
     Disabled="@Disabled"
     Class="@Class"
-    @bind-SelectedOption="Value"
-/>
+    @bind-SelectedOption="Value">
+    @if (IconStart is not null)
+    {
+        <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
+    }
+    @if (IconEnd is not null)
+    {
+        <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
+    }
+
+</FluentCombobox>
 
 @code
 {
-    private ComboboxAutocomplete? Autocomplete { get; set; }
-    private bool Autofocus { get; set; }
-    private string Placeholder { get; set; }
-    private SelectPosition? Position { get; set; }
-    private bool Disabled { get; set; }
+    private ComboboxAutocomplete? Autocomplete;
+    private bool Autofocus;
+    private SelectPosition? Position;
 
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Autocomplete, x => x.Autocomplete);
         DataBind(ViewModel.Autofocus, x => x.Autofocus);
-        DataBind(ViewModel.Placeholder, x => x.Placeholder);
         DataBind(ViewModel.Position, x => x.Position);
-        DataBind(ViewModel.Disabled, x => x.Disabled);
     }
 
 }

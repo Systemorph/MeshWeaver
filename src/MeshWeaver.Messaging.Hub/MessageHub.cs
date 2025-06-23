@@ -24,7 +24,7 @@ public sealed class MessageHub : IMessageHub
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
     private readonly HostedHubsCollection hostedHubs;
-    private readonly IDisposable deferral;
+
     public long Version { get; private set; }
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
@@ -32,7 +32,6 @@ public sealed class MessageHub : IMessageHub
     private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
     private ILogger Logger { get; }
-
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -40,24 +39,21 @@ public sealed class MessageHub : IMessageHub
         IMessageHub parentHub
     )
     {
-
         serviceProvider.Buildup(this);
         Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
+        logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
+
+        logger.LogDebug("Starting MessageHub construction for address {Address}", configuration.Address);
+
         TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         InitializeTypes(this);
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
-        logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
-        Configuration = configuration;
-
-        messageService = new MessageService(configuration.Address,
+        Configuration = configuration; messageService = new MessageService(configuration.Address,
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
-        deferral = messageService.Defer(d => d.Message is not ExecutionRequest);
 
-
-
-        foreach (var disposeAction in configuration.DisposeActions) 
+        foreach (var disposeAction in configuration.DisposeActions)
             disposeActions.Add(disposeAction);
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions();
@@ -69,9 +65,7 @@ public sealed class MessageHub : IMessageHub
             Register(
                 messageHandler.MessageType,
                 (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
-            );
-
-        Register(HandleCallbacks);
+            ); Register(HandleCallbacks);
         Register(ExecuteRequest);
 
         messageService.Start();
@@ -79,7 +73,7 @@ public sealed class MessageHub : IMessageHub
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
-    { 
+    {
         Post(new PingResponse(), o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -102,9 +96,12 @@ public sealed class MessageHub : IMessageHub
             WithTypeAndRelatedTypesFor(registry.Type);
         }
     }
-
     private void WithTypeAndRelatedTypesFor(Type typeToRegister)
     {
+        if (typeToRegister == null) return;
+
+        logger.LogDebug("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
+
         TypeRegistry.WithType(typeToRegister);
 
         var types = typeToRegister
@@ -122,6 +119,8 @@ public sealed class MessageHub : IMessageHub
             foreach (var genericType in typeToRegister.GetGenericArguments())
                 TypeRegistry.WithType(genericType);
         }
+
+        logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
     }
 
     private TypeAndHandler GetTypeAndHandler(Type type, object instance)
@@ -218,17 +217,21 @@ public sealed class MessageHub : IMessageHub
 
         return await HandleMessageAsync(delivery, node.Next, cancellationToken);
     }
-
     async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
     {
-        ++Version; 
-        
-        Logger.LogDebug("Starting processing of {Delivery} in {Address}", delivery, Address);
+        ++Version;
+
+        // Log only important messages during disposal
+        if (IsDisposing && delivery.Message is ShutdownRequest shutdownReq)
+        {
+            logger.LogInformation("Processing ShutdownRequest in {Address}: RunLevel={RunLevel}, Version={RequestVersion}, Expected={ExpectedVersion}",
+                Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
+        }
+
         delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
-        Logger.LogDebug("Finished processing of {Delivery} in {Address}", delivery, Address);
 
         return FinishDelivery(delivery);
     }
@@ -239,21 +242,18 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly TaskCompletionSource hasStarted = new();
-    public Task HasStarted => hasStarted.Task;
-
-    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
+    public Task HasStarted => hasStarted.Task; async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Message hub {address} initialized", Address);
-
+        logger.LogInformation("Message hub {address} initializing", Address);
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
 
-        deferral.Dispose();
         RunLevel = MessageHubRunLevel.Started;
-
         hasStarted.SetResult();
+
+        logger.LogInformation("Message hub {address} fully initialized", Address);
     }
 
 
@@ -330,11 +330,11 @@ public sealed class MessageHub : IMessageHub
     {
         try
         {
-           if (response is IMessageDelivery<TResponse> tResponse)
+            if (response is IMessageDelivery<TResponse> tResponse)
                 return selector.Invoke(tResponse);
-           throw new DeliveryFailureException($"Response for {request} was of unexpected type: {response}");
+            throw new DeliveryFailureException($"Response for {request} was of unexpected type: {response}");
         }
-        catch(DeliveryFailureException)
+        catch (DeliveryFailureException)
         {
             throw;
         }
@@ -439,10 +439,7 @@ public sealed class MessageHub : IMessageHub
         return delivery;
     }
 
-    Address IMessageHub.Address => Address;
-
-
-    public IMessageDelivery<TMessage> Post<TMessage>(
+    Address IMessageHub.Address => Address; public IMessageDelivery<TMessage> Post<TMessage>(
         TMessage message,
         Func<PostOptions, PostOptions> configure = null
     )
@@ -450,6 +447,13 @@ public sealed class MessageHub : IMessageHub
         var options = new PostOptions(Address);
         if (configure != null)
             options = configure(options);
+
+        // Log only important messages during disposal
+        if (IsDisposing && (message is ShutdownRequest || logger.IsEnabled(LogLevel.Debug)))
+        {
+            logger.LogInformation("Posting {MessageType} during disposal from {Sender} to {Target} in hub {Address}",
+                typeof(TMessage).Name, options.Sender, options.Target, Address);
+        }
 
         return (IMessageDelivery<TMessage>)messageService.Post(message, options);
     }
@@ -472,7 +476,7 @@ public sealed class MessageHub : IMessageHub
     }
 
     public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction) =>
-        RegisterForDisposal((hub,_) =>
+        RegisterForDisposal((hub, _) =>
         {
             disposeAction.Invoke(hub);
             return Task.CompletedTask;
@@ -491,33 +495,59 @@ public sealed class MessageHub : IMessageHub
     public Task Disposal { get; private set; }
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
 
-    private readonly object locker = new();
-
-
-    public void Dispose()
+    private readonly object locker = new(); public void Dispose()
     {
         lock (locker)
         {
             if (IsDisposing)
+            {
+                logger.LogWarning("Dispose() called multiple times for hub {address}", Address);
                 return;
-            logger.LogDebug("Starting disposing of hub {address}", Address);
+            }
+            logger.LogInformation("STARTING DISPOSAL of hub {address}, current Version={Version}", Address, Version);
             Disposal = disposingTaskCompletionSource.Task;
         }
+
+        logger.LogInformation("POSTING initial ShutdownRequest for hub {Address} with Version={Version}", Address, Version);
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
-
     private async Task<IMessageDelivery> HandleShutdown(
         IMessageDelivery<ShutdownRequest> request,
         CancellationToken ct
     )
     {
-        while (disposeActions.TryTake(out var configurationDisposeAction))
-            await configurationDisposeAction.Invoke(this, ct);
+        logger.LogInformation("STARTING HandleShutdown for hub {Address}, RunLevel={RunLevel}, RequestVersion={RequestVersion}",
+            Address, request.Message.RunLevel, request.Message.Version);
 
+        // Process dispose actions first
+        while (disposeActions.TryTake(out var configurationDisposeAction))
+        {
+            try
+            {
+                await configurationDisposeAction.Invoke(this, ct);
+            }
+            catch (Exception e)
+            {
+                logger.LogError("Error in dispose action for hub {address}: {exception}", Address, e);
+                // Continue with other dispose actions
+            }
+        }
         if (request.Message.Version != Version - 1)
         {
-            Post(request.Message with { Version = Version });
-            return request.Ignored();
+            logger.LogInformation("Version mismatch for hub {Address}: received {RequestVersion}, expected {ExpectedVersion}, IsDisposing={IsDisposing}",
+                Address, request.Message.Version, Version - 1, IsDisposing);
+
+            // During disposal, proceed regardless of version mismatch to avoid loops
+            if (IsDisposing)
+            {
+                logger.LogInformation("Proceeding with shutdown despite version mismatch during disposal for hub {address}", Address);
+            }
+            else
+            {
+                logger.LogDebug("Reposting ShutdownRequest with corrected version {NewVersion} for hub {Address}", Version, Address);
+                Post(request.Message with { Version = Version });
+                return request.Ignored();
+            }
         }
 
         switch (request.Message.RunLevel)
@@ -528,15 +558,18 @@ public sealed class MessageHub : IMessageHub
                     lock (locker)
                     {
                         if (RunLevel == MessageHubRunLevel.DisposeHostedHubs)
+                        {
+                            logger.LogWarning("DisposeHostedHubs already processed for hub {Address}, ignoring", Address);
                             return request.Ignored();
+                        }
 
                         RunLevel = MessageHubRunLevel.DisposeHostedHubs;
                     }
-                    logger.LogDebug("Starting disposing hosted hubs of hub {address}", Address);
+                    logger.LogInformation("STARTING DisposeHostedHubs for hub {address}", Address);
                     hostedHubs.Dispose();
                     await hostedHubs.Disposal;
+                    logger.LogInformation("COMPLETED DisposeHostedHubs for hub {address}", Address);
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
-                    logger.LogDebug("Finish disposing hosted hubs of hub {address}", Address);
                 }
                 catch (Exception e)
                 {
@@ -544,6 +577,7 @@ public sealed class MessageHub : IMessageHub
                 }
                 finally
                 {
+                    logger.LogInformation("POSTING ShutDown request after DisposeHostedHubs completion for hub {Address}, new Version={Version}", Address, Version);
                     Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                 }
 
@@ -554,17 +588,41 @@ public sealed class MessageHub : IMessageHub
                     lock (locker)
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
+                        {
+                            logger.LogWarning("ShutDown already processed for hub {Address}, ignoring", Address);
                             return request.Ignored();
+                        }
 
-                        logger.LogDebug("Starting shutdown of hub {address}", Address);
+                        logger.LogInformation("STARTING ShutDown for hub {address}", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
+
                     await messageService.DisposeAsync();
-                    disposingTaskCompletionSource.SetResult();
+                    logger.LogInformation("Message service disposed successfully for hub {address}", Address);
+
+                    try
+                    {
+                        disposingTaskCompletionSource.TrySetResult();
+                        logger.LogInformation("Disposal completed successfully for hub {address}", Address);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Task completion source was already set, ignore
+                        logger.LogDebug("Disposal task completion source was already set for hub {address}", Address);
+                    }
                 }
                 catch (Exception e)
                 {
                     logger.LogError("Error during shutdown: {exception}", e);
+                    try
+                    {
+                        disposingTaskCompletionSource.TrySetException(e);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Task completion source was already set, ignore
+                        logger.LogDebug("Disposal task completion source was already set for hub {address}", Address);
+                    }
                 }
                 finally
                 {

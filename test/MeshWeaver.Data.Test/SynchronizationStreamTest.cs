@@ -11,10 +11,18 @@ using System;
 
 namespace MeshWeaver.Data.Test;
 
+/// <summary>
+/// Tests for synchronization stream operations and data change management
+/// </summary>
 public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string Instance = nameof(Instance);
 
+    /// <summary>
+    /// Configures the host with MyData and object types for synchronization testing
+    /// </summary>
+    /// <param name="configuration">The configuration to modify</param>
+    /// <returns>The modified configuration</returns>
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
         return base.ConfigureHost(configuration)
@@ -28,6 +36,9 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             );
     }
 
+    /// <summary>
+    /// Tests parallel updates to the synchronization stream with concurrent modifications
+    /// </summary>
     [Fact]
     public async Task ParallelUpdate()
     {
@@ -64,6 +75,6 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)
-            .And.Subject.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp+1).ToString()));
+            .And.Subject.Select(t => t.Text).Should().Equal(Enumerable.Range(0, 10).Select(exp => (exp + 1).ToString()));
     }
 }

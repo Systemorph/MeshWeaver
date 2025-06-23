@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Articles;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;

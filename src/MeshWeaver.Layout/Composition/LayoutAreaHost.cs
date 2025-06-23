@@ -5,7 +5,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -37,13 +36,12 @@ public record LayoutAreaHost : IDisposable
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
-        LayoutDefinition layoutDefinition,
         IUiControlService uiControlService,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration)
     {
         this.uiControlService = uiControlService;
         Workspace = workspace;
-        LayoutDefinition = layoutDefinition;
+        LayoutDefinition = uiControlService.LayoutDefinition;
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             workspace.Hub,
@@ -143,7 +141,7 @@ public record LayoutAreaHost : IDisposable
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates(WorkspaceOperations.Update((ws ?? new()), collection, update), Stream.StreamId)),
+            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId)),
             ex => logger.LogWarning(ex, "Cannot update {Collection}", collection)
         );
     }
@@ -174,12 +172,12 @@ public record LayoutAreaHost : IDisposable
     {
         return Stream
             .Reduce(reference)
-            .Select(ci => Convert<T>(ci, reference))
+            .Select(ci => Convert<T>(ci))
             .Where(x => x is not null)
             .DistinctUntilChanged();
     }
 
-    private static T Convert<T>(ChangeItem<object> ci, EntityReference reference) where T : class
+    private static T Convert<T>(ChangeItem<object> ci) where T : class
     {
         var result = ci.Value;
         if (result is null)
@@ -272,7 +270,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T:UiControl
     {
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,

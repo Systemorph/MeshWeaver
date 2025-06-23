@@ -27,7 +27,7 @@ public static class CustomerSummaryArea
     /// <returns>A layout stack control representing the customer summary.</returns>
     /// <remarks>This method constructs a stack control that includes a pane header titled "Customer Summary". Additional views can be added to the stack to complete the summary display.
     /// </remarks>
-    public static object CustomerSummary(
+    public static UiControl CustomerSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     ) =>

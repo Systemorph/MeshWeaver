@@ -10,21 +10,21 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class EditFormView
 {
-    private ModelParameter<JsonElement> data;
+    private ModelParameter<JsonElement> model;
     private ActivityLog Log { get; set; }
 
     protected override void BindData()
     {
         DataBind(
             new JsonPointerReference(ViewModel.DataContext), 
-            x => x.data,
-            jsonObject => Convert((JsonObject)jsonObject)
+            x => x.model,
+            (jsonObject,_) => jsonObject == null ? null: Convert((JsonElement)jsonObject)
             );
     }
 
     private async void Submit(EditContext context)
     {
-        var log = await Stream.SubmitModel(Model);
+        var log = await Stream.SubmitModel(model);
         if(log.Status == ActivityStatus.Succeeded)
         {
             Log = null;
@@ -38,19 +38,16 @@ public partial class EditFormView
         }
     }
 
-    private ModelParameter Convert(JsonObject jsonObject)
+    private ModelParameter<JsonElement> Convert(JsonElement jsonObject)
     {
-        if (jsonObject == null)
-            return null;
-        var jsonModel = jsonObject.ToJsonString();
-        var ret = new ModelParameter<JsonElement>(JsonDocument.Parse(jsonModel).RootElement, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
+        var ret = new ModelParameter<JsonElement>(jsonObject, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
         ret.ElementChanged += OnModelChanged;
         return ret;
     }
 
     private void Reset()
     {
-        data.Reset();
+        model.Reset();
         InvokeAsync(StateHasChanged);
     }
 
@@ -68,8 +65,8 @@ public partial class EditFormView
 
     public override ValueTask DisposeAsync()
     {
-        if (data != null)
-            data.ElementChanged -= OnModelChanged;
+        if (model != null)
+            model.ElementChanged -= OnModelChanged;
         return base.DisposeAsync();
     }
 

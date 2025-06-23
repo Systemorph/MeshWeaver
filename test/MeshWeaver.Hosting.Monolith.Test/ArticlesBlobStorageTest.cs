@@ -3,7 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.AzureBlob;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,12 +70,12 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         });
         return services
             .AddAzureBlobArticles()
-            .Configure<List<ArticleSourceConfig>>(
-                options => options.Add(new ArticleSourceConfig()
+            .Configure<List<ContentSourceConfig>>(
+                options => options.Add(new ContentSourceConfig()
                 {
                     Name = "Test",
                     BasePath = StorageProviders.Articles,
-                    SourceType = AzureBlobArticleCollectionFactory.SourceType,
+                    SourceType = AzureBlobContentCollectionFactory.SourceType,
                 })
             );
     }

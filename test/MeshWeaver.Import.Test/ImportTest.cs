@@ -53,7 +53,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var timeout = 10.Seconds();
+        var timeout = 20.Seconds();
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,

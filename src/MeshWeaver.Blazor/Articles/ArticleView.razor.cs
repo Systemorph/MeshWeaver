@@ -1,12 +1,11 @@
 ﻿using MeshWeaver.Activities;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Articles;
@@ -23,27 +22,13 @@ public partial class ArticleView
         DataBind(
             ArticlePointer,
             x => x.data,
-            jsonObject => Convert((Article)jsonObject)
+            (jsonObject,_) => Convert((Article)jsonObject)
         );
     }
 
-    private async void Submit(EditContext context)
-    {
-        var log = await Stream.SubmitModel(Model);
-        if (log.Status == ActivityStatus.Succeeded)
-        {
-            Log = null;
-            ShowSuccess();
-            Reset();
-        }
-        else
-        {
-            Log = log;
-            ShowError();
-        }
-    }
+    
     private ModelParameter<Article> ArticleModel { get; set; }
-    private ModelParameter Convert(Article article)
+    private ModelParameter<Article> Convert(Article article)
     {
         if (article == null)
             return null;

@@ -1,6 +1,7 @@
 @using Icon = MeshWeaver.Domain.Icon
 @using Appearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @inherits BlazorView<ButtonControl, ButtonView>
+@inject NavigationManager NavigationManager
 
 <FluentButton
     Appearance="@Appearance"
@@ -8,17 +9,19 @@
     IconStart="@IconStart?.ToFluentIcon()"
     IconEnd="@IconEnd?.ToFluentIcon()"
     Disabled="@Disabled"
-    >
-    @Title
+    aria-label="@Label">
+    @Data
 </FluentButton>
     
 @code
 {
     private Appearance Appearance { get; set; }
-    private string Title { get; set; }
+    private string Data { get; set; }
+    private string Label { get; set; }
     private Icon IconStart { get; set; }
     private Icon IconEnd { get; set; }
     private bool Disabled { get; set; }
+    private string NavigateToHref { get; set; }
 
     protected override void BindData()
     {
@@ -26,10 +29,25 @@
         if (ViewModel != null)
         {
             DataBind(ViewModel.Appearance, x => x.Appearance);
-            DataBind(ViewModel.Data, x => x.Title);
+            DataBind(ViewModel.Data, x => x.Data);
+            DataBind(ViewModel.Label, x => x.Label);
             DataBind(ViewModel.IconStart, x => x.IconStart);
             DataBind(ViewModel.IconEnd, x => x.IconEnd);
             DataBind(ViewModel.Disabled, x => x.Disabled);
+            DataBind(ViewModel.NavigateToHref, x => x.NavigateToHref);
         }
     }
+
+    protected override void OnClick()
+    {
+        if(NavigateToHref is not null)
+            NavigationManager.NavigateTo(NavigateToHref);
+        base.OnClick();
+    }
+
+    private void NavigateToUrl()
+    {
+        NavigationManager.NavigateTo(NavigateToHref);
+    }
+
 }

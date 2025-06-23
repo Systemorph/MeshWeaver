@@ -37,8 +37,11 @@ public partial class NamedAreaView
                         if (RootControl is null && x is null || RootControl != null && RootControl.Equals(x))
                             return;
                         RootControl = x;
-                        DataBind(RootControl.PageTitle, y => y.PageTitle);
-                        DataBind(RootControl.Meta, y => y.MetaAttributes);
+                        if (RootControl is not null)
+                        {
+                            DataBind(RootControl.PageTitle, y => y.PageTitle);
+                            DataBind(RootControl.Meta, y => y.MetaAttributes);
+                        }
                         Logger.LogDebug("Setting area {Area} to rendering area {AreaToBeRendered} to type {Type}", Area,
                             AreaToBeRendered, x?.GetType().Name ?? "null");
                         RequestStateChange();

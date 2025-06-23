@@ -17,29 +17,6 @@ where TSkin : Skin<TSkin>
     /// </summary>
     protected TSkin This => (TSkin)this;
 
-    /// <summary>
-    /// Gets or initializes the CSS class of the skin.
-    /// </summary>
-    public object Class { get; init; }
-
-    /// <summary>
-    /// Gets or initializes the style of the skin.
-    /// </summary>
-    public object Style { get; init; }
-
-    /// <summary>
-    /// Sets the CSS class of the skin.
-    /// </summary>
-    /// <param name="class">The CSS class to set.</param>
-    /// <returns>A new instance of the skin with the specified CSS class.</returns>
-    public TSkin WithClass(object @class) => This with { Class = @class };
-
-    /// <summary>
-    /// Sets the style of the skin.
-    /// </summary>
-    /// <param name="style">The style to set.</param>
-    /// <returns>A new instance of the skin with the specified style.</returns>
-    public TSkin WithStyle(object style) => This with { Style = style };
 
     //public const string Modal = nameof(Modal);
     //public const string ContextMenu = nameof(ContextMenu);

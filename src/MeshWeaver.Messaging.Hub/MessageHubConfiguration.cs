@@ -72,10 +72,10 @@ public record MessageHubConfiguration
         services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
-        // Check if UserService is registered in the parent service provider
-        if (ParentServiceProvider?.GetService<UserService>() == null)
+        // Check if AccessService is registered in the parent service provider
+        if (ParentServiceProvider?.GetService<AccessService>() == null)
         {
-            services.AddSingleton<UserService>();
+            services.AddSingleton<AccessService>();
         }
         Services.Invoke(services);
         return services;
@@ -143,7 +143,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration AddPostPipeline(Func<SyncPipelineConfig, SyncPipelineConfig> pipeline) => this with { PostPipeline = PostPipeline.Add(pipeline) };
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
-        var userService = syncPipeline.Hub.ServiceProvider.GetService<UserService>();
+        var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         return syncPipeline.AddPipeline((d, next) =>
         {
             var context = userService.Context;
@@ -158,7 +158,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
-        var userService = asyncPipeline.Hub.ServiceProvider.GetService<UserService>();
+        var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
             userService.SetContext(d.AccessContext);

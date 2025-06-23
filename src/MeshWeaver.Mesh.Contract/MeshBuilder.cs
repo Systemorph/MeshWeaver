@@ -3,12 +3,12 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-[assembly:InternalsVisibleTo("MeshWeaver.Hosting")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
 namespace MeshWeaver.Mesh;
 
 public record MeshBuilder
 {
-    public MeshBuilder(Action<Func<IServiceCollection,IServiceCollection>> ServiceConfig, Address Address)
+    public MeshBuilder(Action<Func<IServiceCollection, IServiceCollection>> ServiceConfig, Address Address)
     {
         this.ServiceConfig = ServiceConfig;
         this.Address = Address;
@@ -48,16 +48,21 @@ public record MeshBuilder
         ConfigureServices(services => services
             .AddSingleton(_ => BuildMeshConfiguration())
             .AddSingleton(BuildHub)
-            .AddSingleton<UserService>()
+            .AddSingleton<AccessService>()
             );
 
-        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
-
-        ConfigureHub(conf => conf.WithRoutes(routes =>
+        IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration; ConfigureHub(conf => conf.WithRoutes(routes =>
                 routes.WithHandler((delivery, ct) =>
-                    delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address)
-                        ? Task.FromResult(delivery)
-                        : routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(routes.Hub.JsonSerializerOptions), ct)))
+                {
+                    if (delivery.State != MessageDeliveryState.Submitted || delivery.Target == null || delivery.Target.Equals(Address))
+                        return Task.FromResult(delivery);
+
+                    // Get the sender hub from hosted hubs to use its JsonSerializerOptions for proper polymorphic serialization
+                    var senderHub = routes.Hub.GetHostedHub(delivery.Sender, HostedHubCreation.Never);
+                    var jsonOptions = senderHub?.JsonSerializerOptions ?? routes.Hub.JsonSerializerOptions;
+
+                    return routes.Hub.ServiceProvider.GetRequiredService<IRoutingService>().DeliverMessageAsync(delivery.Package(jsonOptions), ct);
+                }))
             .Set(meshConfig)
         );
 

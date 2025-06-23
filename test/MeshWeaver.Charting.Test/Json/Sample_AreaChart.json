@@ -1,23 +1,29 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
+        "type": "Line",
+        "fill": "origin",
         "data": [
           -1,
           4,
           3,
           2
-        ],
-        "type": "Line"
+        ]
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
+        "type": "Line",
+        "fill": "origin",
         "data": [
           4,
           5,
           6,
           3
-        ],
-        "type": "Line"
+        ]
       }
     ],
     "labels": [
@@ -26,8 +32,11 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

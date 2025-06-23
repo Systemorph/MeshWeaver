@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Articles;
+﻿using MeshWeaver.ContentCollections;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -8,18 +8,24 @@ namespace MeshWeaver.Blazor.FileExplorer;
 public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; }
-    [Inject] private IArticleService ArticleService { get; set; }
+    [Inject] private IContentService ContentService { get; set; }
     [Inject] private NavigationManager NavigationManager { get; set; }
     [Inject] private IToastService ToastService { get; set; }
     [Parameter] public string CollectionName { get; set; }
     [Parameter] public string CurrentPath { get; set; } = "/";
-
+    [Parameter] public string TopLevelPath { get; set; } = "";
+    [Parameter] public bool Embed { get; set; }
+    [Parameter]public bool CreatePath { get; set; }
+    [Parameter] public bool ShowNewArticle { get; set; }
+    [Parameter] public bool ShowCollectionSelection { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
+        if (CreatePath && Collection is not null)
+            await Collection.CreateFolderAsync(CurrentPath);
         await RefreshContentAsync();
     }
 
@@ -53,13 +59,13 @@ public partial class FileBrowser
             return;
         CollectionName = collection;
 
-        Collection = CollectionName is null ? null : ArticleService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
         await RefreshContentAsync();
         await InvokeAsync(StateHasChanged);
     }
 
 
-    private ArticleCollection Collection { get; set; }
+    private ContentCollection Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
 
@@ -76,10 +82,10 @@ public partial class FileBrowser
             Modal = true,
             PreventScroll = true,
         };
-        var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection, CollectionItems), parameters);
+        var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection, CurrentPath, CollectionItems), parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
-            await RefreshContentAsync();
+           await RefreshContentAsync();
     }
     private Task NewArticleAsync(MouseEventArgs arg)
     {
@@ -104,12 +110,23 @@ public partial class FileBrowser
         if (!result.Cancelled)
             await RefreshContentAsync();
     }
-
     private string GetLink(CollectionItem item)
     {
-        return item is FolderItem folder
-            ? $"/collections/{CollectionName}{folder.Path}"
-            : $"/content/{CollectionName}{item.Path}";
+        return item switch
+        {
+            FolderItem folder => GetLink(folder),
+            FileItem file => GetLink(file),
+            _ => null
+        };
+    }
+
+    private string GetLink(FolderItem item)
+    {
+        return $"/collections/{CollectionName}{item.Path}";
+    }
+    private string GetLink(FileItem item)
+    {
+        return $"/content/{CollectionName}{item.Path}";
     }
 
     FluentInputFile myFileByStream = default!;
@@ -141,4 +158,9 @@ public partial class FileBrowser
         await RefreshContentAsync();
     }
 
+    private async Task ChangePath(string path)
+    {
+        CurrentPath = path;
+        await RefreshContentAsync();
+    }
 }

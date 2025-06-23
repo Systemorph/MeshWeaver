@@ -1,10 +1,14 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "C.B.Value",
               "displayName": "Value",
               "coordinates": [
@@ -12,8 +16,7 @@
                 "B",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "C.B",
@@ -22,12 +25,13 @@
             "C",
             "B"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "C.C.Value",
               "displayName": "Value",
               "coordinates": [
@@ -35,8 +39,7 @@
                 "C",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "C.C",
@@ -45,12 +48,13 @@
             "C",
             "C"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "C.E.Value",
               "displayName": "Value",
               "coordinates": [
@@ -58,8 +62,7 @@
                 "E",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "C.E",
@@ -68,12 +71,13 @@
             "C",
             "E"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "C.P.Value",
               "displayName": "Value",
               "coordinates": [
@@ -81,8 +85,7 @@
                 "P",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "C.P",
@@ -91,12 +94,13 @@
             "C",
             "P"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "C.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
@@ -104,8 +108,7 @@
                 "TotalGroup",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "C.TotalGroup",
@@ -114,8 +117,7 @@
             "C",
             "TotalGroup"
           ],
-          "grouperName": "LineOfBusiness",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "LineOfBusiness"
         }
       ],
       "id": "C",
@@ -123,14 +125,16 @@
       "coordinates": [
         "C"
       ],
-      "grouperName": "LineOfBusiness",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "LineOfBusiness"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "H.B.Value",
               "displayName": "Value",
               "coordinates": [
@@ -138,8 +142,7 @@
                 "B",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "H.B",
@@ -148,12 +151,13 @@
             "H",
             "B"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "H.C.Value",
               "displayName": "Value",
               "coordinates": [
@@ -161,8 +165,7 @@
                 "C",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "H.C",
@@ -171,12 +174,13 @@
             "H",
             "C"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "H.E.Value",
               "displayName": "Value",
               "coordinates": [
@@ -184,8 +188,7 @@
                 "E",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "H.E",
@@ -194,12 +197,13 @@
             "H",
             "E"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "H.P.Value",
               "displayName": "Value",
               "coordinates": [
@@ -207,8 +211,7 @@
                 "P",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "H.P",
@@ -217,12 +220,13 @@
             "H",
             "P"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "H.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
@@ -230,8 +234,7 @@
                 "TotalGroup",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "H.TotalGroup",
@@ -240,8 +243,7 @@
             "H",
             "TotalGroup"
           ],
-          "grouperName": "LineOfBusiness",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "LineOfBusiness"
         }
       ],
       "id": "H",
@@ -249,14 +251,16 @@
       "coordinates": [
         "H"
       ],
-      "grouperName": "LineOfBusiness",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "LineOfBusiness"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "L.B.Value",
               "displayName": "Value",
               "coordinates": [
@@ -264,8 +268,7 @@
                 "B",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "L.B",
@@ -274,12 +277,13 @@
             "L",
             "B"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "L.C.Value",
               "displayName": "Value",
               "coordinates": [
@@ -287,8 +291,7 @@
                 "C",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "L.C",
@@ -297,12 +300,13 @@
             "L",
             "C"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "L.E.Value",
               "displayName": "Value",
               "coordinates": [
@@ -310,8 +314,7 @@
                 "E",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "L.E",
@@ -320,12 +323,13 @@
             "L",
             "E"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "L.P.Value",
               "displayName": "Value",
               "coordinates": [
@@ -333,8 +337,7 @@
                 "P",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "L.P",
@@ -343,12 +346,13 @@
             "L",
             "P"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "L.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
@@ -356,8 +360,7 @@
                 "TotalGroup",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "L.TotalGroup",
@@ -366,8 +369,7 @@
             "L",
             "TotalGroup"
           ],
-          "grouperName": "LineOfBusiness",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "LineOfBusiness"
         }
       ],
       "id": "L",
@@ -375,14 +377,16 @@
       "coordinates": [
         "L"
       ],
-      "grouperName": "LineOfBusiness",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "LineOfBusiness"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "P.B.Value",
               "displayName": "Value",
               "coordinates": [
@@ -390,8 +394,7 @@
                 "B",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "P.B",
@@ -400,12 +403,13 @@
             "P",
             "B"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "P.C.Value",
               "displayName": "Value",
               "coordinates": [
@@ -413,8 +417,7 @@
                 "C",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "P.C",
@@ -423,12 +426,13 @@
             "P",
             "C"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "P.E.Value",
               "displayName": "Value",
               "coordinates": [
@@ -436,8 +440,7 @@
                 "E",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "P.E",
@@ -446,12 +449,13 @@
             "P",
             "E"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "P.P.Value",
               "displayName": "Value",
               "coordinates": [
@@ -459,8 +463,7 @@
                 "P",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "P.P",
@@ -469,12 +472,13 @@
             "P",
             "P"
           ],
-          "grouperName": "AmountType",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "AmountType"
         },
         {
+          "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
           "children": [
             {
+              "$type": "MeshWeaver.Pivot.Models.Column",
               "id": "P.TotalGroup.Value",
               "displayName": "Value",
               "coordinates": [
@@ -482,8 +486,7 @@
                 "TotalGroup",
                 "Value"
               ],
-              "grouperName": "ColumnName",
-              "$type": "MeshWeaver.Pivot.Models.Column"
+              "grouperName": "ColumnName"
             }
           ],
           "id": "P.TotalGroup",
@@ -492,8 +495,7 @@
             "P",
             "TotalGroup"
           ],
-          "grouperName": "LineOfBusiness",
-          "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+          "grouperName": "LineOfBusiness"
         }
       ],
       "id": "P",
@@ -501,20 +503,20 @@
       "coordinates": [
         "P"
       ],
-      "grouperName": "LineOfBusiness",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "LineOfBusiness"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "Value"
         ],
         "id": "Value",
         "displayName": "Value",
-        "grouperName": "PropertyName",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "PropertyName"
       },
       "data": {
         "C": {
@@ -545,10 +547,8 @@
           "P": null,
           "TotalGroup": null
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

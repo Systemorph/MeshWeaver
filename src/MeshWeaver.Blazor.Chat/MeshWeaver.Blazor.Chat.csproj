@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+    <PropertyGroup>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+      <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>

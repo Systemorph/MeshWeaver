@@ -27,7 +27,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
                     layout
                         .WithView(
                             StaticView,
-                            Controls.Stack.WithView("Hello", "Hello").WithView("World", "World")
+                            Controls.Stack.WithView(Controls.Html("Hello"), "Hello").WithView(Controls.Html("World"), "World")
                         )
                         .WithNavMenu((menu, _, _) => menu.WithNavLink("item1", "/item1", "icon1"))
                         .WithNavMenu((menu, _, _) => menu.WithNavLink("item2", "/item2", "icon2"))

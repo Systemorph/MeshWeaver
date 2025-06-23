@@ -28,10 +28,14 @@ public partial class MobileNavMenu : ComponentBase
                 "Articles",
                 () => NavigateToAsync("/articles"),
                 DesktopNavMenu.ArticlesIcon(),
-                LinkMatchRegex: new Regex("^/articles$")
+                LinkMatchRegex: new Regex("^/articles")
             );
+            yield return new MobileNavMenuEntry("Areas", 
+                () => NavigateToAsync("/content/Documentation/Readme"),
+                DesktopNavMenu.DocumentationIcon(),
+                LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
 
-        yield return new MobileNavMenuEntry(
+            yield return new MobileNavMenuEntry(
             "Settings"                ,
             LaunchSettingsAsync,
             new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()

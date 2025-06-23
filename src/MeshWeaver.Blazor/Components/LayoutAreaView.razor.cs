@@ -31,8 +31,8 @@ public partial class LayoutAreaView
             AreaStream = null;
         }
 
-        if (IsNotPreRender)
-            BindStream();
+        BindStream();
+        BindStream();
     }
     private bool showProgress;
     private string progressMessage;
@@ -47,7 +47,7 @@ public partial class LayoutAreaView
 
     }
 
-    private Address ConvertAddress(object address)
+    private Address ConvertAddress(object address, Address _)
     {
         if (address is string s)
             return Hub.GetAddress(s);
@@ -58,10 +58,16 @@ public partial class LayoutAreaView
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {
-        if (AreaStream != null)
+        if (IsNotPreRender && AreaStream != null)
             AreaStream.Dispose();
         AreaStream = null;
         await base.DisposeAsync();
+    }
+
+    ~LayoutAreaView()
+    {
+        AreaStream?.Dispose();
+        AreaStream = null;
     }
     private string RenderingArea { get; set; }
     private void BindStream()
@@ -76,8 +82,22 @@ public partial class LayoutAreaView
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
         }
     }
+    protected override void OnAfterRender(bool firstRender)
+    {
+        base.OnAfterRender(firstRender);
+        if (firstRender)
+        {
+            IsNotPreRender = true;
+            // If we're now rendered and we don't have a stream yet, bind it
+            if (AreaStream == null)
+            {
+                BindStream();
+                StateHasChanged();
+            }
 
+        }
+    }
 
-    protected bool IsNotPreRender => (bool)JsRuntime.GetType().GetProperty("IsInitialized")!.GetValue(JsRuntime)!;
+    protected bool IsNotPreRender { get; private set; }
 
 }

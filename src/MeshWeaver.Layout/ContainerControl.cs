@@ -53,15 +53,26 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     {
         return options.Invoke(new(null) { Id = GetAutoName() });
     }
-     /// <summary>
+    /// <summary>
     /// Adds a view to the container control with the specified options.
     /// </summary>
-    /// <param name="view">The view to add.</param>
-    /// <param name="options">A function to configure the named area control.</param>
+    /// <param name="view">The view to add.</param>    /// <param name="options">A function to configure the named area control.</param>
     /// <returns>A new <typeparamref name="TControl"/> instance with the specified view and options.</returns>
-    public TControl WithView(object view, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView(UiControl view, Func<NamedAreaControl, NamedAreaControl> options)
     {
-        var area = GetNamedArea(options);
+        NamedAreaControl area;
+
+        // If the view is already a NamedAreaControl, use it as the base and apply options
+        if (view is NamedAreaControl namedAreaView)
+        {
+            area = options.Invoke(namedAreaView);
+        }
+        else
+        {
+            // For other controls, create a new NamedAreaControl as before
+            area = GetNamedArea(options);
+        }
+
         return This with
         {
             Areas = Areas.Add(area),
@@ -70,19 +81,19 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     }
 
 
-    public TControl WithView(object view) =>
+    public TControl WithView(UiControl view) =>
         WithView(view, opt => opt.WithId(GetAutoName()));
-    public TControl WithView(object view, string area) =>
+    public TControl WithView(UiControl view, string area) =>
         WithView(view, opt => opt.WithId(area));
-    public TControl WithView<T>(ViewDefinition<T> viewDefinition) =>
+    public TControl WithView<T>(ViewDefinition<T> viewDefinition) where T : UiControl =>
         WithView(Observable.Return(viewDefinition), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, string area) =>
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, string area) where T : UiControl =>
         WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) =>
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl =>
         WithView((h, c, _) => viewDefinition.Invoke(h, c), options);
 
 
-    public TControl WithView<T>(IObservable<ViewDefinition<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView<T>(IObservable<ViewDefinition<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl
     {
         var area = Evaluate(options);
         return This with
@@ -111,9 +122,9 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
 
     public TControl WithView(IObservable<ViewDefinition> viewDefinition, string area) =>
         WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView(IObservable<object> viewDefinition) =>
+    public TControl WithView(IObservable<UiControl> viewDefinition) =>
         WithView(viewDefinition, x => x);
-    public TControl WithView(IObservable<object> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView(IObservable<UiControl> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
     {
         var area = Evaluate(options);
         return This with
@@ -124,22 +135,22 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         };
     }
 
-    public TControl WithView(IObservable<object> viewDefinition, string area) =>
+    public TControl WithView(IObservable<UiControl> viewDefinition, string area) =>
         WithView(viewDefinition, control => control.WithId(area));
     public TControl WithView(IObservable<ViewDefinition> viewDefinition)
         => WithView(viewDefinition, x => x);
 
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition)
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition) where T : UiControl
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, Task<T>> viewDefinition)
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options = null) where T : UiControl
+        => WithView(Observable.Return((ViewDefinition)(async (h, c, ct) => await viewDefinition.Invoke(h, c, ct))), options ?? (x => x));
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition) where T : UiControl
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition)
-        => WithView((h,c,_) => viewDefinition.Invoke(h,c), x => x);
-    public TControl WithView<T>(ViewStream<T> viewDefinition)
+    public TControl WithView<T>(ViewStream<T> viewDefinition) where T : UiControl
         => WithView(viewDefinition, x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), options);
-    public TControl WithView<T>(ViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView<T>(ViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl
     {
         var area = Evaluate(options);
 
@@ -147,24 +158,28 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         {
             Areas = Areas.Add(area),
             Renderers = Renderers.Add((host, context, store) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), 
+                host.RenderArea(GetContextForArea(context, area.Id.ToString()),
                     viewDefinition.Invoke, store))
         };
     }
 
-    public TControl WithView<T>(ViewStream<T> viewDefinition, string area)
+    public TControl WithView<T>(ViewStream<T> viewDefinition, string area) where T : UiControl
         => WithView(viewDefinition, control => control.WithId(area));
 
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, object> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
-        => WithView((la, ctx, s) => Observable.Return(viewDefinition.Invoke(la, ctx,s)), options);
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, object> viewDefinition, string area)
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+        => WithView((la, ctx, s) => Observable.Return(viewDefinition.Invoke(la, ctx, s)), options);
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl> viewDefinition, string area)
         => WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, string area)
-        => WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, string area)
-        => WithView((h,c,_) => viewDefinition.Invoke(h,c), control => control.WithId(area));
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, object> viewDefinition)
-        => WithView((h,c,_) => viewDefinition.Invoke(h,c), x => x);
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, string area) where T : UiControl
+        => This with
+        {
+            Areas = Areas.Add(new(area ?? GetAutoName())),
+            Renderers = Renderers.Add((a, ctx, s) => a.RenderArea(ctx, viewDefinition.Invoke(a, ctx, s), s))
+        };
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, string area) where T : UiControl
+        => WithView((h, c, _) => viewDefinition.Invoke(h, c), control => control.WithId(area));
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, UiControl> viewDefinition)
+        => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
 
     protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store) =>
         Renderers.Aggregate(base.Render(host, context, store),
@@ -173,13 +188,13 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
                 var newRender = r.Invoke(host, context, acc.Store);
                 return new EntityStoreAndUpdates(newRender.Store, acc.Updates.Concat(newRender.Updates), null);
             });
-    protected override EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store) => 
+    protected override EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store) =>
         store.UpdateControl(context.Area, PrepareRendering(context));
 
-    protected override  TControl PrepareRendering(RenderingContext context)
+    protected override TControl PrepareRendering(RenderingContext context)
     {
         return base.PrepareRendering(context) with
-            { Areas = Areas.Select(a => a with { Area = $"{context.Area}/{a.Id}" }).ToImmutableList() };
+        { Areas = Areas.Select(a => a with { Area = $"{context.Area}/{a.Id}" }).ToImmutableList() };
     }
 
 
@@ -223,7 +238,7 @@ public abstract record ContainerControl<TControl, TSkin>(string ModuleName, stri
     {
         return base.PrepareRendering(context)
             with
-            { Skins = Skins?.RemoveAll(t => t is TSkin).Insert(0, Skin)  ?? [Skin] };
+        { Skins = Skins?.RemoveAll(t => t is TSkin).Insert(0, Skin) ?? [Skin] };
     }
 
     public TControl WithSkin(Func<TSkin, TSkin> skinConfig)
@@ -231,30 +246,32 @@ public abstract record ContainerControl<TControl, TSkin>(string ModuleName, stri
 }
 
 
-public abstract record ContainerControlWithItemSkin<TControl,TSkin, TItemSkin>(string ModuleName, string ApiVersion, TSkin Skin)
+public abstract record ContainerControlWithItemSkin<TControl, TSkin, TItemSkin>(string ModuleName, string ApiVersion, TSkin Skin)
     : ContainerControl<TControl, TSkin>(ModuleName, ApiVersion, Skin)
     where TControl : ContainerControlWithItemSkin<TControl, TSkin, TItemSkin>
-    where TItemSkin: Skin
+    where TItemSkin : Skin
     where TSkin : Skin
 {
 
 
-    public TControl WithView<T>(T view, Func<TItemSkin, TItemSkin> options)
+    public TControl WithView<T>(T view, Func<TItemSkin, TItemSkin> options) where T : UiControl
     => base.WithView(view, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
 
 
 
 
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, T> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
         => base.WithView((h, c, s) => viewDefinition.Invoke(h, c, s), x => x with { Skins = Skins.Add(options.Invoke(CreateItemSkin(x))) });
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
         => WithView(viewDefinition.Invoke, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x => 
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
+        => base.WithView((h, c, _) => viewDefinition.Invoke(h, c), x =>
             x.AddSkin(options.Invoke(CreateItemSkin(x))));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options)
-        => WithView((h, c, _) => 
-            viewDefinition.Invoke(h,c), x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
+        => WithView((h, c, _) =>
+            viewDefinition.Invoke(h, c), x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<TItemSkin, TItemSkin> options) where T : UiControl
+        => base.WithView<T>(viewDefinition, x => x.AddSkin(options.Invoke(CreateItemSkin(x))));
 
 
 

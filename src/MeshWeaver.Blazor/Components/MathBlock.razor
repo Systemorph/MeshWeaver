@@ -1,23 +1,9 @@
 ﻿@using Microsoft.JSInterop
 @inject IJSRuntime JsRuntime
 
-<HeadContent>
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
-    <script>
-        MathJax = {
-            tex: {
-                packages: ['base', 'ams', 'noundefined', 'newcommand', 'boldsymbol']
-            },
-            startup: {
-                typeset: false
-            }
-        };
-    </script>
-</HeadContent>
-
 @if (Name == "div")
 {
-    <div class="math"@ref="MathBlockElement" @attributes="AdditionalAttributes">
+    <div class="math" @ref="MathBlockElement" @attributes="AdditionalAttributes">
         @((MarkupString)Html)
     </div>
 }
@@ -32,20 +18,24 @@
     [Parameter] public string Name { get; set; }
     [Parameter] public string Html { get; set; }
     [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
-    private IJSObjectReference Mathjax;
+    private IJSObjectReference jsModule;
     private ElementReference MathBlockElement;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
+        try
         {
-            Mathjax ??= await JsRuntime.Import("mathjax.js");
-            await Mathjax.InvokeAsync<bool>("waitForMathJax");
-        }
+            jsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
+                "./_content/MeshWeaver.Blazor/Components/MathBlock.razor.js");
 
-        if (Mathjax is not null)
+            if (jsModule is not null)
+            {
+                await jsModule.InvokeAsync<bool>("loadAndTypeset", MathBlockElement);
+            }
+        }
+        catch (Exception ex)
         {
-            await Mathjax.InvokeVoidAsync("typeset", MathBlockElement);
+            Console.WriteLine($"Error rendering MathJax: {ex.Message}");
         }
     }
 }
