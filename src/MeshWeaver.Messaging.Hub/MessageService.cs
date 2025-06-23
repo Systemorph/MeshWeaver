@@ -83,6 +83,18 @@ public class MessageService : IMessageService
               logger.LogError("MessageService startup timed out after 30 seconds for {Address}", Address);
               startupCompletionSource.SetException(new TimeoutException("MessageService startup timed out"));
               startupProcessingCompletionSource.TrySetException(new TimeoutException("MessageService startup timed out"));
+
+              // If startup timed out, dispose the startup deferral to unblock any pending operations
+              try
+              {
+                  startupDeferral?.Dispose();
+                  logger.LogDebug("Startup deferral disposed due to startup timeout in {Address}", Address);
+              }
+              catch (Exception disposeEx)
+              {
+                  logger.LogError(disposeEx, "Error disposing startup deferral after startup timeout in {Address}", Address);
+              }
+
               throw;
           }
           catch (Exception ex)
@@ -90,6 +102,18 @@ public class MessageService : IMessageService
               logger.LogError(ex, "MessageService startup failed for {Address}", Address);
               startupCompletionSource.SetException(ex);
               startupProcessingCompletionSource.TrySetException(ex);
+
+              // If startup failed, dispose the startup deferral to unblock any pending operations
+              try
+              {
+                  startupDeferral?.Dispose();
+                  logger.LogDebug("Startup deferral disposed due to startup failure in {Address}", Address);
+              }
+              catch (Exception disposeEx)
+              {
+                  logger.LogError(disposeEx, "Error disposing startup deferral after startup failure in {Address}", Address);
+              }
+
               throw;
           }
           finally
@@ -140,9 +164,7 @@ public class MessageService : IMessageService
             if (delivery.Message is not ExecutionRequest && !isStarted)
             {
                 // Increment pending startup messages counter
-                Interlocked.Increment(ref pendingStartupMessages);
-
-                // Schedule the message to be processed after startup completes
+                Interlocked.Increment(ref pendingStartupMessages);                // Schedule the message to be processed after startup completes
                 _ = Task.Run(async () =>
                 {
                     try
@@ -153,19 +175,35 @@ public class MessageService : IMessageService
 
                         await startupCompletionSource.Task.WaitAsync(timeoutCts.Token);
 
-                        // Now it's safe to process the message
+                        // Startup completed successfully, now it's safe to process the message
+                        logger.LogDebug("Startup completed successfully, processing scheduled message {Delivery} in {Address}", delivery, Address);
                         buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, cancellationToken));
                     }
                     catch (OperationCanceledException)
                     {
                         logger.LogWarning("Startup timeout while scheduling message {Delivery} in {Address}", delivery, Address);
-                        // Post anyway to avoid losing the message
-                        buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, cancellationToken));
+                        // Mark as failed and decrement counter to avoid hanging
+                        var remaining = Interlocked.Decrement(ref pendingStartupMessages);
+                        logger.LogDebug("Decremented pending startup messages due to timeout, remaining: {Remaining} in {Address}", remaining, Address);
+
+                        // Complete startup processing if this was the last message
+                        if (remaining == 0 && isStarted)
+                        {
+                            startupProcessingCompletionSource.TrySetResult(true);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex, "Error scheduling message {Delivery} in {Address}", delivery, Address);
-                        buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, cancellationToken));
+                        logger.LogError(ex, "Startup failed while scheduling message {Delivery} in {Address}", delivery, Address);
+                        // Mark as failed and decrement counter to avoid hanging
+                        var remaining = Interlocked.Decrement(ref pendingStartupMessages);
+                        logger.LogDebug("Decremented pending startup messages due to startup failure, remaining: {Remaining} in {Address}", remaining, Address);
+
+                        // Complete startup processing if this was the last message
+                        if (remaining == 0 && isStarted)
+                        {
+                            startupProcessingCompletionSource.TrySetResult(true);
+                        }
                     }
                 }, cancellationToken);
 

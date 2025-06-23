@@ -11,6 +11,7 @@ public class DebugFileLogger : ILogger
 {
     private static readonly string LogDirectory = Path.Combine(Environment.GetEnvironmentVariable("TEMP") ?? ".", "MeshWeaverDebugLogs");
     private static readonly object FileLock = new();
+    private static int _instanceCounter = 0;
     private readonly string _categoryName;
     private readonly string _logFileName;
 
@@ -22,14 +23,15 @@ public class DebugFileLogger : ILogger
     public DebugFileLogger(string categoryName)
     {
         _categoryName = categoryName;
-        _logFileName = Path.Combine(LogDirectory, $"debug_{DateTime.Now:yyyyMMdd_HHmmss}_{categoryName.Replace(".", "_")}.log");
+        var instanceId = Interlocked.Increment(ref _instanceCounter);
+        var processId = Environment.ProcessId;
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        _logFileName = Path.Combine(LogDirectory, $"debug_{timestamp}_{processId}_{instanceId}_{categoryName.Replace(".", "_")}.log");
     }
 
     public IDisposable BeginScope<TState>(TState state) => new NoOpDisposable();
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
-
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
     {
         if (!IsEnabled(logLevel))
             return;
@@ -61,9 +63,27 @@ public class DebugFileLogger : ILogger
             }
         }
 
-        lock (FileLock)
+        // Use retry logic for file access to handle temporary conflicts
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            File.AppendAllText(_logFileName, logEntry + Environment.NewLine);
+            try
+            {
+                lock (FileLock)
+                {
+                    File.AppendAllText(_logFileName, logEntry + Environment.NewLine);
+                }
+                break; // Success, exit retry loop
+            }
+            catch (IOException) when (attempt < 2)
+            {
+                // File might be locked by another process, wait a bit and retry
+                Thread.Sleep(10 + attempt * 10);
+            }
+            catch (Exception)
+            {
+                // Other exceptions or final attempt - give up silently to avoid breaking tests
+                break;
+            }
         }
     }
 
