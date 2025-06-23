@@ -290,7 +290,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace().GetStream(new CollectionReference(typeof(MyData).FullName), null)
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)), null)
             .Select(c => c.Value.Instances.Values)
             .FirstAsync();
 
@@ -603,7 +603,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var host = GetHost();
-        var collectionRef = new CollectionReference(typeof(MyData).FullName);
+        var collectionRef = new CollectionReference(nameof(MyData));
 
         // act
         var stream = host.GetWorkspace().GetStream(collectionRef, null);
