@@ -82,25 +82,13 @@
     <FluentTooltipProvider />
     <FluentMenuProvider />                
     <FluentToastProvider MaxToastCount="10"/>
-    <FluentKeyCodeProvider/>
-    @if (IsAIChatVisible)
+    <FluentKeyCodeProvider/>    @if (IsAIChatVisible)
     {
         <div class="ai-chat-overlay">
             <div class="ai-chat-container">
                 <div class="ai-chat-resizer" @onmousedown="@(e => StartResize())"></div>
                 <div class="ai-chat-content">
-                    <div class="ai-chat-header">
-                        <span>AI Chat</span>
-                        <div class="ai-chat-header-controls">
-                            <FluentButton Appearance="Appearance.Stealth" OnClick="HandleNewChatAsync" Title="New chat">
-                                <FluentIcon Value="@(new Icons.Regular.Size16.Add())" />
-                            </FluentButton>
-                            <FluentButton Appearance="Appearance.Stealth" OnClick="ToggleAIChatVisibility" Title="Close">
-                                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" />
-                            </FluentButton>
-                        </div>
-                    </div>
-                    <AgentChatView @ref="chatComponent"></AgentChatView>
+                    <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
                 </div>
             </div>
         </div>
