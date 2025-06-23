@@ -56,9 +56,7 @@ public class MessageService : IMessageService
           {
               // Add a timeout to prevent startup hangs
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);              await hub.StartAsync(combinedCts.Token);
-
-              // Mark as started and complete the startup task
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); await hub.StartAsync(combinedCts.Token);              // Mark as started and complete the startup task
               isStarted = true;
               startupCompletionSource.SetResult(true);
 
@@ -67,23 +65,18 @@ public class MessageService : IMessageService
               {
                   startupProcessingCompletionSource.TrySetResult(true);
                   logger.LogDebug("No pending startup messages in {Address}", Address);
-              }              logger.LogDebug("MessageService startup completed for {Address}", Address);
 
-              // Schedule startup deferral disposal for later, after any initial message routing
-              // This prevents race conditions with hosted hub creation
-              executionBuffer.Post(_ =>
+                  // If there are no pending startup messages, we can dispose the startup deferral immediately
+                  startupDeferral?.Dispose();
+                  logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
+              }
+              else
               {
-                  try
-                  {
-                      startupDeferral?.Dispose();
-                      logger.LogDebug("Startup deferral disposed for {Address}", Address);
-                  }
-                  catch (Exception ex)
-                  {
-                      logger.LogError(ex, "Error disposing startup deferral for {Address}", Address);
-                  }
-                  return Task.CompletedTask;
-              });
+                  logger.LogDebug("Deferring startup deferral disposal until {PendingCount} pending messages are processed in {Address}", pendingStartupMessages, Address);
+                  // The startup deferral will be disposed in WrapDeliveryWithStartupTracking when pendingStartupMessages reaches 0
+              }
+
+              logger.LogDebug("MessageService startup completed for {Address}", Address);
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
           {
@@ -426,7 +419,17 @@ public class MessageService : IMessageService
             {
                 // All startup-related messages have been processed
                 startupProcessingCompletionSource.TrySetResult(true);
-                logger.LogDebug("All startup messages processed in {Address}, remaining: {Remaining}", Address, remaining);
+
+                // Dispose the startup deferral now that all pending startup messages are processed
+                try
+                {
+                    startupDeferral?.Dispose();
+                    logger.LogDebug("Startup deferral disposed after all pending messages processed in {Address}, remaining: {Remaining}", Address, remaining);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error disposing startup deferral after pending messages processed in {Address}", Address);
+                }
             }
         }
     }
