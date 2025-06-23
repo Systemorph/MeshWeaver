@@ -13,7 +13,7 @@ public static class MarkdownExtensions
 {
     public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
         config
-            .WithTypes(typeof(Article), typeof(ArticleControl))
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogSkin))
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
                 .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog));
