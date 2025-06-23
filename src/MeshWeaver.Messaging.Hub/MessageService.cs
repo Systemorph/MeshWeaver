@@ -9,8 +9,7 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
-    private bool isDisposing;
-    private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
+    private bool isDisposing; private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
@@ -19,6 +18,8 @@ public class MessageService : IMessageService
     private readonly AsyncDelivery deliveryPipeline;
     private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
+    private volatile bool isStarted = false;
+    private readonly TaskCompletionSource<bool> startupCompletionSource = new();
 
 
     public MessageService(
@@ -35,21 +36,55 @@ public class MessageService : IMessageService
 
         deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
         deliveryAction =
-            new(x => x.Invoke());
-
-        postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
-        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true }); hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
+            new(x => x.Invoke()); postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
+        hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
         startupDeferral = Defer(x => x.Message is not ExecutionRequest);
     }
     void IMessageService.Start()
     {
+        // Ensure the execution buffer is linked before we start processing
+        executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
+
+        // Link the delivery buffer to the action block immediately to avoid race conditions
+        buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
         executionBuffer.Post(async ct =>
-        {
-            await hub.StartAsync(ct);
-            buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
-            startupDeferral?.Dispose();
-        });
+      {
+          CancellationTokenSource timeoutCts = null;
+          try
+          {
+              // Add a timeout to prevent startup hangs
+              timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+              await hub.StartAsync(combinedCts.Token);
+
+              // Mark as started and complete the startup task
+              isStarted = true;
+              startupCompletionSource.SetResult(true);
+
+              // Now it's safe to dispose the startup deferral
+              startupDeferral?.Dispose();
+
+              logger.LogDebug("MessageService startup completed for {Address}", Address);
+          }
+          catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
+          {
+              logger.LogError("MessageService startup timed out after 30 seconds for {Address}", Address);
+              startupCompletionSource.SetException(new TimeoutException("MessageService startup timed out"));
+              throw;
+          }
+          catch (Exception ex)
+          {
+              logger.LogError(ex, "MessageService startup failed for {Address}", Address);
+              startupCompletionSource.SetException(ex);
+              throw;
+          }
+          finally
+          {
+              timeoutCts?.Dispose();
+          }
+      });
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
@@ -92,6 +127,40 @@ public class MessageService : IMessageService
         {
             if (isDisposing)
                 return delivery.Failed("Hub disposing");
+
+            // For non-ExecutionRequest messages, ensure startup is complete to avoid race conditions
+            if (delivery.Message is not ExecutionRequest && !isStarted)
+            {
+                // Schedule the message to be processed after startup completes
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Wait for startup to complete with a reasonable timeout
+                        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+                        await startupCompletionSource.Task.WaitAsync(timeoutCts.Token);
+
+                        // Now it's safe to process the message
+                        buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        logger.LogWarning("Startup timeout while scheduling message {Delivery} in {Address}", delivery, Address);
+                        // Post anyway to avoid losing the message
+                        buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Error scheduling message {Delivery} in {Address}", delivery, Address);
+                        buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+                    }
+                }, cancellationToken);
+
+                return delivery.Forwarded();
+            }
+
             buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
         }
         return delivery.Forwarded();
@@ -201,9 +270,7 @@ public class MessageService : IMessageService
         return delivery;
     }
     private readonly Lock locker = new();
-    private readonly IDisposable startupDeferral;
-
-    public async ValueTask DisposeAsync()
+    private readonly IDisposable startupDeferral; public async ValueTask DisposeAsync()
     {
         lock (locker)
         {
@@ -232,13 +299,17 @@ public class MessageService : IMessageService
         try
         {
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
-            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
             logger.LogDebug("Deliveries completed successfully in {Address}", Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 3 seconds in {Address}", Address);
+            logger.LogError("Delivery completion timed out after 5 seconds in {Address}", Address);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error during delivery completion in {Address}", Address);
         }
 
         // Don't wait for execution completion during disposal as this disposal itself
@@ -248,16 +319,33 @@ public class MessageService : IMessageService
         try
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
-            using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             await deferralContainer.DisposeAsync().AsTask().WaitAsync(deferralsTimeout.Token);
             logger.LogDebug("Deferrals completed successfully in {Address}", Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Deferrals disposal timed out after 2 seconds in {Address}", Address);
+            logger.LogError("Deferrals disposal timed out after 3 seconds in {Address}", Address);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error during deferrals disposal in {Address}", Address);
+        }
+
+        // Complete the startup task if it's still pending
+        try
+        {
+            if (!startupCompletionSource.Task.IsCompleted)
+            {
+                startupCompletionSource.TrySetCanceled();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error completing startup task during disposal in {Address}", Address);
         }
 
         logger.LogDebug("Finished disposing message service in {Address}", Address);
     }
-    
+
 }
