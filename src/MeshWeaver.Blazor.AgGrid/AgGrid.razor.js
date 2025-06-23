@@ -28,7 +28,7 @@ function deserialize(data) {
         } else if (value !== null && typeof value === 'object') {
             const result = {};
             for (const key in value) {
-                if(key !== '$type')
+                if (key !== '$type')
                     result[key] = processValue(value[key]);
             }
             return result;
@@ -54,16 +54,22 @@ function loadScript(src) {
 export function updateTheme(id) {
     const gridElement = document.querySelector(`[data-grid-id="${id}"]`);
     if (gridElement) {
-        // Check if themeHandler exists before trying to use it
-        const isDarkMode = window.themeHandler && typeof window.themeHandler.isDarkMode === 'function'
-            ? window.themeHandler.isDarkMode()
-            : false;
+        // Check if themeHandler exists and get effective theme
+        let isDarkMode = false;
+        if (window.themeHandler && typeof window.themeHandler.getEffectiveTheme === 'function') {
+            isDarkMode = window.themeHandler.getEffectiveTheme() === 'dark';
+        } else if (window.matchMedia) {
+            // Fallback to system preference if theme handler not available
+            isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
 
         // Remove existing theme classes
         gridElement.classList.remove('ag-theme-alpine', 'ag-theme-alpine-dark');
 
         // Apply the appropriate theme class
         gridElement.classList.add(isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine');
+
+        console.log(`AgGrid theme updated for ${id}: ${isDarkMode ? 'dark' : 'light'}`);
     }
 }
 
@@ -88,10 +94,9 @@ export async function renderGrid(id, element, options) {
         // Prepare options by deserializing any function strings
         const processedOptions = deserialize(options);
 
-        // Create the grid with the correct AG Grid API
-        // THIS IS THE FIX - using new agGrid.Grid instead of createGrid
-        const gridInstance = new window.agGrid.Grid(element, processedOptions);
-        instances.set(id, gridInstance);
+        // Create the grid with the correct AG Grid API - use createGrid like the original TypeScript
+        const gridApi = window.agGrid.createGrid(element, processedOptions);
+        instances.set(id, gridApi);
 
         // Apply the initial theme
         updateTheme(id);
@@ -105,7 +110,7 @@ export async function renderGrid(id, element, options) {
             console.warn('Theme handler not available. Dark mode detection will not work automatically.');
         }
 
-        return gridInstance;
+        return gridApi;
     } catch (error) {
         console.error('Error rendering AG Grid:', error);
     }
@@ -141,22 +146,6 @@ export function disposeGrid(id) {
 export function disposeAllGrids() {
     instances.forEach(instance => {
         instance.destroy();
-    });
-    instances.clear();
-}
-export function initSystemThemeDetection(dotNetReference) {
-    // Check the current system preference
-    const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-    // Setup listener for theme changes
-    const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    darkModeMediaQuery.addEventListener('change', (e) => {
-        // Notify Blazor when the system theme changes
-        if (dotNetReference) {
-            dotNetReference.invokeMethodAsync('OnSystemThemeChanged', e.matches);
-        }
-    });
-
-    return isDark;
+    }); instances.clear();
 }
 

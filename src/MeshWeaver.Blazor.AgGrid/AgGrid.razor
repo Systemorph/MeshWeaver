@@ -58,21 +58,4 @@
     private object Options { get; set; }
 
 
-    public override async ValueTask DisposeAsync()
-    {
-        try
-        {
-            // Cleanup theme detection listeners
-            if (JSModule is not null)
-            {
-                await JSModule.InvokeVoidAsync("disposeGrid", id);
-                await JSModule.DisposeAsync();
-            }
-
-        }
-        catch (JSDisconnectedException)
-        {
-            // Ignore disconnect exceptions during disposal
-        }
-    }
 }

@@ -1,3 +1,9 @@
+// ChartView.razor.js
+// This file provides the JavaScript functionality for Chart.js integration
+
+// Keep track of chart instances for theme updates
+const chartInstances = new Map();
+
 /**
  * Load Chart.js (if needed) and render the chart in the provided element
  * @param {HTMLCanvasElement} element - The canvas element to render the chart
@@ -18,9 +24,7 @@ export async function renderChart(element, config) {
     }
 
     // Configure Chart.js defaults
-    configureChartDefaults();
-
-    // Render or update the chart
+    configureChartDefaults();    // Render or update the chart
     const existingChart = window.Chart.getChart(element);
     const chartConfig = deserialize(config);
 
@@ -28,9 +32,13 @@ export async function renderChart(element, config) {
         existingChart.config.data = chartConfig.data;
         existingChart.config.options = chartConfig.options;
         existingChart.update();
+        // Update our tracking
+        chartInstances.set(element.id || element, existingChart);
     } else {
         const ctx = element.getContext("2d");
-        new window.Chart(ctx, chartConfig);
+        const newChart = new window.Chart(ctx, chartConfig);
+        // Track this chart instance
+        chartInstances.set(element.id || element, newChart);
     }
 }
 
@@ -53,6 +61,15 @@ async function loadChartJs() {
         // Register plugins
         if (window.Chart && window.ChartDataLabels) {
             window.Chart.register(window.ChartDataLabels);
+        }
+
+        // Set up theme change callback once Chart.js is loaded
+        if (window.themeHandler && typeof window.themeHandler.registerThemeChangeCallback === 'function') {
+            window.themeHandler.registerThemeChangeCallback(() => {
+                updateChartTheme();
+            });
+        } else {
+            console.warn('Theme handler not available for Chart.js. Theme changes will not be applied automatically.');
         }
 
         return true;
@@ -104,12 +121,33 @@ function configureChartDefaults() {
     Chart.defaults.font.family = "roboto, \"sans-serif\"";
     Chart.defaults.font.size = 12;
 
-    // Use the standard Fluent UI text color
-    Chart.defaults.color = getComputedStyle(document.documentElement).getPropertyValue('--neutral-foreground-rest');
+    // Update theme-dependent colors
+    updateChartTheme();
 
     // Configure data labels formatter
     Chart.defaults.plugins.datalabels.formatter = (value, context) =>
         typeof value == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 0 }).format(value) : value;
+}
+
+/**
+ * Update Chart.js theme colors and refresh all charts
+ */
+function updateChartTheme() {
+    if (!window.Chart) return;
+
+    const Chart = window.Chart;
+
+    // Use the standard Fluent UI text color that updates with theme
+    Chart.defaults.color = getComputedStyle(document.documentElement).getPropertyValue('--neutral-foreground-rest');
+
+    // Force update all existing charts to apply new theme
+    chartInstances.forEach((chart) => {
+        if (chart && typeof chart.update === 'function') {
+            chart.update('none'); // Update without animation for theme changes
+        }
+    });
+
+    console.log('Chart.js theme updated');
 }
 
 /**
@@ -188,3 +226,42 @@ const funcRegexps = [
     /^\(function\b/,
     /^\s*(\s*[a-zA-Z]\w*|\(\s*[a-zA-Z]\w*(\s*,\s*[a-zA-Z]\w*)*\s*\))\s*=>/
 ];
+
+/**
+ * Dispose of a chart instance
+ * @param {HTMLCanvasElement} element - The canvas element
+ */
+export function disposeChart(element) {
+    console.log("disposeChart called with element:", element);
+
+    if (!element) {
+        console.warn("disposeChart: element is null or undefined");
+        return;
+    }
+
+    try {
+        const chart = window.Chart ? window.Chart.getChart(element) : null;
+        if (chart) {
+            console.log("Destroying chart:", chart);
+            chart.destroy();
+            chartInstances.delete(element.id || element);
+            console.log("Chart disposed successfully");
+        } else {
+            console.log("No chart found for element");
+        }
+    } catch (error) {
+        console.error("Error disposing chart:", error);
+    }
+}
+
+/**
+ * Dispose of all chart instances
+ */
+export function disposeAllCharts() {
+    chartInstances.forEach(chart => {
+        if (chart && typeof chart.destroy === 'function') {
+            chart.destroy();
+        }
+    });
+    chartInstances.clear();
+}
