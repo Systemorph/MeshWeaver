@@ -56,11 +56,7 @@ public class MessageService : IMessageService
           {
               // Add a timeout to prevent startup hangs
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); await hub.StartAsync(combinedCts.Token);
-
-              // Dispose the startup deferral now that initialization is complete
-              startupDeferral?.Dispose();
-              logger.LogDebug("Startup deferral disposed for {Address}", Address);
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);              await hub.StartAsync(combinedCts.Token);
 
               // Mark as started and complete the startup task
               isStarted = true;
@@ -71,9 +67,23 @@ public class MessageService : IMessageService
               {
                   startupProcessingCompletionSource.TrySetResult(true);
                   logger.LogDebug("No pending startup messages in {Address}", Address);
-              }
+              }              logger.LogDebug("MessageService startup completed for {Address}", Address);
 
-              logger.LogDebug("MessageService startup completed for {Address}", Address);
+              // Schedule startup deferral disposal for later, after any initial message routing
+              // This prevents race conditions with hosted hub creation
+              executionBuffer.Post(_ =>
+              {
+                  try
+                  {
+                      startupDeferral?.Dispose();
+                      logger.LogDebug("Startup deferral disposed for {Address}", Address);
+                  }
+                  catch (Exception ex)
+                  {
+                      logger.LogError(ex, "Error disposing startup deferral for {Address}", Address);
+                  }
+                  return Task.CompletedTask;
+              });
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
           {
