@@ -35,6 +35,16 @@ window.initializeThemeFromBlazor = function (mode) {
                 document.documentElement.classList.toggle('system-dark-theme', isDark && this.currentMode === 0);
                 document.documentElement.setAttribute('data-prefers-color-scheme', isDark ? 'dark' : 'light');
                 window.systemPrefersDarkMode = isDark;
+
+                // Notify all registered callbacks
+                this.themeChangeCallbacks.forEach(callback => {
+                    try {
+                        callback(effectiveTheme, isDark);
+                    } catch (error) {
+                        console.error('Error in theme change callback:', error);
+                    }
+                });
+
                 console.log(`Theme applied: ${effectiveTheme} (mode: ${this.currentMode})`);
             }
         };
@@ -75,9 +85,7 @@ window.themeHandler = {
             default:
                 return this.isDarkMode() ? 'dark' : 'light';
         }
-    },
-
-    // Apply theme to document
+    },    // Apply theme to document
     applyTheme: function () {
         const effectiveTheme = this.getEffectiveTheme();
         const isDark = effectiveTheme === 'dark';

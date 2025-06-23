@@ -20,7 +20,7 @@
             if (firstRender)
             {
                 JsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import",
-                    "./_content/MeshWeaver.Blazor.ChartJs/ChartView.razor.js");
+                "./_content/MeshWeaver.Blazor.ChartJs/ChartView.razor.js");
             }
 
             if (JsModule is not null)
@@ -33,24 +33,9 @@
             Console.WriteLine($"Error rendering chart: {ex.Message}");
         }
     }
-
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.Data, o => o.Options);
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (JsModule is not null)
-        {
-            try
-            {
-                await JsModule.DisposeAsync();
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-        }
     }
 }
