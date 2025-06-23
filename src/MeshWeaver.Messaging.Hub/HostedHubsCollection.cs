@@ -19,7 +19,10 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
             if (create == HostedHubCreation.Always)
+            {
+                logger.LogDebug("Creating hosted hub for address {Address}", address);
                 return messageHubs[address] = CreateHub(address, config ?? (x => x));
+            }
 
             return null;
         }

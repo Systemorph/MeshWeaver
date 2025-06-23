@@ -9,4 +9,5 @@ internal interface IMessageService : IAsyncDisposable
     IMessageDelivery RouteMessageAsync(IMessageDelivery message, CancellationToken cancellationToken);
     IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt);
     internal void Start();
+    void CompleteStartup();
 }
