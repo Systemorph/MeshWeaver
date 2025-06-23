@@ -51,7 +51,7 @@ public static class SupplierSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A layout stack control representing the supplier summary.</returns>
-    public static object SupplierSummary(
+    public static UiControl SupplierSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext context
     )
@@ -74,7 +74,7 @@ public static class SupplierSummaryArea
     /// <param name="area">The layout area host.</param>
     /// <param name="toolbar">The toolbar .</param>
     /// <returns>An observable object representing the supplier summary grid.</returns>
-    private static IObservable<object> SupplierSummaryGrid(
+    private static IObservable<UiControl> SupplierSummaryGrid(
         this LayoutAreaHost area,
         SupplierSummaryToolbar toolbar
     ) =>
@@ -87,12 +87,12 @@ public static class SupplierSummaryArea
     /// <param name="area">The layout area host.</param>
     /// <param name="toolbar">The toolbar for this area.</param>
     /// <returns>An observable object representing the supplier summary grid.</returns>
-    private static IObservable<object> SupplierSummaryChart(
+    private static IObservable<UiControl> SupplierSummaryChart(
         this LayoutAreaHost area,
         SupplierSummaryToolbar toolbar
     ) => 
         area.GetPivotBuilder(toolbar)
-            .SelectMany(builder => builder.ToBarChart());
+            .SelectMany(builder => builder.ToBarChart()).Select(x => x.ToControl());
 
     private static IObservable<DataCubePivotBuilder<IDataCube<NorthwindDataCube>, NorthwindDataCube, NorthwindDataCube, NorthwindDataCube>> 
         GetPivotBuilder(this LayoutAreaHost host, SupplierSummaryToolbar toolbar)

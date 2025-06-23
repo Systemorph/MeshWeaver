@@ -31,6 +31,28 @@
         /// </summary>
         public object Appearance { get; set; }
 
+
+        /// <summary>
+        /// Label coming as aria-label on tooltip
+        /// </summary>
+        public object Label { get; set; }
+
+        /// <summary>
+        /// Navigates to this href when set
+        /// </summary>
+        public object NavigateToHref { get; set; }
+
+        public ButtonControl WithNavigateToHref(object navigateToHref)
+            => this with { NavigateToHref = navigateToHref };
+
+
+        /// <summary>
+        /// Sets the aria-label of the button.
+        /// </summary>
+        /// <param name="label"></param>
+        /// <returns></returns>
+        public ButtonControl WithLabel(object label)
+            => this with { Label = label };
         /// <summary>
         /// Sets the icon displayed at the start of the button.
         /// </summary>

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Northwind.Domain\MeshWeaver.Northwind.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

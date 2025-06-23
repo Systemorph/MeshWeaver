@@ -26,12 +26,13 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 
 
     public LayoutClientConfiguration WithView(ViewMap viewMap)
-        => this with { ViewMaps = ViewMaps.Insert(0, viewMap) };
+        => this with { ViewMaps = ViewMaps.Add(viewMap) };
 
     public LayoutClientConfiguration WithView<TViewModel, TView>()
     {
         typeRegistry.WithType<TViewModel>();
-        return WithView((i, s, a) => i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
+        return WithView((i, s, a) => 
+            i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
     }
 
     public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area) =>

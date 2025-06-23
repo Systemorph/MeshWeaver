@@ -1,101 +1,101 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           1.2999999999999998
         ],
-        "label": "1",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "1"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           9.6
         ],
-        "label": "2",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "2"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           4.3
         ],
-        "label": "3",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "3"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           11.100000000000001
         ],
-        "label": "4",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "4"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           3
         ],
-        "label": "5",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "5"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           4
         ],
-        "label": "6",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "6"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
         "xAxisID": "x1",
         "type": "bar",
         "data": [
           4
         ],
-        "label": "7",
-        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet"
+        "label": "7"
       }
     ],
     "labels": [
       ""
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "responsive": true,
     "scales": {
       "x1": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale",
         "labels": [],
         "display": true,
-        "stacked": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.CartesianCategoryScale"
+        "stacked": false
       },
       "y": {
-        "stacked": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
+        "stacked": false
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "colorschemes": {
-        "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
+        "scheme": "brewer.PastelOne9"
+      }
+    }
+  }
 }

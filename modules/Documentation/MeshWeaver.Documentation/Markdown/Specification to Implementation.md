@@ -6,8 +6,8 @@ Abstract: >
   concerns between data, business logic, and presentation. In this article, we show
   the path from specification to implementation.    
 Thumbnail: "images/Specification to Implementation.jpeg"
-Published: "2025-02-04"
-VideoUrl: "https://www.youtube.com/embed/soujo5VBE00?si=XDLP2Bik8pg1DqBp"
+Published: "2025-04-24"
+VideoUrl: "https://www.youtube.com/embed/VqSMWsvc4gM?si=QSaj3yM75vpr4hba"
 VideoDuration: "00:15:11"
 VideoTitle: "Transform Your Prototypes into Production-Ready Code!"
 VideoTagLine: "From Ideas to Reality"
@@ -32,7 +32,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using static MeshWeaver.Layout.Controls;
 record Calculator(double Summand1, double Summand2);
-static object CalculatorSum(Calculator c) => Markdown($"**Sum**: {c.Summand1 + c.Summand2}");
+static UiControl CalculatorSum(Calculator c) => Markdown($"**Sum**: {c.Summand1 + c.Summand2}");
 Mesh.Edit(new Calculator(1,2), CalculatorSum)
 ```
 
@@ -81,7 +81,7 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="ctx">The rendering context.</param>
-    public static object CalculatorArea(LayoutAreaHost host, RenderingContext ctx) 
+    public static UiControl CalculatorArea(LayoutAreaHost host, RenderingContext ctx) 
         => host.Edit(new Calculator{Summand1 = 1, Summand2 = 2}, CalculatorSum);
 
     /// <summary>
@@ -89,7 +89,7 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="calculator">The calculator instance</param>
     /// <returns>A Markdown Control with the sum.</returns>
-    static object CalculatorSum(Calculator calculator) => 
+    static UiControl CalculatorSum(Calculator calculator) => 
         Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
 }
 ```

@@ -12,6 +12,18 @@ using MeshWeaver.Charting.Models.Segmented;
 
 namespace MeshWeaver.Charting;
 
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(BarDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Bar.BarDataSet")]
+[JsonDerivedType(typeof(FloatingBarDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet")]
+[JsonDerivedType(typeof(HorizontalFloatingBarDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Bar.HorizontalFloatingBarDataSet")]
+[JsonDerivedType(typeof(BubbleDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Bubble.BubbleDataSet")]
+[JsonDerivedType(typeof(LineDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Line.LineDataSet")]
+[JsonDerivedType(typeof(TimeLineDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Line.TimeLineDataSet")]
+[JsonDerivedType(typeof(ScatterDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Line.ScatterDataSet")]
+[JsonDerivedType(typeof(PolarDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Polar.PolarDataSet")]
+[JsonDerivedType(typeof(RadarDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Radar.RadarDataSet")]
+[JsonDerivedType(typeof(PieDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Segmented.PieDataSet")]
+[JsonDerivedType(typeof(DoughnutDataSet), typeDiscriminator: "MeshWeaver.Charting.Models.Segmented.DoughnutDataSet")]
 public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
 {
     /// <summary>
@@ -235,8 +247,8 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="data">The data for the dataset.</param>
     /// <param name="label"></param>
     /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    public static ScatterDataSet Scatter<T1,T2>(IEnumerable<(T1 X, T2 Y)> data, string label = null) => 
-        new(data.Select(x => new PointData(Convert.ToDouble(x.X),Convert.ToDouble(x.Y))).Cast<object>().ToArray(), label);
+    public static ScatterDataSet Scatter<T1, T2>(IEnumerable<(T1 X, T2 Y)> data, string label = null) =>
+        new(data.Select(x => new PointData(Convert.ToDouble(x.X), Convert.ToDouble(x.Y))).Cast<object>().ToArray(), label);
 
     /// <summary>
     /// Creates a new instance of <see cref="ScatterDataSet"/> from separate collections.
@@ -245,7 +257,7 @@ public abstract record DataSet(IReadOnlyCollection<object> Data, string Label)
     /// <param name="y">The y values.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ScatterDataSet"/>.</returns>
-    public static ScatterDataSet Scatter<T1,T2>(IEnumerable<T1> x, IEnumerable<T2> y, string label = null) => new(x.Cast<double>(), y.Cast<double>(), label);
+    public static ScatterDataSet Scatter<T1, T2>(IEnumerable<T1> x, IEnumerable<T2> y, string label = null) => new(x.Cast<double>(), y.Cast<double>(), label);
 
     public static ScatterDataSet Scatter(IEnumerable<PointData> points, string label = null)
         => new(points.Cast<object>().ToArray(), label);

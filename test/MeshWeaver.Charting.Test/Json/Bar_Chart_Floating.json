@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
+        "type": "Bar",
         "data": [
           [
             2,
@@ -19,8 +23,7 @@
             3,
             2
           ]
-        ],
-        "type": "Bar"
+        ]
       }
     ],
     "labels": [
@@ -31,7 +34,9 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "title": {
         "display": true,
         "position": "Top",
@@ -44,6 +49,7 @@
         "text": "Floating"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

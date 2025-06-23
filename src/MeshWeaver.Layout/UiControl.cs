@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Linq;
+using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
@@ -32,9 +34,18 @@ public abstract record UiControl : IUiControl
 
     public object Style { get; init; } //depends on control, we need to give proper style here!
 
-    public object IsReadonly { get; init; } //TODO add concept of registering conventions for properties to distinguish if it is editable!!! have some defaults, no setter=> iseditable to false, or some attribute to mark as not editable, or checking if it has setter, so on... or BProcess open
+    /// <summary>
+    /// Whether the control is readonly.
+    /// </summary>
+    public object Readonly { get; init; }
+    private ImmutableList<Skin> _skins = [];
 
-    public ImmutableList<Skin> Skins { get; init; } = [];
+    [JsonConverter(typeof(SkinListConverter))]
+    public ImmutableList<Skin> Skins
+    {
+        get => _skins;
+        init => _skins = value?.Where(s => s != null).ToImmutableList() ?? ImmutableList<Skin>.Empty;
+    }
     public object Class { get; init; }
 
 
@@ -46,7 +57,7 @@ public abstract record UiControl : IUiControl
     internal Func<UiActionContext, Task> ClickAction { get; init; }
 
 
-    public string DataContext { get; init; } 
+    public string DataContext { get; init; }
 
     public UiControl PopSkin(out object skin)
     {
@@ -58,9 +69,14 @@ public abstract record UiControl : IUiControl
         skin = Skins[^1];
         return this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
     }
-
     public UiControl AddSkin(Skin skin)
-    => this with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
+    {
+        // Don't add null skins to prevent serialization issues
+        if (skin == null)
+            return this;
+
+        return this with { Skins = Skins.Add(skin) };
+    }
 
 
     protected ImmutableList<Func<LayoutAreaHost, RenderingContext, EntityStore, EntityStoreAndUpdates>> Buildup { get; init; } = [];
@@ -83,7 +99,7 @@ public abstract record UiControl : IUiControl
 
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
-               IsReadonly == other.IsReadonly &&
+               Readonly == other.Readonly &&
                (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
@@ -95,7 +111,7 @@ public abstract record UiControl : IUiControl
         HashCode.Combine(
             Id,
             Style,
-            IsReadonly,
+            Readonly,
             Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
             Class,
             DataContext
@@ -189,9 +205,14 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             return Task.CompletedTask;
         });
 
+    public new TControl AddSkin(Skin skin)
+    {
+        // Don't add null skins to prevent serialization issues
+        if (skin == null)
+            return This;
 
-
-    public new TControl AddSkin(Skin skin) => This with { Skins = (Skins ?? ImmutableList<Skin>.Empty).Add(skin) };
+        return This with { Skins = Skins.Add(skin) };
+    }
 
     public new TControl WithClass(object @class) => This with { Class = @class };
 
@@ -204,7 +225,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
                 return new(updated.Store, r.Updates.Concat(updated.Updates), host.Stream.StreamId);
             });
     protected virtual EntityStoreAndUpdates RenderSelf(LayoutAreaHost host, RenderingContext context, EntityStore store)
-        =>store.UpdateControl(context.Area, PrepareRendering(context));
+        => store.UpdateControl(context.Area, PrepareRendering(context));
 
     protected virtual TControl PrepareRendering(RenderingContext context)
         => This;

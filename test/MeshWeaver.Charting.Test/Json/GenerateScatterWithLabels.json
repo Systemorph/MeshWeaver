@@ -1,7 +1,11 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.ScatterDataSet",
+        "type": "Scatter",
         "data": [
           {
             "x": 0,
@@ -64,13 +68,14 @@
             "y": 2
           }
         ],
-        "label": "pp",
-        "type": "Scatter"
+        "label": "pp"
       }
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true,
         "position": "Bottom",
@@ -80,6 +85,7 @@
         }
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

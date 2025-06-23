@@ -31,7 +31,7 @@ public static class SalesComparisonWIthPreviousYearArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the sales comparison view.</returns>
-    public static IObservable<object> SalesByCategoryWithPrevYear(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> SalesByCategoryWithPrevYear(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.WithPrevYearNorthwindData()
             .SelectMany(data =>
@@ -47,7 +47,7 @@ public static class SalesComparisonWIthPreviousYearArea
                                     d.WithAnchor(DataLabelsAnchor.End)
                                         .WithAlign(DataLabelsAlign.End))
                                 )
-                    )
+                    ).Select(x => x.ToControl())
             );
     }
 }

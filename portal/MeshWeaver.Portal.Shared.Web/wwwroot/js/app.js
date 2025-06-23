@@ -58,3 +58,41 @@ function checkCookieConsent() {
 
 // Run consent check when page loads
 window.addEventListener('DOMContentLoaded', checkCookieConsent);
+
+// Initialize theme handling
+function initThemeDetection() {
+    const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    // Apply theme class to document based on current system preference
+    function applyThemeClass() {
+        const isDark = darkModeMediaQuery.matches;
+        document.documentElement.classList.toggle('system-dark-theme', isDark);
+        document.documentElement.setAttribute('data-prefers-color-scheme', isDark ? 'dark' : 'light');
+
+        // Store the system preference for components to access
+        window.systemPrefersDarkMode = isDark;
+    }
+
+    // Apply theme immediately
+    applyThemeClass();
+
+    // Listen for changes in system preference
+    darkModeMediaQuery.addEventListener('change', (e) => {
+        applyThemeClass();
+
+        // Force theme refresh when system changes and we're in 'system' mode
+        const fluentTheme = document.querySelector('fluent-design-theme');
+        if (fluentTheme && fluentTheme.getAttribute('mode') === 'system') {
+            document.body.classList.add('theme-refresh');
+            setTimeout(() => document.body.classList.remove('theme-refresh'), 10);
+        }
+    });
+}
+
+// Run theme detection when document loads
+window.addEventListener('DOMContentLoaded', initThemeDetection);
+
+// Check if we're in dark mode
+window.isDarkMode = function () {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}

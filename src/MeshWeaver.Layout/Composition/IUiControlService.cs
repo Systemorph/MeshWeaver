@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Formatting;
 
 namespace MeshWeaver.Layout.Composition;
@@ -8,9 +9,10 @@ public interface IUiControlService
     UiControl Convert(object o);
     void AddRule(Func<object, UiControl> rule);
 
+    LayoutDefinition LayoutDefinition { get; }
 }
 
-public class UiControlService : IUiControlService
+public class UiControlService(IMessageHub hub) : IUiControlService
 {
     private ImmutableList<Func<object, UiControl>> rules = [o => o as UiControl ?? DefaultConversion(o)];
     public UiControl Convert(object o) => 
@@ -21,6 +23,9 @@ public class UiControlService : IUiControlService
     {
         rules = rules.Insert(0, rule);
     }
+
+    public LayoutDefinition LayoutDefinition { get; } = hub.GetLayoutDefinition();
+
 
 
     private static UiControl DefaultConversion(object instance)

@@ -52,8 +52,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     [HubFact]
     public async Task TestEntityView()
     {
-        var host = GetHost();
-        var reference = DomainViews.GetDetailsReference(typeof(DataRecord).FullName, "Hello");
+        var reference = DomainViews.GetDetailsReference(nameof(DataRecord), "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -99,7 +98,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         value = await stream
-            .DataBind(namePointer, dataContext, x => (string)x)
+            .DataBind<string>(namePointer, dataContext, (x, _) => (string)x)
             .Where(x => x != "Hello")
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
@@ -110,6 +109,13 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
+        controlFromStream = await stream
+            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
+        dataContext = control.DataContext;
         value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext)
             .Timeout(10.Seconds())
@@ -123,7 +129,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestCatalog()
     {
         var host = GetHost();
-        var reference = host.GetCatalogReference(typeof(DataRecord).FullName);
+        var reference = DomainViews.GetCatalogReference(nameof(DataRecord));
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -143,7 +149,12 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
-        dataGrid.Data.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
+        var pointer = dataGrid.Data.Should().BeAssignableTo<JsonPointerReference>().Which;
+        var dataStream = await stream
+            .GetDataStream<IEnumerable<object>>(pointer)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x is not null);
+        dataStream.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
 
     }
 }

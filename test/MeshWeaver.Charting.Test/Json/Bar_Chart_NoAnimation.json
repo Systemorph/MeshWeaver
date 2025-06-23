@@ -1,25 +1,29 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
+        "type": "Bar",
         "data": [
           2,
           2,
           3,
           3
         ],
-        "label": "One",
-        "type": "Bar"
+        "label": "One"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
+        "type": "Bar",
         "data": [
           1,
           4,
           1,
           2
         ],
-        "label": "Two",
-        "type": "Bar"
+        "label": "Two"
       }
     ],
     "labels": [
@@ -30,10 +34,12 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "animation": {
       "duration": 0
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
         "display": true
       },
@@ -49,6 +55,7 @@
         "text": "No animation"
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

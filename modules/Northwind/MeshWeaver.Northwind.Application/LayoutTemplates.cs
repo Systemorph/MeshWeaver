@@ -16,7 +16,7 @@ public static class LayoutTemplates
     /// <param name="value">The value to display in the value box.</param>
     /// <param name="growth">The growth indicator to display in the value box.</param>
     /// <returns>An object representing the value box.</returns>
-    public static object ValueBox(string title, Icon icon, string value, object growth) =>
+    public static UiControl ValueBox(string title, Icon icon, string value, UiControl growth) =>
         Controls.Stack
             .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
             .WithHorizontalGap(10)
@@ -34,7 +34,7 @@ public static class LayoutTemplates
     /// <param name="current">The current value.</param>
     /// <param name="previous">The previous value.</param>
     /// <returns>An object representing the growth percentage indicator.</returns>
-    public static object GrowthPercentage(double current, double previous)
+    public static UiControl GrowthPercentage(double current, double previous)
     {
         var delta = current - previous;
         var percentage = delta / previous;

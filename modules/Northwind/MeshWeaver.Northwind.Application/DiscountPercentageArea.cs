@@ -28,7 +28,7 @@ public static class DiscountPercentageArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the discount summary view.</returns>
-    public static IObservable<object> DiscountPercentage(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> DiscountPercentage(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetCombinedDiscountsDataCube()
             .SelectMany(data =>
                 layoutArea.Workspace
@@ -38,6 +38,7 @@ public static class DiscountPercentageArea
                         builder => builder
                             .WithLegend()
                     )
+                    .Select(x => x.ToControl())
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetCombinedDiscountsDataCube(this LayoutAreaHost area)

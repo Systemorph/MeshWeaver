@@ -9,8 +9,14 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
+/// <summary>
+/// Tests for Activity operations including lifecycle management and sub-activities
+/// </summary>
 public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Tests basic activity creation, sub-activity management, and completion with status validation
+    /// </summary>
     [Fact]
     public async Task TestActivity()
     {
@@ -35,6 +41,9 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         await closeTask;
     }
 
+    /// <summary>
+    /// Tests automatic completion behavior of activities when sub-activities are completed
+    /// </summary>
     [Fact]
     public async Task TestAutoCompletion()
     {
@@ -52,6 +61,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
             log.SubActivities.Should().HaveCount(1);
             activityLog.Should().Be(log);
         });
+        await DisposeAsync();
         taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
         taskComplete2.Status.Should().Be(TaskStatus.RanToCompletion);
     }

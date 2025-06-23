@@ -1,0 +1,75 @@
+@page "/chat"
+
+@implements IDisposable
+@inject IAgentChatFactory AgentChatFactory
+@inject NavigationManager NavigationManager
+@inject IChatPersistenceService ChatPersistenceService
+@inject IEnumerable<IAgentDefinition> AgentDefinitions
+
+<div class="chat-app-container">
+    <!-- Sticky Chat Header -->
+    <div class="chat-header">
+        <h3 class="chat-title">AI Chat</h3>
+        <div class="chat-actions">
+            @if (isGeneratingResponse)
+            {
+                <FluentButton BackgroundColor="transparent" OnClick="CancelCurrentResponse" Title="Cancel Response">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Stop())" Color="Color.Error" />
+                </FluentButton>
+            }
+            <FluentButton BackgroundColor="transparent" OnClick="StartNewConversationAsync" Title="New Chat">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
+            </FluentButton>
+            <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
+                <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
+            </FluentButton>
+            <FluentButton BackgroundColor="transparent" OnClick="CloseChatAsync" Title="Close Chat">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+            </FluentButton>
+        </div>
+    </div>
+
+    <!-- Main Chat Area (Scrollable) -->
+    <div class="chat-main-area">
+        <!-- Chat History Panel (Right Side) -->
+        @if (showChatHistory)
+        {
+            <div class="chat-history-overlay" @onclick="CloseChatHistory">
+                <div class="chat-history-panel" @onclick:stopPropagation="true">
+                    <ChatHistorySelector SelectedConversationId="currentConversationId"
+                        SelectedConversationIdChanged="OnConversationSelectionChanged"
+                        OnNewConversation="StartNewConversationAsync" @ref="chatHistorySelector" IsRightPanel="true" />
+                    <div class="chat-history-close">
+                        <FluentButton BackgroundColor="transparent" OnClick="CloseChatHistory">
+                            <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+                            Close
+                        </FluentButton>
+                    </div>
+                </div>
+            </div>
+        }
+        <div class="chat-messages-area">
+            @if (isLoadingConversation)
+            {
+                <div class="loading-overlay">
+                    <FluentProgressRing />
+                    <div class="loading-text">Loading conversation...</div>
+                </div>
+            }
+            else
+            {
+                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage">
+                    <NoMessagesContent>
+                        <div>You can ask me questions about your pricing or submit documents such as risk profiles or
+                            claims.
+                        </div>
+                    </NoMessagesContent>
+                </ChatMessageList>
+            }
+        </div>
+        <div class="chat-container">
+            <MeshWeaver.Blazor.Chat.ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput"
+                IsDisabled="@isGeneratingResponse" AvailableAgents="@AgentDefinitions.ToList()" />
+        </div>
+    </div>
+</div>

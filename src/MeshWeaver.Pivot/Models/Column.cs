@@ -1,8 +1,12 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using MeshWeaver.Pivot.Models.Interfaces;
 
 namespace MeshWeaver.Pivot.Models
 {
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+    [JsonDerivedType(typeof(Column), "MeshWeaver.Pivot.Models.Column")]
+    [JsonDerivedType(typeof(ColumnGroup), "MeshWeaver.Pivot.Models.ColumnGroup")]
     public record Column : ItemWithCoordinates
     {
         public Column()

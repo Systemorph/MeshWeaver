@@ -1,9 +1,12 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Scales.Ticks;
 
 namespace MeshWeaver.Charting.Models.Options
 {
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+    [JsonDerivedType(typeof(ChartOptions), typeDiscriminator: "MeshWeaver.Charting.Models.Options.ChartOptions")]
     public record ChartOptions
     {
         #region Responsive Charts

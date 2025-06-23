@@ -1,7 +1,10 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
         "fill": false,
         "type": "radar",
         "data": [
@@ -13,10 +16,10 @@
           4,
           4
         ],
-        "label": "Alessandro",
-        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
+        "label": "Alessandro"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet",
         "fill": false,
         "type": "radar",
         "data": [
@@ -28,8 +31,7 @@
           null,
           null
         ],
-        "label": "Paolo",
-        "$type": "MeshWeaver.Charting.Models.Radar.RadarDataSet"
+        "label": "Paolo"
       }
     ],
     "labels": [
@@ -40,22 +42,20 @@
       "5",
       "6",
       "7"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "colorschemes": {
-        "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
+        "scheme": "brewer.PastelOne9"
+      }
+    }
+  }
 }

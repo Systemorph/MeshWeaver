@@ -27,7 +27,40 @@ public record StyleBuilder
     public object Order { get; init; }
     public object Margin { get; init; }
     public object Padding { get; init; }
-    public object Border { get; set; }
+    public object Border { get; init; }
+
+    // Individual margin properties
+    public object MarginTop { get; init; }
+    public object MarginRight { get; init; }
+    public object MarginBottom { get; init; }
+    public object MarginLeft { get; init; }
+
+    // Individual padding properties
+    public object PaddingTop { get; init; }
+    public object PaddingRight { get; init; }
+    public object PaddingBottom { get; init; }
+    public object PaddingLeft { get; init; }
+
+    // Individual border properties
+    public object BorderTop { get; init; }
+    public object BorderRight { get; init; }
+    public object BorderBottom { get; init; }
+    public object BorderLeft { get; init; }
+    public object BorderWidth { get; init; }
+    public object BorderStyle { get; init; }
+    public object BorderColor { get; init; }
+
+    // Additional common CSS properties
+    public object Color { get; init; }
+    public object BackgroundColor { get; init; }
+    public object FontSize { get; init; }
+    public object FontWeight { get; init; }
+    public object TextAlign { get; init; }
+    public object Position { get; init; }
+    public object Top { get; init; }
+    public object Right { get; init; }
+    public object Bottom { get; init; }
+    public object Left { get; init; }
 
 
     /// <summary>
@@ -140,7 +173,40 @@ public record StyleBuilder
     public StyleBuilder WithOrder(object value) => this with { Order = value };
     public StyleBuilder WithMargin(object value) => this with { Margin = value };
     public StyleBuilder WithPadding(object value) => this with { Padding = value };
-    public object WithBorder(object border) => this with { Border = border };
+    public StyleBuilder WithBorder(object border) => this with { Border = border };
+
+    // Individual margin methods
+    public StyleBuilder WithMarginTop(object value) => this with { MarginTop = value };
+    public StyleBuilder WithMarginRight(object value) => this with { MarginRight = value };
+    public StyleBuilder WithMarginBottom(object value) => this with { MarginBottom = value };
+    public StyleBuilder WithMarginLeft(object value) => this with { MarginLeft = value };
+
+    // Individual padding methods
+    public StyleBuilder WithPaddingTop(object value) => this with { PaddingTop = value };
+    public StyleBuilder WithPaddingRight(object value) => this with { PaddingRight = value };
+    public StyleBuilder WithPaddingBottom(object value) => this with { PaddingBottom = value };
+    public StyleBuilder WithPaddingLeft(object value) => this with { PaddingLeft = value };
+
+    // Individual border methods
+    public StyleBuilder WithBorderTop(object value) => this with { BorderTop = value };
+    public StyleBuilder WithBorderRight(object value) => this with { BorderRight = value };
+    public StyleBuilder WithBorderBottom(object value) => this with { BorderBottom = value };
+    public StyleBuilder WithBorderLeft(object value) => this with { BorderLeft = value };
+    public StyleBuilder WithBorderWidth(object value) => this with { BorderWidth = value };
+    public StyleBuilder WithBorderStyle(object value) => this with { BorderStyle = value };
+    public StyleBuilder WithBorderColor(object value) => this with { BorderColor = value };
+
+    // Additional common CSS property methods
+    public StyleBuilder WithColor(object value) => this with { Color = value };
+    public StyleBuilder WithBackgroundColor(object value) => this with { BackgroundColor = value };
+    public StyleBuilder WithFontSize(object value) => this with { FontSize = value };
+    public StyleBuilder WithFontWeight(object value) => this with { FontWeight = value };
+    public StyleBuilder WithTextAlign(object value) => this with { TextAlign = value };
+    public StyleBuilder WithPosition(object value) => this with { Position = value };
+    public StyleBuilder WithTop(object value) => this with { Top = value };
+    public StyleBuilder WithRight(object value) => this with { Right = value };
+    public StyleBuilder WithBottom(object value) => this with { Bottom = value };
+    public StyleBuilder WithLeft(object value) => this with { Left = value };
 
     public override string ToString()
     {
@@ -167,6 +233,39 @@ public record StyleBuilder
         if (Margin != null) styleBuilder.Append($"margin: {Margin}; ");
         if (Padding != null) styleBuilder.Append($"padding: {Padding}; ");
         if (Border != null) styleBuilder.Append($"border: {Border}; ");
+
+        // Add individual margin properties
+        if (MarginTop != null) styleBuilder.Append($"margin-top: {MarginTop}; ");
+        if (MarginRight != null) styleBuilder.Append($"margin-right: {MarginRight}; ");
+        if (MarginBottom != null) styleBuilder.Append($"margin-bottom: {MarginBottom}; ");
+        if (MarginLeft != null) styleBuilder.Append($"margin-left: {MarginLeft}; ");
+
+        // Add individual padding properties
+        if (PaddingTop != null) styleBuilder.Append($"padding-top: {PaddingTop}; ");
+        if (PaddingRight != null) styleBuilder.Append($"padding-right: {PaddingRight}; ");
+        if (PaddingBottom != null) styleBuilder.Append($"padding-bottom: {PaddingBottom}; ");
+        if (PaddingLeft != null) styleBuilder.Append($"padding-left: {PaddingLeft}; ");
+
+        // Add individual border properties
+        if (BorderTop != null) styleBuilder.Append($"border-top: {BorderTop}; ");
+        if (BorderRight != null) styleBuilder.Append($"border-right: {BorderRight}; ");
+        if (BorderBottom != null) styleBuilder.Append($"border-bottom: {BorderBottom}; ");
+        if (BorderLeft != null) styleBuilder.Append($"border-left: {BorderLeft}; ");
+        if (BorderWidth != null) styleBuilder.Append($"border-width: {BorderWidth}; ");
+        if (BorderStyle != null) styleBuilder.Append($"border-style: {BorderStyle}; ");
+        if (BorderColor != null) styleBuilder.Append($"border-color: {BorderColor}; ");
+
+        // Add additional common CSS properties
+        if (Color != null) styleBuilder.Append($"color: {Color}; ");
+        if (BackgroundColor != null) styleBuilder.Append($"background-color: {BackgroundColor}; ");
+        if (FontSize != null) styleBuilder.Append($"font-size: {FontSize}; ");
+        if (FontWeight != null) styleBuilder.Append($"font-weight: {FontWeight}; ");
+        if (TextAlign != null) styleBuilder.Append($"text-align: {TextAlign}; ");
+        if (Position != null) styleBuilder.Append($"position: {Position}; ");
+        if (Top != null) styleBuilder.Append($"top: {Top}; ");
+        if (Right != null) styleBuilder.Append($"right: {Right}; ");
+        if (Bottom != null) styleBuilder.Append($"bottom: {Bottom}; ");
+        if (Left != null) styleBuilder.Append($"left: {Left}; ");
 
         return styleBuilder.ToString().Trim();
     }

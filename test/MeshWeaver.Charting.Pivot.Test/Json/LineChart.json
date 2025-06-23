@@ -1,7 +1,10 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
         "type": "line",
         "xAxisID": "x1",
         "fill": false,
@@ -15,10 +18,10 @@
           null,
           null
         ],
-        "label": "Alessandro.Italy",
-        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet"
+        "label": "Alessandro.Italy"
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet",
         "type": "line",
         "xAxisID": "x1",
         "fill": false,
@@ -32,8 +35,7 @@
           null,
           null
         ],
-        "label": "Paolo.Italy",
-        "$type": "MeshWeaver.Charting.Models.Line.LineDataSet"
+        "label": "Paolo.Italy"
       }
     ],
     "labels": [
@@ -44,22 +46,20 @@
       "12",
       "13",
       "14"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
-        "display": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
+        "display": true
       },
       "colorschemes": {
-        "scheme": "brewer.PastelOne9",
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
+        "scheme": "brewer.PastelOne9"
+      }
+    }
+  }
 }

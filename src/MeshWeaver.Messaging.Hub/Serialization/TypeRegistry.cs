@@ -35,7 +35,18 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         typeof(DisposeRequest)
     ];
 
-    public IEnumerable<KeyValuePair<string, ITypeDefinition>> Types => typeByName.Select(x => new KeyValuePair<string, ITypeDefinition>(x.Key, x.Value));
+    public IEnumerable<KeyValuePair<string, ITypeDefinition>> Types
+    {
+        get
+        {
+            var ret = typeByName.Select(x => new KeyValuePair<string, ITypeDefinition>(x.Key, x.Value));
+            if(parent is not null)
+                ret = ret.Concat(parent.Types)
+                    .DistinctBy(x => x.Key);
+            return ret;
+        }
+    }
+
     private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
         new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t,t.Name, null))));
     private readonly ConcurrentDictionary<Type, string> nameByType =
@@ -47,9 +58,11 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
     public ITypeRegistry WithType(Type type, string typeName)
     {
+        typeName ??= type.FullName!;
         var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder);
         typeByName[typeName] = typeDefinition;
         nameByType[type] = typeName;
+
         return this;
     }
 
@@ -154,7 +167,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
         return this;
     }
 
-    public ITypeDefinition GetTypeDefinition(Type type, bool create)
+    public ITypeDefinition GetTypeDefinition(Type type, bool create = true, string typeName = null)
     {
         if (nameByType.TryGetValue(type, out var name))
             return typeByName.GetValueOrDefault(name);
@@ -164,7 +177,8 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
 
         if (create)
         {
-            ret = new TypeDefinition(type, FormatType(type), keyFunctionBuilder);
+            typeName ??= FormatType(type);
+            ret = new TypeDefinition(type, typeName, keyFunctionBuilder);
             typeByName[ret.CollectionName] = (TypeDefinition)ret;
             nameByType[type] = ret.CollectionName;
         }

@@ -14,6 +14,7 @@ using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Layout.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
@@ -25,31 +26,41 @@ public static class LayoutExtensions
         Func<LayoutDefinition, LayoutDefinition> layoutDefinition
     )
     {
+        var lambdas = config.GetListOfLambdas();
+        if (!lambdas.Any())
+            config = config.WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>());
         return config
             .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
             .AddData(data =>
-                data.Configure(reduction =>
+            {
+                return data.Configure(reduction =>
                     reduction
-                        .AddWorkspaceReferenceStream<EntityStore, LayoutAreaReference>(
-                            (workspace, reference, configuration) =>
-                                reference is not LayoutAreaReference layoutArea ? null :
-                                new LayoutAreaHost(
-                                        workspace, 
-                                        layoutArea, 
-                                        workspace.Hub.GetLayoutDefinition(),
+                        .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
+                            reference is not LayoutAreaReference layoutArea
+                                ? null
+                                : new LayoutAreaHost(
+                                        workspace,
+                                        layoutArea,
                                         workspace.Hub.ServiceProvider
                                             .GetRequiredService<IUiControlService>(),
                                         configuration)
                                     .RenderLayoutArea()
                         )
-                )
+                );
+            }).AddLayoutTypes().WithSerialization(serialization => serialization.WithOptions(options =>
+                {
+                    // Add converters in order of priority
+                    // SkinListConverter to handle ImmutableList<Skin> specifically
+                    options.Converters.Add(new SkinListConverter(config.TypeRegistry));
+                    // Add the dedicated Option converter to ensure $type discriminators are always included
+                    options.Converters.Add(new OptionConverter());
+                })
             )
-            .AddLayoutTypes()
-            .Set(config.GetListOfLambdas().Add(layoutDefinition));
+            .Set(lambdas.Add(layoutDefinition));
     }
 
 
-    private static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
+    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
         hub
             .Configuration.GetListOfLambdas()
             .Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));
@@ -78,14 +89,15 @@ public static class LayoutExtensions
                     .Assembly.GetTypes()
                     .Where(t =>
                         (typeof(IUiControl).IsAssignableFrom(t) || typeof(Skin).IsAssignableFrom(t))
-                        && !t.IsAbstract
+                        //&& !t.IsAbstract
                     )
             )
             .WithTypes(
                 typeof(LayoutAreaReference),
                 typeof(PropertyColumnControl<>),
                 typeof(Option), // this is not a control
-                typeof(Option<>) // this is not a control
+                typeof(Option<>), // this is not a control
+                typeof(ContextProperty) // this is not a control
             );
 
     public static IObservable<UiControl> GetControlStream(
@@ -138,7 +150,7 @@ public static class LayoutExtensions
         string area,
         string id = null
     ) => hub.GetWorkspace()
-        .GetRemoteStream(address, new LayoutAreaReference(area){Id = id})
+        .GetRemoteStream(address, new LayoutAreaReference(area) { Id = id })
         .GetControlStream(area)
 ;
 
@@ -208,7 +220,7 @@ public static class LayoutExtensions
 
     private static void FailRendering(this ISynchronizationStream stream, Exception exception)
     {
-        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception,"Rendering failed");
+        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutExtensions)).LogWarning(exception, "Rendering failed");
     }
 
     public static TControl GetLayoutArea<TControl>(this EntityStore store, string area)
@@ -232,11 +244,11 @@ public static class LayoutExtensions
         stream
             .Reduce(reference)
             .Select(x =>
-                x.Value.ValueKind == JsonValueKind.Undefined 
-                    ? default(T) 
+                x.Value.ValueKind == JsonValueKind.Undefined
+                    ? default(T)
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
-            );
-
+            ); 
+    
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
@@ -246,9 +258,20 @@ public static class LayoutExtensions
             .AddData()
             .AddLayoutTypes()
             .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
-            .Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)))
-            .WithSerialization(serialization => serialization);
+            .AddViews(configuration ?? (x => x))
+            .WithSerialization(serialization =>
+                serialization.WithOptions(options =>
+                {
+                    // Add the dedicated Option converter to ensure $type discriminators work on client side
+                    options.Converters.Add(new OptionConverter());
+                })
+            );
     }
+
+    public static MessageHubConfiguration AddViews(
+        this MessageHubConfiguration config,
+        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration) =>
+        config.Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)));
 
     internal static ImmutableList<
         Func<LayoutClientConfiguration, LayoutClientConfiguration>

@@ -2,34 +2,49 @@
 @inherits BlazorView<GridControl, AgGrid>
 
 <HeadContent>
-    <link href="_content/MeshWeaver.Blazor.AgGrid/style.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-grid.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-theme-alpine.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-theme-alpine-dark.min.css" rel="stylesheet" />
 </HeadContent>
 
-<div @ref="element" class="container" style="height: 500px; width: 100%;"></div>
+
+<div @ref="Element" class="ag-grid-container"
+     style="height: 500px; width: 100%;" data-grid-id="@id"></div>
 
 @code
 {
-    ElementReference element;
+    ElementReference Element;
+    private IJSObjectReference JSModule;
 
 
-    [Inject] private IJSRuntime JsRuntime { get; set; }
-    private IJSObjectReference jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            jsModule = await JsRuntime.Import("index.mjs");
+            // Initialize JS module and setup system theme detection
+            JSModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", "./_content/MeshWeaver.Blazor.AgGrid/AgGrid.razor.js");
 
-            await jsModule.InvokeVoidAsync("LicenseManager.setLicenseKey",
-                Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY"));
-            
+            string licenseKey = Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY");
+            if (!string.IsNullOrEmpty(licenseKey))
+            {
+                await JSModule.InvokeVoidAsync("setLicenseKey", licenseKey);
+            }
 
         }
-        if (jsModule is not null)
+
+        if (JSModule is not null && Options is not null)
         {
-            await jsModule.InvokeVoidAsync("renderGrid", id, element, Options);
+            await JSModule.InvokeVoidAsync("renderGrid", id, Element, Options);
         }
+
+    }
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        StateHasChanged();
     }
 
     protected override void BindData()
@@ -42,17 +57,5 @@
 
     private object Options { get; set; }
 
-    public override async ValueTask DisposeAsync()
-    {
-        if (jsModule is not null)
-        {
-            try
-            {
-                await jsModule.DisposeAsync();
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-        }   
-    }
+
 }

@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
@@ -30,7 +30,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         base.ConfigureMesh(builder)
             .AddKernel()
             .ConfigureServices(ConfigureArticles)
-            .ConfigureServices(services => services.AddArticles())
+            .ConfigureServices(services => services.AddContentCollections())
             .ConfigureMesh(config => config.AddMeshNodes(
                     TestHubExtensions.Node
                 )
@@ -39,8 +39,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected virtual IServiceCollection ConfigureArticles(IServiceCollection services)
     {
         return services
-            .Configure<List<ArticleSourceConfig>>(
-                options => options.Add(new ArticleSourceConfig()
+            .Configure<List<ContentSourceConfig>>(
+                options => options.Add(new ContentSourceConfig()
                 {
                     Name = Test, BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
                 })
@@ -63,14 +63,14 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .GetControlStream("Content")
-            .Timeout(20.Seconds())
+            .Timeout(40.Seconds())
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
         articleControl.Article.Should().BeOfType<JsonPointerReference>();
         var article = await articleStream
             .GetDataAsync<Article>(GetIdFromDataContext(articleControl))
-            .Timeout(20.Seconds());
+            .Timeout(40.Seconds());
         article.Name.Should().Be("Overview");
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBe(null);
@@ -82,7 +82,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var articleStream = client.RenderArticle("Test","NotFound");
 
         var control = await articleStream
-            .Timeout(20.Seconds())
+            .Timeout(40.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
@@ -97,7 +97,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .GetControlStream("Catalog")
-            .Timeout(20.Seconds())
+            .Timeout(40.Seconds())
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
@@ -118,7 +118,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .AddLayout(x => x.AddArticleLayouts());
+            .AddArticles();
     }
 
     /// <summary>

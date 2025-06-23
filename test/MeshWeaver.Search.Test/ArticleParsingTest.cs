@@ -4,9 +4,10 @@ using System.IO;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using FluentAssertions;
-using MeshWeaver.Articles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using Xunit.Abstractions;
+using MarkdownExtensions = MeshWeaver.ContentCollections.MarkdownExtensions;
 
 namespace MeshWeaver.Search.Test;
 

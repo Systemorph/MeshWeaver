@@ -1,16 +1,18 @@
 {
+  "$type": "MeshWeaver.Pivot.Models.PivotModel",
   "columns": [
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "EUR.Value",
           "displayName": "Value",
           "coordinates": [
             "EUR",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "EUR",
@@ -18,20 +20,20 @@
       "coordinates": [
         "EUR"
       ],
-      "grouperName": "Currency",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "Currency"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "RUB.Value",
           "displayName": "Value",
           "coordinates": [
             "RUB",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "RUB",
@@ -39,20 +41,20 @@
       "coordinates": [
         "RUB"
       ],
-      "grouperName": "Currency",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "Currency"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "CHF.Value",
           "displayName": "Value",
           "coordinates": [
             "CHF",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "CHF",
@@ -60,20 +62,20 @@
       "coordinates": [
         "CHF"
       ],
-      "grouperName": "Currency",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "Currency"
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.ColumnGroup",
       "children": [
         {
+          "$type": "MeshWeaver.Pivot.Models.Column",
           "id": "USD.Value",
           "displayName": "Value",
           "coordinates": [
             "USD",
             "Value"
           ],
-          "grouperName": "ColumnName",
-          "$type": "MeshWeaver.Pivot.Models.Column"
+          "grouperName": "ColumnName"
         }
       ],
       "id": "USD",
@@ -81,20 +83,20 @@
       "coordinates": [
         "USD"
       ],
-      "grouperName": "Currency",
-      "$type": "MeshWeaver.Pivot.Models.ColumnGroup"
+      "grouperName": "Currency"
     }
   ],
   "rows": [
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "D"
         ],
         "id": "D",
         "displayName": "Germany",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "EUR": {
@@ -109,18 +111,18 @@
         "USD": {
           "Value": 96
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "PT"
         ],
         "id": "PT",
         "displayName": "Portugal",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "EUR": {
@@ -135,18 +137,18 @@
         "USD": {
           "Value": 96
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "RU"
         ],
         "id": "RU",
         "displayName": "Russia",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "EUR": {
@@ -161,18 +163,18 @@
         "USD": {
           "Value": 96
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     },
     {
+      "$type": "MeshWeaver.Pivot.Models.Row",
       "rowGroup": {
+        "$type": "MeshWeaver.Pivot.Models.RowGroup",
         "coordinates": [
           "CH"
         ],
         "id": "CH",
         "displayName": "Switzerland",
-        "grouperName": "Country",
-        "$type": "MeshWeaver.Pivot.Models.RowGroup"
+        "grouperName": "Country"
       },
       "data": {
         "EUR": {
@@ -187,10 +189,8 @@
         "USD": {
           "Value": 96
         }
-      },
-      "$type": "MeshWeaver.Pivot.Models.Row"
+      }
     }
   ],
-  "hasRowGrouping": true,
-  "$type": "MeshWeaver.Pivot.Models.PivotModel"
+  "hasRowGrouping": true
 }

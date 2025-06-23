@@ -1,15 +1,18 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.BarDataSet",
+        "type": "Bar",
         "data": [
           1,
           2,
           3,
           4
         ],
-        "label": "First",
-        "type": "Bar"
+        "label": "First"
       }
     ],
     "labels": [
@@ -20,15 +23,19 @@
     ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "scales": {
       "y": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
         "min": -1,
         "max": 10,
         "ticks": {}
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": "brewer.PastelOne9"
       }
     }

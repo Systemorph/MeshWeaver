@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Domain;
@@ -8,25 +9,27 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Layout.Domain;
 
 public interface IDomainLayoutService
 {
-    object Render(EntityRenderingContext context);
+    UiControl Render(EntityRenderingContext context);
 
-    object GetCatalog(EntityRenderingContext context);
+    UiControl GetCatalog(EntityRenderingContext context);
 }
 
 public class DomainLayoutService(DomainViewConfiguration configuration) : IDomainLayoutService
 {
-    public object Render(EntityRenderingContext context) =>
+    public UiControl Render(EntityRenderingContext context) =>
         configuration.ViewBuilders
+            .Reverse()
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
 
-    public object GetCatalog(EntityRenderingContext context)
+    public UiControl GetCatalog(EntityRenderingContext context)
     {
         return configuration.GetCatalog(context);
     }
@@ -44,10 +47,11 @@ public record DomainViewConfiguration
         PropertyViewBuilders = [(editor, ctx)=> 
             hub.ServiceProvider.MapToControl<EditFormControl,EditFormSkin>(editor,ctx.Property)];
         CatalogBuilders = [DefaultCatalog];
-    } 
+    }
 
+    public const string HrefProperty = "$href";
 
-    private object DefaultCatalog(EntityRenderingContext context)
+    private UiControl DefaultCatalog(EntityRenderingContext context)
     {
         var typeDefinition = context.TypeDefinition;
         var ret = Controls.Stack
@@ -56,23 +60,48 @@ public record DomainViewConfiguration
         if(!string.IsNullOrWhiteSpace(description))
             ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
         return ret
-                .WithView((a, _) => a
-                    .Workspace
-                    .GetStream(new CollectionsReference(typeDefinition.CollectionName))
-                    .Select(changeItem =>
-                        typeDefinition.ToDataGrid(changeItem.Value.Collections.Values.First().Instances.Values.Select(o => typeDefinition.SerializeEntityAndId(o, context.Host.Hub.JsonSerializerOptions)))
-                            .WithColumn(new TemplateColumnControl(new InfoButtonControl(typeDefinition.CollectionName, new JsonPointerReference(EntitySerializationExtensions.IdProperty))))
-                    )
-                )
+                .WithView((host,_) => RenderCatalog(host, context, typeDefinition))
             ;
 
     }
 
-    internal ImmutableList<Func<EntityRenderingContext, object>> ViewBuilders { get; init; }
-    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
-    internal ImmutableList<Func<EntityRenderingContext, object>> CatalogBuilders { get; init; } = [];
+    private UiControl RenderCatalog(LayoutAreaHost host, EntityRenderingContext context, ITypeDefinition typeDefinition)
+    {
+        var stream = host.Workspace
+            .GetStream(new CollectionReference(typeDefinition.CollectionName));
 
-    private object DefaultViewBuilder(EntityRenderingContext context)
+        var id = Guid.NewGuid().AsString();
+        host.RegisterForDisposal(stream
+            .Select(i => i.Value.Instances.Values.Select(o =>
+            {
+                var serialized = typeDefinition.SerializeEntityAndId(o,
+                    context.Host.Hub.JsonSerializerOptions);
+                serialized[HrefProperty] = new LayoutAreaReference("Details")
+                {
+                    Id =
+                        $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
+                }.ToHref(host.Hub.Address);
+                return serialized;
+            }))
+
+            .Subscribe(x => host.UpdateData(id, x))
+        );
+
+        return typeDefinition.ToDataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(id)))
+            .WithColumn(new TemplateColumnControl(
+                    new ButtonControl("View")
+                        .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                        .WithLabel("View")
+                        .WithNavigateToHref(new ContextProperty(HrefProperty))
+                )
+            );
+    }
+
+    internal ImmutableList<Func<EntityRenderingContext, UiControl>> ViewBuilders { get; init; }
+    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl>> CatalogBuilders { get; init; } = [];
+
+    private UiControl DefaultViewBuilder(EntityRenderingContext context)
     {
         var ret = new StackControl()
             .WithView(Controls.Title(context.TypeDefinition.DisplayName, 1));
@@ -86,35 +115,41 @@ public record DomainViewConfiguration
 
 
 
-    public DomainViewConfiguration WithView(Func<EntityRenderingContext, object> viewBuilder)
+    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl> viewBuilder)
         => this with { ViewBuilders = ViewBuilders.Add(viewBuilder) };
     public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl> viewBuilder)
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
-    public object DetailsLayout(LayoutAreaHost host, RenderingContext ctx, EntityRenderingContext context)
+    public UiControl DetailsLayout(LayoutAreaHost host, RenderingContext _, EntityRenderingContext context)
     {
+        var id = Guid.NewGuid().AsString();
         var stream = host.Workspace
             .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
-        var ret = stream
-            .Select(x => x.Value)
-            .Bind(_ =>
-                context.TypeDefinition.Type.GetProperties()
-                    .Aggregate(new EditFormControl(), (grid, property) =>
+
+        var typeDefinition = context.TypeDefinition;
+        host.RegisterForDisposal(stream
+            .Select(e => typeDefinition.SerializeEntityAndId(e.Value, context.Host.Hub.JsonSerializerOptions))
+            .Subscribe(e => host.UpdateData(id,e))
+        );
+
+        return  context.TypeDefinition.Type.GetProperties()
+                    .Aggregate(new EditFormControl {DataContext = LayoutAreaReference.GetDataPointer(id)}, (grid, property) =>
                         PropertyViewBuilders
+                            .Reverse()
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
                             .FirstOrDefault(x => x != null)
-                    ), ctx.Area);
-        return ret;
+                    );
     }
 
 
 
 
-    public object GetCatalog(EntityRenderingContext context) =>
+    public UiControl GetCatalog(EntityRenderingContext context) =>
         CatalogBuilders
+            .Reverse()
             .Select(x => x.Invoke(context))
             .FirstOrDefault(x => x != null);
 }

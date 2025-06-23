@@ -1,11 +1,15 @@
 {
+  "$type": "MeshWeaver.Charting.Models.ChartModel",
   "data": {
+    "$type": "MeshWeaver.Charting.Models.ChartData",
     "datasets": [
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
         "barThickness": 20,
         "type": "bar",
         "data": [
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar",
             "range": [
               0,
               5.2
@@ -13,10 +17,10 @@
             "label": "Italy.Alessandro",
             "dataLabel": "5.2",
             "dataLabelColor": "#08BFD1",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar",
             "range": [
               5.2,
               16.2
@@ -24,17 +28,17 @@
             "label": "Italy.Paolo",
             "dataLabel": "11",
             "dataLabelColor": "#08BFD1",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar",
             "label": "Italy. ",
             "dataLabel": "",
             "dataLabelColor": "#08BFD1",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar",
             "range": [
               0,
               21.1
@@ -42,106 +46,106 @@
             "label": "Russia.Alessandro",
             "dataLabel": "21.1",
             "dataLabelColor": "#08BFD1",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.IncrementBar"
+            "dataLabelAlignment": "end"
           }
         ],
         "backgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 8,
           "green": 191,
           "blue": 209,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "hoverBackgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 8,
           "green": 191,
           "blue": 209,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "label": "hidden",
         "parsing": {
+          "$type": "MeshWeaver.Charting.Models.Parsing",
           "xAxisKey": "label",
-          "yAxisKey": "range",
-          "$type": "MeshWeaver.Charting.Models.Parsing"
-        },
-        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
+          "yAxisKey": "range"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
         "barThickness": 20,
         "type": "bar",
         "data": [
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar",
             "label": "Italy.Alessandro",
             "dataLabel": "",
             "dataLabelColor": "#01AB6C",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar",
             "label": "Italy.Paolo",
             "dataLabel": "",
             "dataLabelColor": "#01AB6C",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar",
             "label": "Italy. ",
             "dataLabel": "",
             "dataLabelColor": "#01AB6C",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar",
             "label": "Russia.Alessandro",
             "dataLabel": "",
             "dataLabelColor": "#01AB6C",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.DecrementBar"
+            "dataLabelAlignment": "end"
           }
         ],
         "backgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 1,
           "green": 171,
           "blue": 108,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "hoverBackgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 1,
           "green": 171,
           "blue": 108,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "label": "hidden",
         "parsing": {
+          "$type": "MeshWeaver.Charting.Models.Parsing",
           "xAxisKey": "label",
-          "yAxisKey": "range",
-          "$type": "MeshWeaver.Charting.Models.Parsing"
-        },
-        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
+          "yAxisKey": "range"
+        }
       },
       {
+        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet",
         "barThickness": 20,
         "type": "bar",
         "data": [
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar",
             "label": "Italy.Alessandro",
             "dataLabel": "",
             "dataLabelColor": "#A7E1ED",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar",
             "label": "Italy.Paolo",
             "dataLabel": "",
             "dataLabelColor": "#A7E1ED",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar",
             "range": [
               0,
               16.2
@@ -149,38 +153,36 @@
             "label": "Italy. ",
             "dataLabel": "16.2",
             "dataLabelColor": "#A7E1ED",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar"
+            "dataLabelAlignment": "end"
           },
           {
+            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar",
             "label": "Russia.Alessandro",
             "dataLabel": "",
             "dataLabelColor": "#A7E1ED",
-            "dataLabelAlignment": "end",
-            "$type": "MeshWeaver.Charting.Models.Bar.TotalBar"
+            "dataLabelAlignment": "end"
           }
         ],
         "backgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 167,
           "green": 225,
           "blue": 237,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "hoverBackgroundColor": {
+          "$type": "MeshWeaver.Charting.Models.ChartColor",
           "red": 167,
           "green": 225,
           "blue": 237,
-          "alpha": 1,
-          "$type": "MeshWeaver.Charting.Models.ChartColor"
+          "alpha": 1
         },
         "label": "hidden",
         "parsing": {
+          "$type": "MeshWeaver.Charting.Models.Parsing",
           "xAxisKey": "label",
-          "yAxisKey": "range",
-          "$type": "MeshWeaver.Charting.Models.Parsing"
-        },
-        "$type": "MeshWeaver.Charting.Models.Bar.FloatingBarDataSet"
+          "yAxisKey": "range"
+        }
       }
     ],
     "labels": [
@@ -188,38 +190,40 @@
       "Italy.Paolo",
       "Italy. ",
       "Russia.Alessandro"
-    ],
-    "$type": "MeshWeaver.Charting.Models.ChartData"
+    ]
   },
   "options": {
+    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions",
     "scales": {
       "x": {
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
         "grid": {
-          "display": false,
-          "$type": "MeshWeaver.Charting.Models.Options.Scales.Grid"
+          "$type": "MeshWeaver.Charting.Models.Options.Scales.Grid",
+          "display": false
         },
-        "stacked": true,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+        "stacked": true
       },
       "y": {
-        "display": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale"
+        "$type": "MeshWeaver.Charting.Models.Options.Scales.Scale",
+        "display": false
       }
     },
     "plugins": {
+      "$type": "MeshWeaver.Charting.Models.Options.Plugins",
       "legend": {
+        "$type": "MeshWeaver.Charting.Models.Options.Legend",
         "display": true,
         "labels": {
-          "filter": "item =\u003E item.text !== \u0027hidden\u0027",
-          "$type": "MeshWeaver.Charting.Models.Options.LegendLabel"
-        },
-        "$type": "MeshWeaver.Charting.Models.Options.Legend"
+          "$type": "MeshWeaver.Charting.Models.Options.LegendLabel",
+          "filter": "item =\u003E item.text !== \u0027hidden\u0027"
+        }
       },
       "tooltip": {
-        "enabled": false,
-        "$type": "MeshWeaver.Charting.Models.Options.Tooltips.ToolTip"
+        "$type": "MeshWeaver.Charting.Models.Options.Tooltips.ToolTip",
+        "enabled": false
       },
       "colorschemes": {
+        "$type": "MeshWeaver.Charting.Models.ColorSchemes",
         "scheme": [
           "#08BFD1",
           "#01AB6C",
@@ -227,20 +231,16 @@
           "#A7E1ED",
           "#A7E1ED",
           "#A7E1ED"
-        ],
-        "$type": "MeshWeaver.Charting.Models.ColorSchemes"
+        ]
       },
       "datalabels": {
+        "$type": "MeshWeaver.Charting.Models.Options.DataLabels",
         "align": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "anchor": "context =\u003E context.dataset.data[context.dataIndex].dataLabelAlignment",
         "color": "context =\u003E context.dataset.data[context.dataIndex].dataLabelColor",
         "display": true,
-        "formatter": "(value, context) =\u003E context.dataset.data[context.dataIndex]?.dataLabel",
-        "$type": "MeshWeaver.Charting.Models.Options.DataLabels"
-      },
-      "$type": "MeshWeaver.Charting.Models.Options.Plugins"
-    },
-    "$type": "MeshWeaver.Charting.Models.Options.ChartOptions"
-  },
-  "$type": "MeshWeaver.Charting.Models.ChartModel"
+        "formatter": "(value, context) =\u003E context.dataset.data[context.dataIndex]?.dataLabel"
+      }
+    }
+  }
 }

@@ -1,5 +1,4 @@
-<Project>
-  <PropertyGroup>
+<Project>  <PropertyGroup>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <TargetFramework>net9.0</TargetFramework>
     <LangVersion>latest</LangVersion>
@@ -11,6 +10,8 @@
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
     <NoWarn>649;CA2255;NU5104;$(NoWarn)</NoWarn>
     <DefineConstants Condition=" '$(CIRun)' == 'true' ">$(DefineConstants);CIRun</DefineConstants>
+    <!-- Suppress FluentAssertions license warning for open source project -->
+    <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

@@ -1,0 +1,226 @@
+@namespace MeshWeaver.Blazor.Chat
+@inject IChatPersistenceService ChatPersistenceService
+
+<div class="chat-history-container @(IsRightPanel ? "right-panel" : "")">
+    <div class="chat-history-header">
+        <h4>@("Chat History")</h4> 
+        @if (!IsRightPanel)
+                {
+            <FluentButton BackgroundColor="transparent" OnClick="StartNewConversation">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
+                New Chat
+            </FluentButton>
+        }
+    </div>
+    @if (!Conversations.Any())
+    {
+        <div class="no-conversations">No previous conversations</div>
+    }
+    else
+    {
+        <div class="conversation-list">
+            @foreach (var conversation in Conversations.OrderByDescending(c => c.LastModifiedAt))
+            {
+                <div class="conversation-item @(conversation.Id == SelectedConversationId ? "selected" : "")"
+                    @onclick="() => SelectConversation(conversation.Id)">
+                    <div class="conversation-title">@conversation.DisplayTitle</div>
+                    <div class="conversation-meta">
+                        <small class="text-muted">
+                            @FormatDate(conversation.LastModifiedAt) • @conversation.Messages.Count messages
+                        </small>
+                    </div>
+                    <FluentButton BackgroundColor="transparent" OnClick="() => DeleteConversation(conversation.Id)"
+                        title="Delete conversation" Class="delete-btn">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" Color="Color.Error" />
+                    </FluentButton>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<style>
+    .chat-history-container {
+        width: 300px;
+        border-right: 1px solid var(--neutral-stroke-divider);
+        background-color: var(--neutral-layer-2);
+        padding: 1rem;
+        height: 100%;
+        overflow-y: auto;
+        color: var(--neutral-foreground-rest);
+    }
+
+    .chat-history-container.right-panel {
+        width: 100%;
+        border-right: none;
+        border-left: 1px solid var(--neutral-stroke-divider);
+        height: calc(100vh - 120px);
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+        flex: 1;
+        background-color: var(--neutral-layer-1);
+    }
+
+    .chat-history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--neutral-stroke-divider);
+    }
+
+    .chat-history-header h4 {
+        margin: 0;
+        font-size: 1.1rem;
+        color: var(--neutral-foreground-rest);
+    }
+
+    .conversation-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .conversation-item {
+        position: relative;
+        padding: 0.75rem;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 6px;
+        background-color: var(--neutral-layer-1);
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .conversation-item:hover {
+        border-color: var(--accent-fill-rest);
+        background-color: var(--neutral-fill-secondary-hover);
+    }
+
+    .conversation-item.selected {
+        border-color: var(--accent-fill-rest);
+        background-color: var(--accent-fill-secondary);
+    }
+
+    .conversation-title {
+        font-weight: 500;
+        margin-bottom: 0.25rem;
+        color: var(--neutral-foreground-rest);
+        word-break: break-word;
+    }
+
+    .conversation-meta {
+        margin-bottom: 0;
+        color: var(--neutral-foreground-hint);
+    }
+
+    .delete-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        padding: 0.25rem;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        min-width: auto;
+    }
+
+    .conversation-item:hover .delete-btn {
+        opacity: 1;
+    }
+
+    .loading-conversations,
+    .no-conversations {
+        text-align: center;
+        padding: 2rem;
+        color: var(--neutral-foreground-hint);
+        font-style: italic;
+    }
+</style>
+
+@code {
+    [Parameter] public string? SelectedConversationId { get; set; }
+    [Parameter] public EventCallback<string> SelectedConversationIdChanged { get; set; }
+    [Parameter] public EventCallback OnNewConversation { get; set; }
+    [Parameter] public bool IsRightPanel { get; set; }
+
+    private List<ChatConversation> Conversations = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConversations();
+    }
+    private async Task LoadConversations()
+    {
+        try
+        {
+            Conversations = await ChatPersistenceService.GetConversationsAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            // Handle error - could show a toast notification
+            Console.WriteLine($"Error loading conversations: {ex.Message}");
+        }
+    }
+
+    private async Task SelectConversation(string conversationId)
+    {
+        if (SelectedConversationId != conversationId)
+        {
+            SelectedConversationId = conversationId;
+            await SelectedConversationIdChanged.InvokeAsync(conversationId);
+        }
+    }
+    private async Task StartNewConversation()
+    {
+        SelectedConversationId = null;
+        await SelectedConversationIdChanged.InvokeAsync(null);
+        await OnNewConversation.InvokeAsync();
+    }
+    private async Task DeleteConversation(string conversationId)
+    {
+        try
+        {
+            await ChatPersistenceService.DeleteConversationAsync(conversationId);
+
+            // Remove from local list
+            Conversations = Conversations.Where(c => c.Id != conversationId).ToList();
+
+            // If this was the selected conversation, start a new one
+            if (SelectedConversationId == conversationId)
+            {
+                await StartNewConversation();
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            // Handle error - could show a toast notification
+            Console.WriteLine($"Error deleting conversation: {ex.Message}");
+        }
+    }
+
+    private string FormatDate(DateTime date)
+    {
+        var now = DateTime.Now;
+        var timeSpan = now - date;
+
+        if (timeSpan.TotalDays < 1)
+        {
+            return date.ToString("HH:mm");
+        }
+        else if (timeSpan.TotalDays < 7)
+        {
+            return date.ToString("ddd");
+        }
+        else
+        {
+            return date.ToString("MM/dd");
+        }
+    }
+    public async Task RefreshConversations()
+    {
+        await LoadConversations();
+    }
+}

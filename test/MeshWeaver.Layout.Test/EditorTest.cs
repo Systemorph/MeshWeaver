@@ -187,7 +187,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             area.UpdatePointer(i, editor.DataContext, new("x"));
         }
 
-        var controls = await controlStream.ToArray();
+        var controls = await controlStream.Where(x => x is not null).ToArray();
         controls.Should().HaveCountLessThanOrEqualTo(3);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }
@@ -203,13 +203,16 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
     private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
 
+    private static MyDimension[] Dimensions { get; } = [new(1, "One"), new(2, "Two")];
+
     private static readonly object[] ListPropertyBenchmarks =
     [
         new ListPropertyBenchmark<SelectControl>("dimension", Dimensions.Select(x => (Option)new Option<int>(x.Code,x.DisplayName)).ToArray()),
         new ListPropertyBenchmark<SelectControl>("dimensionWithStream", null, LayoutAreaReference.GetDataPointer("stream")),
         new ListPropertyBenchmark<RadioGroupControl>("display", [new Option<string>("chart", "chart"), new Option<string>("table", "table")])
     ];
-    private static readonly MyDimension[] Dimensions = [new(1, "One"), new(2, "Two")];
+
+
     private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
         where TControl : ListControlBase<TControl>
     {
