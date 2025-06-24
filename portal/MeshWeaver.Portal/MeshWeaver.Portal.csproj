@@ -5,6 +5,7 @@
     <UserSecretsId>7a281b74-ad11-4dd9-987b-c59ec5a5dd4c</UserSecretsId>
   </PropertyGroup>
     <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.Shared.Mesh\MeshWeaver.Portal.Shared.Mesh.csproj" />
     <ProjectReference Include="..\MeshWeaver.Portal.Shared.Web\MeshWeaver.Portal.Shared.Web.csproj" />

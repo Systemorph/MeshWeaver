@@ -1,6 +1,8 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using MeshWeaver.AI;
+using MeshWeaver.AI.AzureFoundry;
+using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Infrastructure;
@@ -48,7 +50,15 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             }); services.AddPortalAI();
         services.AddMemoryChatPersistence();
-        services.Configure<AIConfiguration>(builder.Configuration.GetSection("AzureOpenAI"));
+        
+        // configure AzureOpenAI chat
+        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureOpenAI"));
+        services.AddAzureOpenAI();
+
+        // configure Azure Foundry chat
+        //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
+        //services.AddAzureAIFoundry();
+
 
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
