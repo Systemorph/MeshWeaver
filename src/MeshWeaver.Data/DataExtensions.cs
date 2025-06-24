@@ -186,7 +186,10 @@ public static class DataExtensions
                 var types = GetDomainTypes(hub);
                 hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
                 return request.Processed();
-            }); private static string GenerateJsonSchema(IMessageHub hub, string typeName)
+            }); 
+    
+    
+    private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
@@ -234,7 +237,8 @@ public static class DataExtensions
                     // Get the actual PropertyInfo from the declaring type
                     var declaringType = ctx.PropertyInfo.DeclaringType;
                     var propertyName = ctx.PropertyInfo.Name;
-                    var actualPropertyInfo = declaringType?.GetProperty(propertyName); if (actualPropertyInfo != null)
+                    var actualPropertyInfo = declaringType?.GetProperty(propertyName.ToPascalCase()); 
+                    if (actualPropertyInfo != null)
                     {
                         var propertyDescription = actualPropertyInfo.GetXmlDocsSummary();
                         if (!string.IsNullOrEmpty(propertyDescription))

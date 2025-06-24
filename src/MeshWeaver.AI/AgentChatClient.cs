@@ -218,36 +218,13 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                     // Check if we have a completed code block
                     if (codeBlockTracker.HasCompleteBlock && codeBlockTracker.CompletedBlock != null)
                     {
-                        var result = CodeBlockParser.ProcessCodeBlock(codeBlockTracker.CompletedBlock);
-
-                        if (result.Type == CodeBlockType.Delegation && result.DelegationInstruction != null)
-                        {
-                            delegationDetected = true;
-                            delegationInstruction = result.DelegationInstruction;
-
-                            if (result.DelegationInstruction.Type == DelegationType.DelegateTo)
-                            {
-                                // For delegate_to, we continue to the next agent immediately
-                                break;
-                            }
-                            else if (result.DelegationInstruction.Type == DelegationType.ReplyTo)
-                            {
-                                // For reply_to, we set pending state and yield break
-                                delegationState.SetPendingReply(result.DelegationInstruction);
-                                yield break;
-                            }
-                        }
-                        else
-                        {
-                            // Regular code block, output it normally
-                            yield return new ChatResponseUpdate(converted.Role, FormatCodeBlock(codeBlockTracker.CompletedBlock))
-                            { AuthorName = converted.AuthorName };
-                        }
-
-                        codeBlockTracker.Reset();
+                        (delegationDetected, delegationInstruction) = CompleteCodeBlock(codeBlockTracker, delegationDetected, delegationInstruction);
                     }
                 }
+
             }
+            if (codeBlockTracker.IsInCodeBlock)
+                (delegationDetected, delegationInstruction) = CompleteCodeBlock(codeBlockTracker, delegationDetected, delegationInstruction);
 
             // Flush any remaining buffered content
             var remainingContent = codeBlockTracker.Flush();
@@ -284,6 +261,42 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         yield return new ChatResponseUpdate(ChatRole.Assistant,
           $"Maximum delegation depth ({MaxDelegationDepth}) reached. Ending workflow to prevent infinite loops.")
         { AuthorName = originalAuthorName ?? "System" };
+    }
+
+    private (bool delegationDetected, DelegationInstruction? delegationInstruction) CompleteCodeBlock(
+        CodeBlockTracker codeBlockTracker, bool delegationDetected,
+        DelegationInstruction? delegationInstruction)
+    {
+        if(codeBlockTracker.CompletedBlock == null)
+            return (false, null);
+
+        var result = CodeBlockParser.ProcessCodeBlock(codeBlockTracker.CompletedBlock);
+
+        if (result.Type == CodeBlockType.Delegation && result.DelegationInstruction != null)
+        {
+            delegationDetected = true;
+            delegationInstruction = result.DelegationInstruction;
+
+            if (result.DelegationInstruction.Type == DelegationType.DelegateTo)
+            {
+                // For delegate_to, we continue to the next agent immediately
+                return (delegationDetected, delegationInstruction);
+            }
+            else if (result.DelegationInstruction.Type == DelegationType.ReplyTo)
+            {
+                // For reply_to, we set pending state and yield break
+                delegationState.SetPendingReply(result.DelegationInstruction);
+                return (delegationDetected, delegationInstruction);
+            }
+        }
+        else
+        {
+            // Regular code block, output it normally
+            return (delegationDetected, delegationInstruction);
+        }
+
+        codeBlockTracker.Reset();
+        return (delegationDetected, delegationInstruction);
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)
