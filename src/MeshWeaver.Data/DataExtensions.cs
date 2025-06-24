@@ -1,6 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Reflection;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
@@ -48,7 +46,8 @@ public record DomainTypesResponse(IEnumerable<TypeDescription> Types);
 /// <param name="Name">The name of the type</param>
 /// <param name="DisplayName">The display name of the type</param>
 /// <param name="Description">Optional description of the type</param>
-public record TypeDescription(string Name, string DisplayName, string Description);
+/// <param name="Address">Address on which the data type lives.</param>
+public record TypeDescription(string Name, string DisplayName, string Description, Address Address);
 
 public static class DataExtensions
 {
@@ -316,7 +315,8 @@ public static class DataExtensions
             types.Add(new TypeDescription(
                 Name: typeDefinition.CollectionName,
                 DisplayName: typeDefinition.DisplayName ?? typeDefinition.CollectionName.Wordify(),
-                Description: description
+                Description: description,
+                hub.Address
             ));
         }
 

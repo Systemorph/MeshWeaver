@@ -366,8 +366,7 @@ public partial class AgentChatView
         // Create a new AgentContext with the extracted values
         chat.SetContext(new AgentContext
         {
-            AddressType = address.Type,
-            Id = address.Id,
+            Address = address,
             LayoutArea = layoutArea
         });
     }
@@ -401,8 +400,7 @@ public partial class AgentChatView
         // Create a new AgentContext with the extracted values
         return new AgentContext
         {
-            AddressType = address.Type,
-            Id = address.Id,
+            Address = address,
             LayoutArea = layoutArea
         };
     }
