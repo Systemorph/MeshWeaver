@@ -1,4 +1,4 @@
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.Northwind.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,7 +16,6 @@ public static class PortalAIExtensions
     {
         return services
             .AddSingleton<IAgentDefinition, MeshNavigator>()
-            .AddNorthwindAI()
-            .AddAIFoundry();
+            .AddNorthwindAI();
     }
 }

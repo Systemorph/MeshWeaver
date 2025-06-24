@@ -104,7 +104,7 @@ public class DataPlugin(
     {
         var desc = methodInfo.GetCustomAttribute<DescriptionAttribute>();
         var ret = desc?.Description ?? "";
-        if(typeDefinitions.Any())
+        if(typeDefinitions?.Any() == true)
             return ret + "\nAvailable types: " + string.Join(", ", typeDefinitions.Keys);
         return ret;
     }

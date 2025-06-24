@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI.AzureFoundry;
 
@@ -10,8 +10,8 @@ public static class AzureFoundryExtensions
     /// <summary>
     /// Adds Azure AI Foundry services to the service collection
     /// </summary>
-    public static IServiceCollection AddAIFoundry(this IServiceCollection services)
+    public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
     {
-        return services.AddSingleton<IAgentChatFactory, AzureAIChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IAgentChatFactory, AzureOpenAIChatCompletionAgentChatFactory>();
     }
 }

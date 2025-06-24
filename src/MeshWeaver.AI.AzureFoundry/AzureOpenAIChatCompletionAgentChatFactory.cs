@@ -8,7 +8,7 @@ namespace MeshWeaver.AI.AzureFoundry;
 /// Factory for creating agent chats using ChatCompletionAgent with Azure OpenAI.
 /// ChatCompletionAgent is used for stateless chat completion scenarios without persistent assistant storage.
 /// </summary>
-public class AzureAIChatCompletionAgentChatFactory(
+public class AzureOpenAIChatCompletionAgentChatFactory(
     IMessageHub hub,
     IEnumerable<IAgentDefinition> agentDefinitions,
     IOptions<AIConfiguration> options)
