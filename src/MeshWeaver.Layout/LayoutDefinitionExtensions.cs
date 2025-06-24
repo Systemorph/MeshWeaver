@@ -1,8 +1,12 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Layout.Composition;
 using Microsoft.Extensions.DependencyInjection;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
 
@@ -138,12 +142,18 @@ public static class LayoutDefinitionExtensions
         if (delgate is not null)
         {
             var method = delgate.Method;
-            var doc = layout.Hub.ServiceProvider
-                .GetRequiredService<IDocumentationService>()
-                .GetDocumentation(method);
-            if (doc is not null)
-                ret = ret.WithDescription(doc.Summary.Text)
-                    .WithReferences(doc.Summary.See?.Cref);
+            var doc = method.GetXmlDocsSummary();
+            ret = ret.WithDescription(doc);
+            if(method.GetCustomAttribute<DisplayAttribute>() is { } displayAttribute)
+            {
+                ret = ret with{Order = displayAttribute.Order};
+                if(displayAttribute.Description is not null)
+                    ret = ret.WithDescription(displayAttribute.Description);
+                if(displayAttribute.Name is not null)
+                    ret = ret.WithTitle(displayAttribute.Name);
+            }
+            if (method.GetCustomAttribute<BrowsableAttribute>() is { } browsableAtt)
+                ret = ret with{IsInvisible = !browsableAtt.Browsable};
         }
         if (options is not null)
             ret = options.Invoke(ret);

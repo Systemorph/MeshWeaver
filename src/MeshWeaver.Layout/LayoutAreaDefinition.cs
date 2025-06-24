@@ -23,6 +23,8 @@ public record LayoutAreaDefinition(string Area, string Url)
         this with{CRefs = CRefs.AddRange(reference.Where(x => x != null))};
 
     public string Category { get; init; }
+    public bool IsInvisible { get; init; }
+    public int Order { get; init; } = 0;
     public LayoutAreaDefinition WithCategory(string category)
         => this with { Category = category };
 }

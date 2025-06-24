@@ -69,6 +69,5 @@ public partial class DataGridView
         return e => e.ContainsKey(propertyColumn.Property) ? e[propertyColumn.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
     }
 
-    private const string Details = nameof(Details);
 
 }
