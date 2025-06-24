@@ -13,9 +13,14 @@ public static class SerializationExtensions
     public static MessageHubConfiguration WithSerialization(this MessageHubConfiguration hubConf,
         Func<SerializationConfiguration, SerializationConfiguration> configure)
     {
-        var conf = hubConf.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ?? ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
+        var conf = hubConf.GetListOfLambdas();
         return hubConf.Set(conf.Add(configure));
     }
+
+    internal static ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>> GetListOfLambdas(
+        this MessageHubConfiguration config)
+        => config.Get<ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>>() ??
+           ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
 
     public static MessageHubConfiguration WithTypes(this MessageHubConfiguration configuration, params IEnumerable<Type> types)
     {
@@ -36,9 +41,7 @@ public static class SerializationExtensions
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         var configurations =
-            hub.Configuration.Get<
-                ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>
-            >()
+            hub.Configuration.GetListOfLambdas()
             ?? ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
         var serializationConfig = configurations
             .Aggregate(CreateSerializationConfiguration(hub), (c, f) => f.Invoke(c)); var options = serializationConfig.Options;        // Add standard converters

@@ -50,7 +50,10 @@ public sealed class MessageHub : IMessageHub
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
-        Configuration = configuration; messageService = new MessageService(configuration.Address,
+        Configuration = configuration; 
+        
+        
+        messageService = new MessageService(configuration.Address,
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
 
         foreach (var disposeAction in configuration.DisposeActions)

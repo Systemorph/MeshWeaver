@@ -80,29 +80,36 @@ public class HubTestBase : TestBase
 
         try
         {
-            // Force dispose the router synchronously first
-            Router.Dispose();
+            // Add aggressive 3 second timeout to prevent hanging
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
 
-            // Add aggressive 5 second timeout to prevent hanging
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-            // If Router.Disposal is null, don't wait
+            // If Router.Disposal is null, don't wait - just dispose synchronously
             if (Router.Disposal != null)
             {
-                await Router.Disposal.WaitAsync(timeout.Token);
+                try
+                {
+                    await Router.Disposal.WaitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.LogWarning("Router disposal timed out after 3 seconds - forcing synchronous disposal");
+                }
             }
 
+            // Force dispose the router synchronously
+            Router.Dispose();
+
             Logger.LogInformation("Finished disposal of router");
-        }
-        catch (OperationCanceledException)
-        {
-            Logger.LogError("Router disposal timed out after 5 seconds - forcing completion");
-            // Don't throw, just log and continue to prevent test hanging
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error during router disposal - continuing");
-            // Don't throw, just log and continue
+            // Don't throw, just log and continue to prevent test hanging
+        }
+        finally
+        {
+            // Call base disposal to clean up other resources
+            await base.DisposeAsync();
         }
     }
 }
