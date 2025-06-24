@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.ComponentModel;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -28,6 +29,7 @@ public static class DomainViews
 
     public const string Type = nameof(Type);
 
+    [Browsable(false)]
     public static UiControl Details(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string typeAndId)
@@ -61,6 +63,7 @@ public static class DomainViews
 
     private static MarkdownControl Error(string message) => new($"[!CAUTION]\n{message}\n");
 
+    [Browsable(false)]
     public static UiControl Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string collection)
@@ -146,22 +149,6 @@ public static class DomainViews
                     sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({GetParameters(method)})");
                 sb.AppendLine("}");
             }
-
-
-            // TODO V10: Need to create relationships, but they will be across the diagram.
-            //  Need to think of different diagram type. (29.01.2025, Roland Bürgi)
-            // Add relationships within the group
-            //foreach (var type in group)
-            //{
-            //    var typeName = type.Type.Name;
-            //    foreach (var prop in type.Type.GetProperties())
-            //    {
-            //        if (group.Any(t => t.Type == prop.PropertyType))
-            //        {
-            //            sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
-            //        }
-            //    }
-            //}
 
             sb.AppendLine("```");
         }
