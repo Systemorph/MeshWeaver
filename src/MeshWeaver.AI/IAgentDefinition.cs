@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.AI;
+﻿using Microsoft.SemanticKernel;
+
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Interface for providing agent definitions
@@ -8,7 +10,7 @@ public interface IAgentDefinition
     /// <summary>
     /// Gets the name of the agent
     /// </summary>
-    string AgentName { get; }
+    string Name { get; }
 
     /// <summary>
     /// Gets the description of the agent
@@ -20,8 +22,4 @@ public interface IAgentDefinition
     /// </summary>
     string Instructions { get; }
 
-    /// <summary>
-    /// Gets the plugins for the agent
-    /// </summary>
-    IEnumerable<object> GetPlugins() => [];
 }

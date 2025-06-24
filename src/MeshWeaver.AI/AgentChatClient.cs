@@ -1,6 +1,7 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
@@ -15,9 +16,10 @@ namespace MeshWeaver.AI;
 public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvider) : IAgentChat
 {
     private const int MaxDelegationDepth = 10; // Prevent infinite delegation loops
-
+    private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly DelegationState delegationState = new();
-    private AgentContext? context; 
+    public AgentContext? Context { get; private set; } 
+    
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -134,14 +136,14 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     private ChatMessage ProcessMessageWithContext(ChatMessage message)
     {
-        if (context == null || message.Role != ChatRole.User)
+        if (Context == null || message.Role != ChatRole.User)
             return message;
 
         // Extract original text content
         var originalText = ExtractTextFromMessage(message);
 
         // Create new message with context template
-        var contextJson = JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = false });
+        var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
         var messageWithContext = $"{originalText}\n<Context>\n{contextJson}\n</Context>";
 
         return new ChatMessage(ChatRole.User, [new TextContent(messageWithContext)])
@@ -291,7 +293,7 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     public void SetContext(AgentContext applicationContext)
     {
-        context = applicationContext;
+        Context = applicationContext;
     }
 
     public Task ResumeAsync(ChatConversation conversation)
@@ -509,9 +511,9 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         var delegationContent = CodeBlockParser.CreateDelegationMessage(delegationInstruction);
 
         // If we have context, append it to the delegation message
-        if (context != null)
+        if (Context != null)
         {
-            var contextJson = JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = false });
+            var contextJson = JsonSerializer.Serialize(Context, new JsonSerializerOptions { WriteIndented = false });
             delegationContent = $"{delegationContent}\n<Context>\n{contextJson}\n</Context>";
         }
 

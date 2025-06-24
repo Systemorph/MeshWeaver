@@ -3,8 +3,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
-using Namotion.Reflection;
-using System.Reflection;
 
 namespace MeshWeaver.AI.Application.Layout;
 
@@ -18,7 +16,7 @@ public static class AgentDetailsArea
     {        // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
         var agents = host.Hub.ServiceProvider.GetService<IEnumerable<IAgentDefinition>>()?.ToList() ?? [];
-        var agent = agents.FirstOrDefault(a => a.AgentName == agentName);
+        var agent = agents.FirstOrDefault(a => a.Name == agentName);
 
         if (agent == null)
         {
@@ -30,7 +28,7 @@ public static class AgentDetailsArea
 
         return CreateAgentDetailsView(agent, host);
     }
-    private static string ExtractAgentNameFromLayoutAreaId(object id)
+    private static string ExtractAgentNameFromLayoutAreaId(object? id)
     {
         // Extract agent name from the LayoutAreaReference.Id
         // Expecting Id to contain the agent name directly
@@ -42,8 +40,8 @@ public static class AgentDetailsArea
 
         return Controls.Stack
             .WithView(Controls.NavLink("← Back to Agent Overview", $"{host.Hub.Address}/Overview"), "BackLink")
-            .WithView(Controls.Title($"{agent.AgentName.Wordify()}", 1), "Title")
-            .WithView(Controls.Text($"{agent.Description ?? "No description available"}"), "Description")
+            .WithView(Controls.Title($"{agent.Name.Wordify()}", 1), "Title")
+            .WithView(Controls.Text($"{agent.Description}"), "Description")
             .WithView(CreateInstructionsSection(agent), "Instructions")
             .WithView(CreateAttributesSection(agent), "Attributes")
             .WithView(CreatePluginsSection(agent), "Plugins")
@@ -51,8 +49,7 @@ public static class AgentDetailsArea
     }
     private static UiControl CreateInstructionsSection(IAgentDefinition agent)
     {
-        var instructions = agent.Instructions ?? "No instructions provided.";
-        var hasInstructions = !string.IsNullOrEmpty(agent.Instructions);
+        var instructions = agent.Instructions;
 
         return Controls.Html($"""
             <div style='margin: 16px 0; padding: 16px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>
@@ -84,12 +81,12 @@ public static class AgentDetailsArea
         {
             try
             {
-                kernelPlugins = agentWithPlugins.GetPlugins()?.ToList() ?? [];
+                kernelPlugins = agentWithPlugins.GetPlugins(null)?.ToList() ?? [];
             }
             catch (Exception ex)
             {
                 // In case plugin creation fails, log but continue
-                System.Diagnostics.Debug.WriteLine($"Failed to get plugins for {agent.AgentName}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Failed to get plugins for {agent.Name}: {ex.Message}");
             }
         }
         var pluginsList = kernelPlugins.Any()
@@ -165,28 +162,6 @@ public static class AgentDetailsArea
 
         return attributes.Any() ? string.Join(" ", attributes) : "<span style='color: var(--color-fg-muted); font-style: italic;'>No special attributes</span>";
     }
-    private static string? GetTypeXmlDocsSummary(Type type)
-    {
-        try
-        {
-            // First check for Description attribute
-            var descriptionAttribute = type.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>();
-            if (descriptionAttribute != null && !string.IsNullOrEmpty(descriptionAttribute.Description))
-                return descriptionAttribute.Description;
-
-            // Try to get XML documentation summary using Namotion.Reflection
-            var summary = type.GetXmlDocsSummary();
-            if (!string.IsNullOrEmpty(summary))
-                return summary;
-
-            return null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     internal static string GetDelegationInfoForDisplay(IAgentDefinition agent, List<IAgentDefinition> agents, LayoutAreaHost host)
     {
         var sections = new List<string>();
@@ -194,12 +169,12 @@ public static class AgentDetailsArea
         // Section: Can delegate to
         if (agent is IAgentWithDelegation agentWithDelegation)
         {
-            var delegationsList = agentWithDelegation.Delegations?.ToList() ?? [];
+            var delegationsList = agentWithDelegation.Delegations.ToList();
             if (delegationsList.Any())
             {
                 var delegationsHtml = string.Join("", delegationsList.Select(d =>
                 {
-                    var targetAgent = agents.FirstOrDefault(a => a.AgentName == d.AgentName);
+                    var targetAgent = agents.FirstOrDefault(a => a.Name == d.AgentName);
                     var agentLink = targetAgent != null
                         ? $"<a href='{host.Hub.Address}/AgentDetails/{d.AgentName}' style='color: var(--color-accent-fg); text-decoration: none; font-weight: 600;'>{d.AgentName}</a>"
                         : $"<span style='font-weight: 600; color: var(--color-accent-fg);'>{d.AgentName}</span>";
@@ -222,7 +197,7 @@ public static class AgentDetailsArea
         // Section: Exposes agents
         if (agent is IAgentWithDelegations agentWithDelegations)
         {
-            var exposedAgents = agentWithDelegations.GetDelegationAgents()?.ToList() ?? [];
+            var exposedAgents = agentWithDelegations.GetDelegationAgents().ToList() ?? [];
             if (exposedAgents.Any())
             {
                 var exposedHtml = string.Join("", exposedAgents.Select(a =>
@@ -247,8 +222,8 @@ public static class AgentDetailsArea
 
         // 1. Direct delegations from agents with IAgentWithDelegation
         var directDelegationsFrom = agents.OfType<IAgentWithDelegation>()
-            .Where(a => a != agent && a.Delegations.Any(d => d.AgentName == agent.AgentName))
-            .Select(a => ((IAgentDefinition)a, a.Delegations.First(d => d.AgentName == agent.AgentName).Instructions))
+            .Where(a => a != agent && a.Delegations.Any(d => d.AgentName == agent.Name))
+            .Select(a => ((IAgentDefinition)a, a.Delegations.First(d => d.AgentName == agent.Name).Instructions))
             .ToList();
         delegationsFromList.AddRange(directDelegationsFrom);
 
@@ -266,7 +241,7 @@ public static class AgentDetailsArea
             var delegationsFromHtml = string.Join("", delegationsFromList.Select(item =>
             {
                 var (sourceAgent, reason) = item;
-                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.AgentName}' style='color: var(--color-success-fg); text-decoration: none; font-weight: 600;'>{sourceAgent.AgentName.Wordify()}</a>";
+                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Name}' style='color: var(--color-success-fg); text-decoration: none; font-weight: 600;'>{sourceAgent.Name.Wordify()}</a>";
 
                 return $"<li style='margin: 8px 0; padding: 12px; background: var(--color-success-subtle); border-radius: 4px; border-left: 3px solid var(--color-success-emphasis);'>" +
                        $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +

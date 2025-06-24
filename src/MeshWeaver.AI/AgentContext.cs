@@ -1,11 +1,11 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
 public record AgentContext
 {
-    public required string AddressType { get; init; }
-    public required string Id { get; init; }
+    public Address? Address { get; init; }
 
     public LayoutAreaReference? LayoutArea { get; init; }
 }

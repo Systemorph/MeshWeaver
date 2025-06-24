@@ -16,7 +16,7 @@ public class AzureAIChatCompletionAgentChatFactory(
 {
     private readonly AIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 
-    protected override async Task<Microsoft.SemanticKernel.Kernel> CreateKernelAsync(IAgentDefinition agentDefinition)
+    protected override Microsoft.SemanticKernel.Kernel CreateKernel(IAgentDefinition agentDefinition)
     {
         // Validate credentials
         if (string.IsNullOrEmpty(credentials.Url))
@@ -31,6 +31,8 @@ public class AzureAIChatCompletionAgentChatFactory(
                 endpoint: credentials.Url,
                 apiKey: credentials.ApiKey);
 
-        return await Task.FromResult(kernelBuilder.Build());
+        return kernelBuilder.Build();
     }
+
+
 }

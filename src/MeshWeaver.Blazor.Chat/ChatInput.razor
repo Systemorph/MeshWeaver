@@ -17,7 +17,7 @@
                         var agent = FilteredAgents[i];
                         <div class="agent-option @(index == SelectedAgentIndex ? "selected" : "")"
                             @onclick="() => SelectAgent(agent)" @onclick:preventDefault="true">
-                            <div class="agent-name">@@@agent.AgentName</div>
+                            <div class="agent-name">@@@agent.Name</div>
                             <div class="agent-description">@agent.Description</div>
                         </div>
                     }                </div>
@@ -50,7 +50,7 @@
     public bool IsDisabled { get; set; }
 
     /// <summary>
-    /// List of available agents for autocomplete when typing @AgentName
+    /// List of available agents for autocomplete when typing @Name
     /// </summary>
     [Parameter]
     public List<IAgentDefinition> AvailableAgents { get; set; } = new();
@@ -112,7 +112,7 @@
             var parts = MessageText.Split(' ');
             var agentQuery = parts[0].Substring(1).ToLowerInvariant();
 
-            // If there's already a space after the @AgentName, don't show dropdown
+            // If there's already a space after the @Name, don't show dropdown
             if (parts.Length > 1 && !string.IsNullOrEmpty(agentQuery))
             {
                 ShowAgentDropdown = false;
@@ -120,7 +120,7 @@
             else
             {
                 FilteredAgents = AvailableAgents
-                .Where(a => a.AgentName.ToLowerInvariant().Contains(agentQuery))
+                .Where(a => a.Name.ToLowerInvariant().Contains(agentQuery))
                 .ToList();
 
                 ShowAgentDropdown = FilteredAgents.Any();
@@ -147,7 +147,7 @@
             }
         }
 
-        MessageText = $"@{agent.AgentName} {restOfMessage}".TrimEnd();
+        MessageText = $"@{agent.Name} {restOfMessage}".TrimEnd();
         ShowAgentDropdown = false;
         SelectedAgentIndex = 0;
 

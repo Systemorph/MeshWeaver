@@ -26,4 +26,6 @@ public interface IAgentChat
     IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         CancellationToken cancellationToken = default);
+
+    AgentContext? Context { get; }
 }

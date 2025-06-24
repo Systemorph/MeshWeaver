@@ -1,8 +1,6 @@
-﻿using System.Collections.Concurrent;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 
@@ -12,80 +10,101 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
     where TAgent : class
 {
     protected readonly IMessageHub Hub;
-    protected readonly IEnumerable<IAgentDefinition> AgentDefinitions;
-    protected readonly Task Initialized;
-    protected readonly ConcurrentDictionary<string, Agent> Agents = new();
+    protected readonly Task<IReadOnlyDictionary<string, IAgentDefinition>> AgentDefinitions;
 
     protected AgentChatFactoryBase(
         IMessageHub hub,
         IEnumerable<IAgentDefinition> agentDefinitions)
     {
         this.Hub = hub;
-        this.AgentDefinitions = agentDefinitions;
         Logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
-        Initialized = Initialize();
+        AgentDefinitions = Initialize(agentDefinitions);
     }
     protected ILogger Logger { get; }
-    protected virtual async Task<Dictionary<string, TAgent>> Initialize()
+
+    protected async Task<IReadOnlyDictionary<string, IAgentDefinition>> Initialize(
+        IEnumerable<IAgentDefinition> agentDefinitions) =>
+        await agentDefinitions.ToAsyncEnumerable().SelectAwait(async x =>
+            {
+
+                if (x is IInitializableAgent initializable)
+                    await initializable.InitializeAsync();
+                return x;
+            })
+            .ToDictionaryAsync(x => x.Name);
+
+
+    public virtual async Task<IAgentChat> CreateAsync()
     {
+        var agentDefinitions = await AgentDefinitions;
         var existingAgents = await GetExistingAgentsAsync();
 
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
-
-        try
+        var agents = new Dictionary<string, Agent>();
+        foreach (var agentDefinition in agentDefinitions.Values)
         {
-            // Initialize all initializable agent definitions first
-            foreach (var provider in AgentDefinitions.OfType<IInitializableAgent>())
-            {
-                await provider.InitializeAsync();
-            }
-
-            // Process each agent definition
-            foreach (var provider in AgentDefinitions)
-            {
 
 
-                var existingAgent = agentsByName.GetValueOrDefault(provider.AgentName);
-                var agent = await CreateOrUpdateAgentAsync(
-                    provider,
-                    existingAgent);                // Configure plugins for this agent
-                foreach (var pluginObject in provider.GetPlugins())
-                {
-                    var plugin = KernelPluginFactory.CreateFromObject(pluginObject, pluginObject.GetType().Name);
-                    agent.Kernel.Plugins.Add(plugin);
-                }
-
-                // Handle file uploads for agents that implement IAgentDefinitionWithFiles
-                if (provider is IAgentDefinitionWithFiles fileProvider)
-                    await foreach (var file in fileProvider.GetFilesAsync())
-                        await UploadFileAsync(agent, file);
+            var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
+            var agent = await CreateOrUpdateAgentAsync(
+                agentDefinition,
+                existingAgent);
 
 
-                Agents[provider.AgentName] = agent;
-            }
 
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError("Could not initialize agents: {Exception}", ex);
+            // Handle file uploads for agents that implement IAgentDefinitionWithFiles
+            if (agentDefinition is IAgentDefinitionWithFiles fileProvider)
+                await foreach (var file in fileProvider.GetFilesAsync())
+                    await UploadFileAsync(agent, file);
+
+
+            agents[agentDefinition.Name] = agent;
         }
 
-        return agentsByName;
+        var agentChat = new AgentGroupChat(agents.Values.ToArray())
+        {
+            ExecutionSettings = new AgentGroupChatSettings()
+            {
+                SelectionStrategy = CreateSelectionStrategy(agentDefinitions, agents)
+            }
+        };
+
+        var ret = new AgentChatClient(agentChat, Hub.ServiceProvider);
+
+        // Configure plugins for this agent
+        foreach (var pluginAgent in agentDefinitions.Values.OfType<IAgentWithPlugins>())
+        {
+            var agent = agents[pluginAgent.Name];
+            foreach (var plugin in pluginAgent.GetPlugins(ret))
+                agent.Kernel.Plugins.Add(plugin);
+        }
+
+        return ret;
     }
 
+    protected abstract Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent);
     protected abstract Task UploadFileAsync(Agent assistant, AgentFileInfo file);
 
 
     protected abstract Task<IEnumerable<TAgent>> GetExistingAgentsAsync();
     protected abstract string GetAgentName(TAgent agent);
 
-    protected abstract Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent); protected virtual SelectionStrategy CreateSelectionStrategy(AgentGroupChat chat)
+
+    /// <summary>
+    /// Creates a Kernel instance for the specified agent definition.
+    /// Implementations should configure the kernel with their specific chat completion provider.
+    /// </summary>
+    /// <param name="agentDefinition">The agent definition for which to create the kernel</param>
+    /// <returns>A configured Kernel instance</returns>
+    protected abstract Microsoft.SemanticKernel.Kernel CreateKernel(IAgentDefinition agentDefinition);
+
+    protected virtual SelectionStrategy CreateSelectionStrategy(IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions, IReadOnlyDictionary<string, Agent> agents)
     {
         // Find the agent marked with [DefaultAgent] attribute
-        var defaultAgentDefinition = AgentDefinitions
+        var defaultAgentDefinition = agentDefinitions.Values
             .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
 
-        if (defaultAgentDefinition != null && Agents.TryGetValue(defaultAgentDefinition.AgentName, out var defaultAgent))
+        if (defaultAgentDefinition != null && agents.TryGetValue(defaultAgentDefinition.Name, out var defaultAgent))
         {
             // Return a simple strategy that handles explicit mentions and delegation patterns
             return new DefaultAgentSelectionStrategy(defaultAgent, Logger);
@@ -94,17 +113,6 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         // Fallback to sequential selection if no default agent is found
         return new SequentialSelectionStrategy();
     }
-    public virtual async Task<IAgentChat> CreateAsync()
-    {
-        await Initialized;
-
-        var ret = new AgentGroupChat(GetAgentArray(Agents)); ret.ExecutionSettings = new()
-        {
-            SelectionStrategy = CreateSelectionStrategy(ret)
-        };
-        return new AgentChatClient(ret, Hub.ServiceProvider);
-    }
-
 
 
 

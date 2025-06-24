@@ -117,7 +117,7 @@ public static class CodeBlockParser
 
     /// <summary>
     /// Parses the agent name from the header line.
-    /// Expected format: delegate_to "AgentName" or reply_to "AgentName"
+    /// Expected format: delegate_to "Name" or reply_to "Name"
     /// </summary>
     /// <param name="header">The header line to parse</param>
     /// <returns>The agent name if found, null otherwise</returns>

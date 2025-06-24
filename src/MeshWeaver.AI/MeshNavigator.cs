@@ -7,7 +7,7 @@
 public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
     : IAgentDefinition, IAgentWithDelegations
 {
-    public string AgentName => "MeshNavigator";
+    public string Name => "MeshNavigator";
 
     public string Description => "A helpful assistant for navigating the MeshWeaver portal and providing general assistance.";
 
@@ -29,6 +29,6 @@ public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
         return agentDefinitions.Value
             .Where(agent => agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
             .Where(agent => agent != this) // Exclude self
-            .Select(agent => new DelegationAgent(agent.AgentName, agent.Description));
+            .Select(agent => new DelegationAgent(agent.Name, agent.Description));
     }
 }

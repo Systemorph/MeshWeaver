@@ -25,7 +25,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
         var lastMessage = history.Last();
         string content = lastMessage.Content ?? string.Empty;
 
-        // Check for explicit user agent mention first (@AgentName at start of message)
+        // Check for explicit user agent mention first (@Name at start of message)
         var mentionMatch = AgentMentionRegex.Match(content);
         if (mentionMatch.Success)
         {
@@ -35,7 +35,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
 
             if (matchingAgent != null)
             {
-                _logger.LogInformation("Routing to explicitly mentioned agent: {AgentName}", mentionedAgentName);
+                _logger.LogInformation("Routing to explicitly mentioned agent: {Name}", mentionedAgentName);
                 return Task.FromResult(matchingAgent);
             }
         }
@@ -50,7 +50,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
 
             if (delegatedAgent != null)
             {
-                _logger.LogInformation("Routing to JSON delegated agent: {AgentName}", delegatedAgentName);
+                _logger.LogInformation("Routing to JSON delegated agent: {Name}", delegatedAgentName);
                 return Task.FromResult(delegatedAgent);
             }
             else
@@ -72,7 +72,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
                         string.Join(", ", partialMatches.Select(a => a.Name)));
                 }
             }
-        }        // Fallback: Check for agent delegation pattern (DELEGATE_TO: @AgentName or §DELEGATE_TO:AgentName§ anywhere in the message)
+        }        // Fallback: Check for agent delegation pattern (DELEGATE_TO: @Name or §DELEGATE_TO:Name§ anywhere in the message)
         var delegationMatch = DelegationRegex.Match(content);
         var sectionDelegationMatch = SectionDelegationRegex.Match(content);
 
@@ -84,7 +84,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
 
             if (delegatedAgent != null)
             {
-                _logger.LogInformation("Agent delegation detected for: {AgentName}", delegatedAgentName);
+                _logger.LogInformation("Agent delegation detected for: {Name}", delegatedAgentName);
                 return Task.FromResult(delegatedAgent);
             }
         }
@@ -97,7 +97,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
 
             if (delegatedAgent != null)
             {
-                _logger.LogInformation("Routing to delegated agent: {AgentName}", delegatedAgentName);
+                _logger.LogInformation("Routing to delegated agent: {Name}", delegatedAgentName);
                 return Task.FromResult(delegatedAgent);
             }
             else
@@ -122,7 +122,7 @@ public class DefaultAgentSelectionStrategy(Agent defaultAgent, ILogger logger) :
         }
 
         // Default to the default agent (MeshNavigator)
-        _logger.LogInformation("Routing to default agent: {AgentName}", _defaultAgent.Name);
+        _logger.LogInformation("Routing to default agent: {Name}", _defaultAgent.Name);
         return Task.FromResult(_defaultAgent);
     }
 }

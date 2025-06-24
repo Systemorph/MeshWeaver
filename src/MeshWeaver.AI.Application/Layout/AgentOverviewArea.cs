@@ -50,9 +50,9 @@ public class AgentOverviewViewModel
         };        // Add agent nodes with proper font sizes and styling
         foreach (var agent in agents)
         {
-            var nodeId = GetNodeId(agent.AgentName);
+            var nodeId = GetNodeId(agent.Name);
             var isDefault = agent == defaultAgent;
-            var agentNameWordified = agent.AgentName.Wordify();
+            var agentNameWordified = agent.Name.Wordify();
             var description = EscapeForMermaid(agent.Description);
 
             // Determine reachability and apply proper styling
@@ -62,13 +62,13 @@ public class AgentOverviewViewModel
         }// Add delegation arrows from agents that implement IAgentWithDelegation
         foreach (var agent in agents.OfType<IAgentWithDelegation>())
         {
-            var sourceNodeId = GetNodeId(agent.AgentName);
+            var sourceNodeId = GetNodeId(agent.Name);
             foreach (var delegation in agent.Delegations)
             {
-                var targetAgent = agents.FirstOrDefault(a => a.AgentName == delegation.AgentName);
+                var targetAgent = agents.FirstOrDefault(a => a.Name == delegation.AgentName);
                 if (targetAgent != null)
                 {
-                    var targetNodeId = GetNodeId(targetAgent.AgentName);
+                    var targetNodeId = GetNodeId(targetAgent.Name);
                     var instruction = EscapeForMermaid(delegation.Instructions);
                     diagram.Add($"    {sourceNodeId} -->|\"delegate when: {instruction}\"| {targetNodeId}");
                 }
@@ -76,10 +76,10 @@ public class AgentOverviewViewModel
         }        // Add arrows from default agent to agents exposed in navigator
         if (defaultAgent != null)
         {
-            var defaultNodeId = GetNodeId(defaultAgent.AgentName);
+            var defaultNodeId = GetNodeId(defaultAgent.Name);
             foreach (var agent in agents.Where(a => a != defaultAgent && a.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any()))
             {
-                var exposedNodeId = GetNodeId(agent.AgentName);
+                var exposedNodeId = GetNodeId(agent.Name);
                 diagram.Add($"    {defaultNodeId} -.->|delegate| {exposedNodeId}");
             }
         }
@@ -87,8 +87,8 @@ public class AgentOverviewViewModel
         // Add click events for navigation to agent details
         foreach (var agent in agents)
         {
-            var nodeId = GetNodeId(agent.AgentName);
-            diagram.Add($"    click {nodeId} \"{hubAddress}/AgentDetails/{agent.AgentName}\"");
+            var nodeId = GetNodeId(agent.Name);
+            diagram.Add($"    click {nodeId} \"{hubAddress}/AgentDetails/{agent.Name}\"");
         }
 
         return string.Join("\n", diagram);
@@ -137,7 +137,7 @@ public class AgentOverviewViewModel
         if (defaultAgent is not IAgentWithDelegation delegatingAgent)
             return false;
 
-        return delegatingAgent.Delegations.Any(d => d.AgentName == agent.AgentName);
+        return delegatingAgent.Delegations.Any(d => d.AgentName == agent.Name);
     }
 
     private static bool IsExposedInNavigator(IAgentDefinition agent)
@@ -156,7 +156,7 @@ public class AgentOverviewViewModel
         foreach (var reachableAgent in directlyReachableAgents)
         {
             if (reachableAgent is IAgentWithDelegation delegating &&
-                delegating.Delegations.Any(d => d.AgentName == agent.AgentName))
+                delegating.Delegations.Any(d => d.AgentName == agent.Name))
             {
                 return true;
             }
