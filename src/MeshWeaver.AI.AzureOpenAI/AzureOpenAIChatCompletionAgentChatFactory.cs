@@ -2,19 +2,19 @@
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
 
-namespace MeshWeaver.AI.AzureFoundry;
+namespace MeshWeaver.AI.AzureOpenAI;
 
 /// <summary>
 /// Factory for creating agent chats using ChatCompletionAgent with Azure OpenAI.
 /// ChatCompletionAgent is used for stateless chat completion scenarios without persistent assistant storage.
 /// </summary>
-public class AzureAIChatCompletionAgentChatFactory(
+public class AzureOpenAIChatCompletionAgentChatFactory(
     IMessageHub hub,
     IEnumerable<IAgentDefinition> agentDefinitions,
-    IOptions<AIConfiguration> options)
+    IOptions<AzureOpenAIConfiguration> options)
     : ChatCompletionAgentChatFactory(hub, agentDefinitions)
 {
-    private readonly AIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
+    private readonly AzureOpenAIConfiguration credentials = options.Value ?? throw new ArgumentNullException(nameof(options));
 
     protected override Microsoft.SemanticKernel.Kernel CreateKernel(IAgentDefinition agentDefinition)
     {
@@ -33,6 +33,4 @@ public class AzureAIChatCompletionAgentChatFactory(
 
         return kernelBuilder.Build();
     }
-
-
 }

@@ -1,9 +1,9 @@
-﻿namespace MeshWeaver.AI;
+﻿namespace MeshWeaver.AI.AzureOpenAI;
 
 /// <summary>
 /// Configuration for AI service credentials
 /// </summary>
-public class AIConfiguration
+public class AzureOpenAIConfiguration
 {
     /// <summary>
     /// The Azure OpenAI endpoint URL
