@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout.Composition;
+﻿using System.ComponentModel;
+using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Views;
 
@@ -9,6 +10,7 @@ public static class LayoutAreaCatalogArea
     internal static LayoutDefinition AddLayoutAreaCatalog(this LayoutDefinition layout)
         => layout.WithView(LayoutAreas, LayoutAreaCatalog);
 
+    [Browsable(false)]
     private static UiControl LayoutAreaCatalog(LayoutAreaHost host, RenderingContext ctx)
     {
         var layouts = host.GetLayoutAreaDefinitions();
