@@ -21,6 +21,8 @@ public static class ImportExtensions
     )
     {
         var lambdas = configuration.GetListOfLambdas();
+        if(!lambdas.Any())
+            configuration = configuration.WithInitialization(h => h.ServiceProvider.GetRequiredService<ImportManager>());
         var ret = configuration.Set(lambdas.Add(importConfiguration));
         if (lambdas.Any())
             return ret;

@@ -24,8 +24,7 @@ public class ImportManager
         Workspace = workspace;
         Hub = hub;
         Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
-        importHub = hub.GetHostedHub(
-            new ImportAddress());
+        importHub = hub.GetHostedHub(new ImportAddress());
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
