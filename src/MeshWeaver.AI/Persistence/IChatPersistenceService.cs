@@ -1,4 +1,4 @@
-﻿namespace MeshWeaver.AI;
+﻿namespace MeshWeaver.AI.Persistence;
 
 /// <summary>
 /// Service interface for managing chat conversation persistence

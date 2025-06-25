@@ -1,6 +1,6 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.AI.Persistence;
 
 /// <summary>
 /// Extension methods for adding chat persistence services

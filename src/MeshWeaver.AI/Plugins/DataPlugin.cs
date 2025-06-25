@@ -7,7 +7,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using Microsoft.SemanticKernel;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
 /// Plugin that provides access to data from a specified address.
@@ -57,7 +57,7 @@ public class DataPlugin(
             return "Please navigate to a context for which you want to know the data types.";
 
         // Return types that match the specified address
-        var ret = await hub.AwaitResponse<DomainTypesResponse>(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address));
+        var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address));
         return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
     }
 
@@ -74,7 +74,7 @@ public class DataPlugin(
         if (address is null)
             return $"Unknown type: {type}." + (typeDefinitions is not null ? $" Valid types are: {string.Join(", ", typeDefinitions.Keys)}" : string.Empty);
 
-        var response = await hub.AwaitResponse<SchemaResponse>(new GetSchemaRequest(type), o => o.WithTarget(address));
+        var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address));
         return response.Message.Schema ?? $"No schema defined for type '{type}'";
     }
 
@@ -89,7 +89,7 @@ public class DataPlugin(
     public KernelPlugin CreateKernelPlugin()
     {
         var plugin = KernelPluginFactory.CreateFromFunctions(nameof(DataPlugin),
-            this.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
                 .Where(m => m.HasAttribute<KernelFunctionAttribute>())
                 .Select(m =>
                     KernelFunctionFactory.CreateFromMethod(m, this,

@@ -1,6 +1,9 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Plugins;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.Agents.Chat;
 
@@ -71,6 +74,27 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
         var ret = new AgentChatClient(agentChat, Hub.ServiceProvider);
 
+        // Add DelegationPlugin to agents that implement IAgentWithDelegations or are marked as default
+        var delegationPlugin = KernelPluginFactory.CreateFromObject(new DelegationPlugin(ret), "DelegationPlugin");
+
+        // Find the default agent definition
+        var defaultAgentDefinition = agentDefinitions.Values
+            .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+
+        foreach (var agentDefinition in agentDefinitions.Values)
+        {
+            var agent = agents[agentDefinition.Name];
+
+            // Add delegation plugin if:
+            // 1. Agent implements IAgentWithDelegations, OR
+            // 2. Agent is marked as default agent
+            if (agentDefinition is IAgentWithDelegations ||
+                agentDefinition == defaultAgentDefinition)
+            {
+                agent.Kernel.Plugins.Add(delegationPlugin);
+            }
+        }
+
         // Configure plugins for this agent
         foreach (var pluginAgent in agentDefinitions.Values.OfType<IAgentWithPlugins>())
         {
@@ -133,7 +157,7 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
     protected string GetAgentInstructions(IAgentDefinition agentDefinition)
     {
         var baseInstructions = agentDefinition.Instructions;        // Check if this agent supports delegation
-        if (agentDefinition is IAgentWithDelegation delegatingAgent)
+        if (agentDefinition is IAgentWithDelegations delegatingAgent)
         {
             var delegationInstructions = string.Join('\n', delegatingAgent.Delegations.Select(d => $"{d.AgentName}: {d.Instructions}"));
 
@@ -148,36 +172,31 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                    
                    **When to delegate:**
                    {{{delegationInstructions}}}
-                     **DELEGATION METHOD - USE CODE BLOCK FORMAT:**
                    
-                   When you need to delegate immediately, use this format:
-                   ```delegate_to "EXACT_AGENT_NAME"
-                   Your message content for the agent goes here.
-                   ```
+                   **DELEGATION METHOD - USE KERNEL FUNCTION:**
                    
+                   When you need to delegate to another agent, use the {{{nameof(Delegate)}}} tool from the {{{nameof(DelegationPlugin)}}}:
+                   - agentName: The exact name of the agent to delegate to (use the names from the list above)
+                   - message: Your message or task for the agent
+                   - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)
                    
-                   **Important:** The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
+                   **Important:** 
+                   - The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
+                   - it is not necessary to repeat the message you put into the delegation ==> we will see it after you finish.
                    
                    **Examples:**
                    
                    For immediate delegation:
-                   ```delegate_to "ReportingSpecialist"
-                   Please create a comprehensive report on the current portfolio performance.
-                   ```
+                   Use the Delegate function with agentName="ReportingSpecialist" and message="Please create a comprehensive report on the current portfolio performance."
                    
-                   For delegation with user input:
-                   ```delegate_to "DataAnalyst"
-                   Please analyze the data the user will provide next.
-                   ```
+                   For delegation with user feedback:
+                   Use the Delegate function with agentName="DataAnalyst", message="Please analyze the data the user will provide next.", and askUserFeedback=true
                    
                    **Step-by-step delegation process:**
                    1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
                    2. Copy it EXACTLY as written (including all letters)
-                   3. Use code block format with delegate_to
-                   4. No newline between the backticks, the delegate_to and the agent name. 
-                      All must be on one line. 
-                   5. Include your message content inside the code block
-                   6. DO NOT INCLUDE THE CONTEXT in your message
+                   3. Use the Delegate function with the appropriate parameters
+                   4. DO NOT INCLUDE THE CONTEXT in your message
                    
                    """;
 
@@ -188,12 +207,12 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         // Check if this agent supports delegations (new interface)
         if (agentDefinition is IAgentWithDelegations delegationsAgent)
         {
-            var delegationAgents = delegationsAgent.GetDelegationAgents().ToList();
+            var delegationAgents = delegationsAgent.Delegations.ToList();
 
             if (delegationAgents.Any())
             {
                 var agentList = string.Join('\n', delegationAgents.Select(d => $"@{d.AgentName}"));
-                var delegationInstructions = string.Join('\n', delegationAgents.Select(d => $"{d.AgentName}: {d.Description}"));
+                var delegationInstructions = string.Join('\n', delegationAgents.Select(d => $"{d.AgentName}: {d.Instructions}"));
 
                 var delegationGuidelines =
                     $$$"""
@@ -206,31 +225,25 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                        **Available Agents:**
                        {{{delegationInstructions}}}
                        
-                       **DELEGATION METHOD - USE CODE BLOCK FORMAT:**
+                       **DELEGATION METHOD - USE KERNEL FUNCTION:**
                        
-                       When you need to delegate immediately, use this format:
-                       ```delegate_to "EXACT_AGENT_NAME"
-                       Your message content for the agent goes here.
-                       ```
-                       
+                       When you need to delegate to another agent, use the Delegate function:
+                       - agentName: The exact name of the agent to delegate to (use the names from the list above)
+                       - message: Your message or task for the agent
+                       - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)
                        
                        **Important:** The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
                        
                        **Examples:**
                        
                        For immediate delegation:
-                       ```delegate_to "NorthwindDataAgent"
-                       Please analyze the customer data and provide insights.
-                       ```
+                       Use the Delegate function with agentName="NorthwindDataAgent" and message="Please analyze the customer data and provide insights."
                        
                        **Step-by-step delegation process:**
                        1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
                        2. Copy it EXACTLY as written (including all letters)
-                       3. Use code block format with delegate_to
-                       4. No newline between the backticks, the delegate_to and the agent name. 
-                          All must be on one line. 
-                       5. Include your message content inside the code block
-                       6. DO NOT INCLUDE THE CONTEXT in your message
+                       3. Use the Delegate function with the appropriate parameters
+                       4. DO NOT INCLUDE THE CONTEXT in your message
                        
                        """;
 

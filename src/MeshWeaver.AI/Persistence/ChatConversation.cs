@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.AI;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.AI.Persistence;
 
 /// <summary>
 /// Represents a complete chat conversation with metadata

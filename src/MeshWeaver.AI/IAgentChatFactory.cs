@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.AI;
+﻿using MeshWeaver.AI.Persistence;
+
+namespace MeshWeaver.AI;
 
 public interface IAgentChatFactory
 {

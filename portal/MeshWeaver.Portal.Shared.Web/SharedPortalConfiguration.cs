@@ -3,6 +3,7 @@ using System.Security.Claims;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Infrastructure;
@@ -50,9 +51,9 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             }); services.AddPortalAI();
         services.AddMemoryChatPersistence();
-        
+
         // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("Github"));
+        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureOpenAIS"));
         services.AddAzureOpenAI();
 
         // configure Azure Foundry chat

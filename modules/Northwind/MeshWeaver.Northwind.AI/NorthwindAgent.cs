@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;

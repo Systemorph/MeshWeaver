@@ -4,7 +4,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
 /// Generalized plugin for reading and writing files to configured collections

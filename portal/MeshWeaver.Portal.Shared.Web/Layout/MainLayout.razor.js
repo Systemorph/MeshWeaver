@@ -1,4 +1,4 @@
-﻿export function isDarkMode() {
+﻿window.isDarkMode = function(){
     let matched = window.matchMedia("(prefers-color-scheme: dark)").matches ;
 
     if (matched)

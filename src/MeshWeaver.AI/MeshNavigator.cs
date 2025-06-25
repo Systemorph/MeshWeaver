@@ -24,11 +24,9 @@ public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
         Always be friendly, helpful, and professional. If you don't know something specific about the portal, be honest about it and suggest alternatives or ways to find the information.
         """;
 
-    public IEnumerable<DelegationAgent> GetDelegationAgents()
-    {
-        return agentDefinitions.Value
+    public IEnumerable<DelegationDescription> Delegations =>
+        agentDefinitions.Value
             .Where(agent => agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
             .Where(agent => agent != this) // Exclude self
-            .Select(agent => new DelegationAgent(agent.Name, agent.Description));
-    }
+            .Select(agent => new DelegationDescription(agent.Name, agent.Description));
 }

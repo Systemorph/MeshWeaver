@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.AI;
+namespace MeshWeaver.AI.Persistence;
 
 /// <summary>
 /// In-memory implementation of chat persistence service

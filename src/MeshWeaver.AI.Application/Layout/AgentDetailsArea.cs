@@ -142,7 +142,7 @@ public static class AgentDetailsArea
         if (type.GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #cce5ff; color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
-        if (agent is IAgentWithDelegation)
+        if (agent is IAgentWithDelegations)
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #fff3cd; color: #856404; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟡 With Delegation</span>");
 
         if (agent is IAgentWithDelegations)
@@ -155,7 +155,7 @@ public static class AgentDetailsArea
         var sections = new List<string>();
 
         // Section: Can delegate to
-        if (agent is IAgentWithDelegation agentWithDelegation)
+        if (agent is IAgentWithDelegations agentWithDelegation)
         {
             var delegationsList = agentWithDelegation.Delegations.ToList();
             if (delegationsList.Any())
@@ -185,7 +185,7 @@ public static class AgentDetailsArea
         // Section: Exposes agents
         if (agent is IAgentWithDelegations agentWithDelegations)
         {
-            var exposedAgents = agentWithDelegations.GetDelegationAgents().ToList();
+            var exposedAgents = agentWithDelegations.Delegations.ToList();
             if (exposedAgents.Any())
             {
                 var exposedHtml = string.Join("", exposedAgents.Select(a =>
@@ -194,7 +194,7 @@ public static class AgentDetailsArea
 
                     return $"<li style='margin: 8px 0; padding: 12px; background: #f0fff4; border-left: 4px solid #28a745; border-radius: 4px;'>" +
                            $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +
-                           $"<div style='color: #586069; font-size: 13px;'>{a.Description}</div>" +
+                           $"<div style='color: #586069; font-size: 13px;'>{a.Instructions}</div>" +
                            $"</li>";
                 }));
 
@@ -210,8 +210,8 @@ public static class AgentDetailsArea
         // Section: Delegations from (agents that delegate TO this agent)
         var delegationsFromList = new List<(IAgentDefinition sourceAgent, string reason)>();
 
-        // 1. Direct delegations from agents with IAgentWithDelegation
-        var directDelegationsFrom = agents.Values.OfType<IAgentWithDelegation>()
+        // 1. Direct delegations from agents with IAgentWithDelegations
+        var directDelegationsFrom = agents.Values.OfType<IAgentWithDelegations>()
             .Where(a => a != agent && a.Delegations.Any(d => d.AgentName == agent.Name))
             .Select(a => ((IAgentDefinition)a, a.Delegations.First(d => d.AgentName == agent.Name).Instructions))
             .ToList();
