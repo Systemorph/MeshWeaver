@@ -15,20 +15,20 @@
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.ico" />
-    <HeadOutlet @rendermode="RenderMode.InteractiveServer"/>
+    <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Mesh Weaver</PageTitle>
 </head>
 
 <body>
-<CascadingValue Name="ThemeMode" Value="@(Mode)">
-    <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
-    <Routes @rendermode="RenderMode.InteractiveServer"/>
-</CascadingValue>
-<CookiePolicy @rendermode="RenderMode.InteractiveServer"/>
-<script src="_framework/blazor.web.js"></script>
-<script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
-<script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
-<script src="./_content/MeshWeaver.Portal.Shared.Web/Layout/MainLayout.razor.js"></script>
+    <CascadingValue Name="ThemeMode" Value="@(Mode)">
+        <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
+        <Routes @rendermode="RenderMode.InteractiveServer" />
+    </CascadingValue>
+    <CookiePolicy @rendermode="RenderMode.InteractiveServer" />
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
+    <script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
+    <script src="_content/MeshWeaver.Portal.Shared.Web/Layout/MainLayout.razor.js"></script>
 </body>
 
 </html>
