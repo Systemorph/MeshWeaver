@@ -40,8 +40,9 @@ public static class AgentDetailsArea
 
         return Controls.Stack
             .WithView(Controls.NavLink("← Back to Agent Overview", $"{host.Hub.Address}/Overview"), "BackLink")
+            .WithView(Controls.Html("<div style='margin: 20px 0;'></div>"), "Spacer1")
             .WithView(Controls.Title($"{agent.Name.Wordify()}", 1), "Title")
-            .WithView(Controls.Markdown($"{agent.Description}"), "Description")
+            .WithView(Controls.Html($"<div style='margin: 16px 0; padding: 0 4px;'>{agent.Description}</div>"), "Description")
             .WithView(CreateInstructionsSection(agent), "Instructions")
             .WithView(CreateAttributesSection(agent), "Attributes")
             .WithView(CreatePluginsSection(agent), "Plugins")
@@ -52,11 +53,9 @@ public static class AgentDetailsArea
         var instructions = agent.Instructions;
 
         return Controls.Html($"""
-            <div style='margin: 16px 0; padding: 16px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>
-                <h3 style='margin: 0 0 12px 0; color: var(--color-fg-default); font-size: 16px; font-weight: 600;'>Instructions</h3>
-                <div style='background: var(--color-neutral-muted); padding: 12px; border-radius: 4px; border-left: 3px solid var(--color-accent-emphasis);'>
-                    <pre style='margin: 0; font-family: var(--fontStack-monospace); font-size: 13px; line-height: 1.45; color: var(--color-fg-default); white-space: pre-wrap;'>{instructions}</pre>
-                </div>
+            <div style='margin: 24px 0; padding: 0 4px;'>
+                <h2 style='margin-bottom: 16px;'>Instructions</h2>
+                <pre style='background: var(--code-block-background-color, #f6f8fa); border: 1px solid var(--code-block-border-color, #e1e4e8); border-radius: 6px; padding: 16px; margin: 0; overflow-x: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.45; white-space: pre-wrap;'>{instructions}</pre>
             </div>
             """);
     }
@@ -65,11 +64,9 @@ public static class AgentDetailsArea
         var attributes = GetAgentAttributesForDisplay(agent);
 
         return Controls.Html($"""
-            <div style='margin: 16px 0; padding: 16px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>
-                <h3 style='margin: 0 0 12px 0; color: var(--color-fg-default); font-size: 16px; font-weight: 600;'>Attributes</h3>
-                <div style='display: flex; flex-wrap: wrap; gap: 8px;'>
-                    {attributes}
-                </div>
+            <div style='margin: 24px 0; padding: 0 4px;'>
+                <h2 style='margin-bottom: 16px;'>Attributes</h2>
+                <div style='line-height: 1.6;'>{attributes}</div>
             </div>
             """);
     }
@@ -81,7 +78,7 @@ public static class AgentDetailsArea
         {
             try
             {
-                kernelPlugins = agentWithPlugins.GetPlugins(null)?.ToList() ?? [];
+                kernelPlugins = agentWithPlugins.GetPlugins(null!)?.ToList() ?? [];
             }
             catch (Exception ex)
             {
@@ -96,39 +93,30 @@ public static class AgentDetailsArea
                 {
                     var parametersHtml = function.Metadata.Parameters.Any()
                         ? string.Join("", function.Metadata.Parameters.Select(param =>
-                            $"<div style='margin: 4px 0; padding: 6px; background: var(--color-neutral-muted); border-radius: 3px;'>" +
-                            $"<code style='color: var(--color-accent-fg); font-weight: 600;'>{param.Name}</code>" +
-                            $"<span style='color: var(--color-fg-muted); margin-left: 8px;'>({param.ParameterType?.Name ?? "string"})</span>" +
-                            $"{(param.IsRequired ? "<span style='color: var(--color-danger-fg); margin-left: 4px; font-size: 10px;'>*required</span>" : "")}" +
-                            $"{(!string.IsNullOrEmpty(param.Description) ? $"<div style='color: var(--color-fg-muted); font-size: 11px; margin-top: 2px;'>{param.Description}</div>" : "")}" +
-                            $"</div>"))
-                        : "<div style='color: var(--color-fg-muted); font-style: italic; font-size: 11px;'>No parameters</div>";
+                            $"<li style='margin: 4px 0;'><strong>{param.Name}</strong> ({param.ParameterType?.Name ?? "string"})" +
+                            $"{(param.IsRequired ? " <em style='color: #d73a49;'>*required*</em>" : "")}" +
+                            $"{(!string.IsNullOrEmpty(param.Description) ? $": {param.Description}" : "")}</li>"))
+                        : "<li style='color: #6a737d; font-style: italic;'>No parameters</li>";
 
-                    return $"<div style='margin: 8px 0; padding: 8px; background: var(--color-canvas-default); border: 1px solid var(--color-border-muted); border-radius: 4px;'>" +
-                           $"<div style='font-weight: 600; color: var(--color-fg-default); margin-bottom: 4px;'>" +
-                           $"<code style='color: var(--color-accent-emphasis);'>{function.Name}</code>" +
-                           $"</div>" +
-                           $"{(!string.IsNullOrEmpty(function.Description) ? $"<div style='color: var(--color-fg-default); font-size: 12px; margin-bottom: 6px;'>{function.Description}</div>" : "")}" +
-                           $"<div style='margin-top: 6px;'>" +
-                           $"<div style='font-size: 11px; font-weight: 600; color: var(--color-fg-muted); margin-bottom: 4px;'>Parameters:</div>" +
-                           $"{parametersHtml}" +
-                           $"</div>" +
+                    return $"<div style='margin: 16px 0; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border: 1px solid var(--code-block-border-color, #e1e4e8); border-radius: 6px;'>" +
+                           $"<h4 style='margin: 0 0 8px 0; color: #0366d6;'>{function.Name}</h4>" +
+                           $"{(!string.IsNullOrEmpty(function.Description) ? $"<p style='margin: 0 0 12px 0; color: #586069;'>{function.Description}</p>" : "")}" +
+                           $"<div><strong style='font-size: 13px; color: #24292e;'>Parameters:</strong></div>" +
+                           $"<ul style='margin: 8px 0 0 20px; padding: 0;'>{parametersHtml}</ul>" +
                            $"</div>";
                 }));
 
-                return $"<li style='margin: 8px 0; padding: 12px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>" +
-                       $"<div style='font-weight: 600; color: var(--color-fg-default); margin-bottom: 8px; font-size: 14px;'>{plugin.Name}</div>" +
-                       $"<div style='margin-top: 8px;'>{functionsHtml}</div>" +
-                       $"</li>";
+                return $"<div style='margin: 20px 0;'>" +
+                       $"<h3 style='margin: 0 0 12px 0; color: #24292e;'>{plugin.Name}</h3>" +
+                       $"{functionsHtml}" +
+                       $"</div>";
             }))
-            : "<li style='margin: 4px 0; padding: 8px 12px; background: var(--color-attention-subtle); border: 1px solid var(--color-attention-muted); border-radius: 4px; color: var(--color-attention-fg);'>No plugins configured</li>";
+            : "<div style='color: #6a737d; font-style: italic; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border: 1px solid var(--code-block-border-color, #e1e4e8); border-radius: 6px;'>No plugins configured</div>";
 
         return Controls.Html($"""
-            <div style='margin: 16px 0; padding: 16px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>
-                <h3 style='margin: 0 0 12px 0; color: var(--color-fg-default); font-size: 16px; font-weight: 600;'>Plugins</h3>
-                <ul style='margin: 0; padding: 0; list-style: none;'>
-                    {pluginsList}
-                </ul>
+            <div style='margin: 24px 0; padding: 0 4px;'>
+                <h2 style='margin-bottom: 16px;'>Plugins</h2>
+                {pluginsList}
             </div>
             """);
     }
@@ -137,8 +125,8 @@ public static class AgentDetailsArea
         var delegationInfo = GetDelegationInfoForDisplay(agent, agents, host);
 
         return Controls.Html($"""
-            <div style='margin: 16px 0; padding: 16px; background: var(--color-canvas-subtle); border: 1px solid var(--color-border-default); border-radius: 6px;'>
-                <h3 style='margin: 0 0 12px 0; color: var(--color-fg-default); font-size: 16px; font-weight: 600;'>Delegations</h3>
+            <div style='margin: 24px 0; padding: 0 4px;'>
+                <h2 style='margin-bottom: 16px;'>Delegations</h2>
                 {delegationInfo}
             </div>
             """);
@@ -149,18 +137,18 @@ public static class AgentDetailsArea
         var type = agent.GetType();
 
         if (type.GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any())
-            attributes.Add("<span style='display: inline-block; padding: 4px 8px; background: var(--color-success-subtle); color: var(--color-success-fg); border-radius: 4px; font-size: 12px; font-weight: 500;'>Default Agent</span>");
+            attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #d4edda; color: #155724; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟢 Default Agent</span>");
 
         if (type.GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
-            attributes.Add("<span style='display: inline-block; padding: 4px 8px; background: var(--color-accent-subtle); color: var(--color-accent-fg); border-radius: 4px; font-size: 12px; font-weight: 500;'>Exposed in Navigator</span>");
+            attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #cce5ff; color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
         if (agent is IAgentWithDelegation)
-            attributes.Add("<span style='display: inline-block; padding: 4px 8px; background: var(--color-done-subtle); color: var(--color-done-fg); border-radius: 4px; font-size: 12px; font-weight: 500;'>With Delegation</span>");
+            attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #fff3cd; color: #856404; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟡 With Delegation</span>");
 
         if (agent is IAgentWithDelegations)
-            attributes.Add("<span style='display: inline-block; padding: 4px 8px; background: var(--color-sponsors-subtle); color: var(--color-sponsors-fg); border-radius: 4px; font-size: 12px; font-weight: 500;'>With Delegations</span>");
+            attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: #ffe6cc; color: #b45309; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟠 With Delegations</span>");
 
-        return attributes.Any() ? string.Join(" ", attributes) : "<span style='color: var(--color-fg-muted); font-style: italic;'>No special attributes</span>";
+        return attributes.Any() ? string.Join("", attributes) : "<span style='color: #6a737d; font-style: italic;'>No special attributes</span>";
     }
     internal static string GetDelegationInfoForDisplay(IAgentDefinition agent, IReadOnlyDictionary<string, IAgentDefinition> agents, LayoutAreaHost host)
     {
@@ -176,18 +164,18 @@ public static class AgentDetailsArea
                 {
                     var targetAgent = agents.GetValueOrDefault(d.AgentName);
                     var agentLink = targetAgent != null
-                        ? $"<a href='{host.Hub.Address}/AgentDetails/{d.AgentName}' style='color: var(--color-accent-fg); text-decoration: none; font-weight: 600;'>{d.AgentName}</a>"
-                        : $"<span style='font-weight: 600; color: var(--color-accent-fg);'>{d.AgentName}</span>";
+                        ? $"<a href='{host.Hub.Address}/AgentDetails/{d.AgentName}' style='color: #0366d6; text-decoration: none; font-weight: 600;'>{d.AgentName}</a>"
+                        : $"<strong style='color: #0366d6;'>{d.AgentName}</strong>";
 
-                    return $"<li style='margin: 8px 0; padding: 12px; background: var(--color-accent-subtle); border-radius: 4px; border-left: 3px solid var(--color-accent-emphasis);'>" +
+                    return $"<li style='margin: 8px 0; padding: 12px; background: #f0f8ff; border-left: 4px solid #0366d6; border-radius: 4px;'>" +
                            $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +
-                           $"<div style='color: var(--color-fg-muted); font-size: 13px;'>{d.Instructions}</div>" +
+                           $"<div style='color: #586069; font-size: 13px;'>{d.Instructions}</div>" +
                            $"</li>";
                 }));
 
                 sections.Add($"""
-                    <div style='margin-bottom: 16px;'>
-                        <h4 style='margin: 0 0 8px 0; color: var(--color-fg-default); font-size: 14px; font-weight: 600;'>Can delegate to:</h4>
+                    <div style='margin-bottom: 20px;'>
+                        <h3 style='margin: 0 0 12px 0; color: #24292e; font-size: 16px;'>Can delegate to:</h3>
                         <ul style='margin: 0; padding: 0; list-style: none;'>{delegationsHtml}</ul>
                     </div>
                     """);
@@ -202,22 +190,24 @@ public static class AgentDetailsArea
             {
                 var exposedHtml = string.Join("", exposedAgents.Select(a =>
                 {
-                    var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{a.AgentName}' style='color: var(--color-done-fg); text-decoration: none; font-weight: 600;'>{a.AgentName}</a>";
+                    var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{a.AgentName}' style='color: #28a745; text-decoration: none; font-weight: 600;'>{a.AgentName}</a>";
 
-                    return $"<li style='margin: 8px 0; padding: 12px; background: var(--color-done-subtle); border-radius: 4px; border-left: 3px solid var(--color-done-emphasis);'>" +
+                    return $"<li style='margin: 8px 0; padding: 12px; background: #f0fff4; border-left: 4px solid #28a745; border-radius: 4px;'>" +
                            $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +
-                           $"<div style='color: var(--color-fg-muted); font-size: 13px;'>{a.Description}</div>" +
+                           $"<div style='color: #586069; font-size: 13px;'>{a.Description}</div>" +
                            $"</li>";
                 }));
 
                 sections.Add($"""
-                    <div style='margin-bottom: 16px;'>
-                        <h4 style='margin: 0 0 8px 0; color: var(--color-fg-default); font-size: 14px; font-weight: 600;'>Exposes agents:</h4>
+                    <div style='margin-bottom: 20px;'>
+                        <h3 style='margin: 0 0 12px 0; color: #24292e; font-size: 16px;'>Exposes agents:</h3>
                         <ul style='margin: 0; padding: 0; list-style: none;'>{exposedHtml}</ul>
                     </div>
                     """);
             }
-        }        // Section: Delegations from (agents that delegate TO this agent)
+        }
+
+        // Section: Delegations from (agents that delegate TO this agent)
         var delegationsFromList = new List<(IAgentDefinition sourceAgent, string reason)>();
 
         // 1. Direct delegations from agents with IAgentWithDelegation
@@ -241,22 +231,22 @@ public static class AgentDetailsArea
             var delegationsFromHtml = string.Join("", delegationsFromList.Select(item =>
             {
                 var (sourceAgent, reason) = item;
-                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Name}' style='color: var(--color-success-fg); text-decoration: none; font-weight: 600;'>{sourceAgent.Name.Wordify()}</a>";
+                var agentLink = $"<a href='{host.Hub.Address}/AgentDetails/{sourceAgent.Name}' style='color: #6f42c1; text-decoration: none; font-weight: 600;'>{sourceAgent.Name.Wordify()}</a>";
 
-                return $"<li style='margin: 8px 0; padding: 12px; background: var(--color-success-subtle); border-radius: 4px; border-left: 3px solid var(--color-success-emphasis);'>" +
+                return $"<li style='margin: 8px 0; padding: 12px; background: #f8f4fd; border-left: 4px solid #6f42c1; border-radius: 4px;'>" +
                        $"<div style='margin-bottom: 4px;'>{agentLink}</div>" +
-                       $"<div style='color: var(--color-fg-muted); font-size: 13px;'>{reason}</div>" +
+                       $"<div style='color: #586069; font-size: 13px;'>{reason}</div>" +
                        $"</li>";
             }));
 
             sections.Add($"""
                 <div>
-                    <h4 style='margin: 0 0 8px 0; color: var(--color-fg-default); font-size: 14px; font-weight: 600;'>Delegations from:</h4>
+                    <h3 style='margin: 0 0 12px 0; color: #24292e; font-size: 16px;'>Delegations from:</h3>
                     <ul style='margin: 0; padding: 0; list-style: none;'>{delegationsFromHtml}</ul>
                 </div>
                 """);
         }
 
-        return sections.Any() ? string.Join("", sections) : "<div style='color: var(--color-fg-muted); font-style: italic; padding: 12px; background: var(--color-canvas-subtle); border-radius: 4px;'>No delegations configured</div>";
+        return sections.Any() ? string.Join("", sections) : "<div style='color: #6a737d; font-style: italic; padding: 12px; background: var(--code-block-background-color, #f6f8fa); border: 1px solid var(--code-block-border-color, #e1e4e8); border-radius: 6px;'>No delegations configured</div>";
     }
 }
