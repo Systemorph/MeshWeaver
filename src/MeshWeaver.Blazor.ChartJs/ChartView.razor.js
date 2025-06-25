@@ -67,16 +67,20 @@ export async function renderChart(element, config) {
 async function loadChartJs() {
     try {
         // Load Chart.js core
-        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');        // Load Chart.js plugins
-        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js', 'chartjs-datalabels-script');
-        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js', 'chartjs-moment-script');
+        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');
+        // Wait for Chart.js to be available
+        if (!window.Chart) {
+            throw new Error("Chart.js did not load correctly.");
+        }
 
-        // Try to load colorschemes plugin (may cause issues, so load it last)
-        try {
-            await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-colorschemes@0.4.0/dist/chartjs-plugin-colorschemes.min.js', 'chartjs-colorschemes-script');
-            console.log('ColorSchemes plugin loaded successfully');
-        } catch (error) {
-            console.warn('Failed to load ColorSchemes plugin:', error);
+        // Load DataLabels plugin
+        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js', 'chartjs-datalabels-script');
+        // Wait for DataLabels to be available
+        if (window.Chart && window.ChartDataLabels) {
+            window.Chart.register(window.ChartDataLabels);
+            console.log('Chart.js DataLabels plugin registered successfully');
+        } else {
+            console.warn('Chart.js DataLabels plugin not available for registration');
         }
 
         // Load moment.js for the adapter
