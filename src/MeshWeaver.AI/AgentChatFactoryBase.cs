@@ -127,6 +127,9 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         await ret.ResumeAsync(messages);
         return ret;
     }
+
+    public Task<IReadOnlyDictionary<string, IAgentDefinition>> GetAgentsAsync()
+        => AgentDefinitions;
     protected string GetAgentInstructions(IAgentDefinition agentDefinition)
     {
         var baseInstructions = agentDefinition.Instructions;        // Check if this agent supports delegation
