@@ -187,7 +187,9 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
             var codeBlockTracker = new CodeBlockTracker();
             var responseBuilder = new StringBuilder();
             var delegationDetected = false;
-            DelegationInstruction? delegationInstruction = null; await foreach (var update in agentChat.InvokeStreamingAsync(cancellationToken))
+            DelegationInstruction? delegationInstruction = null; 
+            
+            await foreach (var update in agentChat.InvokeStreamingAsync(cancellationToken))
             {
                 var converted = ConvertToExtensionsAI(update);
                 if (converted == null) continue;

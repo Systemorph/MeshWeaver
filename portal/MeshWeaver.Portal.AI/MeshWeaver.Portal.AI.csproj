@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\modules\Northwind\MeshWeaver.Northwind.AI\MeshWeaver.Northwind.AI.csproj" />
+    <ProjectReference Include="..\..\modules\Documentation\MeshWeaver.Documentation.AI\MeshWeaver.Documentation.AI.csproj" />
   </ItemGroup>
 
 </Project>

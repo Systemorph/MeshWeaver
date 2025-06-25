@@ -52,7 +52,7 @@ public static class SharedPortalConfiguration
         services.AddMemoryChatPersistence();
         
         // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureOpenAI"));
+        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("Github"));
         services.AddAzureOpenAI();
 
         // configure Azure Foundry chat
