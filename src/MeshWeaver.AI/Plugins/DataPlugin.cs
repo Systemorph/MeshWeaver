@@ -45,7 +45,7 @@ public class DataPlugin(
         }
     }
 
-    [KernelFunction, Description($"List all data types available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
+    [KernelFunction, Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
     public async Task<string> GetDataTypes()
     {
 
@@ -92,20 +92,31 @@ public class DataPlugin(
             GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
                 .Where(m => m.HasAttribute<KernelFunctionAttribute>())
                 .Select(m =>
-                    KernelFunctionFactory.CreateFromMethod(m, this,
-                        new KernelFunctionFromMethodOptions()
-                        {
-                            FunctionName = m.Name, Description = CreateDescription(m)
-                        })));
-        return plugin;
+                {
+                    var ret = KernelFunctionFactory.CreateFromMethod(m, hub.JsonSerializerOptions, this);
+                    if (ret.Name == nameof(GetData))
+                    {
+                        var typeParameter = ret.Metadata.Parameters.First();
+                        typeParameter.Description = EnrichDescriptionByTypes(typeParameter.Description);
+                    }
+                    return ret;
+                })
+                .ToList()
+            );
+       return plugin;
     }
 
-    private string CreateDescription(MethodInfo methodInfo)
+    private string EnrichDescriptionByTypes(string description)
+    {
+        if (typeDefinitions?.Any() == true)
+            return description + "\nAvailable types: " + string.Join(", ", typeDefinitions.Keys);
+        return description;
+    }
+
+    private string GetDescription(MemberInfo methodInfo)
     {
         var desc = methodInfo.GetCustomAttribute<DescriptionAttribute>();
         var ret = desc?.Description ?? "";
-        if(typeDefinitions?.Any() == true)
-            return ret + "\nAvailable types: " + string.Join(", ", typeDefinitions.Keys);
         return ret;
     }
 }
