@@ -113,7 +113,7 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         // Add the original messages
         messagesToProcess.AddRange(messages);
 
-        var processedMessages = messagesToProcess.Select(message => ProcessMessageWithContext(message)).ToArray();
+        var processedMessages = messagesToProcess.Select(ProcessMessageWithContext).ToArray();
         agentChat.AddChatMessages(processedMessages.Select(ConvertToAgentChat).ToArray());
     }
 
