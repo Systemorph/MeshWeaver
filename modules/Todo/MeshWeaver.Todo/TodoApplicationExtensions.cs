@@ -1,4 +1,4 @@
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
@@ -18,7 +18,6 @@ public static class TodoApplicationExtensions
     {
         return configuration
             .WithTypes(
-                typeof(TodoItem),
                 typeof(TodoStatus)
             )
             .AddData(data =>

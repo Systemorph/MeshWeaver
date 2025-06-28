@@ -1,24 +1,17 @@
 using FluentAssertions;
-using MeshWeaver.Fixture;
-using MeshWeaver.Messaging;
 using MeshWeaver.Todo;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Todo.Test;
 
-public class BasicTodoTest(ITestOutputHelper output) : HubTestBase(output)
+public class BasicTodoTest(ITestOutputHelper output) : TodoDataTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureHost(configuration)
-            .ConfigureTodoApplication();
-    }
-
-    [HubFact]
+    [Fact]
     public void TodoApplication_CanBeConfigured()
     {
-        // Test that the host can be configured with TodoApplication
-        var host = GetHost();
-        host.Should().NotBeNull();
+        // Test that the mesh can be configured with TodoApplication
+        var mesh = Mesh;
+        mesh.Should().NotBeNull();
     }
 }
