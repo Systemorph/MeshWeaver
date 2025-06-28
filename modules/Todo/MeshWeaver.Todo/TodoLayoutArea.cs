@@ -232,7 +232,7 @@ public static class TodoLayoutArea
                 .WithStyle(style => style.WithMarginBottom("10px").WithColor("#2c3e50")),
                 skin => skin.WithXs(12).WithSm(8).WithMd(9))
             .WithView(Controls.Button("➕ Add New Todo")
-                .WithClickAction(_ => Task.CompletedTask)
+                .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
                 .WithStyle(style => style.WithMarginBottom("20px")),
                 skin => skin.WithXs(12).WithSm(4).WithMd(3));
 
@@ -265,16 +265,16 @@ public static class TodoLayoutArea
             UiControl statusActionButton = statusGroup.Key switch
             {
                 TodoStatus.Pending => Controls.Button("▶️ Start All")
-                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.InProgress); return Task.CompletedTask; })
                     .WithStyle(style => style.WithBackgroundColor("#28a745").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
                 TodoStatus.InProgress => Controls.Button("⏸️ Close All")
-                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.Completed); return Task.CompletedTask; })
                     .WithStyle(style => style.WithBackgroundColor("#ffc107").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
                 TodoStatus.Completed => Controls.Button("📦 Archive All")
-                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithClickAction(_ => { DeleteAllTodosInGroup(host, statusGroup); return Task.CompletedTask; })
                     .WithStyle(style => style.WithBackgroundColor("#6c757d").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
                 TodoStatus.Cancelled => Controls.Button("🗑️ Delete All")
-                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithClickAction(_ => { DeleteAllTodosInGroup(host, statusGroup); return Task.CompletedTask; })
                     .WithStyle(style => style.WithBackgroundColor("#dc3545").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
                 _ => Controls.Html("") // Empty placeholder for other statuses
             };
@@ -511,6 +511,63 @@ public static class TodoLayoutArea
     {
         var changeRequest = new DataChangeRequest()
             .WithDeletions(todoToDelete);
+
+        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+    }
+
+    /// <summary>
+    /// Submits a request to create a new todo item
+    /// </summary>
+    /// <param name="host">The layout area host</param>
+    private static void SubmitNewTodo(LayoutAreaHost host)
+    {
+        var newTodo = new TodoItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "New Todo Item",
+            Description = "Description for new todo",
+            Status = TodoStatus.Pending,
+            Category = "General",
+            DueDate = DateTime.Now.AddDays(7),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        var changeRequest = new DataChangeRequest()
+            .WithCreations(newTodo);
+
+        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+    }
+
+    /// <summary>
+    /// Updates all todos in a status group to a new status
+    /// </summary>
+    /// <param name="host">The layout area host</param>
+    /// <param name="todos">The todos to update</param>
+    /// <param name="newStatus">The new status</param>
+    private static void UpdateAllTodosInGroup(LayoutAreaHost host, IEnumerable<TodoItem> todos, TodoStatus newStatus)
+    {
+        var updatedTodos = todos.Select(todo => todo with
+        {
+            Status = newStatus,
+            UpdatedAt = DateTime.UtcNow
+        });
+
+        var changeRequest = new DataChangeRequest()
+            .WithUpdates(updatedTodos);
+
+        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+    }
+
+    /// <summary>
+    /// Deletes all todos in a group
+    /// </summary>
+    /// <param name="host">The layout area host</param>
+    /// <param name="todos">The todos to delete</param>
+    private static void DeleteAllTodosInGroup(LayoutAreaHost host, IEnumerable<TodoItem> todos)
+    {
+        var changeRequest = new DataChangeRequest()
+            .WithDeletions(todos);
 
         host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
     }

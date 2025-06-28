@@ -21,7 +21,9 @@ public record DataChangeRequest
         => this with { Creations = Creations.AddRange(creations) };
 
     public DataChangeRequest WithUpdates(params object[] updates)
-    => this with { Updates = Updates.AddRange(updates) };
+        => this with { Updates = Updates.AddRange(updates) };
+    public DataChangeRequest WithUpdates(IEnumerable<object> updates)
+        => this with { Updates = Updates.AddRange(updates) };
     public DataChangeRequest WithDeletions(params object[] deletions)
     => this with { Deletions = Deletions.AddRange(deletions) };
 
