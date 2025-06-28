@@ -24,7 +24,8 @@ public static class TodoApplicationExtensions
             .AddData(data =>
                 data.AddSource(dataSource =>
                     dataSource.WithType<TodoItem>(t =>
-                        t.WithInitialData(TodoSampleData.GetSampleTodos())
+                        t.WithKey(todo => todo.Id)
+                         .WithInitialData(TodoSampleData.GetSampleTodos())
                     )
                 )
             )

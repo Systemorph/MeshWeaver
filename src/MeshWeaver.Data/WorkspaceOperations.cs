@@ -48,14 +48,14 @@ public static class WorkspaceOperations
         }
 
 
-        activity.Update(a => a.HasErrors() ? a with{Log = a.Log} : StartUpdate(a, workspace, change, request), 
+        activity.Update(a => a.HasErrors() ? a with { Log = a.Log } : StartUpdate(a, workspace, change, request),
             ex => UpdateFailed(workspace, request, ex)
             );
     }
 
     private static void UpdateFailed(IWorkspace workspace, IMessageDelivery delivery, Exception exception)
     {
-        if(delivery is not null)
+        if (delivery is not null)
             workspace.Hub.Post(new DeliveryFailure(delivery, exception?.ToString()), o => o.ResponseFor(delivery));
     }
 
@@ -96,7 +96,7 @@ public static class WorkspaceOperations
                 try
                 {
 
-                    var updates = group.GroupBy(x => (Op:(x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
+                    var updates = group.GroupBy(x => (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
                         .Aggregate(new EntityStoreAndUpdates(store, [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
@@ -248,7 +248,7 @@ public static class WorkspaceOperations
         foreach (var instance in instances)
         {
 
-            var context = new ValidationContext(instance, serviceProvider:workspace.Hub.ServiceProvider, items:null);
+            var context = new ValidationContext(instance, serviceProvider: workspace.Hub.ServiceProvider, items: null);
             isValid = isValid && Validator.TryValidateObject(instance, context, validationResults);
         }
 
@@ -264,7 +264,7 @@ public static class WorkspaceOperations
     }
 
     public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, string changedBy,
-        UpdateOptions options = null )
+        UpdateOptions options = null)
     {
         options ??= UpdateOptions.Default;
         var newStore = store.Merge(updated, options);

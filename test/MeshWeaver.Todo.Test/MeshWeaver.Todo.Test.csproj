@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>
