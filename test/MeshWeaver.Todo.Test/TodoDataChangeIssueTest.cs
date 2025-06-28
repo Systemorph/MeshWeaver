@@ -1,10 +1,12 @@
+﻿using System;
+using System.Linq;
 using System.Reactive.Linq;
+using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Fixture;
-using MeshWeaver.Messaging;
 using MeshWeaver.Todo;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Todo.Test;
@@ -13,28 +15,14 @@ namespace MeshWeaver.Todo.Test;
 /// Test to verify the DataChangeRequest issue described by the user
 /// This simulates the button click scenario that should trigger layout area updates
 /// </summary>
-public class TodoDataChangeIssueTest(ITestOutputHelper output) : HubTestBase(output)
+public class TodoDataChangeIssueTest(ITestOutputHelper output) : TodoDataTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureHost(configuration)
-            .ConfigureTodoApplication();
-    }
-
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
-    {
-        return base.ConfigureClient(configuration)
-            .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource =>
-                    dataSource.WithType<TodoItem>())
-            );
-    }
 
     /// <summary>
     /// Test that reproduces the DataChangeRequest issue
     /// This simulates what happens when a user clicks a button in the TodoList layout area
     /// </summary>
-    [HubFact]
+    [Fact]
     public async Task SimulateButtonClick_DataChangeRequest_ShouldUpdateData()
     {
         // Step 1: Set up data context with TodoItems

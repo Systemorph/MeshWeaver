@@ -27,6 +27,14 @@ public class Workspace : IWorkspace
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
 
+    public IObservable<IEnumerable<TType>> GetRemoteStream<TType>(Address address)
+    {
+        return GetRemoteStream(
+            address,
+            new CollectionsReference(Hub.TypeRegistry.GetOrAddType(typeof(TType)))
+            ).Select(x => x.Value.Collections.FirstOrDefault().Value?.Instances.Values.OfType<TType>());
+    }
+
     public IObservable<IReadOnlyCollection<T>> GetStream<T>()
     {
         var collection = DataContext.GetTypeSource(typeof(T));
@@ -183,7 +191,7 @@ public class Workspace : IWorkspace
     {
         var referenceType = request.Reference.GetType();
         var genericWorkspaceType = referenceType;
-        while (!genericWorkspaceType.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
+        while (!genericWorkspaceType!.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
         {
             genericWorkspaceType = genericWorkspaceType.BaseType;
         }

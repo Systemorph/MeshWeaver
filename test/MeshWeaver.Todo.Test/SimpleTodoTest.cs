@@ -1,6 +1,6 @@
 using FluentAssertions;
-using MeshWeaver.Fixture;
 using MeshWeaver.Todo;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Todo.Test;
@@ -8,9 +8,9 @@ namespace MeshWeaver.Todo.Test;
 /// <summary>
 /// Simple test to verify basic Todo functionality
 /// </summary>
-public class SimpleTodoTest(ITestOutputHelper output) : HubTestBase(output)
+public class SimpleTodoTest(ITestOutputHelper output) : TodoDataTestBase(output)
 {
-    [HubFact]
+    [Fact]
     public void CanCreateTodoItem()
     {
         var todo = new TodoItem
