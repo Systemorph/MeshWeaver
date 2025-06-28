@@ -6,7 +6,7 @@ namespace MeshWeaver.Data;
 
 public record StreamMessage(string StreamId);
 
-public record DataChangeRequest
+public record DataChangeRequest 
     : IRequest<DataChangeResponse>
 {
     public string ChangedBy { get; init; }

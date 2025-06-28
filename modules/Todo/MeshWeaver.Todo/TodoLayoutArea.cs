@@ -39,7 +39,7 @@ public static class TodoLayoutArea
         _ = context; // Unused parameter but required by interface
         return host.Workspace
             .GetStream<TodoItem>()
-            .Select(todoItems => CreateTodosByCategoryMarkdown(todoItems))
+            .Select(CreateTodosByCategoryMarkdown)
             .StartWith(Controls.Markdown("# Todos by Category\n\n*Loading todo items...*"));
     }
 
@@ -54,7 +54,7 @@ public static class TodoLayoutArea
         _ = context; // Unused parameter but required by interface
         return host.Workspace
             .GetStream<TodoItem>()
-            .Select(todoItems => CreateTodoSummaryMarkdown(todoItems))
+            .Select(CreateTodoSummaryMarkdown)
             .StartWith(Controls.Markdown("# Todo Summary\n\n*Loading todo statistics...*"));
     }
 
