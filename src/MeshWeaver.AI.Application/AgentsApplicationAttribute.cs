@@ -1,14 +1,14 @@
 ﻿using MeshWeaver.AI.Application;
 using MeshWeaver.Mesh;
 
-[assembly: AgentsApplicationNode]
+[assembly: AgentsApplication]
 
 namespace MeshWeaver.AI.Application;
 
 /// <summary>
 /// Mesh node attribute for the Agents application
 /// </summary>
-public class AgentsApplicationNodeAttribute : MeshNodeAttribute
+public class AgentsApplicationAttribute : MeshNodeAttribute
 {
     public override IEnumerable<MeshNode> Nodes =>
     [

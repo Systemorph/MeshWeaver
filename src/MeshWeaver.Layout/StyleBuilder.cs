@@ -49,6 +49,7 @@ public record StyleBuilder
     public object BorderWidth { get; init; }
     public object BorderStyle { get; init; }
     public object BorderColor { get; init; }
+    public object BorderRadius { get; init; }
 
     // Additional common CSS properties
     public object Color { get; init; }
@@ -61,6 +62,7 @@ public record StyleBuilder
     public object Right { get; init; }
     public object Bottom { get; init; }
     public object Left { get; init; }
+    public object BoxShadow { get; init; }
 
 
     /// <summary>
@@ -195,6 +197,7 @@ public record StyleBuilder
     public StyleBuilder WithBorderWidth(object value) => this with { BorderWidth = value };
     public StyleBuilder WithBorderStyle(object value) => this with { BorderStyle = value };
     public StyleBuilder WithBorderColor(object value) => this with { BorderColor = value };
+    public StyleBuilder WithBorderRadius(object value) => this with { BorderRadius = value };
 
     // Additional common CSS property methods
     public StyleBuilder WithColor(object value) => this with { Color = value };
@@ -207,6 +210,7 @@ public record StyleBuilder
     public StyleBuilder WithRight(object value) => this with { Right = value };
     public StyleBuilder WithBottom(object value) => this with { Bottom = value };
     public StyleBuilder WithLeft(object value) => this with { Left = value };
+    public StyleBuilder WithBoxShadow(object value) => this with { BoxShadow = value };
 
     public override string ToString()
     {
@@ -254,6 +258,7 @@ public record StyleBuilder
         if (BorderWidth != null) styleBuilder.Append($"border-width: {BorderWidth}; ");
         if (BorderStyle != null) styleBuilder.Append($"border-style: {BorderStyle}; ");
         if (BorderColor != null) styleBuilder.Append($"border-color: {BorderColor}; ");
+        if (BorderRadius != null) styleBuilder.Append($"border-radius: {BorderRadius}; ");
 
         // Add additional common CSS properties
         if (Color != null) styleBuilder.Append($"color: {Color}; ");
@@ -266,6 +271,7 @@ public record StyleBuilder
         if (Right != null) styleBuilder.Append($"right: {Right}; ");
         if (Bottom != null) styleBuilder.Append($"bottom: {Bottom}; ");
         if (Left != null) styleBuilder.Append($"left: {Left}; ");
+        if (BoxShadow != null) styleBuilder.Append($"box-shadow: {BoxShadow}; ");
 
         return styleBuilder.ToString().Trim();
     }
