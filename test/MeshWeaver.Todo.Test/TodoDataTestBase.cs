@@ -1,4 +1,4 @@
-using MeshWeaver.Hosting.Monolith.TestBase;
+﻿using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -28,6 +28,6 @@ public abstract class TodoDataTestBase(ITestOutputHelper output) : MonolithMeshT
     /// </summary>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration).AddLayoutClient();
+        return base.ConfigureClient(configuration).AddLayoutClient().WithType<TodoItem>(nameof(TodoItem));
     }
 }

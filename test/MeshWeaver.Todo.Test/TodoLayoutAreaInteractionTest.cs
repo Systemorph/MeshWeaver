@@ -5,9 +5,6 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Composition;
-using MeshWeaver.Messaging;
-using MeshWeaver.Todo;
 using Xunit;
 using Xunit.Abstractions;
 
