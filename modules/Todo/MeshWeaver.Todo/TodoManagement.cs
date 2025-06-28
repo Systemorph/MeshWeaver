@@ -88,12 +88,11 @@ public static class TodoManagement
     /// <returns>A Stack control with markdown and action buttons</returns>
     private static UiControl CreateInteractiveTodoListMarkdown(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
     {
-        var stack = Controls.Stack
-            .WithView(Controls.H2("📝 Todo List with Actions"));
-
         if (!todoItems.Any())
         {
-            return stack.WithView(Controls.Markdown("*No todo items found. Add your first todo to get started!*"));
+            return Controls.Stack
+                .WithView(Controls.H2("📝 Todo List with Actions"))
+                .WithView(Controls.Markdown("*No todo items found. Add your first todo to get started!*"));
         }
 
         // Order by due date (nulls last), then by created date
@@ -102,9 +101,17 @@ public static class TodoManagement
             .ThenBy(t => t.CreatedAt)
             .ToList();
 
-        // Follow the exact Northwind pattern but with 2-column layout
+        // Start with LayoutGrid as the main container
         var mainGrid = Controls.LayoutGrid
             .WithSkin(skin => skin.WithSpacing(8));
+
+        // First row: Title and Add New Todo button
+        mainGrid = mainGrid
+            .WithView(Controls.H2("📝 Todo List with Actions"),
+                     skin => skin.WithXs(12).WithSm(8).WithMd(9))
+            .WithView(Controls.Button("➕ Add New Todo")
+                .WithClickAction(_ => Task.CompletedTask),
+                     skin => skin.WithXs(12).WithSm(4).WithMd(3));
 
         // Group by status for better organization
         var statusGroups = orderedTodos.GroupBy(t => t.Status).ToList();
@@ -114,10 +121,21 @@ public static class TodoManagement
             var statusIcon = GetStatusIcon(statusGroup.Key);
             var statusName = statusGroup.Key.ToString();
 
-            // Add status header (full width)
+            // Heading row: Status header and action button (or placeholder)
+            UiControl statusActionButton = statusGroup.Key switch
+            {
+                TodoStatus.Completed => Controls.Button("Archive All")
+                    .WithClickAction(_ => Task.CompletedTask),
+                TodoStatus.Pending => Controls.Button("Start All")
+                    .WithClickAction(_ => Task.CompletedTask),
+                _ => Controls.Html("") // Empty placeholder for other statuses
+            };
+
             mainGrid = mainGrid
                 .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})"),
-                         skin => skin.WithXs(12));
+                         skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                .WithView(statusActionButton,
+                         skin => skin.WithXs(12).WithSm(4).WithMd(3));
 
             // Add each todo using the Northwind pattern: content + buttons as separate views
             foreach (var todo in statusGroup)
@@ -137,9 +155,7 @@ public static class TodoManagement
             }
         }
 
-        stack = stack.WithView(mainGrid);
-
-        return stack;
+        return mainGrid;
     }
 
     /// <summary>

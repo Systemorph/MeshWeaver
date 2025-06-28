@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -216,24 +216,35 @@ public static class TodoLayoutArea
     };
 
     /// <summary>
-    /// Creates an interactive todo list with a clean layout structure and collapsible action menus
+    /// Creates an interactive todo list with a clean layout grid structure and vertically aligned action buttons
     /// </summary>
     /// <param name="todoItems">The collection of todo items</param>
     /// <param name="host">The layout area host for submitting changes</param>
-    /// <returns>A Stack control with structured todo items</returns>
+    /// <returns>A LayoutGrid control with structured todo items</returns>
     private static UiControl CreateInteractiveTodoListStack(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
     {
-        var mainStack = Controls.Stack
-            .WithView(CreateTodoListHeader())
+        // Create main LayoutGrid with minimal spacing
+        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(0));
+
+        // First row: Title and Add New Todo button
+        mainGrid = mainGrid
+            .WithView(Controls.H2("📝 Todo List with Actions")
+                .WithStyle(style => style.WithMarginBottom("10px").WithColor("#2c3e50")),
+                skin => skin.WithXs(12).WithSm(8).WithMd(9))
             .WithView(Controls.Button("➕ Add New Todo")
                 .WithClickAction(_ => Task.CompletedTask)
-                .WithStyle(style => style.WithMarginBottom("20px")));
+                .WithStyle(style => style.WithMarginBottom("20px")),
+                skin => skin.WithXs(12).WithSm(4).WithMd(3));
 
         if (!todoItems.Any())
         {
-            return mainStack.WithView(
-                Controls.Markdown("*No todo items found. Click 'Add New Todo' to get started!*")
-                    .WithStyle(style => style.WithColor("#666")));
+            mainGrid = mainGrid
+                .WithView(Controls.Markdown("*No todo items found. Click 'Add New Todo' to get started!*")
+                    .WithStyle(style => style.WithColor("#666")),
+                    skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                .WithView(Controls.Html(""),
+                    skin => skin.WithXs(12).WithSm(4).WithMd(3));
+            return mainGrid;
         }
 
         // Order by due date (nulls last), then by created date
@@ -250,29 +261,48 @@ public static class TodoLayoutArea
             var statusIcon = GetStatusIcon(statusGroup.Key);
             var statusName = statusGroup.Key.ToString();
 
-            // Status group header
-            mainStack = mainStack.WithView(
-                Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
-                    .WithStyle(style => style.WithMarginTop("25px").WithMarginBottom("15px").WithColor("#333")));
+            // Create action button for status header
+            UiControl statusActionButton = statusGroup.Key switch
+            {
+                TodoStatus.Pending => Controls.Button("▶️ Start All")
+                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithStyle(style => style.WithBackgroundColor("#28a745").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
+                TodoStatus.InProgress => Controls.Button("⏸️ Close All")
+                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithStyle(style => style.WithBackgroundColor("#ffc107").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
+                TodoStatus.Completed => Controls.Button("📦 Archive All")
+                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithStyle(style => style.WithBackgroundColor("#6c757d").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
+                TodoStatus.Cancelled => Controls.Button("🗑️ Delete All")
+                    .WithClickAction(_ => Task.CompletedTask)
+                    .WithStyle(style => style.WithBackgroundColor("#dc3545").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
+                _ => Controls.Html("") // Empty placeholder for other statuses
+            };
+
+            // Status group header row with aligned content
+            mainGrid = mainGrid
+                .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
+                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("#333").WithDisplay("flex").WithAlignItems("center")),
+                    skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                .WithView(Controls.Stack
+                    .WithView(statusActionButton)
+                    .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end").WithHeight("100%").WithPaddingTop("20px")),
+                    skin => skin.WithXs(12).WithSm(4).WithMd(3));
 
             // Todo items in this status group
             foreach (var todo in statusGroup)
             {
-                mainStack = mainStack.WithView(CreateTodoItemRow(todo, host));
+                var (todoContent, todoActions) = CreateTodoItemContentAndActions(todo, host);
+
+                mainGrid = mainGrid
+                    .WithView(todoContent,
+                        skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                    .WithView(todoActions,
+                        skin => skin.WithXs(12).WithSm(4).WithMd(3));
             }
         }
 
-        return mainStack;
-    }
-
-    /// <summary>
-    /// Creates the header for the todo list
-    /// </summary>
-    /// <returns>A header control</returns>
-    private static UiControl CreateTodoListHeader()
-    {
-        return Controls.H2("📝 Todo List")
-            .WithStyle(style => style.WithMarginBottom("10px").WithColor("#2c3e50"));
+        return mainGrid;
     }
 
     /// <summary>
@@ -526,5 +556,55 @@ public static class TodoLayoutArea
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Creates todo item content and actions as separate controls for layout grid
+    /// </summary>
+    /// <param name="todo">The todo item</param>
+    /// <param name="host">The layout area host for submitting changes</param>
+    /// <returns>A tuple containing the content control and actions control</returns>
+    private static (UiControl content, UiControl actions) CreateTodoItemContentAndActions(TodoItem todo, LayoutAreaHost host)
+    {
+        var statusIcon = GetStatusIcon(todo.Status);
+        var contentMarkdown = CreateCompactTodoContent(todo);
+        var actionControls = CreateActionControls(todo, host);
+
+        // Create content control with icon and text
+        var content = Controls.Stack
+            .WithView(
+                Controls.Stack
+                    .WithView(Controls.Markdown($"{statusIcon}"))
+                    .WithStyle(style => style
+                        .WithWidth("40px")
+                        .WithTextAlign("center")
+                        .WithFlexShrink("0")))
+            .WithView(
+                Controls.Stack
+                    .WithView(Controls.Markdown(contentMarkdown))
+                    .WithStyle(style => style
+                        .WithFlexGrow("1")
+                        .WithMinWidth("0")
+                        .WithPaddingLeft("15px")))
+            .WithStyle(style => style
+                .WithDisplay("flex")
+                .WithFlexDirection("row")
+                .WithAlignItems("flex-start")
+                .WithPadding("15px")
+                .WithMarginBottom("10px")
+                .WithBorder("1px solid #e1e8ed")
+                .WithBorderRadius("8px")
+                .WithBackgroundColor("#fafbfc")
+                .WithBoxShadow("0 1px 3px rgba(0,0,0,0.1)"));
+
+        // Create actions control
+        var actions = Controls.Stack
+            .WithView(actionControls)
+            .WithStyle(style => style
+                .WithTextAlign("right")
+                .WithPadding("15px")
+                .WithMarginBottom("10px"));
+
+        return (content, actions);
     }
 }
