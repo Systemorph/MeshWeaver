@@ -162,33 +162,46 @@ public static class DataExtensions
 
     private static MessageHubConfiguration RegisterDataEvents(this MessageHubConfiguration configuration) =>
         configuration
-            .WithHandler<DataChangeRequest>(async (hub, request, cancellationToken) =>
-            {
-                var activity = new Activity(ActivityCategory.DataUpdate, hub);
-                hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity, request);
-                await activity.Complete(log =>
-                    hub.Post(new DataChangeResponse(hub.Version, log),
-                        o => o.ResponseFor(request)),
-                    cancellationToken: cancellationToken);
-                return request.Processed();
-            }).WithHandler<SubscribeRequest>((hub, request) =>
-            {
-                hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-                return request.Processed();
-            }).WithHandler<GetSchemaRequest>((hub, request) =>
-            {
-                var schema = GenerateJsonSchema(hub, request.Message.Type);
-                hub.Post(new SchemaResponse(request.Message.Type, schema), o => o.ResponseFor(request));
-                return request.Processed();
-            })
-            .WithHandler<GetDomainTypesRequest>((hub, request) =>
-            {
-                var types = GetDomainTypes(hub);
-                hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
-                return request.Processed();
-            }); 
-    
-    
+            .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
+            .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
+            .WithHandler<GetSchemaRequest>(HandleGetSchemaRequest)
+            .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest);
+
+    private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request) 
+    {
+        var types = GetDomainTypes(hub);
+        hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    private static IMessageDelivery HandleGetSchemaRequest(IMessageHub hub, IMessageDelivery<GetSchemaRequest> request)
+    {
+        var schema = GenerateJsonSchema(hub, request.Message.Type);
+        hub.Post(new SchemaResponse(request.Message.Type, schema), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+
+    private static IMessageDelivery HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request)
+    {
+        hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
+        return request.Processed();
+    }
+
+    private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
+        IMessageDelivery<DataChangeRequest> request, CancellationToken cancellationToken)
+    {
+        var activity = new Activity(ActivityCategory.DataUpdate, hub);
+        hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
+            request);
+        await activity.Complete(log =>
+                hub.Post(new DataChangeResponse(hub.Version, log),
+                    o => o.ResponseFor(request)),
+            cancellationToken: cancellationToken);
+        return request.Processed();
+    }
+
+
     private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
