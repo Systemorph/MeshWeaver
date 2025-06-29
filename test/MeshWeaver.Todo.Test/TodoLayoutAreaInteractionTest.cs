@@ -79,24 +79,72 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         Output.WriteLine($"✅ Step 1: Initial LayoutGrid rendered with {initialControl.Areas.Count} areas");
 
-        // Step 2: Find actual button controls in the layout areas
+        // Step 2: Benchmark - Find and validate "Pending (X)" heading with count > 0
+        Output.WriteLine("📊 Step 2: Finding and validating Pending count before action...");
+
+        int initialPendingCount = 0;
+        string pendingHeaderAreaName = null;
+
+        foreach (var area in initialControl.Areas)
+        {
+            var areaName = area.Area.ToString();
+            try
+            {
+                var areaControl = await stream
+                    .GetControlStream(areaName)
+                    .Timeout(2.Seconds())
+                    .FirstOrDefaultAsync();
+
+                if (areaControl is LabelControl labelControl)
+                {
+                    var labelContent = labelControl.Data?.ToString() ?? "";
+                    Output.WriteLine($"   Checking Label area {areaName}: '{labelContent}'");
+
+                    // Look for heading with "Pending" and count
+                    if (labelContent.Contains("Pending") && labelContent.Contains("(") && labelContent.Contains(")"))
+                    {
+                        // Extract count from "(X)" format
+                        var match = System.Text.RegularExpressions.Regex.Match(labelContent, @"Pending \((\d+)\)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out var count))
+                        {
+                            initialPendingCount = count;
+                            pendingHeaderAreaName = areaName;
+                            Output.WriteLine($"🎯 Found Pending header: '{labelContent}' with count {count} in area {areaName}");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.WriteLine($"   Could not get control for area {areaName}: {ex.Message}");
+            }
+        }
+
+        // Validate we found pending items
+        initialPendingCount.Should().BeGreaterThan(0, "Should have at least one pending todo item before starting test");
+        pendingHeaderAreaName.Should().NotBeNull("Should find the Pending heading area");
+        Output.WriteLine($"✅ Step 2: Confirmed initial pending count: {initialPendingCount} todos");
+
+        // Step 3: Find actual button controls in the layout areas
+        Output.WriteLine("🔍 Step 3: Looking for actual button controls...");
         Output.WriteLine("🔍 Step 2: Looking for actual button controls...");
-        
+
         // Examine all areas to find buttons
         foreach (var area in initialControl.Areas)
         {
             var areaName = area.Area?.ToString();
             Output.WriteLine($"   Area: {areaName}");
         }
-        
+
         // Look for button controls in the layout areas
         ButtonControl startButton = null;
         string buttonAreaName = null;
-        
+
         foreach (var area in initialControl.Areas)
         {
             var areaName = area.Area.ToString();
-            
+
             // Get controls for this specific area
             try
             {
@@ -104,14 +152,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                     .GetControlStream(areaName)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
-                
+
                 if (areaControls is ButtonControl button)
                 {
                     var text = button.Data.ToString();
                     Output.WriteLine($"   Found button in area {areaName}: '{button.Data}'");
-                    
+
                     // Look for a "Start" or action button
-                    if (text.Contains("Start") || 
+                    if (text.Contains("Start") ||
                         text.Contains("Begin") ||
                         text.Contains("▶"))
                     {
@@ -123,7 +171,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                 else if (areaControls is StackControl stack)
                 {
                     Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
-                    
+
                     // Look for buttons inside the stack control areas
                     if (stack.Areas != null)
                     {
@@ -139,14 +187,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                                         .GetControlStream(stackAreaName)
                                         .Timeout(2.Seconds())
                                         .FirstOrDefaultAsync();
-                                    
+
                                     if (stackAreaControl is ButtonControl stackButton)
                                     {
                                         var text = stackButton.Data?.ToString() ?? "";
                                         Output.WriteLine($"   Found button in stack area {stackAreaName}: '{text}'");
-                                        
+
                                         // Look for a "Start" or action button
-                                        if (text.Contains("Start") || 
+                                        if (text.Contains("Start") ||
                                             text.Contains("Begin") ||
                                             text.Contains("▶") ||
                                             (startButton == null)) // First button as fallback
@@ -182,15 +230,15 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         }
 
         startButton.Should().NotBeNull("Should find at least one clickable button");
-        Output.WriteLine($"✅ Step 2: Found clickable button '{startButton.Data}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Data}' in area {buttonAreaName}");
 
-        // Step 3: Click the actual button control
-        Output.WriteLine("🖱️ Step 3: Clicking the actual button control...");
-        
+        // Step 4: Click the actual button control
+        Output.WriteLine("🖱️ Step 4: Clicking the actual button control...");
+
         // Create a click event for the specific button area
         var clickEvent = new ClickedEvent(buttonAreaName, stream.StreamId);
         client.Post(clickEvent, o => o.WithTarget(TodoApplicationAttribute.Address));
-        Output.WriteLine($"✅ Step 3: Click event sent for button '{startButton.Data}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 4: Click event sent for button '{startButton.Data}' in area {buttonAreaName}");
 
         // Step 5: Verify the layout system is still responsive after the click
         var finalLayoutGrid = await stream
@@ -199,19 +247,66 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             .Skip(1)
             //.Timeout(5.Seconds())
             .FirstAsync();
-        
+
         finalLayoutGrid.Should().NotBeNull("Layout system should still be responsive");
         finalLayoutGrid.Areas.Should().NotBeEmpty("Should still have layout areas after click");
         Output.WriteLine($"✅ Step 5: Layout system responsive - {finalLayoutGrid.Areas.Count} areas available");
 
-        // Step 6: Summary and conclusion
+        // Step 6: Benchmark - Validate that pending count is now 0 after clicking "Start All"
+        Output.WriteLine("📊 Step 6: Validating that pending count is now 0 after clicking 'Start All'...");
+
+        int finalPendingCount = -1;
+        bool foundFinalPendingHeader = false;
+
+        foreach (var area in finalLayoutGrid.Areas)
+        {
+            var areaName = area.Area.ToString();
+            try
+            {
+                var areaControl = await stream
+                    .GetControlStream(areaName)
+                    .Skip(1) // Skip the first emission to get updated data after the button click
+                    .Timeout(2.Seconds())
+                    .FirstOrDefaultAsync();
+
+                if (areaControl is LabelControl labelControl)
+                {
+                    var labelContent = labelControl.Data?.ToString() ?? "";
+                    if (labelContent.Contains("Pending") && labelContent.Contains("(") && labelContent.Contains(")"))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(labelContent, @"Pending \((\d+)\)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out var count))
+                        {
+                            finalPendingCount = count;
+                            foundFinalPendingHeader = true;
+                            Output.WriteLine($"🎯 Found final Pending header: '{labelContent}' with count {count} in area {areaName}");
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.WriteLine($"   Could not get control for final area {areaName}: {ex.Message}");
+            }
+        }
+
+        // Validate the final state
+        foundFinalPendingHeader.Should().BeTrue("Should still find the Pending header after the action");
+        finalPendingCount.Should().Be(0, "After clicking 'Start All', there should be 0 pending todos");
+        Output.WriteLine($"✅ Step 6: Confirmed final pending count: {finalPendingCount} todos (expected 0)");
+
+        // Step 7: Summary and conclusion
+        // Step 7: Summary and conclusion
         Output.WriteLine("🎯 CONCLUSION:");
         Output.WriteLine("✅ Layout areas render correctly");
+        Output.WriteLine($"✅ Initial pending count was {initialPendingCount} (> 0)");
         Output.WriteLine("✅ Found actual button controls");
         Output.WriteLine("✅ Button click events can be sent to specific areas");
+        Output.WriteLine($"✅ Final pending count is {finalPendingCount} (= 0 after Start All)");
         Output.WriteLine("✅ Layout system remains stable after clicks");
         Output.WriteLine("🔧 NOTE: Data update testing done in separate tests (TodoDataChangeTest)");
-        Output.WriteLine("🔧 NOTE: This test focuses on layout area infrastructure and button discovery");
+        Output.WriteLine("🔧 NOTE: This test focuses on layout area infrastructure and validates pending count changes");
     }
 
     /// <summary>
@@ -224,13 +319,13 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         foreach (var area in layoutGrid.Areas)
         {
             var areaName = area.Area?.ToString();
-            if (!string.IsNullOrEmpty(areaName) && 
+            if (!string.IsNullOrEmpty(areaName) &&
                 (areaName.Contains("Pending") || areaName.Contains("Start") || areaName.Contains("Todo")))
             {
                 return areaName;
             }
         }
-        
+
         // Fallback: return first area (this is a simplified approach)
         return layoutGrid.Areas.FirstOrDefault()?.Area?.ToString();
     }
@@ -256,13 +351,13 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         foreach (var area in layoutGrid.Areas)
         {
             var areaName = area.Area?.ToString();
-            if (!string.IsNullOrEmpty(areaName) && 
+            if (!string.IsNullOrEmpty(areaName) &&
                 (areaName.Contains("InProgress") || areaName.Contains("Progress") || areaName.Contains("Complete")))
             {
                 return areaName;
             }
         }
-        
+
         return null;
     }
 
