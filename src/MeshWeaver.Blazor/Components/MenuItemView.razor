@@ -1,16 +1,87 @@
 ﻿@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
-<div class="menu-item">
-    <FluentMenuItem 
-        OnClick="OnClick"
-    >@Title</FluentMenuItem>
-</div>
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@using MeshWeaver.Layout
+
+@if (HasSubMenus)
+{
+    @if (HasTopLevelAction)
+    {
+        <!-- Has top-level action AND sub-menus: Split button with main action and expand arrow -->
+        <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal"
+            Style="@($"display: flex; gap: 0; width: {Width}; {Style}")">
+            <FluentButton Appearance="@ButtonAppearance" OnClick="OnClick"
+                Style="flex: 1; border-radius: 4px 0 0 4px; text-align: left; justify-content: flex-start; display: flex;">
+                @Title
+            </FluentButton>
+            <FluentMenuButton Text="&#8230;" ButtonAppearance="@ButtonAppearance"
+                Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;">
+                @foreach (var area in ViewModel.Areas)
+                {
+                    <FluentMenuItem>
+                        <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+                    </FluentMenuItem>
+                }
+            </FluentMenuButton>
+        </FluentStack>
+    }
+    else
+    {
+        <!-- No top-level action: Clicking button expands menu -->
+        <div Style="@($"width: {Width}; {Style}")">
+            <FluentMenuButton Text="@Title" Appearance="@ButtonAppearance"
+                Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
+                @foreach (var area in ViewModel.Areas)
+                {
+                    <FluentMenuItem>
+                        <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+                    </FluentMenuItem>
+                }
+            </FluentMenuButton>
+        </div>
+    }
+}
+else
+{
+    <!-- Regular menu item without sub-menus -->
+    <div Style="@($"width: {Width}; {Style}")">
+        <FluentButton OnClick="OnClick" Appearance="@ButtonAppearance"
+            Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
+            @Title
+        </FluentButton>
+    </div>
+}
+
 @code
 {
     private string Title { get; set; }
+    private FluentAppearance ButtonAppearance { get; set; } = FluentAppearance.Neutral;
+    private string Width { get; set; } = "auto";
+    private bool HasSubMenus => ViewModel.Areas?.Any() == true;
+    private bool HasTopLevelAction => ViewModel.IsClickable;
+
     protected override void BindData()
     {
         base.BindData();
         DataBind(Skin.Title, x => x.Title);
+        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin.Style, x => x.Style);
+
+        // Handle appearance conversion
+        if (Skin.Appearance != null)
+        {
+            ConvertToFluentAppearance(Skin.Appearance);
+        }
     }
 
+    private void ConvertToFluentAppearance(object appearance)
+    {
+        ButtonAppearance = appearance switch
+        {
+            FluentAppearance fluentAppearance => fluentAppearance,
+            string stringAppearance => Enum.TryParse<FluentAppearance>(stringAppearance, true, out var parsedAppearance)
+            ? parsedAppearance
+            : FluentAppearance.Neutral,
+            _ => FluentAppearance.Neutral
+        };
+    }
 }
