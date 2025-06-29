@@ -3,6 +3,7 @@ using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Activities;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,7 +21,7 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
-        if(hub.IsDisposing)
+        if (hub.IsDisposing)
             throw new ObjectDisposedException($"Hub {hub.Address} is disposing, cannot create stream.");
 
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
@@ -286,11 +287,20 @@ public static class JsonSynchronizationStream
         this JsonElement current,
         JsonElement updated,
         JsonPatch patch,
-        JsonSerializerOptions options)
+        JsonSerializerOptions options,
+        ITypeRegistry typeRegistry = null)
         => patch.Operations.Select(p =>
         {
             var id = p.Path.Skip(1).FirstOrDefault();
-            var collection = p.Path.First();
+            var rawCollection = p.Path.First();
+
+            // Normalize collection name using TypeRegistry to ensure consistency
+            // This fixes the bug where JsonPatch paths contain full type names 
+            // but CollectionsReference expects short names from TypeRegistry
+            var collection = typeRegistry?.TryGetType(rawCollection, out var typeDefinition) == true
+                ? typeDefinition.CollectionName
+                : rawCollection;
+
             var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
             return new EntityUpdate(
                 collection,

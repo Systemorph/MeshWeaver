@@ -449,7 +449,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Use the hub from the stream to post the event
         stream.Hub.Post(clickEvent, o => o.WithTarget(TodoApplicationAttribute.Address));
         Output.WriteLine($"✅ Click event sent for button '{startButton.Data}' in area {buttonAreaName}");
-        
+
     }
 
     #endregion

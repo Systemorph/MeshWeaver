@@ -20,7 +20,7 @@ public static class StandardReducers
             .AddWorkspaceReference<PartitionedWorkspaceReference<InstanceCollection>, InstanceCollection>(
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
-            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci,r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
+            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
@@ -44,7 +44,8 @@ public static class StandardReducers
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
     {
-        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions));
+        var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
+        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions, typeRegistry));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
@@ -68,7 +69,7 @@ public static class StandardReducers
             return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
 
         return new(
-            current.Value.ReduceImpl(reference), 
+            current.Value.ReduceImpl(reference),
             null,
             ChangeType.Full,
             current.Version,
