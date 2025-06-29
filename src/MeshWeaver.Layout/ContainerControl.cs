@@ -35,6 +35,11 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     /// </summary>
     protected ImmutableList<Renderer> Renderers { get; init; } = ImmutableList<Renderer>.Empty;
     /// <summary>
+    /// Gets the list of views used for equality comparison. This stores the actual views
+    /// to enable proper equality comparison of container controls.
+    /// </summary>
+    protected ImmutableList<object> Views { get; init; } = ImmutableList<object>.Empty;
+    /// <summary>
     /// Generates an automatic name for a new area control.
     /// </summary>
     /// <returns>A string representing the automatic name.</returns>
@@ -76,6 +81,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
+            Views = Views.Add(view),
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString());
@@ -103,6 +109,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
+            Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString());
@@ -122,6 +129,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
+            Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString());
@@ -140,6 +148,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
+            Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString());
@@ -170,6 +179,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
+            Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString());
@@ -189,6 +199,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         => This with
         {
             Areas = Areas.Add(new(area ?? GetAutoName())),
+            Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((a, ctx, s) => a.RenderArea(ctx, viewDefinition.Invoke(a, ctx, s), s))
         };
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, string area) where T : UiControl
@@ -220,8 +231,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             return true;
         return base.Equals(other) &&
                Skins.SequenceEqual(other.Skins) &&
-               Areas.SequenceEqual(other.Areas);
-
+               Areas.SequenceEqual(other.Areas) &&
+               Views.SequenceEqual(other.Views);
     }
 
 
@@ -230,14 +241,11 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return HashCode.Combine(
             base.GetHashCode(),
             HashCode.Combine(
-                Renderers.Aggregate(0, (acc, renderer) => acc ^ renderer.GetHashCode()),
-                Skins.Aggregate(0, (acc, renderer) => acc ^ renderer.GetHashCode())
-            ),
-            HashCode.Combine(
-                Renderers.Aggregate(0, (acc, area) => acc ^ area.GetHashCode()),
-                Skins.Aggregate(0, (acc, rawArea) => acc ^ rawArea.GetHashCode())
+                Skins.Aggregate(0, (acc, renderer) => acc ^ renderer.GetHashCode()),
+                Views.Aggregate(0, (acc, view) => acc ^ (view?.GetHashCode() ?? 0)),
+                Areas.Aggregate(0, (acc, area) => acc ^ area.GetHashCode())
             )
-        );
+         );
     }
 
 }
