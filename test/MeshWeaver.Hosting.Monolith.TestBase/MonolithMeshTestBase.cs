@@ -38,7 +38,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h)); public override async Task DisposeAsync()
+        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h)); 
+    
+    public override async Task DisposeAsync()
     {
         try
         {
