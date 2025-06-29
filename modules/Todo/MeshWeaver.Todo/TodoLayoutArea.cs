@@ -516,16 +516,17 @@ public static class TodoLayoutArea
     }
 
     /// <summary>
-    /// Submits a request to create a new todo item
+    /// Submits a request to create a new todo item using a dialog
     /// </summary>
     /// <param name="host">The layout area host</param>
     private static void SubmitNewTodo(LayoutAreaHost host)
     {
+        // Create a new empty todo item for editing
         var newTodo = new TodoItem
         {
             Id = Guid.NewGuid(),
-            Title = "New Todo Item",
-            Description = "Description for new todo",
+            Title = "",
+            Description = "",
             Status = TodoStatus.Pending,
             Category = "General",
             DueDate = DateTime.Now.AddDays(7),
@@ -533,10 +534,60 @@ public static class TodoLayoutArea
             UpdatedAt = DateTime.UtcNow
         };
 
-        var changeRequest = new DataChangeRequest()
-            .WithCreations(newTodo);
+        // Create an edit form for the new todo item
+        var editForm = host.Hub.ServiceProvider.Edit(newTodo, (todo, editHost, ctx) =>
+        {
+            return Controls.Stack
+                .WithView(Controls.H3("Create New Todo"))
+                .WithView(Controls.Stack
+                    .WithView(Controls.Button("💾 Save Todo")
+                        .WithClickAction(_ =>
+                        {
+                            // Validate required fields
+                            if (string.IsNullOrWhiteSpace(todo?.Title))
+                            {
+                                return Task.CompletedTask; // Could add validation message here
+                            }
 
-        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+                            // Submit the new todo
+                            var changeRequest = new DataChangeRequest()
+                                .WithCreations(todo with
+                                {
+                                    Id = Guid.NewGuid(), // Ensure new ID
+                                    CreatedAt = DateTime.UtcNow,
+                                    UpdatedAt = DateTime.UtcNow
+                                });
+
+                            host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+
+                            // Close the dialog by clearing the dialog area
+                            host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
+                            return Task.CompletedTask;
+                        }))
+                    .WithView(Controls.Button("❌ Cancel")
+                        .WithClickAction(_ =>
+                        {
+                            // Close the dialog by clearing the dialog area
+                            host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
+                            return Task.CompletedTask;
+                        }))
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithHorizontalGap(10))
+                .WithVerticalGap(15);
+        });
+
+        // Create a dialog with the edit form content - DialogControl.Render() will handle the UiControl rendering
+        var dialog = Controls.Dialog(editForm, "Create New Todo")
+            .WithSize("M")
+            .WithClosable(true)
+            .WithCloseAction(_ =>
+            {
+                // Clear the dialog area when closed
+                host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
+            });
+
+        // Update the dialog area to show the dialog
+        host.UpdateArea(DialogControl.DialogArea, dialog);
     }
 
     /// <summary>
