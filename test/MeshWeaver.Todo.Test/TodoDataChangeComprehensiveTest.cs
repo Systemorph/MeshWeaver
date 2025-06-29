@@ -8,7 +8,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
-using MeshWeaver.Todo;
+using MeshWeaver.Todo.Domain;
+using MeshWeaver.Todo.SampleData;
 using Xunit;
 using Xunit.Abstractions;
 

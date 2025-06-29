@@ -1,4 +1,4 @@
+@using Microsoft.AspNetCore.Mvc
 @inherits FormComponentBase<DateTimeControl, DateTimeView, DateTime?>
 
-<FluentDatePicker bind-Value="Value" Disabled="@Disabled" Required="@Required" ReadOnly="@Readonly"></FluentDatePicker>
-
+<FluentDatePicker Value="@Value" ValueChanged="v => Value = v" Disabled="@Disabled" Required="@Required" ReadOnly="@Readonly"></FluentDatePicker>

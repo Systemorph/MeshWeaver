@@ -3,8 +3,9 @@ using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Todo.Domain;
 
-namespace MeshWeaver.Todo;
+namespace MeshWeaver.Todo.LayoutAreas;
 
 /// <summary>
 /// Layout areas for the Todo application
@@ -524,7 +525,6 @@ public static class TodoLayoutArea
         // Create a new empty todo item for editing
         var newTodo = new TodoItem
         {
-            Id = Guid.NewGuid(),
             Title = "",
             Description = "",
             Status = TodoStatus.Pending,
@@ -543,37 +543,19 @@ public static class TodoLayoutArea
             .WithView(host.Edit(newTodo, newTodoDataId), newTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Todo")
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
-                        // Get the current todo data from the host data stream using the area ID
-                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
-
-                        // Validate required fields
-                        if (string.IsNullOrWhiteSpace(currentTodo?.Title))
-                        {
-                            return; // Could add validation message here
-                        }
-
-                        // Submit the new todo
-                        var changeRequest = new DataChangeRequest()
-                            .WithCreations(currentTodo with
-                            {
-                                Id = Guid.NewGuid(), // Ensure new ID
-                                CreatedAt = DateTime.UtcNow,
-                                UpdatedAt = DateTime.UtcNow
-                            });
-
-                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
 
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
                     }))
                 .WithView(Controls.Button("❌ Cancel")
-                    .WithClickAction(_ =>
+                    .WithClickAction(async _ =>
                     {
+                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
+                        host.Hub.Post(new DataChangeRequest(){Deletions = [currentTodo] }, o => o.WithTarget(TodoApplicationAttribute.Address));
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
-                        return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(10))

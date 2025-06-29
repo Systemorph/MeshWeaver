@@ -1,8 +1,10 @@
 ﻿using System.Collections;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
@@ -266,7 +268,11 @@ public static class EditorExtensions
         where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
-        var propertySkinLabel = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
+        if (propertyInfo.GetCustomAttribute<BrowsableAttribute>()?.Browsable == false)
+            return editor;
+
+        var displayAttribute = propertyInfo.GetCustomAttribute<DisplayAttribute>();
+        var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
         string label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
@@ -395,14 +401,57 @@ public static class EditorExtensions
             $"No implementation to parse dimension options of type {options.GetType().FullName}.");
     }
 
-    private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>> 
+    private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>>
         BasicControls = new()
-    {
-        {typeof(DateTimeControl), (reference,property,_) => new DateTimeControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
-        {typeof(TextFieldControl), (reference,property,_)=> new TextFieldControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
-        {typeof(NumberFieldControl), (reference, property, type)=> new NumberFieldControl(reference,type) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>()}},
-        { typeof(CheckBoxControl), (reference, property, _) => new CheckBoxControl(reference) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>() }},
-    };
+        {
+            {
+                typeof(DateTimeControl),
+                (reference, property, _) => new DateTimeControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(TextFieldControl),
+                (reference, property, _) => new TextFieldControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(NumberFieldControl),
+                (reference, property, type) => new NumberFieldControl(reference, type)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(CheckBoxControl),
+                (reference, property, _) => new CheckBoxControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                               property.HasAttribute<KeyAttribute>()
+                }
+            },
+        };
 
 
     private static IReadOnlyCollection<Option> ConvertToOptions(InstanceCollection instances, ITypeDefinition dimensionType)
