@@ -252,7 +252,7 @@ public static class JsonSynchronizationStream
                 {
                     if (x.Updates.Count == 0)
                         return null;
-                    var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions);
+                    var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions, stream.Reference as WorkspaceReference);
                     currentJson = patch.Apply(currentJson.Value);
                     stream.Set(currentJson);
                     return new DataChangedEvent
@@ -290,27 +290,27 @@ public static class JsonSynchronizationStream
         JsonSerializerOptions options,
         ITypeRegistry typeRegistry = null)
         => patch.Operations.Select(p =>
-        {
-            var id = p.Path.Skip(1).FirstOrDefault();
-            var rawCollection = p.Path.First();
+            {
+                var id = p.Path.Skip(1).FirstOrDefault();
+                var rawCollection = p.Path.First();
 
-            // Normalize collection name using TypeRegistry to ensure consistency
-            // This fixes the bug where JsonPatch paths contain full type names 
-            // but CollectionsReference expects short names from TypeRegistry
-            var collection = typeRegistry?.TryGetType(rawCollection, out var typeDefinition) == true
-                ? typeDefinition.CollectionName
-                : rawCollection;
+                // Normalize collection name using TypeRegistry to ensure consistency
+                // This fixes the bug where JsonPatch paths contain full type names 
+                // but CollectionsReference expects short names from TypeRegistry
+                var collection = typeRegistry?.TryGetType(rawCollection, out var typeDefinition) == true
+                    ? typeDefinition.CollectionName
+                    : rawCollection;
 
-            var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
-            return new EntityUpdate(
-                collection,
-                id == null ? null : JsonSerializer.Deserialize<object>(id, options),
-                pointer.Evaluate(updated)
-            )
-            { OldValue = pointer.Evaluate(current) };
-        })
-        .DistinctBy(x => new { x.Id, x.Collection })
-        .ToArray();
+                var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
+                return new EntityUpdate(
+                        collection,
+                        id == null ? null : JsonSerializer.Deserialize<object>(id, options),
+                        pointer.Evaluate(updated)
+                    )
+                    { OldValue = pointer.Evaluate(current) };
+            })
+            .DistinctBy(x => new { x.Id, x.Collection })
+            .ToArray();
 
     internal static (JsonElement, JsonPatch) UpdateJsonElement(this DataChangedEvent request, JsonElement? currentJson, JsonSerializerOptions options)
     {
@@ -323,6 +323,42 @@ public static class JsonSynchronizationStream
             throw new InvalidOperationException("Current state is null, cannot patch.");
         var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options);
         return (patch.Apply(currentJson.Value), patch);
+    }
+    public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
+        this InstanceCollection current,
+        CollectionReference reference,
+        JsonElement updated,
+        JsonPatch patch,
+        JsonSerializerOptions options,
+        ITypeRegistry typeRegistry = null)
+        => patch.Operations.Select(p =>
+        {
+            var id = p.Path.FirstOrDefault();
+
+
+            var pointer = id == null ? null : JsonPointer.Create(id);
+            return new EntityUpdate(
+                reference.Name,
+                id == null ? null : JsonSerializer.Deserialize<object>(id, options),
+                pointer?.Evaluate(updated) ?? updated
+            )
+            { OldValue = id is null ? current.Instances : current.Instances.GetValueOrDefault(id) };
+        })
+        .DistinctBy(x => new { x.Id, x.Collection })
+        .ToArray();
+
+    internal static (InstanceCollection, JsonPatch) UpdateJsonElement(this DataChangedEvent request, InstanceCollection current, JsonSerializerOptions options)
+    {
+        if (request.ChangeType == ChangeType.Full)
+        {
+            return (JsonDocument.Parse(request.Change.Content).RootElement.Deserialize<InstanceCollection>(), null);
+        }
+
+        if (current is null)
+            throw new InvalidOperationException("Current state is null, cannot patch.");
+        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options);
+        var updated = patch.Apply(current);
+        return (updated, patch);
     }
 
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
@@ -353,7 +389,56 @@ public static class JsonSynchronizationStream
             });
     }
 
-    internal static JsonPatch ToJsonPatch(this IEnumerable<EntityUpdate> updates, JsonSerializerOptions options)
+    internal static JsonPatch ToJsonPatch(this IEnumerable<EntityUpdate> updates, 
+        JsonSerializerOptions options,
+        WorkspaceReference streamReference)
+    {
+        return streamReference switch
+        {
+            CollectionReference collection => CreateCollectionPatch(collection, options, updates),
+            _ => CreateEntityStorePatch(options, updates)
+        };
+
+
+    }
+
+    private static JsonPatch CreateCollectionPatch(
+        CollectionReference collection, 
+        JsonSerializerOptions options,
+        IEnumerable<EntityUpdate> updates)
+    {
+        var collectionName = collection.Name;
+        return new JsonPatch(updates
+            .Where(e => e.Collection == collectionName)
+            .GroupBy(x => x.Id)
+            .Aggregate(Enumerable.Empty<PatchOperation>(), (e, g) =>
+            {
+                var first = g.First().OldValue;
+                var last = g.Last().Value;
+                PointerSegment[] pointerSegments = g.Key == null
+                    ? []
+                    :
+                    [
+                        JsonSerializer.Serialize(g.Key, options)
+                    ];
+                var parentPath = JsonPointer.Create(pointerSegments);
+                if (last == null && first == null)
+                    return e;
+                if (first == null)
+                    return e.Concat([PatchOperation.Add(parentPath, JsonSerializer.SerializeToNode(last, options))]);
+                if (last == null)
+                    return e.Concat([PatchOperation.Remove(parentPath)]);
+                var patches = first.CreatePatch(last, options).Operations;
+                patches = patches.Select(p =>
+                {
+                    var newPath = parentPath.Combine(p.Path);
+                    return CreatePatchOperation(p, newPath);
+                }).ToArray();
+                return e.Concat(patches);
+            }).ToArray());
+    }
+
+    private static JsonPatch CreateEntityStorePatch(JsonSerializerOptions options, IEnumerable<EntityUpdate> updates)
     {
         return new JsonPatch(updates
             .GroupBy(x => new { x.Collection, x.Id })
@@ -389,7 +474,6 @@ public static class JsonSynchronizationStream
                 return e.Concat(patches);
             }).ToArray());
     }
-
 
 
     private static PatchOperation CreatePatchOperation(PatchOperation original, JsonPointer newPath)
