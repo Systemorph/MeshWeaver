@@ -19,7 +19,7 @@ public interface ITypeRegistry
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter);
     ITypeRegistry WithTypes(params IEnumerable<Type> types);
     ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string,Type>> types);
-    string GetOrAddType(Type valueType);
+    string GetOrAddType(Type valueType, string defaultName = null);
     ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key);
     ITypeDefinition GetTypeDefinition(Type type, bool create = true, string typeName = null);
     ITypeDefinition GetTypeDefinition(string collection);

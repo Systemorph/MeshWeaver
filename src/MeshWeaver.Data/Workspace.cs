@@ -31,7 +31,7 @@ public class Workspace : IWorkspace
     {
         return GetRemoteStream(
             address,
-            new CollectionsReference(Hub.TypeRegistry.GetOrAddType(typeof(TType)))
+            new CollectionsReference(Hub.TypeRegistry.GetOrAddType(typeof(TType), typeof(TType).Name))
             ).Select(x => x.Value.Collections.FirstOrDefault().Value?.Instances.Values.OfType<TType>());
     }
 
