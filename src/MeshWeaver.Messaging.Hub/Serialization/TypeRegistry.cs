@@ -150,12 +150,12 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
     public ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string, Type>> types)
         => types.Aggregate((ITypeRegistry)this, (i, kvp) => i.WithType(kvp.Value, kvp.Key));
 
-    public string GetOrAddType(Type type)
+    public string GetOrAddType(Type type, string defaultName = null)
     {
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
-        typeName = FormatType(type);
+        typeName = defaultName ?? FormatType(type);
         typeByName[typeName] = new(type,typeName, keyFunctionBuilder);
         return nameByType[type] = typeName;
     }
@@ -222,7 +222,7 @@ internal class TypeRegistry(ITypeRegistry parent) : ITypeRegistry
             return FormatType(mainType.GetGenericArguments()[0]) + "?";
 
         var text =
-            $"{GetOrAddType(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(GetOrAddType))}]";
+            $"{GetOrAddType(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(valueType => GetOrAddType(valueType)))}]";
         return text;
     }
 }

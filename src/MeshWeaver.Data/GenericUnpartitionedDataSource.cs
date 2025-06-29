@@ -241,7 +241,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             .AggregateAsync(
                 new EntityStore()
                 {
-                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddType
+                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
                 },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken
@@ -309,7 +309,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             .AggregateAsync(
                 new EntityStore()
                 {
-                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddType
+                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
                 },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken
