@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo;
@@ -209,7 +211,12 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine($"   Status Change: {pendingTodo.Status} → {updatedTodo.Status}");
 
         // Send the request
-        client.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+        var response = await client.AwaitResponse(
+            changeRequest, 
+            o => o.WithTarget(TodoApplicationAttribute.Address)
+            //, new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            );
+        response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded, "DataChangeRequest should succeed");
         Output.WriteLine("✅ DataChangeRequest sent");
 
         // Wait a moment for processing

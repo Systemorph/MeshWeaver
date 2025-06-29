@@ -3,6 +3,7 @@ using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -23,7 +24,8 @@ public static class StandardReducers
             .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
-                reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
+                reduced.AddPatchFunction(PatchInstanceCollectionJsonElement)
+                    .AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
                     .AddWorkspaceReference<InstanceReference, object>(ReduceInstanceCollectionTo)
             )
             .ForReducedStream<JsonElement>(reduced =>
@@ -32,6 +34,7 @@ public static class StandardReducers
                 );
 
     }
+
 
     private static ChangeItem<JsonElement> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference, bool initial)
     {
@@ -46,6 +49,17 @@ public static class StandardReducers
     {
         var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
         return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions, typeRegistry));
+    }
+    private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch patch, string changedBy)
+    {
+        var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
+        var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
+        return new(
+            updatedInstances, 
+            changedBy, 
+            ChangeType.Patch, 
+            stream.Hub.Version, 
+            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch, stream.Hub.JsonSerializerOptions, typeRegistry));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
