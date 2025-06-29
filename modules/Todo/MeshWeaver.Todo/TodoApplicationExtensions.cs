@@ -1,6 +1,9 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using MeshWeaver.Todo.Domain;
+using MeshWeaver.Todo.LayoutAreas;
+using MeshWeaver.Todo.SampleData;
 
 namespace MeshWeaver.Todo;
 
@@ -27,12 +30,17 @@ public static class TodoApplicationExtensions
                          .WithInitialData(TodoSampleData.GetSampleTodos())
                     )
                 )
+                .AddSource(dataSource =>
+                    dataSource.WithType<TodoCategory>(t =>
+                        t.WithKey(category => category.Name)
+                         .WithInitialData(TodoSampleData.GetSampleCategories())
+                    )
+                )
             )
             .AddLayout(layout =>
                 layout.WithView(nameof(TodoLayoutArea.TodoList), TodoLayoutArea.TodoList)
                       .WithView(nameof(TodoLayoutArea.TodosByCategory), TodoLayoutArea.TodosByCategory)
                       .WithView(nameof(TodoLayoutArea.TodoSummary), TodoLayoutArea.TodoSummary)
-                      .WithView("TodoDetails", (_, _) => TodoViews.CreateTodoDetailsView())
                       .WithView(nameof(TodoManagement.AddTodo), TodoManagement.AddTodo)
                       .WithView(nameof(TodoManagement.TodoListWithActions), TodoManagement.TodoListWithActions)
                       .WithView(nameof(TodoManagement.TodoDemo), TodoManagement.TodoDemo)

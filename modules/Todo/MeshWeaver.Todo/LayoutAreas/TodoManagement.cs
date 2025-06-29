@@ -1,10 +1,11 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Todo.Domain;
 
-namespace MeshWeaver.Todo;
+namespace MeshWeaver.Todo.LayoutAreas;
 
 /// <summary>
 /// Interactive Todo management layout areas with add/edit functionality
@@ -23,7 +24,6 @@ public static class TodoManagement
 
         var newTodo = new TodoItem
         {
-            Id = Guid.NewGuid(),
             Title = "",
             Description = "",
             Category = "General",

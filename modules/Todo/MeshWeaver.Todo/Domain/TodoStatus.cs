@@ -1,4 +1,4 @@
-namespace MeshWeaver.Todo;
+﻿namespace MeshWeaver.Todo.Domain;
 
 public enum TodoStatus
 {

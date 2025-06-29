@@ -2,7 +2,7 @@
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using MeshWeaver.Todo;
+using MeshWeaver.Todo.Domain;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Todo.Test;
