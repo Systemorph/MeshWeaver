@@ -1,9 +1,11 @@
 ﻿using System.Reactive.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Todo.Domain;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Todo.LayoutAreas;
 
@@ -225,17 +227,19 @@ public static class TodoLayoutArea
     private static UiControl CreateInteractiveTodoListStack(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
     {
         // Create main LayoutGrid with minimal spacing
-        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(0));
+        var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
         // First row: Title and Add New Todo button
         mainGrid = mainGrid
             .WithView(Controls.H2("📝 Todo List with Actions")
                 .WithStyle(style => style.WithMarginBottom("10px").WithColor("#2c3e50")),
-                skin => skin.WithXs(12).WithSm(8).WithMd(9))
-            .WithView(Controls.Button("➕ Add New Todo")
+                skin => skin.WithXs(12).WithSm(9).WithMd(10))
+            .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
-                .WithStyle(style => style.WithMarginBottom("20px")),
-                skin => skin.WithXs(12).WithSm(4).WithMd(3));
+                .WithWidth(MenuWidth)
+                .WithAppearance(Layout.Appearance.Neutral)
+                .WithStyle(LeftAlignedStyle),
+                skin => skin.WithXs(12).WithSm(3).WithMd(2));
 
         if (!todoItems.Any())
         {
@@ -262,21 +266,21 @@ public static class TodoLayoutArea
             var statusIcon = GetStatusIcon(statusGroup.Key);
             var statusName = statusGroup.Key.ToString();
 
-            // Create action button for status header
-            UiControl statusActionButton = statusGroup.Key switch
+            // Create hierarchical action menu for status header
+            var statusActionButton = statusGroup.Key switch
             {
-                TodoStatus.Pending => Controls.Button("▶️ Start All")
-                    .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.InProgress); return Task.CompletedTask; })
-                    .WithStyle(style => style.WithBackgroundColor("#28a745").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-                TodoStatus.InProgress => Controls.Button("⏸️ Close All")
-                    .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.Completed); return Task.CompletedTask; })
-                    .WithStyle(style => style.WithBackgroundColor("#ffc107").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-                TodoStatus.Completed => Controls.Button("📦 Archive All")
-                    .WithClickAction(_ => { DeleteAllTodosInGroup(host, statusGroup); return Task.CompletedTask; })
-                    .WithStyle(style => style.WithBackgroundColor("#6c757d").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-                TodoStatus.Cancelled => Controls.Button("🗑️ Delete All")
-                    .WithClickAction(_ => { DeleteAllTodosInGroup(host, statusGroup); return Task.CompletedTask; })
-                    .WithStyle(style => style.WithBackgroundColor("#dc3545").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
+                TodoStatus.Pending => CreateStatusGroupMenuItem("▶️ Start All", "play",
+                    (host, todos) => UpdateAllTodosInGroup(host, todos, TodoStatus.InProgress),
+                    host, statusGroup),
+                TodoStatus.InProgress => CreateStatusGroupMenuItem("⏸️ Close All", "pause",
+                    (host, todos) => UpdateAllTodosInGroup(host, todos, TodoStatus.Completed),
+                    host, statusGroup),
+                TodoStatus.Completed => CreateStatusGroupMenuItem("📦 Archive All", "archive",
+                    DeleteAllTodosInGroup,
+                    host, statusGroup),
+                TodoStatus.Cancelled => CreateStatusGroupMenuItem("🗑️ Delete All", "trash",
+                    DeleteAllTodosInGroup,
+                    host, statusGroup),
                 _ => Controls.Html("") // Empty placeholder for other statuses
             };
 
@@ -297,182 +301,49 @@ public static class TodoLayoutArea
 
                 mainGrid = mainGrid
                     .WithView(todoContent,
-                        skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                        skin => skin.WithXs(12).WithSm(9).WithMd(10))
                     .WithView(todoActions,
-                        skin => skin.WithXs(12).WithSm(4).WithMd(3));
+                        skin => skin.WithXs(12).WithSm(3).WithMd(2));
             }
         }
 
         return mainGrid;
     }
 
+
+    private const string MenuWidth = "150px";
+    private const string LeftAlignedStyle = "text-align: left; justify-content: flex-start; display: flex;";
     /// <summary>
-    /// Creates a structured todo item row with content and collapsible actions
+    /// Creates hierarchical menu item action controls with primary action and expandable secondary actions
     /// </summary>
     /// <param name="todo">The todo item</param>
     /// <param name="host">The layout area host for submitting changes</param>
-    /// <returns>A styled todo item row</returns>
-    private static UiControl CreateTodoItemRow(TodoItem todo, LayoutAreaHost host)
-    {
-        var statusIcon = GetStatusIcon(todo.Status);
-        var contentMarkdown = CreateCompactTodoContent(todo);
-        var actionControls = CreateActionControls(todo, host);
-
-        // Create a horizontal layout using flexbox styling
-        return Controls.Stack
-            .WithView(
-                Controls.Stack
-                    .WithView(
-                        Controls.Stack
-                            .WithView(Controls.Markdown($"{statusIcon}"))
-                            .WithStyle(style => style
-                                .WithWidth("40px")
-                                .WithTextAlign("center")
-                                .WithFlexShrink("0")))
-                    .WithView(
-                        Controls.Stack
-                            .WithView(Controls.Markdown(contentMarkdown))
-                            .WithStyle(style => style
-                                .WithFlexGrow("1")
-                                .WithMinWidth("0")
-                                .WithPaddingLeft("15px")
-                                .WithPaddingRight("15px")))
-                    .WithView(
-                        Controls.Stack
-                            .WithView(actionControls)
-                            .WithStyle(style => style
-                                .WithWidth("150px")
-                                .WithFlexShrink("0")
-                                .WithTextAlign("right")))
-                    .WithStyle(style => style
-                        .WithDisplay("flex")
-                        .WithFlexDirection("row")
-                        .WithAlignItems("flex-start")
-                        .WithGap("0")))
-            .WithStyle(style => style
-                .WithPadding("15px")
-                .WithMarginBottom("10px")
-                .WithBorder("1px solid #e1e8ed")
-                .WithBorderRadius("8px")
-                .WithBackgroundColor("#fafbfc")
-                .WithBoxShadow("0 1px 3px rgba(0,0,0,0.1)"));
-    }
-
-    /// <summary>
-    /// Creates action controls with primary action and menu button for secondary actions
-    /// </summary>
-    /// <param name="todo">The todo item</param>
-    /// <param name="host">The layout area host for submitting changes</param>
-    /// <returns>A control with action buttons</returns>
+    /// <returns>A hierarchical menu item control with actions</returns>
     private static UiControl CreateActionControls(TodoItem todo, LayoutAreaHost host)
     {
-        var primaryAction = GetPrimaryActionButton(todo, host);
-        var hasSecondaryActions = HasSecondaryActions(todo);
+        var primaryAction = GetPrimaryActionData(todo);
+        var menuItem = Controls.MenuItem(primaryAction.Title, primaryAction.Icon)
+            .WithClickAction(_ => { primaryAction.Action(host, todo); return Task.CompletedTask; })
+            .WithWidth(MenuWidth)
+            .WithAppearance(Layout.Appearance.Neutral)
+            .WithStyle(LeftAlignedStyle);
 
-        if (!hasSecondaryActions)
+        // Add secondary actions as sub-views
+        var secondaryActions = GetSecondaryActionData(todo);
+        foreach (var action in secondaryActions)
         {
-            return primaryAction;
+            var subMenuItem = Controls.MenuItem(action.Title, action.Icon)
+                .WithClickAction(_ => { action.Action(host, todo); return Task.CompletedTask; })
+                .WithWidth(MenuWidth)
+                .WithAppearance(Layout.Appearance.Neutral)
+                .WithStyle(LeftAlignedStyle);
+            menuItem = menuItem.WithView(subMenuItem);
         }
 
-        // Create horizontal layout with primary action and menu button
-        return Controls.Stack
-            .WithView(primaryAction)
-            .WithView(CreateMenuButton(todo, host))
-            .WithStyle(style => style
-                .WithDisplay("flex")
-                .WithFlexDirection("row")
-                .WithGap("8px")
-                .WithAlignItems("center"));
+        return menuItem;
     }
 
-    /// <summary>
-    /// Creates a menu button that shows secondary actions (simplified for now)
-    /// </summary>
-    /// <param name="todo">The todo item</param>
-    /// <param name="host">The layout area host</param>
-    /// <returns>A menu button</returns>
-    private static UiControl CreateMenuButton(TodoItem todo, LayoutAreaHost host)
-    {
-        // For now, create a simple button that shows the most common secondary action
-        // In a real implementation, this would be a proper dropdown menu
-        var secondaryAction = GetFirstSecondaryAction(todo, host);
-        return secondaryAction ?? Controls.Button("⋯")
-            .WithClickAction(_ => Task.CompletedTask)
-            .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px"));
-    }
 
-    /// <summary>
-    /// Gets the primary (most likely) action button for a todo item
-    /// </summary>
-    /// <param name="todo">The todo item</param>
-    /// <param name="host">The layout area host</param>
-    /// <returns>Primary action button</returns>
-    private static UiControl GetPrimaryActionButton(TodoItem todo, LayoutAreaHost host)
-    {
-        return todo.Status switch
-        {
-            TodoStatus.Pending => Controls.Button("▶️ Start")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.InProgress); return Task.CompletedTask; })
-                .WithStyle(style => style.WithBackgroundColor("#28a745").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-
-            TodoStatus.InProgress => Controls.Button("✅ Done")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.Completed); return Task.CompletedTask; })
-                .WithStyle(style => style.WithBackgroundColor("#17a2b8").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-
-            TodoStatus.Completed => Controls.Button("🔄 Reopen")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.Pending); return Task.CompletedTask; })
-                .WithStyle(style => style.WithBackgroundColor("#6c757d").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-
-            TodoStatus.Cancelled => Controls.Button("🔄 Restore")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.Pending); return Task.CompletedTask; })
-                .WithStyle(style => style.WithBackgroundColor("#6c757d").WithColor("white").WithBorder("none").WithPadding("6px 12px").WithBorderRadius("4px")),
-
-            _ => Controls.Button("❓")
-                .WithClickAction(_ => Task.CompletedTask)
-                .WithStyle(style => style.WithPadding("6px 12px"))
-        };
-    }
-
-    /// <summary>
-    /// Checks if the todo item has secondary actions available
-    /// </summary>
-    /// <param name="todo">The todo item</param>
-    /// <returns>True if secondary actions are available</returns>
-    private static bool HasSecondaryActions(TodoItem todo)
-    {
-        return todo.Status switch
-        {
-            TodoStatus.Pending => true,     // Complete, Delete
-            TodoStatus.InProgress => true,  // Pause, Delete
-            TodoStatus.Completed => true,   // Delete
-            TodoStatus.Cancelled => true,   // Delete
-            _ => false
-        };
-    }
-
-    /// <summary>
-    /// Gets the first secondary action for simple menu display
-    /// </summary>
-    /// <param name="todo">The todo item</param>
-    /// <param name="host">The layout area host</param>
-    /// <returns>First secondary action button or null</returns>
-    private static UiControl GetFirstSecondaryAction(TodoItem todo, LayoutAreaHost host)
-    {
-        return todo.Status switch
-        {
-            TodoStatus.Pending => Controls.Button("✅")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.Completed); return Task.CompletedTask; })
-                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithBackgroundColor("#28a745").WithColor("white").WithBorder("none").WithBorderRadius("4px")),
-
-            TodoStatus.InProgress => Controls.Button("⏸️")
-                .WithClickAction(_ => { UpdateTodoStatus(host, todo, TodoStatus.Pending); return Task.CompletedTask; })
-                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithBackgroundColor("#ffc107").WithColor("white").WithBorder("none").WithBorderRadius("4px")),
-
-            _ => Controls.Button("🗑️")
-                .WithClickAction(_ => { SubmitTodoDelete(host, todo); return Task.CompletedTask; })
-                .WithStyle(style => style.WithMinWidth("32px").WithPadding("4px 8px").WithBackgroundColor("#dc3545").WithColor("white").WithBorder("none").WithBorderRadius("4px"))
-        };
-    }
 
     /// <summary>
     /// Updates the status of a todo item
@@ -525,6 +396,7 @@ public static class TodoLayoutArea
         // Create a new empty todo item for editing
         var newTodo = new TodoItem
         {
+            Id = Guid.NewGuid().AsString(),
             Title = "",
             Description = "",
             Status = TodoStatus.Pending,
@@ -543,19 +415,37 @@ public static class TodoLayoutArea
             .WithView(host.Edit(newTodo, newTodoDataId), newTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Todo")
-                    .WithClickAction(_ =>
+                    .WithClickAction(async _ =>
                     {
+                        // Get the current todo data from the host data stream using the area ID
+                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
+
+                        // Validate required fields
+                        if (string.IsNullOrWhiteSpace(currentTodo?.Title))
+                        {
+                            return; // Could add validation message here
+                        }
+
+                        // Submit the new todo
+                        var changeRequest = new DataChangeRequest()
+                            .WithCreations(currentTodo with
+                            {
+                                Id = Guid.NewGuid().AsString(), // Ensure new ID
+                                CreatedAt = DateTime.UtcNow,
+                                UpdatedAt = DateTime.UtcNow
+                            });
+
+                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
 
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
                     }))
                 .WithView(Controls.Button("❌ Cancel")
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
-                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
-                        host.Hub.Post(new DataChangeRequest(){Deletions = [currentTodo] }, o => o.WithTarget(TodoApplicationAttribute.Address));
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
+                        return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(10))
@@ -658,13 +548,13 @@ public static class TodoLayoutArea
         var contentMarkdown = CreateCompactTodoContent(todo);
         var actionControls = CreateActionControls(todo, host);
 
-        // Create content control with icon and text
+        // Create content control with icon and text - more compact design
         var content = Controls.Stack
             .WithView(
                 Controls.Stack
                     .WithView(Controls.Markdown($"{statusIcon}"))
                     .WithStyle(style => style
-                        .WithWidth("40px")
+                        .WithWidth("32px")
                         .WithTextAlign("center")
                         .WithFlexShrink("0")))
             .WithView(
@@ -673,26 +563,162 @@ public static class TodoLayoutArea
                     .WithStyle(style => style
                         .WithFlexGrow("1")
                         .WithMinWidth("0")
-                        .WithPaddingLeft("15px")))
+                        .WithPaddingLeft("12px")))
             .WithStyle(style => style
                 .WithDisplay("flex")
                 .WithFlexDirection("row")
                 .WithAlignItems("flex-start")
-                .WithPadding("15px")
-                .WithMarginBottom("10px")
+                .WithPadding("12px")
+                .WithMarginBottom("8px")
                 .WithBorder("1px solid #e1e8ed")
-                .WithBorderRadius("8px")
+                .WithBorderRadius("6px")
                 .WithBackgroundColor("#fafbfc")
-                .WithBoxShadow("0 1px 3px rgba(0,0,0,0.1)"));
+                .WithBoxShadow("0 1px 2px rgba(0,0,0,0.05)"));
 
-        // Create actions control
+        // Create actions control - centered and compact
         var actions = Controls.Stack
             .WithView(actionControls)
             .WithStyle(style => style
-                .WithTextAlign("right")
-                .WithPadding("15px")
-                .WithMarginBottom("10px"));
+                .WithDisplay("flex")
+                .WithJustifyContent("center")
+                .WithAlignItems("center")
+                .WithPadding("12px")
+                .WithMarginBottom("8px"));
 
         return (content, actions);
+    }
+
+    /// <summary>
+    /// Represents an action with its display information and handler
+    /// </summary>
+    /// <param name="Title">The display title for the action</param>
+    /// <param name="Icon">The icon for the action</param>
+    /// <param name="Action">The action handler</param>
+    private record ActionData(string Title, string Icon, Action<LayoutAreaHost, TodoItem> Action);
+
+    /// <summary>
+    /// Gets the primary action data for a todo item
+    /// </summary>
+    /// <param name="todo">The todo item</param>
+    /// <returns>Primary action data</returns>
+    private static ActionData GetPrimaryActionData(TodoItem todo)
+    {
+        return todo.Status switch
+        {
+            TodoStatus.Pending => new ActionData("▶️ Start", "play", (host, item) => UpdateTodoStatus(host, item, TodoStatus.InProgress)),
+            TodoStatus.InProgress => new ActionData("✅ Done", "check", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Completed)),
+            TodoStatus.Completed => new ActionData("🔄 Reopen", "refresh", (host, item) => UpdateTodoStatus(host, item, TodoStatus.InProgress)),
+            TodoStatus.Cancelled => new ActionData("🔄 Restore", "refresh", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Pending)),
+            _ => new ActionData("❓ Unknown", "help", (host, item) => { })
+        };
+    }
+
+    /// <summary>
+    /// Gets the secondary action data for a todo item
+    /// </summary>
+    /// <param name="todo">The todo item</param>
+    /// <returns>List of secondary action data</returns>
+    private static List<ActionData> GetSecondaryActionData(TodoItem todo)
+    {
+        var actions = new List<ActionData>();
+
+        // Always add Edit action
+        actions.Add(new ActionData("✏️ Edit", "edit", (host, item) => SubmitEditTodo(host, item)));
+
+        // Status-specific secondary actions
+        switch (todo.Status)
+        {
+            case TodoStatus.Pending:
+                actions.Add(new ActionData("✅ Complete", "check", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Completed)));
+                actions.Add(new ActionData("❌ Cancel", "close", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Cancelled)));
+                break;
+            case TodoStatus.InProgress:
+                actions.Add(new ActionData("⏸️ Pause", "pause", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Pending)));
+                actions.Add(new ActionData("❌ Cancel", "close", (host, item) => UpdateTodoStatus(host, item, TodoStatus.Cancelled)));
+                break;
+            case TodoStatus.Completed:
+            case TodoStatus.Cancelled:
+                // No additional status actions for completed/cancelled items
+                break;
+        }
+
+        // Always add Delete action
+        actions.Add(new ActionData("🗑️ Delete", "trash", (host, item) => SubmitTodoDelete(host, item)));
+
+        return actions;
+    }
+
+    /// <summary>
+    /// Submits a request to edit an existing todo item using a dialog
+    /// </summary>
+    /// <param name="host">The layout area host</param>
+    /// <param name="todoToEdit">The todo item to edit</param>
+    private static void SubmitEditTodo(LayoutAreaHost host, TodoItem todoToEdit)
+    {
+        // Define the area ID for the edit todo data
+        var editTodoDataId = $"EditTodoData_{todoToEdit.Id}";
+
+        // Capture the original todo item in a closure for cancel functionality
+        var originalTodo = todoToEdit;
+
+        // Create an edit form for the todo item with proper data binding
+        var editForm = Controls.Stack
+            .WithView(Controls.H3("Edit Todo"))
+            .WithView(host.Edit(todoToEdit, editTodoDataId), editTodoDataId)
+            .WithView(Controls.Stack
+                .WithView(Controls.Button("💾 Save Changes")
+                    .WithClickAction(async _ =>
+                    {
+                        var updatedTodo = await host.Stream.GetDataAsync<TodoItem>(editTodoDataId);
+                        var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo with { UpdatedAt = DateTime.UtcNow });
+                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
+
+                        // Close the dialog by clearing the dialog area
+                        host.UpdateArea(DialogControl.DialogArea, null);
+                    }))
+                .WithView(Controls.Button("❌ Cancel")
+                    .WithClickAction(_ =>
+                    {
+                        // Restore the original todo item data to the area
+                        host.UpdateData(editTodoDataId, originalTodo);
+
+                        // Close the dialog by clearing the dialog area
+                        host.UpdateArea(DialogControl.DialogArea, null);
+                        return Task.CompletedTask;
+                    }))
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(10))
+            .WithVerticalGap(15);
+
+        // Create a dialog with the edit form content
+        var dialog = Controls.Dialog(editForm, "Edit Todo")
+            .WithSize("M")
+            .WithClosable(false); // Disable the X button - only Save/Cancel buttons should close the dialog
+
+        // Update the dialog area to show the dialog
+        host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    /// <summary>
+    /// Creates a hierarchical menu item for status group operations
+    /// </summary>
+    /// <param name="title">The primary action title</param>
+    /// <param name="icon">The primary action icon</param>
+    /// <param name="primaryAction">The primary action to execute</param>
+    /// <param name="host">The layout area host</param>
+    /// <param name="statusGroup">The group of todos</param>
+    /// <returns>A hierarchical menu item with group actions</returns>
+    private static UiControl CreateStatusGroupMenuItem(string title, string icon,
+        Action<LayoutAreaHost, IEnumerable<TodoItem>> primaryAction,
+        LayoutAreaHost host, IGrouping<TodoStatus, TodoItem> statusGroup)
+    {
+        // Create simple button with only primary action - no submenus for headings
+        var menuItem = Controls.MenuItem(title, icon)
+            .WithClickAction(_ => { primaryAction(host, statusGroup); return Task.CompletedTask; })
+            .WithWidth(MenuWidth)
+            .WithAppearance(Layout.Appearance.Neutral)
+            .WithStyle(LeftAlignedStyle);
+
+        return menuItem;
     }
 }

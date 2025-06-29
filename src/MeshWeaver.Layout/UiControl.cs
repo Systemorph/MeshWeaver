@@ -39,6 +39,7 @@ public abstract record UiControl : IUiControl
     /// </summary>
     public object Readonly { get; init; }
     private ImmutableList<Skin> _skins = [];
+    private readonly Func<UiActionContext, Task> clickAction;
 
     [JsonConverter(typeof(SkinListConverter))]
     public ImmutableList<Skin> Skins
@@ -52,9 +53,17 @@ public abstract record UiControl : IUiControl
     public abstract bool IsUpToDate(object other);
 
     // ReSharper disable once IdentifierTypo
-    public bool IsClickable => ClickAction != null;
+    public bool IsClickable { get; init; }
 
-    internal Func<UiActionContext, Task> ClickAction { get; init; }
+    internal Func<UiActionContext, Task> ClickAction
+    {
+        get => clickAction;
+        init
+        {
+            clickAction = value;
+            IsClickable = value != null;
+        }
+    }
 
 
     public string DataContext { get; init; }
@@ -190,7 +199,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     public new TControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
-        return This with { ClickAction = onClick, };
+        return This with { ClickAction = onClick };
     }
 
     public new TControl RegisterForDisposal(Action action)
