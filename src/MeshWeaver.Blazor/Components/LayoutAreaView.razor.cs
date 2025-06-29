@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
@@ -17,7 +18,7 @@ public partial class LayoutAreaView
     private LayoutAreaProperties Properties { get; set; }
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = showProgress, ProgressMessage=progressMessage };
+        new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
@@ -32,10 +33,11 @@ public partial class LayoutAreaView
         }
 
         BindStream();
-        BindStream();
     }
     private bool showProgress;
     private string progressMessage;
+    private DialogControl currentDialog;
+    private bool showDialog = false;
 
     private void BindViewModel()
     {
@@ -58,16 +60,24 @@ public partial class LayoutAreaView
     private ISynchronizationStream<JsonElement> AreaStream { get; set; }
     public override async ValueTask DisposeAsync()
     {
-        if (IsNotPreRender && AreaStream != null)
-            AreaStream.Dispose();
+        if (IsNotPreRender)
+        {
+            if (AreaStream != null)
+                AreaStream.Dispose();
+            if (DialogStream != null)
+                DialogStream.Dispose();
+        }
         AreaStream = null;
+        DialogStream = null;
         await base.DisposeAsync();
     }
 
     ~LayoutAreaView()
     {
         AreaStream?.Dispose();
+        DialogStream?.Dispose();
         AreaStream = null;
+        DialogStream = null;
     }
     private string RenderingArea { get; set; }
     private void BindStream()
@@ -80,8 +90,51 @@ public partial class LayoutAreaView
             AreaStream = Address.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address, ViewModel.Reference);
+            DialogStream = SetupDialogAreaMonitoring(AreaStream);
+            DialogStream.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
+        }
+
+    }
+
+    private ISynchronizationStream<JsonElement> DialogStream { get; set; }
+
+    private ISynchronizationStream<JsonElement> SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
+    {
+        return areaStream.Reduce(
+            new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
+    }
+
+    private void OnDialogStreamChanged(JsonElement dialogData)
+    {
+        try
+        {
+            if (IsNotPreRender)
+            {
+                // Deserialize the dialog control from the stream
+                if (dialogData.ValueKind != JsonValueKind.Null && dialogData.ValueKind != JsonValueKind.Undefined)
+                {
+                    var dialogControl = dialogData.Deserialize<DialogControl>(Hub.JsonSerializerOptions);
+                    if (dialogControl != null)
+                    {
+                        currentDialog = dialogControl;
+                        showDialog = true;
+                        InvokeAsync(StateHasChanged);
+                        return;
+                    }
+                }
+
+                // If we get here, dialog was cleared or is null
+                showDialog = false;
+                currentDialog = null;
+                InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error processing dialog stream change");
         }
     }
+
     protected override void OnAfterRender(bool firstRender)
     {
         base.OnAfterRender(firstRender);

@@ -56,6 +56,12 @@ public record LayoutAreaHost : IDisposable
                 delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
             )
         );
+        Stream.RegisterForDisposal(
+            Stream.Hub.Register<CloseDialogEvent>(
+                OnCloseDialog,
+                delivery => Stream.ClientId.Equals(delivery.Message.StreamId)
+            )
+        );
         executionHub = Stream.Hub.GetHostedHub(
             new LayoutExecutionAddress(),
             x => x
@@ -69,6 +75,15 @@ public record LayoutAreaHost : IDisposable
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
             InvokeAsync(() => control.ClickAction.Invoke(
                 new(request.Message.Area, request.Message.Payload, Hub, this)
+            ), ex => FailRequest(ex, request));
+        return request.Processed();
+    }
+
+    private IMessageDelivery OnCloseDialog(IMessageDelivery<CloseDialogEvent> request)
+    {
+        if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
+            InvokeAsync(() => control.CloseAction.Invoke(
+                new(request.Message.Area, request.Message.State, request.Message.Payload, Hub, this)
             ), ex => FailRequest(ex, request));
         return request.Processed();
     }
@@ -131,7 +146,7 @@ public record LayoutAreaHost : IDisposable
                 changes.Updates.Concat(updates.Updates),
                 Stream.StreamId
                     )
-            ) ;
+            );
         }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
     }
 
@@ -270,7 +285,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T:UiControl
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T : UiControl
     {
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
@@ -342,7 +357,7 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(async ct => 
+            Stream.Initialize(async ct =>
                     (await LayoutDefinition
                         .RenderAsync(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)

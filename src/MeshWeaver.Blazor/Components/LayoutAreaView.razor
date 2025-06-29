@@ -1,13 +1,15 @@
+@using MeshWeaver.Layout
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 
-<NamedAreaView 
-    Stream="@AreaStream" 
-    ViewModel="@NamedArea"
-    Area="@NamedArea.GetArea()" 
-    Top="@Top"
-/>
-    
+<NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
+
+@* Render dialog if one is active *@
+@if (showDialog && currentDialog != null)
+{
+    <DialogView ViewModel="@currentDialog" Area="@DialogControl.DialogArea" Stream="@AreaStream" />
+}
+
 @code
-{    
+{
     [Parameter] public bool Top { get; set; }
 }

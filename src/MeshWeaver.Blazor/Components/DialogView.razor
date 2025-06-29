@@ -1,0 +1,25 @@
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+@using FluentHorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
+@inherits BlazorView<DialogControl, DialogView>
+
+<FluentDialog @bind-Hidden="isHidden" Modal="true" OnDialogResult="HandleDialogResult" style="@GetDialogStyle()">
+    <FluentDialogHeader>
+        <FluentStack HorizontalAlignment="FluentHorizontalAlignment.Left">
+            <FluentLabel Typography="Typography.PaneHeader">@ViewModel.Title</FluentLabel>
+        </FluentStack>
+    </FluentDialogHeader>
+    <FluentDialogBody>
+        @if (ViewModel.ContentArea is not null)
+        {
+            <NamedAreaView Stream="@Stream" ViewModel="@ViewModel.ContentArea" Area="@ViewModel.ContentArea.Area.ToString()" />
+        }
+    </FluentDialogBody>
+    @if (ViewModel.IsClosable)
+    {
+        <FluentDialogFooter>
+            <FluentButton Appearance="FluentAppearance.Neutral" OnClick="HandleClose">
+                Close
+            </FluentButton>
+        </FluentDialogFooter>
+    }
+</FluentDialog>
