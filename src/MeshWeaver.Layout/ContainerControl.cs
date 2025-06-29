@@ -76,7 +76,11 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         return This with
         {
             Areas = Areas.Add(area),
-            Renderers = Renderers.Add((host, context, store) => host.RenderArea(GetContextForArea(context, area.Id.ToString()), view, store))
+            Renderers = Renderers.Add((host, context, store) =>
+            {
+                var areaContext = GetContextForArea(context, area.Id.ToString());
+                return host.RenderArea(areaContext, view, store);
+            })
         };
     }
 
@@ -100,7 +104,10 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         {
             Areas = Areas.Add(area),
             Renderers = Renderers.Add((host, context, store) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
+            {
+                var areaContext = GetContextForArea(context, area.Id.ToString());
+                return host.RenderArea(areaContext, viewDefinition, store);
+            })
         };
     }
 
@@ -116,7 +123,10 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         {
             Areas = Areas.Add(area),
             Renderers = Renderers.Add((host, context, store) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
+            {
+                var areaContext = GetContextForArea(context, area.Id.ToString());
+                return host.RenderArea(areaContext, viewDefinition, store);
+            })
         };
     }
 
@@ -131,7 +141,10 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         {
             Areas = Areas.Add(area),
             Renderers = Renderers.Add((host, context, store) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()), viewDefinition, store))
+            {
+                var areaContext = GetContextForArea(context, area.Id.ToString());
+                return host.RenderArea(areaContext, viewDefinition, store);
+            })
         };
     }
 
@@ -158,8 +171,10 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         {
             Areas = Areas.Add(area),
             Renderers = Renderers.Add((host, context, store) =>
-                host.RenderArea(GetContextForArea(context, area.Id.ToString()),
-                    viewDefinition.Invoke, store))
+            {
+                var areaContext = GetContextForArea(context, area.Id.ToString());
+                return host.RenderArea(areaContext, viewDefinition.Invoke, store);
+            })
         };
     }
 
