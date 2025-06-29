@@ -101,9 +101,9 @@ public static class TodoLayoutArea
 
         // Due date analysis
         var now = DateTime.Now.Date;
-        var overdue = todoItems.Where(t => t.DueDate.HasValue && t.DueDate.Value.Date < now && t.Status != TodoStatus.Completed).Count();
-        var dueToday = todoItems.Where(t => t.DueDate.HasValue && t.DueDate.Value.Date == now && t.Status != TodoStatus.Completed).Count();
-        var dueSoon = todoItems.Where(t => t.DueDate.HasValue && t.DueDate.Value.Date > now && t.DueDate.Value.Date <= now.AddDays(7) && t.Status != TodoStatus.Completed).Count();
+        var overdue = todoItems.Count(t => t.DueDate.HasValue && t.DueDate.Value.Date < now && t.Status != TodoStatus.Completed);
+        var dueToday = todoItems.Count(t => t.DueDate.HasValue && t.DueDate.Value.Date == now && t.Status != TodoStatus.Completed);
+        var dueSoon = todoItems.Count(t => t.DueDate.HasValue && t.DueDate.Value.Date > now && t.DueDate.Value.Date <= now.AddDays(7) && t.Status != TodoStatus.Completed);
 
         sb.AppendLine("## Due Date Analysis");
         sb.AppendLine($"- 🚨 **Overdue**: {overdue}");
@@ -534,57 +534,55 @@ public static class TodoLayoutArea
             UpdatedAt = DateTime.UtcNow
         };
 
-        // Create an edit form for the new todo item
-        var editForm = host.Hub.ServiceProvider.Edit(newTodo, (todo, editHost, ctx) =>
-        {
-            return Controls.Stack
-                .WithView(Controls.H3("Create New Todo"))
-                .WithView(Controls.Stack
-                    .WithView(Controls.Button("💾 Save Todo")
-                        .WithClickAction(_ =>
+        // Define the area ID for the new todo data
+        const string newTodoDataId = "NewTodoData";
+
+        // Create an edit form for the new todo item with proper data binding
+        var editForm = Controls.Stack
+            .WithView(Controls.H3("Create New Todo"))
+            .WithView(host.Edit(newTodo, newTodoDataId), newTodoDataId)
+            .WithView(Controls.Stack
+                .WithView(Controls.Button("💾 Save Todo")
+                    .WithClickAction(async _ =>
+                    {
+                        // Get the current todo data from the host data stream using the area ID
+                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
+
+                        // Validate required fields
+                        if (string.IsNullOrWhiteSpace(currentTodo?.Title))
                         {
-                            // Validate required fields
-                            if (string.IsNullOrWhiteSpace(todo?.Title))
+                            return; // Could add validation message here
+                        }
+
+                        // Submit the new todo
+                        var changeRequest = new DataChangeRequest()
+                            .WithCreations(currentTodo with
                             {
-                                return Task.CompletedTask; // Could add validation message here
-                            }
+                                Id = Guid.NewGuid(), // Ensure new ID
+                                CreatedAt = DateTime.UtcNow,
+                                UpdatedAt = DateTime.UtcNow
+                            });
 
-                            // Submit the new todo
-                            var changeRequest = new DataChangeRequest()
-                                .WithCreations(todo with
-                                {
-                                    Id = Guid.NewGuid(), // Ensure new ID
-                                    CreatedAt = DateTime.UtcNow,
-                                    UpdatedAt = DateTime.UtcNow
-                                });
+                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
 
-                            host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
-
-                            // Close the dialog by clearing the dialog area
-                            host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
-                            return Task.CompletedTask;
-                        }))
-                    .WithView(Controls.Button("❌ Cancel")
-                        .WithClickAction(_ =>
-                        {
-                            // Close the dialog by clearing the dialog area
-                            host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
-                            return Task.CompletedTask;
-                        }))
-                    .WithOrientation(Orientation.Horizontal)
-                    .WithHorizontalGap(10))
-                .WithVerticalGap(15);
-        });
+                        // Close the dialog by clearing the dialog area
+                        host.UpdateArea(DialogControl.DialogArea, null);
+                    }))
+                .WithView(Controls.Button("❌ Cancel")
+                    .WithClickAction(_ =>
+                    {
+                        // Close the dialog by clearing the dialog area
+                        host.UpdateArea(DialogControl.DialogArea, null);
+                        return Task.CompletedTask;
+                    }))
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(10))
+            .WithVerticalGap(15);
 
         // Create a dialog with the edit form content - DialogControl.Render() will handle the UiControl rendering
         var dialog = Controls.Dialog(editForm, "Create New Todo")
             .WithSize("M")
-            .WithClosable(true)
-            .WithCloseAction(_ =>
-            {
-                // Clear the dialog area when closed
-                host.UpdateArea(DialogControl.DialogArea, Controls.Html(""));
-            });
+            .WithClosable(false); // Disable the X button - only Save/Cancel buttons should close the dialog
 
         // Update the dialog area to show the dialog
         host.UpdateArea(DialogControl.DialogArea, dialog);

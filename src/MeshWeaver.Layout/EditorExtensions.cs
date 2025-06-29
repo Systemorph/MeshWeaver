@@ -14,6 +14,7 @@ using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
 
@@ -273,9 +274,7 @@ public static class EditorExtensions
             {
                 Name = propertyInfo.Name.ToCamelCase(),
                 Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
-                              ?? serviceProvider
-                                  .GetRequiredService<IDocumentationService>()
-                                  .GetDocumentation(propertyInfo)?.Summary?.Text,
+                              ?? propertyInfo.GetXmlDocsSummary(),
                 Label = propertySkinLabel
             };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
