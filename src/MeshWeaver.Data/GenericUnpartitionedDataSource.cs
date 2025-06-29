@@ -260,7 +260,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
             ex => Logger.LogWarning(ex, "An error occurred initializing data source {DataSource}", Id)
         );
-        stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null /*&& !x.ChangedBy.Equals(Id)*/).Subscribe(Synchronize));
+        stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }
 }
