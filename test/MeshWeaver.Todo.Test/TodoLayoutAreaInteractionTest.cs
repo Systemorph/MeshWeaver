@@ -3,12 +3,11 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Collections.Generic;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Domain;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -80,7 +79,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Step 4: Click the button and verify response
         var finalLayoutGridTask = GetUpdatedLayoutGrid(stream, reference);
-        await ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
         // Step 5: Validate that pending count is now 0 after clicking "Start All"
         var finalLayoutGrid = await finalLayoutGridTask;
@@ -126,10 +125,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Data}' in area {buttonAreaName}");
 
         // Step 4: Click the individual button and verify response
-        await ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        var updatedGridTask = GetUpdatedLayoutGrid(stream, reference);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
         // Step 5: Validate that pending count decreased by 1
-        var finalLayoutGrid = await GetUpdatedLayoutGrid(stream, reference);
+        var finalLayoutGrid = await updatedGridTask;
         var finalPendingCount = await GetPendingCount(stream, finalLayoutGrid);
 
         // Validate the final state
@@ -192,6 +192,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             .GetControlStream(reference.Area)
             .OfType<LayoutGridControl>()
             .Skip(1)
+            .Timeout(5.Seconds())
             .FirstAsync();
 
         finalLayoutGrid.Should().NotBeNull("Layout system should still be responsive");
@@ -337,78 +338,73 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("🔍 Looking for individual start button (not 'Start All')...");
 
-        foreach (var area in layoutGrid.Areas)
+        return await RecursivelyFindIndividualStartButton(stream, layoutGrid.Areas);
+    }
+
+    /// <summary>
+    /// Recursively searches through areas and container controls to find individual start buttons
+    /// </summary>
+    private async Task<(ButtonControl button, string areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
+    {
+        foreach (var area in areas)
         {
             var areaName = area.Area.ToString();
 
             try
             {
-                var areaControls = await stream
+                var areaControl = await stream
                     .GetControlStream(areaName)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
-                if (areaControls is ButtonControl button)
+                if (areaControl is ButtonControl button)
                 {
                     var text = button.Data?.ToString() ?? "";
                     Output.WriteLine($"   Found button in area {areaName}: '{text}'");
 
-                    // Look for individual start buttons, excluding "Start All"
-                    if ((text.Contains("Start", StringComparison.OrdinalIgnoreCase) ||
-                         text.Contains("Begin", StringComparison.OrdinalIgnoreCase) ||
-                         text.Contains("▶")) &&
-                        !text.Contains("All", StringComparison.OrdinalIgnoreCase))
+                    // Look for individual start buttons, excluding global actions
+                    if (IsIndividualStartButton(text))
                     {
                         Output.WriteLine($"🎯 Found individual start button: '{text}' in area {areaName}");
                         return (button, areaName);
                     }
                 }
-                else if (areaControls is StackControl stack)
+                else if (areaControl is StackControl stack)
                 {
                     Output.WriteLine($"   Area {areaName} has StackControl with {stack.Areas?.Count ?? 0} areas");
 
                     if (stack.Areas != null)
                     {
-                        foreach (var namedArea in stack.Areas)
+                        // Recursively search within the stack control
+                        var result = await RecursivelyFindIndividualStartButton(stream, stack.Areas);
+                        if (result.button != null)
                         {
-                            var stackAreaName = namedArea.Area?.ToString();
-                            if (!string.IsNullOrEmpty(stackAreaName))
-                            {
-                                try
-                                {
-                                    var stackAreaControl = await stream
-                                        .GetControlStream(stackAreaName)
-                                        .Timeout(2.Seconds())
-                                        .FirstOrDefaultAsync();
-
-                                    if (stackAreaControl is ButtonControl stackButton)
-                                    {
-                                        var text = stackButton.Data?.ToString() ?? "";
-                                        Output.WriteLine($"   Found button in stack area {stackAreaName}: '{text}'");
-
-                                        // Look for individual start buttons, excluding "Start All"
-                                        if ((text.Contains("Start", StringComparison.OrdinalIgnoreCase) ||
-                                             text.Contains("Begin", StringComparison.OrdinalIgnoreCase) ||
-                                             text.Contains("▶")) &&
-                                            !text.Contains("All", StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            Output.WriteLine($"🎯 Found individual start button: '{text}' in stack area {stackAreaName}");
-                                            return (stackButton, stackAreaName);
-                                        }
-                                    }
-                                }
-                                catch (Exception stackEx)
-                                {
-                                    Output.WriteLine($"   Could not get control for stack area {stackAreaName}: {stackEx.Message}");
-                                }
-                            }
+                            return result;
                         }
                     }
+                }
+                else if (areaControl is LayoutGridControl nestedGrid)
+                {
+                    Output.WriteLine($"   Area {areaName} has nested LayoutGridControl with {nestedGrid.Areas?.Count ?? 0} areas");
+
+                    if (nestedGrid.Areas != null)
+                    {
+                        // Recursively search within the nested grid
+                        var result = await RecursivelyFindIndividualStartButton(stream, nestedGrid.Areas);
+                        if (result.button != null)
+                        {
+                            return result;
+                        }
+                    }
+                }
+                else if (areaControl != null)
+                {
+                    Output.WriteLine($"   Area {areaName} has control: {areaControl.GetType().Name}");
                 }
             }
             catch (Exception ex)
             {
-                Output.WriteLine($"   Could not get controls for area {areaName}: {ex.Message}");
+                Output.WriteLine($"   Could not get control for area {areaName}: {ex.Message}");
             }
         }
 
@@ -416,9 +412,34 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     }
 
     /// <summary>
+    /// Determines if a button text represents an individual start button
+    /// </summary>
+    private static bool IsIndividualStartButton(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return false;
+
+        // Exclude global actions
+        if (text.Contains("All", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Add", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("New", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Look for individual start actions
+        return text.Contains("Start", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Begin", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("▶") ||
+               text.Contains("Play", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Go", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("Run", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Clicks a button and verifies the layout system responds properly
     /// </summary>
-    private async Task ClickButtonAndVerifyResponse(ISynchronizationStream<JsonElement> stream, string buttonAreaName, ButtonControl startButton)
+    private void ClickButtonAndVerifyResponse(ISynchronizationStream<JsonElement> stream, string buttonAreaName, ButtonControl startButton)
     {
         Output.WriteLine("🖱️ Clicking the button control...");
 
@@ -428,7 +449,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Use the hub from the stream to post the event
         stream.Hub.Post(clickEvent, o => o.WithTarget(TodoApplicationAttribute.Address));
         Output.WriteLine($"✅ Click event sent for button '{startButton.Data}' in area {buttonAreaName}");
-
+        
     }
 
     #endregion
