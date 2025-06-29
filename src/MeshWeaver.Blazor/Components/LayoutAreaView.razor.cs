@@ -116,6 +116,8 @@ public partial class LayoutAreaView
                     var dialogControl = dialogData.Deserialize<DialogControl>(Hub.JsonSerializerOptions);
                     if (dialogControl != null)
                     {
+                        if(dialogControl.Equals(currentDialog))
+                            return; // No change, do nothing
                         currentDialog = dialogControl;
                         showDialog = true;
                         InvokeAsync(StateHasChanged);

@@ -49,7 +49,7 @@ public record DialogControl
     /// <summary>
     /// Whether the dialog can be closed with the X button
     /// </summary>
-    public bool IsClosable { get; init; } = true;
+    public bool IsClosable { get; init; }
 
     /// <summary>
     /// The size of the dialog (S, M, L)
