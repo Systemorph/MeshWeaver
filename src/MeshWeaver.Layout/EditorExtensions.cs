@@ -429,6 +429,18 @@ public static class EditorExtensions
                 }
             },
             {
+                typeof(TextAreaControl),
+                (reference, property, _) => new TextAreaControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
                 typeof(NumberFieldControl),
                 (reference, property, type) => new NumberFieldControl(reference, type)
                 {

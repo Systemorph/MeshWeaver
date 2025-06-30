@@ -1,5 +1,4 @@
 ﻿using System.Reactive.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -238,7 +237,7 @@ public static class TodoLayoutArea
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Layout.Appearance.Neutral)
-                .WithStyle(LeftAlignedStyle),
+                .WithStyle(style => HeadingButtonStyle(style)),
                 skin => skin.WithXs(12).WithSm(3).WithMd(2));
 
         if (!todoItems.Any())
@@ -246,9 +245,9 @@ public static class TodoLayoutArea
             mainGrid = mainGrid
                 .WithView(Controls.Markdown("*No todo items found. Click 'Add New Todo' to get started!*")
                     .WithStyle(style => style.WithColor("#666")),
-                    skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                    skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(Controls.Html(""),
-                    skin => skin.WithXs(12).WithSm(4).WithMd(3));
+                    skin => skin.WithXs(12).WithSm(3).WithMd(2));
             return mainGrid;
         }
 
@@ -288,11 +287,11 @@ public static class TodoLayoutArea
             mainGrid = mainGrid
                 .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
                     .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("#333").WithDisplay("flex").WithAlignItems("center")),
-                    skin => skin.WithXs(12).WithSm(8).WithMd(9))
+                    skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(Controls.Stack
                     .WithView(statusActionButton)
-                    .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end").WithHeight("100%").WithPaddingTop("20px")),
-                    skin => skin.WithXs(12).WithSm(4).WithMd(3));
+                    .WithStyle(style => HeadingButtonStyle(style)),
+                    skin => skin.WithXs(12).WithSm(3).WithMd(2));
 
             // Todo items in this status group
             foreach (var todo in statusGroup)
@@ -312,7 +311,6 @@ public static class TodoLayoutArea
 
 
     private const string MenuWidth = "150px";
-    private const string LeftAlignedStyle = "text-align: left; justify-content: flex-start; display: flex;";
     /// <summary>
     /// Creates hierarchical menu item action controls with primary action and expandable secondary actions
     /// </summary>
@@ -326,7 +324,7 @@ public static class TodoLayoutArea
             .WithClickAction(_ => { primaryAction.Action(host, todo); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
             .WithAppearance(Layout.Appearance.Neutral)
-            .WithStyle(LeftAlignedStyle);
+            .WithStyle(style => HeadingButtonStyle(style));
 
         // Add secondary actions as sub-views
         var secondaryActions = GetSecondaryActionData(todo);
@@ -336,7 +334,7 @@ public static class TodoLayoutArea
                 .WithClickAction(_ => { action.Action(host, todo); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Layout.Appearance.Neutral)
-                .WithStyle(LeftAlignedStyle);
+                .WithStyle(style => HeadingButtonStyle(style));
             menuItem = menuItem.WithView(subMenuItem);
         }
 
@@ -411,45 +409,33 @@ public static class TodoLayoutArea
 
         // Create an edit form for the new todo item with proper data binding
         var editForm = Controls.Stack
-            .WithView(Controls.H3("Create New Todo"))
-            .WithView(host.Edit(newTodo, newTodoDataId), newTodoDataId)
+            .WithView(Controls.H3("Create New Todo")
+                .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
+            .WithView(host.Edit(newTodo, newTodoDataId)
+                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), newTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Todo")
                     .WithClickAction(async _ =>
                     {
-                        // Get the current todo data from the host data stream using the area ID
-                        var currentTodo = await host.Stream.GetDataAsync<TodoItem>(newTodoDataId);
-
-                        // Validate required fields
-                        if (string.IsNullOrWhiteSpace(currentTodo?.Title))
-                        {
-                            return; // Could add validation message here
-                        }
-
-                        // Submit the new todo
-                        var changeRequest = new DataChangeRequest()
-                            .WithCreations(currentTodo with
-                            {
-                                Id = Guid.NewGuid().AsString(), // Ensure new ID
-                                CreatedAt = DateTime.UtcNow,
-                                UpdatedAt = DateTime.UtcNow
-                            });
-
-                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
-
+                        // Changes are saved immediately ==> just
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
                     }))
                 .WithView(Controls.Button("❌ Cancel")
                     .WithClickAction(_ =>
                     {
+                        // since we have saved immediately, we need to now delete the entity.
+                        host.Hub.Post(new DataChangeRequest() { Deletions = [newTodo] }, o => o.WithTarget(TodoApplicationAttribute.Address));
+
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(10))
-            .WithVerticalGap(15);
+                .WithHorizontalGap(10)
+                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
+            .WithVerticalGap(15)
+            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
 
         // Create a dialog with the edit form content - DialogControl.Render() will handle the UiControl rendering
         var dialog = Controls.Dialog(editForm, "Create New Todo")
@@ -663,8 +649,10 @@ public static class TodoLayoutArea
 
         // Create an edit form for the todo item with proper data binding
         var editForm = Controls.Stack
-            .WithView(Controls.H3("Edit Todo"))
-            .WithView(host.Edit(todoToEdit, editTodoDataId), editTodoDataId)
+            .WithView(Controls.H3("Edit Todo")
+                .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
+            .WithView(host.Edit(todoToEdit, editTodoDataId)
+                .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Changes")
                     .WithClickAction(async _ =>
@@ -687,8 +675,10 @@ public static class TodoLayoutArea
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
-                .WithHorizontalGap(10))
-            .WithVerticalGap(15);
+                .WithHorizontalGap(10)
+                .WithStyle(style => style.WithJustifyContent("center").WithWidth("100%")))
+            .WithVerticalGap(15)
+            .WithStyle(style => style.WithWidth("100%").WithDisplay("block").WithMargin("0 auto"));
 
         // Create a dialog with the edit form content
         var dialog = Controls.Dialog(editForm, "Edit Todo")
@@ -717,8 +707,12 @@ public static class TodoLayoutArea
             .WithClickAction(_ => { primaryAction(host, statusGroup); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
             .WithAppearance(Layout.Appearance.Neutral)
-            .WithStyle(LeftAlignedStyle);
-
+            .WithStyle(style => HeadingButtonStyle(style));
+        
         return menuItem;
     }
+
+    private static readonly Func<StyleBuilder, StyleBuilder> HeadingButtonStyle = style =>
+        style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end").WithHeight("100%")
+            .WithPaddingTop("20px");
 }
