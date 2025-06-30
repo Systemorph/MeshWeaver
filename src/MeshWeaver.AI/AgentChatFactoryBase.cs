@@ -84,15 +84,7 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         foreach (var agentDefinition in agentDefinitions.Values)
         {
             var agent = agents[agentDefinition.Name];
-
-            // Add delegation plugin if:
-            // 1. Agent implements IAgentWithDelegations, OR
-            // 2. Agent is marked as default agent
-            if (agentDefinition is IAgentWithDelegations ||
-                agentDefinition == defaultAgentDefinition)
-            {
-                agent.Kernel.Plugins.Add(delegationPlugin);
-            }
+            agent.Kernel.Plugins.Add(delegationPlugin);
         }
 
         // Configure plugins for this agent

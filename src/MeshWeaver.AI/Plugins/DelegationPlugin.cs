@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel;
-using Microsoft.Extensions.AI;
 using Microsoft.SemanticKernel;
 
 namespace MeshWeaver.AI.Plugins;
