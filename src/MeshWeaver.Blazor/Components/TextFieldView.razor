@@ -34,7 +34,7 @@
     {
         base.BindData();
 
-        @if (ViewModel != null)  
+        if (ViewModel != null)  
         {  
            DataBind(ViewModel.Autocomplete, x => x.Autocomplete);  
         }

@@ -63,6 +63,7 @@ public static class BlazorViewRegistry
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
             NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
+            TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
             RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),

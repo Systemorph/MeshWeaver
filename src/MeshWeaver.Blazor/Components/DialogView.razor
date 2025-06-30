@@ -11,7 +11,10 @@
     <FluentDialogBody>
         @if (ViewModel.ContentArea is not null)
         {
-            <NamedAreaView Stream="@Stream" ViewModel="@ViewModel.ContentArea" Area="@ViewModel.ContentArea.Area.ToString()" />
+            <div class="dialog-content-wrapper">
+                <NamedAreaView Stream="@Stream" ViewModel="@ViewModel.ContentArea"
+                    Area="@ViewModel.ContentArea.Area.ToString()" />
+            </div>
         }
     </FluentDialogBody>
     @if (ViewModel.IsClosable)
