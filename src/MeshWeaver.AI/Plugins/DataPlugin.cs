@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
+using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -59,6 +60,26 @@ public class DataPlugin(
         // Return types that match the specified address
         var ret = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(chat.Context.Address));
         return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
+    }
+
+    [KernelFunction,
+     Description(
+         $"Updates the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
+    public async Task<string> UpdateData(
+        [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json, 
+        [Description("Name of the type to be updated. Must be in list of available types.")]string type
+        )
+    {
+        var address = GetAddress(type);
+
+        if (address == null)
+            return $"No address defined for type: {type}";
+
+        var response = await hub.AwaitResponse(new DataChangeRequest(){Updates = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
+
+        if(response.Message.Log.Status == ActivityStatus.Succeeded)
+            return $"Data of type '{type}' updated successfully.";
+        return $"Failed to update data of type '{type}': {response.Message}";
     }
 
     public static string GetTools() =>
