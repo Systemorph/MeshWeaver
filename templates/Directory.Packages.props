@@ -1,0 +1,49 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- MeshWeaver packages - these will be project references for local development -->
+    <PackageVersion Include="MeshWeaver.Hosting" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Hosting.Monolith" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Portal.Shared.Mesh" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Portal.Shared.Web" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Portal" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.ContentCollections" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Messaging" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Mesh.Contract" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Messaging.Hub" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Data" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Layout" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.AI" Version="2.2.0-rc5" />
+    <PackageVersion Include="MeshWeaver.Hosting.Monolith.TestBase" Version="2.2.0-rc5" />
+    
+    <!-- Microsoft packages required by referenced projects -->
+    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="9.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="9.0.6" />
+    <PackageVersion Include="System.Collections.Immutable" Version="9.0.0" />
+    <PackageVersion Include="System.Text.Json" Version="9.0.4" />
+    <PackageVersion Include="System.Reactive" Version="6.0.1" />
+    <PackageVersion Include="System.Linq.Async" Version="6.0.3" />
+    <PackageVersion Include="System.Interactive" Version="6.0.3" />
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageVersion Include="JetBrains.Annotations" Version="2023.3.0" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.12.0" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.12.0" />
+    
+    <!-- Test packages -->
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+  </ItemGroup>
+</Project>

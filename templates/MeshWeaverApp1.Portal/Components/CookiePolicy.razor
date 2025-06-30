@@ -1,0 +1,81 @@
+﻿@using Microsoft.Extensions.Configuration
+@inject IJSRuntime JsRuntime;
+@inject IConfiguration Configuration
+
+@if (!IsDevelopment && !string.IsNullOrEmpty(TrackingId))
+{
+    <script async src="https://www.googletagmanager.com/gtag/js?id=@TrackingId"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', '@TrackingId');
+    </script>
+}
+
+<div class="@(IsVisible ? "cookie-consent-banner" : "cookie-consent-banner hidden")">
+    <div class="cookie-consent-content">
+        <div class="cookie-consent-text">
+            <FluentStack Orientation="Orientation.Vertical">
+                <FluentLabel Typo="Typography.Body">
+                    This website uses cookies to ensure you get the best experience on our website.
+                </FluentLabel>
+            </FluentStack>
+        </div>
+        <div class="cookie-consent-buttons">
+            <FluentButton Appearance="Appearance.Accent"
+                          @onclick="AcceptCookies">
+                Accept
+            </FluentButton>
+            <FluentButton Appearance="Appearance.Neutral"
+                          @onclick="RejectCookies">
+                Reject Non-Essential
+            </FluentButton>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool IsVisible;
+    private bool IsDevelopment;
+    private string TrackingId;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        IsDevelopment = Configuration.GetValue<bool>("IsDevelopment");
+        TrackingId = Configuration["GoogleAnalyticsTrackingId"];
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Check if user has already made a choice
+            var consent = await JsRuntime.InvokeAsync<string>("localStorage.getItem", "cookieConsent");
+            if (string.IsNullOrEmpty(consent) && !IsDevelopment)
+            {
+                IsVisible = true;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task AcceptCookies()
+    {
+        await JsRuntime.InvokeVoidAsync("localStorage.setItem", "cookieConsent", "accepted");
+        IsVisible = false;
+        StateHasChanged();
+    }
+
+    private async Task RejectCookies()
+    {
+        await JsRuntime.InvokeVoidAsync("localStorage.setItem", "cookieConsent", "rejected");
+        IsVisible = false;
+        StateHasChanged();
+
+        // Disable analytics when rejected
+        await JsRuntime.InvokeVoidAsync("disableAnalytics");
+    }
+}
