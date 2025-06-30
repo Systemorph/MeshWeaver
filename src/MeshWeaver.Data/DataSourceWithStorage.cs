@@ -38,6 +38,7 @@ public abstract record UnpartitionedDataSourceWithStorage<TDataSource, TTypeSour
         persistenceHub.InvokeAsync(ct => UpdateAsync(item, ct), ex =>
         {
             logger.LogWarning(ex,"Updating {DataSource} failed", Id);
+            return Task.CompletedTask;
         });
     }
 

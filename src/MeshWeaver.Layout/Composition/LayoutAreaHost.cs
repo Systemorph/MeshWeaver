@@ -88,10 +88,11 @@ public record LayoutAreaHost : IDisposable
         return request.Processed();
     }
 
-    private void FailRequest(Exception exception, IMessageDelivery request)
+    private Task FailRequest(Exception exception, IMessageDelivery request)
     {
         logger.LogWarning(exception, "Request failed");
         Hub.Post(new DeliveryFailure(request, exception?.Message), o => o.ResponseFor(request));
+        return Task.CompletedTask;
     }
 
     public object GetControl(string area) =>
@@ -147,7 +148,11 @@ public record LayoutAreaHost : IDisposable
                 Stream.StreamId
                     )
             );
-        }, ex => logger.LogWarning(ex, "Cannot update {Area}", context.Area));
+        }, ex =>
+        {
+            logger.LogWarning(ex, "Cannot update {Area}", context.Area);
+            return Task.CompletedTask;
+        });
     }
 
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
@@ -157,8 +162,11 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.Update(ws =>
             Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId)),
-            ex => logger.LogWarning(ex, "Cannot update {Collection}", collection)
-        );
+            ex =>
+            {
+                logger.LogWarning(ex, "Cannot update {Collection}", collection);
+                return Task.CompletedTask;
+            });
     }
 
     public void UpdateData(string id, object data)
@@ -245,12 +253,12 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.Clear();
     }
 
-    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback)
+    public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
     {
         executionHub.InvokeAsync(action, exceptionCallback);
     }
 
-    public void InvokeAsync(Action action, Action<Exception> exceptionCallback) =>
+    public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(_ =>
         {
             action();
@@ -313,7 +321,11 @@ public record LayoutAreaHost : IDisposable
 
             UpdateArea(context, view);
             logger.LogDebug("End rendering of {area}", context.Area);
-        }, FailRendering);
+        }, ex =>
+        {
+            FailRendering(ex);
+            return Task.CompletedTask;
+        });
         return DisposeExistingAreas(store, context);
     }
     internal EntityStoreAndUpdates RenderArea(
@@ -326,7 +338,11 @@ public record LayoutAreaHost : IDisposable
                 {
                     var view = await vd.Invoke(this, context, ct);
                     UpdateArea(context, view);
-                }, FailRendering)
+                }, ex =>
+                {
+                    FailRendering(ex);
+                    return Task.CompletedTask;
+                })
             )
         );
 
@@ -363,9 +379,17 @@ public record LayoutAreaHost : IDisposable
                             .Update(LayoutAreaReference.Areas, x => x)
                             .Update(LayoutAreaReference.Data, x => x)
                         ))
-                        .Store, FailRendering);
+                        .Store, ex =>
+            {
+                FailRendering(ex);
+                return Task.CompletedTask;
+            });
             logger.LogDebug("End re-rendering");
-        }, FailRendering);
+        }, ex =>
+        {
+            FailRendering(ex);
+            return Task.CompletedTask;
+        });
         return Stream;
     }
 

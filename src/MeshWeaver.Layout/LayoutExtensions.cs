@@ -214,8 +214,11 @@ public static class LayoutExtensions
                     changedBy
                 )
             ),
-            stream.FailRendering
-        );
+            ex =>
+            {
+                stream.FailRendering(ex);
+                return Task.CompletedTask;
+            });
     }
 
     private static void FailRendering(this ISynchronizationStream stream, Exception exception)

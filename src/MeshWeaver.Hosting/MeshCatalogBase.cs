@@ -52,7 +52,11 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private MeshNode UpdateNode(MeshNode node)
     {
         cache.Set(node.Key, node, cacheOptions);
-        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex => logger.LogError(ex, "unable to update mesh catalog"));
+        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex =>
+        {
+            logger.LogError(ex, "unable to update mesh catalog");
+            return Task.CompletedTask;
+        });
         return node;
     }
 

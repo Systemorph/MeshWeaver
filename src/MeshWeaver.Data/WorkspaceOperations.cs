@@ -53,10 +53,11 @@ public static class WorkspaceOperations
             );
     }
 
-    private static void UpdateFailed(IWorkspace workspace, IMessageDelivery delivery, Exception exception)
+    private static Task UpdateFailed(IWorkspace workspace, IMessageDelivery delivery, Exception exception)
     {
         if (delivery is not null)
             workspace.Hub.Post(new DeliveryFailure(delivery, exception?.ToString()), o => o.ResponseFor(delivery));
+        return Task.CompletedTask;
     }
 
     private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery request)

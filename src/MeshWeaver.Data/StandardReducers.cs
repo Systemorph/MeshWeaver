@@ -3,7 +3,6 @@ using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data.Serialization;
-using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -52,14 +51,13 @@ public static class StandardReducers
     }
     private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch patch, string changedBy)
     {
-        var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
         var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
         return new(
             updatedInstances, 
             changedBy, 
             ChangeType.Patch, 
             stream.Hub.Version, 
-            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch, stream.Hub.JsonSerializerOptions, typeRegistry));
+            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch, stream.Hub.JsonSerializerOptions));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)

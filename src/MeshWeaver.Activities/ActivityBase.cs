@@ -23,16 +23,17 @@ namespace MeshWeaver.Activities
             Update(x => x, FailActivity);
         }
 
-        protected void FailActivity(Exception ex)
+        protected Task FailActivity(Exception ex)
         {
             Update(x =>
             {
                 Logger.LogWarning(ex, "An exception occurred in {Activity}", x);
                 return x with { Log = Log.Fail($"An exception occurred: {ex}") };
-            }, _ => { });
+            }, _ => Task.CompletedTask);
+            return Task.CompletedTask;
         }
 
-        private TActivity current; public void Update(Func<TActivity, TActivity> update, Action<Exception> exceptionCallback)
+        private TActivity current; public void Update(Func<TActivity, TActivity> update, Func<Exception, Task> exceptionCallback)
         {
             if (SyncHub == null)
             {
