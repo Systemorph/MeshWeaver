@@ -656,7 +656,7 @@ public static class TodoLayoutArea
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Done")
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
                         // is updated on the fly, so we just need to close the dialog
                         // Close the dialog by clearing the dialog area

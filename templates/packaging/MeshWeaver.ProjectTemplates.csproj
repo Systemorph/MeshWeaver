@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <PackageVersion>2.2.0-rc5</PackageVersion>
+    <PackageId>MeshWeaver.ProjectTemplates</PackageId>
+    <Title>MeshWeaver Project Templates</Title>
+    <Authors>Systemorph</Authors>
+    <Description>Project templates for creating MeshWeaver applications with Portal and Todo module examples.</Description>
+    <PackageTags>dotnet-new;templates;meshweaver;portal;todo;web</PackageTags>
+    <TargetFramework>net9.0</TargetFramework>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+    <LocalizeTemplates>false</LocalizeTemplates>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="../dist/templates/**" Exclude="../dist/templates/bin/**;../dist/templates/obj/**" />
+  </ItemGroup>
+
+</Project>

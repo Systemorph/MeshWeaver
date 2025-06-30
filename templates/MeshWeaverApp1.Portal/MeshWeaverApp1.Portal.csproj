@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
+    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+  </ItemGroup>
+
+</Project>
