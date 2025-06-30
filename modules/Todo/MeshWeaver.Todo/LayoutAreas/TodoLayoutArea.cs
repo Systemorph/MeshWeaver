@@ -415,11 +415,12 @@ public static class TodoLayoutArea
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), newTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Todo")
-                    .WithClickAction(async _ =>
+                    .WithClickAction(_ =>
                     {
                         // Changes are saved immediately ==> just
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
+                        return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("❌ Cancel")
                     .WithClickAction(_ =>
@@ -654,25 +655,12 @@ public static class TodoLayoutArea
             .WithView(host.Edit(todoToEdit, editTodoDataId)
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
             .WithView(Controls.Stack
-                .WithView(Controls.Button("💾 Save Changes")
+                .WithView(Controls.Button("💾 Done")
                     .WithClickAction(async _ =>
                     {
-                        var updatedTodo = await host.Stream.GetDataAsync<TodoItem>(editTodoDataId);
-                        var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo with { UpdatedAt = DateTime.UtcNow });
-                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
-
+                        // is updated on the fly, so we just need to close the dialog
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
-                    }))
-                .WithView(Controls.Button("❌ Cancel")
-                    .WithClickAction(_ =>
-                    {
-                        // Restore the original todo item data to the area
-                        host.UpdateData(editTodoDataId, originalTodo);
-
-                        // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
-                        return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(10)

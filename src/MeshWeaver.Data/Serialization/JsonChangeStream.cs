@@ -39,8 +39,11 @@ public static class JsonSynchronizationStream
                     .WithClientId(config.Stream.StreamId)
             );
         reduced.Initialize(ct => (tcs2 = new(ct)).Task,
-            ex => logger.LogWarning(ex, "An error occurred updating data source {Stream}", reduced.StreamId)
-        );
+            ex =>
+            {
+                logger.LogWarning(ex, "An error occurred updating data source {Stream}", reduced.StreamId);
+                return Task.CompletedTask;
+            });
         reduced.RegisterForDisposal(
                 reduced
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
@@ -170,9 +173,17 @@ public static class JsonSynchronizationStream
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
                     var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
                     reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
-                    activity.Complete(_ =>
+                    reduced.Hub.InvokeAsync(async ct =>
                     {
-                        /*TODO: Where to save?*/
+                        await activity.Complete(_ =>
+                        {
+                            /*TODO: Where to save?*/
+                        }, cancellationToken: ct);
+
+                    }, ex =>
+                    {
+                        activity.LogError("An error occurred: {exception}", ex);
+                        return Task.CompletedTask;
                     });
                 })
         );
@@ -221,9 +232,10 @@ public static class JsonSynchronizationStream
                 })
         );
 
-    private static void SyncFailed<TStream>(IMessageDelivery delivery, ISynchronizationStream<TStream> stream, Exception exception)
+    private static Task SyncFailed<TStream>(IMessageDelivery delivery, ISynchronizationStream<TStream> stream, Exception exception)
     {
         stream.Hub.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
+        return Task.CompletedTask;
     }
 
 
@@ -329,8 +341,7 @@ public static class JsonSynchronizationStream
         CollectionReference reference,
         JsonElement updated,
         JsonPatch patch,
-        JsonSerializerOptions options,
-        ITypeRegistry typeRegistry = null)
+        JsonSerializerOptions options)
         => patch.Operations.Select(p =>
         {
             var id = p.Path.FirstOrDefault();

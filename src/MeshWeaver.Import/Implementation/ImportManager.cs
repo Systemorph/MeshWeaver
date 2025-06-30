@@ -33,7 +33,7 @@ public class ImportManager
         return request.Processed();
     }
 
-    private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
+    private Task FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
     {
         var message = new StringBuilder(exception.Message);
         while (exception.InnerException != null)
@@ -43,7 +43,7 @@ public class ImportManager
         }
         var activity = new Activity(ActivityCategory.Import, Hub);
         activity.LogError(message.ToString());
-        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        return activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
     private async Task<IMessageDelivery> DoImport(

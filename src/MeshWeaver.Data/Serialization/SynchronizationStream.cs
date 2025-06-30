@@ -107,12 +107,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
-    public void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback) =>
+    public void Update(Func<TStream, ChangeItem<TStream>> update, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)), exceptionCallback);
-    public void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback) =>
+    public void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)), exceptionCallback);
 
-    public void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback)
+    public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
     {
         InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), Hub.Version)), exceptionCallback);
     }
@@ -146,7 +146,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
     }
 
-    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback)
+    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update, Func<Exception, Task> exceptionCallback)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
         Update(update, exceptionCallback);
@@ -190,10 +190,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     internal StreamConfiguration<TStream> Configuration { get; }
 
     private readonly IMessageHub synchronizationHub;
-    public void InvokeAsync(Action action, Action<Exception> exceptionCallback)
+    public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback)
         => synchronizationHub.InvokeAsync(action, exceptionCallback);
 
-    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback)
+    public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
         => synchronizationHub.InvokeAsync(action, exceptionCallback);
 
 

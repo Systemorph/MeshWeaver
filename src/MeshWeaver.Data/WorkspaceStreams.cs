@@ -55,14 +55,23 @@ c => c
             .ToAsyncEnumerable()
             .SelectAwait(async x => await x.FirstAsync())
             .AggregateAsync(new EntityStore(), (x, y) =>
-            x.Merge(y.Value), cancellationToken: ct), ex => logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address));
+            x.Merge(y.Value), cancellationToken: ct), ex =>
+        {
+            logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address);
+            return Task.CompletedTask;
+        });
 
         foreach (var stream in streams)
             ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => 
                 ret.Update(
                     current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)),
-                    ex => logger.LogError(ex, "cannot apply changes to stream for {Address}", workspace.Hub.Address)
-                    )
+                    ex =>
+                    {
+                        logger.LogError(ex, "cannot apply changes to stream for {Address}",
+                            workspace.Hub.Address);
+                        return Task.CompletedTask;
+
+                    })
                 )
             );
 

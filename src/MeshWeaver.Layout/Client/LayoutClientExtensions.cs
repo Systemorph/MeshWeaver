@@ -36,7 +36,12 @@ public static class LayoutClientExtensions
 
                     return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
                 },
-                    ex => stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout"));
+                    ex =>
+                    {
+                        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
+                        return Task.CompletedTask;
+                    });
 
         }
     }

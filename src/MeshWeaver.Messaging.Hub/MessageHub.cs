@@ -15,7 +15,7 @@ public sealed class MessageHub : IMessageHub
 {
     public Address Address => Configuration.Address;
 
-    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback) =>
+    public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback) =>
         Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
