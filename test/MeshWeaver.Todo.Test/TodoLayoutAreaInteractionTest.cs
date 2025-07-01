@@ -76,11 +76,12 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var startButton = buttonResult.button;
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one clickable button");
-        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Data}' in area {buttonAreaName}");
+        buttonAreaName.Should().NotBeNull("Button area name should not be null");
+        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton!.Data}' in area {buttonAreaName}");
 
         // Step 4: Click the button and verify response
         var finalLayoutGridTask = GetUpdatedLayoutGrid(stream, reference);
-        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
 
         // Step 5: Validate that pending count is now 0 after clicking "Start All"
         var finalLayoutGrid = await finalLayoutGridTask;
@@ -123,11 +124,12 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var startButton = buttonResult.button;
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one individual start button");
-        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Data}' in area {buttonAreaName}");
+        buttonAreaName.Should().NotBeNull("Button area name should not be null");
+        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton!.Data}' in area {buttonAreaName}");
 
         // Step 4: Click the individual button and verify response
         var updatedGridTask = GetUpdatedLayoutGrid(stream, reference);
-        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
 
         // Step 5: Validate that pending count decreased by 1
         var finalLayoutGrid = await updatedGridTask;
@@ -252,7 +254,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds a button by searching for specific text in the button content
     /// </summary>
-    private async Task<(ButtonControl button, string areaName)> FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
+    private async Task<(ButtonControl? button, string? areaName)> FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
     {
         Output.WriteLine($"🔍 Looking for button containing '{searchText}'...");
 
@@ -335,7 +337,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds an individual start button (not "Start All")
     /// </summary>
-    private async Task<(ButtonControl button, string areaName)> FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
+    private async Task<(ButtonControl? button, string? areaName)> FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
     {
         Output.WriteLine("🔍 Looking for individual start button (not 'Start All')...");
 
@@ -345,7 +347,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Recursively searches through areas and container controls to find individual start buttons
     /// </summary>
-    private async Task<(ButtonControl button, string areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
+    private async Task<(ButtonControl? button, string? areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
     {
         foreach (var area in areas)
         {
@@ -458,7 +460,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Helper method to find a pending todo area that has a Start button
     /// </summary>
-    private static string FindPendingTodoWithStartButton(LayoutGridControl layoutGrid)
+    private static string? FindPendingTodoWithStartButton(LayoutGridControl layoutGrid)
     {
         // In TodoLayoutArea, pending todos are typically in areas with "Start" actions
         // We need to examine the layout structure to find the right area
@@ -490,7 +492,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Helper method to find a todo in InProgress section by ID
     /// </summary>
-    private static string FindInProgressTodoById(LayoutGridControl layoutGrid, string todoId)
+    private static string? FindInProgressTodoById(LayoutGridControl layoutGrid, string todoId)
     {
         // Look for areas that suggest InProgress todos
         _ = todoId; // Suppress unused parameter warning

@@ -5,14 +5,14 @@ namespace MeshWeaverApp1.Portal.Resize;
 
 public class DimensionManager
 {
-    private ViewportInformation _viewportInformation;
-    private ViewportSize _viewportSize;
+    private ViewportInformation _viewportInformation = new ViewportInformation(false, false, false);
+    private ViewportSize _viewportSize = new ViewportSize(0, 0);
 
-    public event ViewportSizeChangedEventHandler OnViewportSizeChanged;
-    public event ViewportInformationChangedEventHandler OnViewportInformationChanged;
+    public event ViewportSizeChangedEventHandler? OnViewportSizeChanged;
+    public event ViewportInformationChangedEventHandler? OnViewportInformationChanged;
 
-    public ViewportInformation ViewportInformation => _viewportInformation ?? throw new ArgumentNullException(nameof(_viewportInformation));
-    public ViewportSize ViewportSize=> _viewportSize ?? throw new ArgumentNullException(nameof(_viewportSize));
+    public ViewportInformation ViewportInformation => _viewportInformation;
+    public ViewportSize ViewportSize => _viewportSize;
 
     internal void InvokeOnViewportSizeChanged(ViewportSize newViewportSize)
     {
