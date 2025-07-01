@@ -92,13 +92,11 @@ $portalCsproj = @"
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MeshWeaver.Hosting" Version="$Version" />
+    <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="$Version" />
+    <PackageReference Include="MeshWeaver.Blazor.Chat" Version="$Version" />
+    <PackageReference Include="MeshWeaver.Blazor" Version="$Version" />
+    <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="$Version" />
     <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="$Version" />
-    <PackageReference Include="MeshWeaver.Portal.Shared.Mesh" Version="$Version" />
-    <PackageReference Include="MeshWeaver.Portal.Shared.Web" Version="$Version" />
-    <PackageReference Include="MeshWeaver.Portal" Version="$Version" />
-    <PackageReference Include="MeshWeaver.ContentCollections" Version="$Version" />
-    <PackageReference Include="MeshWeaver.Messaging" Version="$Version" />
   </ItemGroup>
 
 </Project>
@@ -153,13 +151,26 @@ $todoAICsproj | Out-File -FilePath "$OutputPath\MeshWeaverApp1.Todo.AI\MeshWeave
 Write-Host "Updating Test project with package references..." -ForegroundColor Cyan
 $testCsproj = @"
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <ProjectGuid>{1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D}</ProjectGuid>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
   </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
-    <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" Version="$Version" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" Version="$Version" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
 </Project>
 "@
 

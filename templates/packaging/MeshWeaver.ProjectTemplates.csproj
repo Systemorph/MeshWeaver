@@ -2,12 +2,11 @@
 
   <PropertyGroup>
     <PackageType>Template</PackageType>
-    <PackageVersion>2.2.0-rc5</PackageVersion>
     <PackageId>MeshWeaver.ProjectTemplates</PackageId>
     <Title>MeshWeaver Project Templates</Title>
     <Authors>Systemorph</Authors>
-    <Description>Project templates for creating MeshWeaver applications with Portal and Todo module examples.</Description>
-    <PackageTags>dotnet-new;templates;meshweaver;portal;todo;web</PackageTags>
+    <Description>Starter project templates for MeshWeaver applications including Portal structure, Todo modules, AI agents, and testing infrastructure. Ready to be configured with MeshWeaver packages when available.</Description>
+    <PackageTags>dotnet-new;templates;meshweaver;portal;todo;ai;web;blazor;starter</PackageTags>
     <TargetFramework>net9.0</TargetFramework>
     <IncludeContentInPack>true</IncludeContentInPack>
     <IncludeBuildOutput>false</IncludeBuildOutput>
@@ -18,6 +17,13 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
   </PropertyGroup>
+
+  <!-- Generate templates before build -->
+  <Target Name="GenerateTemplates" BeforeTargets="Build">
+    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\..\..\tools\MeshWeaver.TemplateGenerator\MeshWeaver.TemplateGenerator.csproj&quot; &quot;$(Version)&quot; &quot;$(MSBuildProjectDirectory)\..\dist\templates&quot;" 
+          WorkingDirectory="$(MSBuildProjectDirectory)\..\..\" 
+          ContinueOnError="false" />
+  </Target>
 
   <ItemGroup>
     <Content Include="../dist/templates/**" Exclude="../dist/templates/bin/**;../dist/templates/obj/**" />

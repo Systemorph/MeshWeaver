@@ -6,7 +6,7 @@
     <PackageReference Include="HtmlAgilityPack" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
   </ItemGroup>
 </Project>
