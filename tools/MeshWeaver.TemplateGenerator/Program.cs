@@ -130,6 +130,29 @@ public class TemplateGenerator
         content = content.Replace("typeof(TodoAgent)", "typeof(MeshWeaverApp1.Todo.AI.TodoAgent)");
 
         File.WriteAllText(programCsPath, content);
+
+        // Also update MeshConfiguration.cs in Portal project
+        var meshConfigPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "MeshConfiguration.cs");
+        if (File.Exists(meshConfigPath))
+        {
+            var meshConfigContent = File.ReadAllText(meshConfigPath);
+            meshConfigContent = meshConfigContent.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;");
+            meshConfigContent = meshConfigContent.Replace("using MeshWeaver.Todo.AI;", "using MeshWeaverApp1.Todo.AI;");
+            meshConfigContent = meshConfigContent.Replace("typeof(TodoApplicationAttribute)", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)");
+            File.WriteAllText(meshConfigPath, meshConfigContent);
+        }
+
+        // Also update SharedPortalConfiguration.cs in Portal project
+        var sharedConfigPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "SharedPortalConfiguration.cs");
+        if (File.Exists(sharedConfigPath))
+        {
+            var sharedConfigContent = File.ReadAllText(sharedConfigPath);
+            sharedConfigContent = sharedConfigContent.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;");
+            sharedConfigContent = sharedConfigContent.Replace("using MeshWeaver.Todo.AI;", "using MeshWeaverApp1.Todo.AI;");
+            sharedConfigContent = sharedConfigContent.Replace("typeof(TodoApplicationAttribute)", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)");
+            sharedConfigContent = sharedConfigContent.Replace("typeof(TodoAgent)", "typeof(MeshWeaverApp1.Todo.AI.TodoAgent)");
+            File.WriteAllText(sharedConfigPath, sharedConfigContent);
+        }
     }
 
     private void UpdateProjectFiles()
@@ -221,6 +244,7 @@ public class TemplateGenerator
                 <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
                 <PackageReference Include="xunit" Version="2.9.3" />
                 <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+                <PackageReference Include="FluentAssertions" Version="6.12.2" />
               </ItemGroup>
 
             </Project>
