@@ -198,7 +198,7 @@ public static class TodoManagement
         sb.Append($"**{todo.Title}**");
 
         // Category badge
-        if (!string.IsNullOrEmpty(todo.Category) && todo.Category != "General")
+        if (todo.Category != "General")
         {
             sb.Append($" `{todo.Category}`");
         }

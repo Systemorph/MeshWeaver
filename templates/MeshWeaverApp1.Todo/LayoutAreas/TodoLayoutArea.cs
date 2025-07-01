@@ -3,10 +3,10 @@ using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Todo.Domain;
+using MeshWeaverApp1.Todo.Domain;
 using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Todo.LayoutAreas;
+namespace MeshWeaverApp1.Todo.LayoutAreas;
 
 /// <summary>
 /// Layout areas for the Todo application
@@ -227,12 +227,12 @@ public static class TodoLayoutArea
         // First row: Title and Add New Todo button
         mainGrid = mainGrid
             .WithView(Controls.H2("📝 Todo List with Actions")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithStyle(style => style.WithMarginBottom("10px").WithColor("#2c3e50")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
-                .WithAppearance(Appearance.Neutral)
+                .WithAppearance(Layout.Appearance.Neutral)
                 .WithStyle(style => HeadingButtonStyle(style)),
                 skin => skin.WithXs(12).WithSm(3).WithMd(2));
 
@@ -240,7 +240,7 @@ public static class TodoLayoutArea
         {
             mainGrid = mainGrid
                 .WithView(Controls.Markdown("*No todo items found. Click 'Add New Todo' to get started!*")
-                    .WithStyle(style => style.WithColor("var(--color-fg-muted)")),
+                    .WithStyle(style => style.WithColor("#666")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(Controls.Html(""),
                     skin => skin.WithXs(12).WithSm(3).WithMd(2));
@@ -282,7 +282,7 @@ public static class TodoLayoutArea
             // Status group header row with aligned content
             mainGrid = mainGrid
                 .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
-                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-fg-default)").WithDisplay("flex").WithAlignItems("center")),
+                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("#333").WithDisplay("flex").WithAlignItems("center")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(Controls.Stack
                     .WithView(statusActionButton)
@@ -319,7 +319,7 @@ public static class TodoLayoutArea
         var menuItem = Controls.MenuItem(primaryAction.Title, primaryAction.Icon)
             .WithClickAction(_ => { primaryAction.Action(host, todo); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
-            .WithAppearance(Appearance.Neutral)
+            .WithAppearance(Layout.Appearance.Neutral)
             .WithStyle(style => HeadingButtonStyle(style));
 
         // Add secondary actions as sub-views
@@ -329,7 +329,7 @@ public static class TodoLayoutArea
             var subMenuItem = Controls.MenuItem(action.Title, action.Icon)
                 .WithClickAction(_ => { action.Action(host, todo); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
-                .WithAppearance(Appearance.Neutral)
+                .WithAppearance(Layout.Appearance.Neutral)
                 .WithStyle(style => HeadingButtonStyle(style));
             menuItem = menuItem.WithView(subMenuItem);
         }
@@ -553,10 +553,10 @@ public static class TodoLayoutArea
                 .WithAlignItems("flex-start")
                 .WithPadding("12px")
                 .WithMarginBottom("8px")
-                .WithBorder("1px solid var(--color-border-default)")
+                .WithBorder("1px solid #e1e8ed")
                 .WithBorderRadius("6px")
-                .WithBackgroundColor("var(--color-canvas-subtle)")
-                .WithBoxShadow("0 1px 2px var(--color-shadow-small)"));
+                .WithBackgroundColor("#fafbfc")
+                .WithBoxShadow("0 1px 2px rgba(0,0,0,0.05)"));
 
         // Create actions control - centered and compact
         var actions = Controls.Stack
@@ -652,25 +652,11 @@ public static class TodoLayoutArea
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Done")
-                    .WithClickAction(_ =>
+                    .WithClickAction(async _ =>
                     {
                         // is updated on the fly, so we just need to close the dialog
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null);
-                        return Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("❌ Cancel")
-                    .WithClickAction(_ =>
-                    {
-                        // Revert to original todo state
-                        var changeRequest = new DataChangeRequest()
-                            .WithUpdates(originalTodo);
-
-                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
-
-                        // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
-                        return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(10)
@@ -704,7 +690,7 @@ public static class TodoLayoutArea
         var menuItem = Controls.MenuItem(title, icon)
             .WithClickAction(_ => { primaryAction(host, statusGroup); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
-            .WithAppearance(Appearance.Neutral)
+            .WithAppearance(Layout.Appearance.Neutral)
             .WithStyle(style => HeadingButtonStyle(style));
 
         return menuItem;
