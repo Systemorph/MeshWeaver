@@ -39,8 +39,8 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            }); 
-        
+            });
+
         services.AddTodoAI();
         services.AddMemoryChatPersistence();
 
