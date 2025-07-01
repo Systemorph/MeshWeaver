@@ -236,7 +236,7 @@ public static class TodoLayoutArea
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
-                .WithAppearance(Layout.Appearance.Neutral)
+                .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => HeadingButtonStyle(style)),
                 skin => skin.WithXs(12).WithSm(3).WithMd(2));
 
@@ -323,7 +323,7 @@ public static class TodoLayoutArea
         var menuItem = Controls.MenuItem(primaryAction.Title, primaryAction.Icon)
             .WithClickAction(_ => { primaryAction.Action(host, todo); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
-            .WithAppearance(Layout.Appearance.Neutral)
+            .WithAppearance(Appearance.Neutral)
             .WithStyle(style => HeadingButtonStyle(style));
 
         // Add secondary actions as sub-views
@@ -333,7 +333,7 @@ public static class TodoLayoutArea
             var subMenuItem = Controls.MenuItem(action.Title, action.Icon)
                 .WithClickAction(_ => { action.Action(host, todo); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
-                .WithAppearance(Layout.Appearance.Neutral)
+                .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => HeadingButtonStyle(style));
             menuItem = menuItem.WithView(subMenuItem);
         }
@@ -708,7 +708,7 @@ public static class TodoLayoutArea
         var menuItem = Controls.MenuItem(title, icon)
             .WithClickAction(_ => { primaryAction(host, statusGroup); return Task.CompletedTask; })
             .WithWidth(MenuWidth)
-            .WithAppearance(Layout.Appearance.Neutral)
+            .WithAppearance(Appearance.Neutral)
             .WithStyle(style => HeadingButtonStyle(style));
 
         return menuItem;
