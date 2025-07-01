@@ -11,4 +11,9 @@
     <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
+    <ItemGroup>
+        <None Update="appsettings.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
 </Project>
