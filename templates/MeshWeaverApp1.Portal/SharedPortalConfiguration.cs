@@ -45,7 +45,7 @@ public static class SharedPortalConfiguration
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureOpen"));
+        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureInference"));
         services.AddAzureOpenAI();
 
         // configure Azure Foundry chat
@@ -70,7 +70,8 @@ public static class SharedPortalConfiguration
                 var roleMappings = builder.Configuration
                     .GetSection("EntraId:RoleMappings")
                     .GetChildren()
-                    .ToDictionary(x => x.Value, x => x.Key);
+                    .Where(x => x.Value != null && x.Key != null)
+                    .ToDictionary(x => x.Value!, x => x.Key);
 
                 options.Events.OnTokenValidated = async context =>
                 {

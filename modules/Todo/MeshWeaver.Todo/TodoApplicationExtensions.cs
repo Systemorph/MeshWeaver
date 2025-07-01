@@ -41,9 +41,6 @@ public static class TodoApplicationExtensions
                 layout.WithView(nameof(TodoLayoutArea.TodoList), TodoLayoutArea.TodoList)
                       .WithView(nameof(TodoLayoutArea.TodosByCategory), TodoLayoutArea.TodosByCategory)
                       .WithView(nameof(TodoLayoutArea.TodoSummary), TodoLayoutArea.TodoSummary)
-                      .WithView(nameof(TodoManagement.AddTodo), TodoManagement.AddTodo)
-                      .WithView(nameof(TodoManagement.TodoListWithActions), TodoManagement.TodoListWithActions)
-                      .WithView(nameof(TodoManagement.TodoDemo), TodoManagement.TodoDemo)
             );
     }
 }
