@@ -46,9 +46,9 @@ public partial class UserProfile : ComponentBase
         }
         else
         {                // If we don't have an authenticated user, don't show the user profile menu. This shouldn't happen.
-                name = "";
-                username = "";
-                initials = "";
+            name = "";
+            username = "";
+            initials = "";
         }
 
     }

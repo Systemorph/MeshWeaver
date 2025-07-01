@@ -139,6 +139,11 @@ public class TemplateGenerator
             meshConfigContent = meshConfigContent.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;");
             meshConfigContent = meshConfigContent.Replace("using MeshWeaver.Todo.AI;", "using MeshWeaverApp1.Todo.AI;");
             meshConfigContent = meshConfigContent.Replace("typeof(TodoApplicationAttribute)", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)");
+            // Remove the AgentsApplicationAttribute since generated projects don't include AI.Application
+            meshConfigContent = meshConfigContent.Replace("using MeshWeaver.AI.Application;", "");
+            meshConfigContent = meshConfigContent.Replace(".InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)", "");
+            // Clean up any double newlines or trailing spaces from the removal
+            meshConfigContent = System.Text.RegularExpressions.Regex.Replace(meshConfigContent, @"\r?\n\s*\r?\n", "\n");
             File.WriteAllText(meshConfigPath, meshConfigContent);
         }
 

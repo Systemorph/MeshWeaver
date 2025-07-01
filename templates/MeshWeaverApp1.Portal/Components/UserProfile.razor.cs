@@ -9,7 +9,7 @@ namespace MeshWeaverApp1.Portal.Components;
 
 public partial class UserProfile : ComponentBase
 {
-    [Inject] 
+    [Inject]
     public required NavigationManager Navigation { get; init; }
 
     [Inject]
@@ -32,24 +32,24 @@ public partial class UserProfile : ComponentBase
 
     protected override async Task OnParametersSetAsync()
     {
-            var authState = await AuthenticationState;
+        var authState = await AuthenticationState;
 
-            var claimsIdentity = authState.User.Identity as ClaimsIdentity;
+        var claimsIdentity = authState.User.Identity as ClaimsIdentity;
 
-            if (claimsIdentity?.IsAuthenticated == true)
-            {
-                name = claimsIdentity.FindFirst(NameClaimType)?.Value ?? "";
-                username = claimsIdentity.FindFirst(UsernameClaimType)?.Value ?? "";
-                initials = GetInitials(name);
-            }
-            else
-            {
-                // If we don't have an authenticated user, don't show the user profile menu. This shouldn't happen.
-                name = "";
-                username = "";
-                initials = "";
-            }
-        
+        if (claimsIdentity?.IsAuthenticated == true)
+        {
+            name = claimsIdentity.FindFirst(NameClaimType)?.Value ?? "";
+            username = claimsIdentity.FindFirst(UsernameClaimType)?.Value ?? "";
+            initials = GetInitials(name);
+        }
+        else
+        {
+            // If we don't have an authenticated user, don't show the user profile menu. This shouldn't happen.
+            name = "";
+            username = "";
+            initials = "";
+        }
+
     }
     public static string GetInitials(string name)
     {
