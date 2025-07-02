@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.ServiceProvider;
+﻿#nullable enable
+namespace MeshWeaver.ServiceProvider;
 
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public class InjectAttribute : Attribute

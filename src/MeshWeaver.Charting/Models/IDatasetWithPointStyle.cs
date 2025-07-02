@@ -1,8 +1,9 @@
-﻿using MeshWeaver.Charting.Enums;
+﻿#nullable enable
+using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models;
 
-public interface IDataSetWithPointStyle<T> 
+public interface IDataSetWithPointStyle<T>
 {
     /// <summary>
     /// Style of the point for legend.

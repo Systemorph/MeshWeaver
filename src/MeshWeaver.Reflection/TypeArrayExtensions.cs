@@ -1,3 +1,4 @@
+#nullable enable
 namespace MeshWeaver.Reflection
 {
     public static class TypeArrayExtensions
@@ -39,7 +40,7 @@ namespace MeshWeaver.Reflection
             return string.Join("|", types.Select(x => x.FullName));
         }
 
-        public bool Equals(TypeArrayKey other)
+        public bool Equals(TypeArrayKey? other)
         {
             if (ReferenceEquals(null, other))
                 return false;
@@ -48,7 +49,7 @@ namespace MeshWeaver.Reflection
             return types.SequenceEqual(other.types);
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (ReferenceEquals(null, obj))
                 return false;

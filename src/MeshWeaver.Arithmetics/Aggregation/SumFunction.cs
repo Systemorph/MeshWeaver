@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿#nullable enable
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using MeshWeaver.Arithmetics.Aggregation.Implementation;
 
@@ -14,9 +15,9 @@ namespace MeshWeaver.Arithmetics.Aggregation
     {
         private static readonly ConcurrentDictionary<Type, Delegate> SumDelegateStore = new();
 
-        private static ImmutableList<(Func<Type, bool> Filter, ISumFunctionProvider Provider)> sumFunctionProviders = 
+        private static ImmutableList<(Func<Type, bool> Filter, ISumFunctionProvider Provider)> sumFunctionProviders =
             ImmutableList<(Func<Type, bool> Filter, ISumFunctionProvider Provider)>.Empty
-                .Add(( _ => true, new GenericSumFunctionProvider()));
+                .Add((_ => true, new GenericSumFunctionProvider()));
 
         /// <summary>
         /// Calculates the sum of <paramref name="x"/> and <paramref name="y"/>, where the sum is applied to all properties where applicable.
@@ -45,7 +46,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return (Func<T, T, T>)GetSumFunc(typeof(T));
         }
 
-        
+
         /// <summary>
         /// Gets the delegate of the Sum method. Signature is <see cref="Func{T,T,T}"/>
         /// </summary>
@@ -70,7 +71,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
         public static void RegisterSumProviderAfter<T>(ISumFunctionProvider provider, Func<Type, bool> filter)
         {
             var insert = sumFunctionProviders.FindIndex(x => x.Provider is T);
-            sumFunctionProviders = sumFunctionProviders.Insert(insert+1, (filter, provider));
+            sumFunctionProviders = sumFunctionProviders.Insert(insert + 1, (filter, provider));
         }
 
         /// <summary>
@@ -117,7 +118,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return SumFunctionWithResultDelegateStore.GetOrAdd(type, t => CreateDelegate(t, p => p.CreateSumFunctionWithResult(t)));
         }
 
-        private static Delegate CreateDelegate(Type type, Func<ISumFunctionProvider,Delegate> creationFunc)
+        private static Delegate CreateDelegate(Type type, Func<ISumFunctionProvider, Delegate> creationFunc)
         {
             var sumFunctionProvider = sumFunctionProviders.FirstOrDefault(x => x.Filter(type)).Provider;
 

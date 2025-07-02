@@ -1,4 +1,5 @@
-﻿using System.Linq.Expressions;
+﻿#nullable enable
+using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Utils;
 
@@ -335,7 +336,7 @@ namespace MeshWeaver.Reflection
             return GetPropertyInner(selector);
         }
 
-        private static PropertyInfo GetPropertyInner<TDelegate>(Expression<TDelegate> selector, Type type = null)
+        private static PropertyInfo? GetPropertyInner<TDelegate>(Expression<TDelegate> selector, Type? type = null)
         {
             Expression expression;
             // if the return value had to be cast to object, the body will be an UnaryExpression
@@ -463,7 +464,7 @@ namespace MeshWeaver.Reflection
             return GetMethodInner(selector, generic: true);
         }
 
-        private static MethodInfo GetMethodInner<TDelegate>(Expression<TDelegate> selector, Type type = null, bool generic = false)
+        private static MethodInfo? GetMethodInner<TDelegate>(Expression<TDelegate> selector, Type? type = null, bool generic = false)
         {
             var body = selector.Body;
             var expression = body as MethodCallExpression;

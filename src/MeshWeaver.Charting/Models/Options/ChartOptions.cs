@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿#nullable enable
+using System.Text.Json.Serialization;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Scales.Ticks;

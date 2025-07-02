@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.Data;
+﻿#nullable enable
+namespace MeshWeaver.Data;
 
 public record EmptyTransaction : ITransaction
 {
@@ -29,13 +30,14 @@ public record DelegateTransaction(Func<CancellationToken, Task> CommitAsync, Fun
         {
             revert();
             return Task.CompletedTask;
-        }){}
+        })
+    { }
     public async ValueTask DisposeAsync()
         => await RevertAsync();
 
-    Task ITransaction.CommitAsync(CancellationToken cancellationToken) 
+    Task ITransaction.CommitAsync(CancellationToken cancellationToken)
         => CommitAsync(cancellationToken);
 
-    Task ITransaction.RevertAsync() 
+    Task ITransaction.RevertAsync()
         => RevertAsync();
 }

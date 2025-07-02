@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿#nullable enable
+using System.Diagnostics.CodeAnalysis;
 
 namespace MeshWeaver.Arithmetics;
 
@@ -180,7 +181,7 @@ public static class PrimitiveArithmeticOperations
     public static double Power(float a, double b) => Math.Pow(a, b);
 
     private const string CannotApplyPowerOperatorToOperandOfTypeDecimal = "Cannot calculate power of operand of type 'decimal'";
-    
+
     [Obsolete(CannotApplyPowerOperatorToOperandOfTypeDecimal, true)]
     public static void Power(decimal a, double b) => throw new ArgumentException(CannotApplyPowerOperatorToOperandOfTypeDecimal);
 }

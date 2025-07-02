@@ -1,10 +1,11 @@
-﻿namespace MeshWeaver.Messaging;
+﻿#nullable enable
+namespace MeshWeaver.Messaging;
 
 public record Address(string Type, string Id)
 {
     public sealed override string ToString() => $"{Type}/{Id}";
 
-    public virtual bool Equals(Address other)
+    public virtual bool Equals(Address? other)
     {
         if (ReferenceEquals(null, other)) return false;
         if (ReferenceEquals(this, other)) return true;
@@ -21,7 +22,7 @@ public record Address(string Type, string Id)
         return new Address(parts[0], parts.Length > 1 ? string.Join('/', parts.Skip(1)) : string.Empty);
     }
 }
-public record MeshAddress(string Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().ToString())
+public record MeshAddress(string? Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().ToString())
 {
     public const string TypeName = "mesh";
 }

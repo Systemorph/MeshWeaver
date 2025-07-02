@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.Charting.Models;
+﻿#nullable enable
+namespace MeshWeaver.Charting.Models;
 
 public interface IDataSetWithOrder<T>
 {

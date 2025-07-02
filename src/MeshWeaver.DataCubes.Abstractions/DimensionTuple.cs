@@ -1,22 +1,23 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 
 namespace MeshWeaver.DataCubes;
 
-public readonly struct DimensionTuple : IEnumerable<(string Dimension, object Value)> //: IEquatable<DimensionTuple>
+public readonly struct DimensionTuple : IEnumerable<(string Dimension, object? Value)> //: IEquatable<DimensionTuple>
 {
-    private readonly Dictionary<string, object> tuple;
+    private readonly Dictionary<string, object?>? tuple;
 
-    public DimensionTuple(params (string dimension, object value)[] tuple)
-        : this((IEnumerable<(string dimension, object value)>)tuple)
+    public DimensionTuple(params (string dimension, object? value)[] tuple)
+        : this((IEnumerable<(string dimension, object? value)>)tuple)
     {
     }
 
-    public DimensionTuple(IEnumerable<(string dimension, object value)> tuple)
+    public DimensionTuple(IEnumerable<(string dimension, object? value)> tuple)
     {
         this.tuple = tuple.ToDictionary(t => t.dimension, t => t.value);
     }
 
-    private DimensionTuple(Dictionary<string, object> tuple)
+    private DimensionTuple(Dictionary<string, object?> tuple)
     {
         this.tuple = tuple;
     }
@@ -27,22 +28,22 @@ public readonly struct DimensionTuple : IEnumerable<(string Dimension, object Va
     {
         if (tuple == null)
             return other.tuple == null;
-        return tuple.Count == other.tuple.Count && tuple.All(other.tuple.Contains);
+        return other.tuple != null && tuple.Count == other.tuple.Count && tuple.All(other.tuple.Contains);
     }
 
-    public IEnumerator<(string Dimension, object Value)> GetEnumerator()
+    public IEnumerator<(string Dimension, object? Value)> GetEnumerator()
     {
-        return (tuple?.Select(t => (t.Key, t.Value)) ?? Enumerable.Empty<(string, object)>()).GetEnumerator();
+        return (tuple?.Select(t => (t.Key, t.Value)) ?? Enumerable.Empty<(string, object?)>()).GetEnumerator();
     }
 
-    public override bool Equals(object obj)
+    public override bool Equals(object? obj)
     {
         if (obj is not DimensionTuple dimensionTuple)
             return false;
         return Equals(dimensionTuple);
     }
 
-    public object GetValue(string dimension)
+    public object? GetValue(string dimension)
     {
         if (tuple == null)
             return null;
@@ -64,23 +65,23 @@ public readonly struct DimensionTuple : IEnumerable<(string Dimension, object Va
 
     public DimensionTuple Enrich(DimensionTuple additionalTuple)
     {
-        return Enrich((IEnumerable<(string, object)>)additionalTuple);
+        return Enrich((IEnumerable<(string, object?)>)additionalTuple);
     }
 
-    public DimensionTuple Enrich(params (string dimension, object value)[] additionalTuple)
+    public DimensionTuple Enrich(params (string dimension, object? value)[] additionalTuple)
     {
-        return Enrich((IEnumerable<(string, object)>)additionalTuple);
+        return Enrich((IEnumerable<(string, object?)>)additionalTuple);
     }
 
-    public DimensionTuple Enrich(IEnumerable<(string dimension, object value)> additionalTuple)
+    public DimensionTuple Enrich(IEnumerable<(string dimension, object? value)> additionalTuple)
     {
-        Dictionary<string, object> newDict = null;
+        Dictionary<string, object?>? newDict = null;
 
         foreach (var (dim, value) in additionalTuple)
         {
             newDict ??= tuple == null
-                            ? new Dictionary<string, object>()
-                            : new Dictionary<string, object>(tuple);
+                            ? new Dictionary<string, object?>()
+                            : new Dictionary<string, object?>(tuple);
             newDict[dim] = value;
         }
 

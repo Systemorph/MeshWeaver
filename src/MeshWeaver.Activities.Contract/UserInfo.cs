@@ -1,3 +1,4 @@
-﻿namespace MeshWeaver.Activities;
+﻿#nullable enable
+namespace MeshWeaver.Activities;
 
-public record UserInfo(string Email, string DisplayName, string Photo = default);
+public record UserInfo(string Email, string DisplayName, string? Photo = default);

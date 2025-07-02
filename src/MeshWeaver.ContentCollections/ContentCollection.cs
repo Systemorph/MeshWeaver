@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿#nullable enable
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -21,7 +22,7 @@ public abstract class ContentCollection : IDisposable
         markdownStream = CreateStream();
     }
 
-    private  ISynchronizationStream<InstanceCollection> CreateStream()
+    private ISynchronizationStream<InstanceCollection> CreateStream()
     {
         var ret = new SynchronizationStream<InstanceCollection>(
             new(Collection, null),
@@ -32,9 +33,9 @@ public abstract class ContentCollection : IDisposable
         ret.Initialize(InitializeAsync, null);
         return ret;
     }
-    protected IMessageHub Hub { get; } 
-    public string Collection  => config.Name;
-    public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
+    protected IMessageHub Hub { get; }
+    public string Collection => config.Name;
+    public string DisplayName => config.DisplayName ?? config.Name.Wordify();
 
     public IObservable<object> GetMarkdown(string path)
         => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent()).Select(x => x?.Value);
@@ -98,7 +99,7 @@ public abstract class ContentCollection : IDisposable
         Authors = await LoadAuthorsAsync(ct);
         var ret = new InstanceCollection(
             await GetStreams(MarkdownFilter, ct)
-                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream,tuple.Path, tuple.LastModified, ct))
+                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
                 .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x.Path), x => (object)x, cancellationToken: ct)
         );
@@ -123,7 +124,7 @@ public abstract class ContentCollection : IDisposable
     {
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(ct);
- 
+
 
         return MarkdownExtensions.ParseContent(
             Collection,
@@ -150,7 +151,7 @@ public abstract class ContentCollection : IDisposable
     public virtual string GetContentType(string path)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();
-        if(string.IsNullOrEmpty(extension))
+        if (string.IsNullOrEmpty(extension))
             return "text/markdown";
         return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }

@@ -1,10 +1,11 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿#nullable enable
+using System.Diagnostics.CodeAnalysis;
 
 namespace MeshWeaver.DataCubes;
 
 public record DimensionDescriptor
 {
-    public DimensionDescriptor([NotNull] string systemName, [NotNull] Type type)
+    public DimensionDescriptor(string systemName, Type type)
     {
         SystemName = systemName;
         Type = type;

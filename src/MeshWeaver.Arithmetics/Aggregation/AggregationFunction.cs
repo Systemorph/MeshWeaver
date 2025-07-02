@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
@@ -44,7 +45,7 @@ public static class AggregationFunction
         {
             if (type == typeof(string)) throw new ArgumentException();
 
-            if (type.GetInterface(nameof( ICollection )) != null &&
+            if (type.GetInterface(nameof(ICollection)) != null &&
                 type.IsGenericType &&
                 type.GetGenericTypeDefinition() != typeof(Dictionary<,>) &&
                 type.GetGenericArguments().Length > 0 &&
@@ -56,7 +57,7 @@ public static class AggregationFunction
 
         var aggregated = await toAggregate.Where(x => x != null).AggregateAsync((result, item) => SumFunction.Sum(result, item));
 
-        if (aggregated == null) return (T) Activator.CreateInstance(typeof(T));
+        if (aggregated == null) return (T)Activator.CreateInstance(typeof(T));
 
         return aggregated;
     }
@@ -68,7 +69,7 @@ public static class AggregationFunction
     /// <param name="toAggregate">The elements to aggregate</param>
     /// <returns>New instance of <typeparamref name="T"/> with the aggregated result</returns>
     /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
-    public static T Aggregate<T>(params T[] toAggregate) 
+    public static T Aggregate<T>(params T[] toAggregate)
     {
         return GetAggregationFunction<T>()(toAggregate);
     }
@@ -95,7 +96,7 @@ public static class AggregationFunction
         return AggregationFunctions.GetOrAdd(elementType, x => CreateAggregationFunction(elementType));
     }
 
-       
+
     /// <summary>
     /// Aggregates (sums) all elements into the <paramref name="target"/>
     /// </summary>
@@ -132,13 +133,13 @@ public static class AggregationFunction
     /// <typeparam name="TElement"></typeparam>
     /// <returns>Delegate that aggregates the enumerable into the second parameter instance</returns>
     /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
-    public static Action<IEnumerable<TElement>, TElement>GetAggregationAction<TElement>()
+    public static Action<IEnumerable<TElement>, TElement> GetAggregationAction<TElement>()
         where TElement : class
     {
         return (Action<IEnumerable<TElement>, TElement>)GetAggregationAction(typeof(TElement));
     }
 
-      
+
     /// <summary>
     /// Non-generic version of <see cref="GetAggregationAction{TElement}"/>. 
     /// </summary>
@@ -150,7 +151,7 @@ public static class AggregationFunction
         return AggregateActionClassDelegateStore.GetOrAdd(elementType, CreateAggregateActionClass);
     }
 
-      
+
     /// <summary>
     /// Unknown usage. Is this legacy Formula Framework? Strange signature.
     /// </summary>
@@ -162,7 +163,7 @@ public static class AggregationFunction
     /// <summary>
     /// Unknown usage. Is this legacy Formula Framework? Strange signature.
     /// </summary>
-    public static Func<IEnumerable<TElement>, TResult>GetAggregationFunction<TElement, TResult>()
+    public static Func<IEnumerable<TElement>, TResult> GetAggregationFunction<TElement, TResult>()
     {
         return (Func<IEnumerable<TElement>, TResult>)AggregationFunctions.GetOrAdd(typeof(TElement), x => CreateAggregationFunction(typeof(TElement)));
     }
@@ -253,7 +254,7 @@ public static class AggregationFunction
 
     private static readonly ConcurrentDictionary<Type, Delegate> AggregateActionClassDelegateStore = new ConcurrentDictionary<Type, Delegate>();
 
-        
+
 
     private static Delegate CreateAggregateActionClass(Type type)
     {

@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿#nullable enable
+using System.Reflection;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.Reflection
@@ -34,7 +35,7 @@ namespace MeshWeaver.Reflection
 
             return HasAttributeCache.GetInstance(typeof(T), member, inherit);
         }
-        
+
         /// <summary>
         /// Tests if on the <paramref name="parameter"/> (or an ancestor of the member) an attribute of type <typeparamref name="T"/> is applied
         /// </summary>
@@ -51,9 +52,9 @@ namespace MeshWeaver.Reflection
             return HasAttributeCache.GetInstance(typeof(T), parameter, inherit);
         }
 
-        private static readonly CreatableObjectStore<Type, MemberInfo, bool, Attribute> SingleCustomAttributeCache = new CreatableObjectStore<Type, MemberInfo, bool, Attribute>(SingleCustomAttributeCacheFactory);
+        private static readonly CreatableObjectStore<Type, MemberInfo, bool, Attribute?> SingleCustomAttributeCache = new CreatableObjectStore<Type, MemberInfo, bool, Attribute?>(SingleCustomAttributeCacheFactory);
 
-        private static Attribute SingleCustomAttributeCacheFactory(Type type, MemberInfo member, bool inherit)
+        private static Attribute? SingleCustomAttributeCacheFactory(Type type, MemberInfo member, bool inherit)
         {
             switch (member.MemberType)
             {
@@ -67,7 +68,7 @@ namespace MeshWeaver.Reflection
                 default:
                     {
                         var attributes = member.GetCustomAttributes(type, inherit);
-                        return (Attribute)attributes.SingleOrDefault();
+                        return (Attribute?)attributes.SingleOrDefault();
                     }
             }
         }
@@ -93,10 +94,10 @@ namespace MeshWeaver.Reflection
         /// <param name="member">The member (property, method, field,...) to get the attribute from</param>
         /// <param name="inherit">Flag whether to search ancestors of the member</param>
         /// <returns>The applied attribute of type <typeparamref name="T"/> or null</returns>
-        public static T GetSingleCustomAttribute<T>(this MemberInfo member, bool inherit = true)
+        public static T? GetSingleCustomAttribute<T>(this MemberInfo member, bool inherit = true)
             where T : Attribute
         {
-            return (T)SingleCustomAttributeCache.GetInstance(typeof(T), member, inherit);
+            return (T?)SingleCustomAttributeCache.GetInstance(typeof(T), member, inherit);
         }
 
         /// <summary>
@@ -145,8 +146,11 @@ namespace MeshWeaver.Reflection
                 return IsHiding(property, declaringType.BaseType, declaringType);
         }
 
-        private static bool IsHiding(PropertyInfo property, Type baseType, Type declaringType)
+        private static bool IsHiding(PropertyInfo property, Type? baseType, Type declaringType)
         {
+            if (baseType == null)
+                return false;
+
             var baseProperty = baseType.GetProperty(property.Name, property.PropertyType);
             if (baseProperty == null)
                 return false;
@@ -192,7 +196,10 @@ namespace MeshWeaver.Reflection
             if (interfaces.Length == 0)
                 yield break;
 
-            MethodInfo propertyGetter = source.GetGetMethod();
+            MethodInfo? propertyGetter = source.GetGetMethod();
+            if (propertyGetter == null)
+                yield break;
+
             foreach (Type @interface in interfaces)
             {
                 InterfaceMapping memberMap = source.ReflectedType!.GetInterfaceMap(@interface);

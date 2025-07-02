@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿#nullable enable
+using System.Text;
 
 namespace MeshWeaver.Layout;
 
@@ -7,62 +8,62 @@ namespace MeshWeaver.Layout;
 /// </summary>
 public record StyleBuilder
 {
-    public object Display { get; init; }
-    public object Width { get; init; }
-    public object MinWidth { get; init; }
-    public object Height { get; init; }
-    public object FlexDirection { get; init; }
-    public object FlexWrap { get; init; }
-    public object FlexFlow { get; init; }
-    public object JustifyContent { get; init; }
-    public object AlignContent { get; init; }
-    public object AlignItems { get; init; }
-    public object Gap { get; init; }
-    public object RowGap { get; init; }
-    public object ColumnGap { get; init; }
-    public object AlignSelf { get; init; }
-    public object FlexBasis { get; init; }
-    public object FlexGrow { get; init; }
-    public object FlexShrink { get; init; }
-    public object Order { get; init; }
-    public object Margin { get; init; }
-    public object Padding { get; init; }
-    public object Border { get; init; }
+    public object? Display { get; init; }
+    public object? Width { get; init; }
+    public object? MinWidth { get; init; }
+    public object? Height { get; init; }
+    public object? FlexDirection { get; init; }
+    public object? FlexWrap { get; init; }
+    public object? FlexFlow { get; init; }
+    public object? JustifyContent { get; init; }
+    public object? AlignContent { get; init; }
+    public object? AlignItems { get; init; }
+    public object? Gap { get; init; }
+    public object? RowGap { get; init; }
+    public object? ColumnGap { get; init; }
+    public object? AlignSelf { get; init; }
+    public object? FlexBasis { get; init; }
+    public object? FlexGrow { get; init; }
+    public object? FlexShrink { get; init; }
+    public object? Order { get; init; }
+    public object? Margin { get; init; }
+    public object? Padding { get; init; }
+    public object? Border { get; init; }
 
     // Individual margin properties
-    public object MarginTop { get; init; }
-    public object MarginRight { get; init; }
-    public object MarginBottom { get; init; }
-    public object MarginLeft { get; init; }
+    public object? MarginTop { get; init; }
+    public object? MarginRight { get; init; }
+    public object? MarginBottom { get; init; }
+    public object? MarginLeft { get; init; }
 
     // Individual padding properties
-    public object PaddingTop { get; init; }
-    public object PaddingRight { get; init; }
-    public object PaddingBottom { get; init; }
-    public object PaddingLeft { get; init; }
+    public object? PaddingTop { get; init; }
+    public object? PaddingRight { get; init; }
+    public object? PaddingBottom { get; init; }
+    public object? PaddingLeft { get; init; }
 
     // Individual border properties
-    public object BorderTop { get; init; }
-    public object BorderRight { get; init; }
-    public object BorderBottom { get; init; }
-    public object BorderLeft { get; init; }
-    public object BorderWidth { get; init; }
-    public object BorderStyle { get; init; }
-    public object BorderColor { get; init; }
-    public object BorderRadius { get; init; }
+    public object? BorderTop { get; init; }
+    public object? BorderRight { get; init; }
+    public object? BorderBottom { get; init; }
+    public object? BorderLeft { get; init; }
+    public object? BorderWidth { get; init; }
+    public object? BorderStyle { get; init; }
+    public object? BorderColor { get; init; }
+    public object? BorderRadius { get; init; }
 
     // Additional common CSS properties
-    public object Color { get; init; }
-    public object BackgroundColor { get; init; }
-    public object FontSize { get; init; }
-    public object FontWeight { get; init; }
-    public object TextAlign { get; init; }
-    public object Position { get; init; }
-    public object Top { get; init; }
-    public object Right { get; init; }
-    public object Bottom { get; init; }
-    public object Left { get; init; }
-    public object BoxShadow { get; init; }
+    public object? Color { get; init; }
+    public object? BackgroundColor { get; init; }
+    public object? FontSize { get; init; }
+    public object? FontWeight { get; init; }
+    public object? TextAlign { get; init; }
+    public object? Position { get; init; }
+    public object? Top { get; init; }
+    public object? Right { get; init; }
+    public object? Bottom { get; init; }
+    public object? Left { get; init; }
+    public object? BoxShadow { get; init; }
 
 
     /// <summary>

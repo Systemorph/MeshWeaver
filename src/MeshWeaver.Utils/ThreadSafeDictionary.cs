@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Collections.Concurrent;
 
 namespace MeshWeaver.Utils
@@ -14,14 +15,15 @@ namespace MeshWeaver.Utils
     /// </remarks>
     [Serializable]
     public class ThreadSafeDictionary<TKey, TValue> : IDictionary<TKey, TValue>
+        where TKey : notnull
     {
         private readonly IDictionary<TKey, TValue> innerDictionary;
         private readonly ConcurrentDictionary<TKey, TValue> innerDictionaryAsConcurrent;
         [NonSerialized]
         private readonly object factoryLockObject = new object();
 
-        public ThreadSafeDictionary(IEnumerable<KeyValuePair<TKey, TValue>> collection = null,
-                                    IEqualityComparer<TKey> comparer = null)
+        public ThreadSafeDictionary(IEnumerable<KeyValuePair<TKey, TValue>>? collection = null,
+                                    IEqualityComparer<TKey>? comparer = null)
         {
             ConcurrentDictionary<TKey, TValue> dictionary;
             if (collection == null)
@@ -36,7 +38,7 @@ namespace MeshWeaver.Utils
                                  ? new ConcurrentDictionary<TKey, TValue>(collection)
                                  : new ConcurrentDictionary<TKey, TValue>(collection, comparer);
             }
-            
+
             innerDictionary = innerDictionaryAsConcurrent = dictionary;
         }
 
@@ -137,7 +139,7 @@ namespace MeshWeaver.Utils
 
         public bool TryGetValue(TKey key, out TValue value)
         {
-            return innerDictionary.TryGetValue(key, out value);
+            return innerDictionary.TryGetValue(key, out value!);
         }
 
         public TValue this[TKey key]

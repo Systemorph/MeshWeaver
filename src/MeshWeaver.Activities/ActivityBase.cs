@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿#nullable enable
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Messaging;
@@ -69,13 +70,13 @@ namespace MeshWeaver.Activities
             LogLevel logLevel,
             EventId eventId,
             TState state,
-            Exception exception,
-            Func<TState, Exception, string> formatter
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
         )
         {
             Logger.Log(logLevel, eventId, state, exception, formatter);
 
-            var item = new LogMessage(state.ToString(), logLevel);
+            var item = new LogMessage(state?.ToString() ?? "", logLevel);
             if (state is IReadOnlyCollection<KeyValuePair<string, object>> list)
                 item = item with { Scopes = list };
             LogMessage(item);
@@ -86,10 +87,10 @@ namespace MeshWeaver.Activities
         protected void LogMessage(LogMessage item)
         {
             Update(x => x.WithLog(log => log with
-                    {
-                        Messages = log.Messages.Add(item),
-                        Version = log.Version + 1
-                    }
+            {
+                Messages = log.Messages.Add(item),
+                Version = log.Version + 1
+            }
 
                 ), FailActivity
             );
@@ -152,12 +153,12 @@ namespace MeshWeaver.Activities
             }
         }
 
-        protected readonly IMessageHub SyncHub;
+        protected readonly IMessageHub? SyncHub;
         public string Id => Log.Id;
         public ActivityLog Log { get; init; }
         public bool IsEnabled(LogLevel logLevel) => Logger.IsEnabled(logLevel);
 
-        public IDisposable BeginScope<TState>(TState state) => Logger.BeginScope(state);
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => Logger.BeginScope(state);
 
         public bool HasErrors() => Log.Errors().Any();
 

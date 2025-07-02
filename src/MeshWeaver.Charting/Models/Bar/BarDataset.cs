@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
@@ -11,9 +12,9 @@ namespace MeshWeaver.Charting.Models.Bar;
 /// https://www.chartjs.org/docs/latest/charts/bar.html
 /// </summary>
 [SuppressMessage("ReSharper", "InconsistentNaming")]
-public record BarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSetBase<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
+public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null) : DataSetBase<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
 {
-    public BarDataSet(IEnumerable Data, string label = null) : this(Data.Cast<object>().ToArray())
+    public BarDataSet(IEnumerable Data, string? label = null) : this(Data.Cast<object>().ToArray())
     {
         Label = label;
     }
@@ -221,7 +222,7 @@ public record FloatingBarDataSet : BarDataSet
 
     public FloatingBarDataSet(IEnumerable dataFrom, IEnumerable dataTo, string label = null) : this(ConvertToFloatingData(dataFrom, dataTo), label)
     {
-        
+
     }
 
     private static IReadOnlyCollection<object> ConvertToFloatingData(IEnumerable dataFrom, IEnumerable dataTo)

@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.ContentCollections;
+﻿#nullable enable
+namespace MeshWeaver.ContentCollections;
 
 public record ArticleOptions
 {

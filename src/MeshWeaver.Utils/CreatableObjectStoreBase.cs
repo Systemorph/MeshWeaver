@@ -1,18 +1,20 @@
-﻿/******************************************************************************************************
+﻿#nullable enable
+/******************************************************************************************************
  * Copyright (c) 2012- Systemorph Ltd. This file is part of Systemorph Platform. All rights reserved. *
  ******************************************************************************************************/
 
 namespace MeshWeaver.Utils
 {
-    public abstract class CreatableObjectStoreBase<TKey, TValue>  
+    public abstract class CreatableObjectStoreBase<TKey, TValue>
+        where TKey : notnull
     {
         private readonly object nullLockObject = new object();
         private volatile bool nullMainValueInitialized;
-        private TValue nullValue;
+        private TValue nullValue = default!;
 
-        private volatile Dictionary<TKey, TValue> cache;
+        private volatile Dictionary<TKey, TValue> cache = null!;
         private readonly object locker = new object();
-        protected CreatableObjectStoreBase(IEqualityComparer<TKey> keyComparer, KeyValuePair<TKey, TValue>[] initialValues)
+        protected CreatableObjectStoreBase(IEqualityComparer<TKey>? keyComparer, KeyValuePair<TKey, TValue>[] initialValues)
         {
             cache = keyComparer != null
                 ? new Dictionary<TKey, TValue>(keyComparer)
@@ -20,7 +22,7 @@ namespace MeshWeaver.Utils
 
             foreach (var initialValue in initialValues)
             {
-                cache.Add(initialValue.Key,initialValue.Value);
+                cache.Add(initialValue.Key, initialValue.Value);
             }
         }
 
@@ -35,7 +37,7 @@ namespace MeshWeaver.Utils
                 throw new ArgumentNullException(nameof(valueFactory));
 
             if (key == null)
-                return GetOrCreateNullKeyInstance(default, valueFactory);
+                return GetOrCreateNullKeyInstance(default!, valueFactory);
 
             if (cache.TryGetValue(key, out var ret))
                 return ret;
@@ -70,19 +72,20 @@ namespace MeshWeaver.Utils
         protected abstract TValue Create(TKey key);
     }
 
-    public class CreatableObjectStore<TKey, TValue> : CreatableObjectStoreBase<TKey, TValue> 
+    public class CreatableObjectStore<TKey, TValue> : CreatableObjectStoreBase<TKey, TValue>
+        where TKey : notnull
     {
-        private readonly Func<TKey,TValue> defaultValueFactory;
+        private readonly Func<TKey, TValue>? defaultValueFactory;
 
-        public CreatableObjectStore(Func<TKey, TValue> defaultValueFactory = null, IEqualityComparer<TKey> keyComparer = null, params KeyValuePair<TKey,TValue>[] initialValues)
+        public CreatableObjectStore(Func<TKey, TValue>? defaultValueFactory = null, IEqualityComparer<TKey>? keyComparer = null, params KeyValuePair<TKey, TValue>[] initialValues)
             : base(keyComparer, initialValues)
         {
             this.defaultValueFactory = defaultValueFactory;
         }
 
-        public new TValue GetInstance(TKey key, Func<TKey, TValue> factory = null)
+        public new TValue GetInstance(TKey key, Func<TKey, TValue>? factory = null)
         {
-            return base.GetInstance(key, factory ?? defaultValueFactory);
+            return base.GetInstance(key, factory ?? defaultValueFactory!);
         }
 
         protected override TValue Create(TKey key)
@@ -94,21 +97,23 @@ namespace MeshWeaver.Utils
         }
     }
 
-    public class CreatableObjectStore<TKey1, TKey2, TValue> 
+    public class CreatableObjectStore<TKey1, TKey2, TValue>
         : CreatableObjectStore<TKey1, CreatableObjectStore<TKey2, TValue>>
+        where TKey1 : notnull
+        where TKey2 : notnull
     {
-        public CreatableObjectStore(Func<TKey1,TKey2,TValue> defaultFactory)
-            : base(x => new CreatableObjectStore<TKey2, TValue>(y => defaultFactory(x,y)))
+        public CreatableObjectStore(Func<TKey1, TKey2, TValue> defaultFactory)
+            : base(x => new CreatableObjectStore<TKey2, TValue>(y => defaultFactory(x, y)))
         { }
 
-        public CreatableObjectStore(Func<TKey1, CreatableObjectStore<TKey2, TValue>> defaultValueFactory = null, IEqualityComparer<TKey1> key1Comparer = null) 
+        public CreatableObjectStore(Func<TKey1, CreatableObjectStore<TKey2, TValue>>? defaultValueFactory = null, IEqualityComparer<TKey1>? key1Comparer = null)
             : base(defaultValueFactory, key1Comparer)
         {
         }
 
         public TValue GetInstance(TKey1 key1, TKey2 key2,
-                                  Func<TKey1, CreatableObjectStore<TKey2, TValue>> factory1 = null,
-                                  Func<TKey2, TValue> factory2 = null)
+                                  Func<TKey1, CreatableObjectStore<TKey2, TValue>>? factory1 = null,
+                                  Func<TKey2, TValue>? factory2 = null)
         {
             var store = GetInstance(key1, factory1);
             return store.GetInstance(key2, factory2);
@@ -117,22 +122,25 @@ namespace MeshWeaver.Utils
 
     public class CreatableObjectStore<TKey1, TKey2, TKey3, TValue>
         : CreatableObjectStore<TKey1, TKey2, CreatableObjectStore<TKey3, TValue>>
+        where TKey1 : notnull
+        where TKey2 : notnull
+        where TKey3 : notnull
     {
-        public CreatableObjectStore(Func<TKey1, CreatableObjectStore<TKey2, TKey3, TValue>> defaultValueFactory = null,
-                                    IEqualityComparer<TKey1> key1Comparer = null)
+        public CreatableObjectStore(Func<TKey1, CreatableObjectStore<TKey2, TKey3, TValue>>? defaultValueFactory = null,
+                                    IEqualityComparer<TKey1>? key1Comparer = null)
             : base(defaultValueFactory, key1Comparer)
         {
         }
-        public CreatableObjectStore(Func<TKey1,TKey2, TKey3, TValue> defaultValueFactory,
-                                   IEqualityComparer<TKey1> key1Comparer = null)
+        public CreatableObjectStore(Func<TKey1, TKey2, TKey3, TValue> defaultValueFactory,
+                                   IEqualityComparer<TKey1>? key1Comparer = null)
             : base(x => new CreatableObjectStore<TKey2, CreatableObjectStore<TKey3, TValue>>((y) => new CreatableObjectStore<TKey3, TValue>(z => defaultValueFactory(x, y, z))), key1Comparer)
         {
         }
 
         public TValue GetInstance(TKey1 key1, TKey2 key2, TKey3 key3,
-                                  Func<TKey1, CreatableObjectStore<TKey2, CreatableObjectStore<TKey3, TValue>>> factory1 = null,
-                                  Func<TKey2, CreatableObjectStore<TKey3, TValue>> factory2 = null,
-                                  Func<TKey3, TValue> factory3 = null)
+                                  Func<TKey1, CreatableObjectStore<TKey2, CreatableObjectStore<TKey3, TValue>>>? factory1 = null,
+                                  Func<TKey2, CreatableObjectStore<TKey3, TValue>>? factory2 = null,
+                                  Func<TKey3, TValue>? factory3 = null)
         {
             var store = GetInstance(key1, key2, factory1, factory2);
             return store.GetInstance(key3, factory3);
