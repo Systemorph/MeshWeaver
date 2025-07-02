@@ -12,11 +12,11 @@ public interface IMessageHandlerRegistry
     IDisposable Register(Type tMessage, SyncDelivery action, DeliveryFilter filter);
     IDisposable RegisterInherited<TMessage>(
         AsyncDelivery<TMessage> action,
-        DeliveryFilter<TMessage> filter = null
+        DeliveryFilter<TMessage>? filter = null
     );
     IDisposable RegisterInherited<TMessage>(
         SyncDelivery<TMessage> action,
-        DeliveryFilter<TMessage> filter = null
+        DeliveryFilter<TMessage>? filter = null
     );
     IDisposable Register(SyncDelivery delivery);
     IDisposable Register(AsyncDelivery delivery);

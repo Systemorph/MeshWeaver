@@ -17,14 +17,14 @@ public class DeliveryFailureException : Exception
     internal DeliveryFailureException(string message, Exception innerException)
         : base(message, innerException) { }
 
-    internal DeliveryFailure Failure { get; }
+    internal DeliveryFailure Failure { get; } = null!;
 }
 
-public record DeliveryFailure(IMessageDelivery Delivery, string Message = null)
+public record DeliveryFailure(IMessageDelivery Delivery, string? Message = null)
 {
     public ErrorType ErrorType { get; init; }
-    public string ExceptionType { get; init; }
-    public string StackTrace { get; init; }
+    public string ExceptionType { get; init; } = string.Empty;
+    public string StackTrace { get; init; } = string.Empty;
 
     public static DeliveryFailure FromException(IMessageDelivery request, Exception e) =>
         new(request)
@@ -32,7 +32,7 @@ public record DeliveryFailure(IMessageDelivery Delivery, string Message = null)
             ErrorType = ErrorType.Exception,
             ExceptionType = e.GetType().Name,
             Message = e.Message,
-            StackTrace = e.StackTrace
+            StackTrace = e.StackTrace ?? string.Empty
         };
 }
 
