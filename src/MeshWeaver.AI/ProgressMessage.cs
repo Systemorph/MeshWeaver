@@ -1,3 +1,4 @@
+#nullable enable
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.AI

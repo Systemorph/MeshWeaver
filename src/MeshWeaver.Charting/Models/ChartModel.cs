@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿#nullable enable
+using System.Text.Json.Serialization;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Layout;
@@ -52,10 +53,10 @@ public record ChartModel : IRenderableObject
 
     private ChartModel WithAutoLegend() => this with { Options = GetAutoLegendOptions(), };
 
-    public ChartModel WithLegend(Func<Legend, Legend> builder = null)
+    public ChartModel WithLegend(Func<Legend, Legend>? builder = null)
         => WithOptions(o => o.WithPlugins(p => p.WithLegend(builder)));
 
-    public ChartModel WithTitle(string text, Func<Title, Title> titleModifier = null)
+    public ChartModel WithTitle(string text, Func<Title, Title>? titleModifier = null)
         => WithOptions(o => o.WithPlugins(p =>
         {
             p.Title = new Title { Text = text, Display = true, Font = ChartFonts.MainTitle, };
@@ -64,7 +65,7 @@ public record ChartModel : IRenderableObject
             return p;
         }));
 
-    public ChartModel WithSubTitle(string text, Func<Title, Title> titleModifier = null)
+    public ChartModel WithSubTitle(string text, Func<Title, Title>? titleModifier = null)
         => WithOptions(o => o.WithPlugins(p =>
         {
             p.Subtitle = new Title { Text = text, Display = true, Font = ChartFonts.SubTitle, };
@@ -86,7 +87,7 @@ public record ChartModel : IRenderableObject
 
     public ChartModel WithOptions(Func<ChartOptions, ChartOptions> func) => this with { Options = func(Options), };
 
-    public ChartModel WithDataLabels(Func<DataLabels, DataLabels> func = null) =>
+    public ChartModel WithDataLabels(Func<DataLabels, DataLabels>? func = null) =>
         WithOptions(o => o.WithPlugins(p => p.WithDataLabels(func)));
 
     public ChartModel WithDataSets(params IEnumerable<DataSet> dataSets)

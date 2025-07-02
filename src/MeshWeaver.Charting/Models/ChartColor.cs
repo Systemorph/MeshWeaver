@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿#nullable enable
+using System.Globalization;
 
 namespace MeshWeaver.Charting.Models;
 

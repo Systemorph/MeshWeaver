@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿#nullable enable
+using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -121,7 +122,7 @@ public static class MarkdownExtensions
             ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
                 .Deserialize<Article>(yamlBlock.Lines.ToString());
         }
-        catch 
+        catch
         {
 
             ret = new();
@@ -164,7 +165,7 @@ public static class MarkdownExtensions
 
 public record ArticleCatalogOptions
 {
-    public string Collection { get; init; }
+    public string Collection { get; init; } = string.Empty;
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
 

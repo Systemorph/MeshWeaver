@@ -1,3 +1,4 @@
+#nullable enable
 namespace MeshWeaver.DataStructures
 {
     /// <summary>
@@ -5,7 +6,7 @@ namespace MeshWeaver.DataStructures
     /// </summary>
     public interface IDataSetFactory
     {
-        IDataSet Create(string name = null);
+        IDataSet Create(string? name = null);
         IDataSet ConvertFromAdoNet(System.Data.DataSet dataSet);
         System.Data.DataSet ConvertToAdoNet(IDataSet dataSet);
     }
@@ -16,14 +17,14 @@ namespace MeshWeaver.DataStructures
     /// </summary>
     public interface IDataSet : IEnumerable<IDataTable>
     {
-        string DataSetName { get; set; }
+        string? DataSetName { get; set; }
         IDataTableCollection Tables { get; }
     }
 
     public interface IDataTableCollection : IEnumerable<IDataTable>
     {
         IDataTable this[int i] { get; }
-        IDataTable this[string name] { get; }
+        IDataTable? this[string name] { get; }
         int Count { get; }
         void Add(IDataTable table);
         IDataTable Add(string name);
@@ -36,7 +37,7 @@ namespace MeshWeaver.DataStructures
 
     public interface IDataTable : IEnumerable<IDataRow>
     {
-        string TableName { get; set; }
+        string? TableName { get; set; }
         IDataColumnCollection Columns { get; }
         IDataRowCollection Rows { get; }
         IDataRow NewRow();
@@ -44,8 +45,8 @@ namespace MeshWeaver.DataStructures
 
     public interface IDataColumnCollection : IEnumerable<IDataColumn>
     {
-        IDataColumn this[int i] { get; }
-        IDataColumn this[string name] { get; }
+        IDataColumn? this[int i] { get; }
+        IDataColumn? this[string name] { get; }
         int Count { get; }
         IDataColumn Add(string name, Type type);
         void AddRange(IEnumerable<IDataColumn> columns);
@@ -83,14 +84,14 @@ namespace MeshWeaver.DataStructures
         /// </summary>
         /// <param name="i">0-based index of the column</param>
         /// <returns>Value of column</returns>
-        object this[int i] { get; set; }
+        object? this[int i] { get; set; }
 
         /// <summary>
         /// Gets or sets the value in the column of the given column name.
         /// </summary>
         /// <param name="name">Name of the column</param>
         /// <returns>Value of column</returns>
-        object this[string name] { get; set; }
+        object? this[string name] { get; set; }
 
         /// <summary>
         /// Gets or sets all values of the data row as array
@@ -116,7 +117,7 @@ namespace MeshWeaver.DataStructures
         /// <param name="name">Name of the column</param>
         /// <param name="converter">Function to use to convert cell value to T, if not specified, then attempt of calling IConvertable.Convert will be performed</param>
         /// <returns>Returns the value in the column of the given column</returns>
-        T Field<T>(string name, Func<object, T> converter);
+        T Field<T>(string name, Func<object?, T>? converter);
     }
 
     public interface IDataRowCollection : IEnumerable<IDataRow>

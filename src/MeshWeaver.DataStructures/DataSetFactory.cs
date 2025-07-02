@@ -1,6 +1,7 @@
+#nullable enable
 namespace MeshWeaver.DataStructures
 {
-    public static class DataSetFactory 
+    public static class DataSetFactory
     {
         public static IDataSet Create(string name)
         {

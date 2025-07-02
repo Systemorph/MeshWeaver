@@ -1,15 +1,16 @@
-﻿namespace MeshWeaver.Utils;
+﻿#nullable enable
+namespace MeshWeaver.Utils;
 
 public static class CamelCaseExtensions
 {
-    public static string ToPascalCase(this string s) => s is null || s.Length < 1 ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+    public static string? ToPascalCase(this string? s) => s is null || s.Length < 1 ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
 
     /// <summary>
     /// Algorithm is copy pasted from Newthonsoft.Json (version 12.0.3) library just to avoid redundant dependencies in the modules code.
     /// Inside Newthonsoft.Json it is internal. 
     /// No need to cover with tests.
     /// </summary>
-    public static string ToCamelCase(this string s)
+    public static string? ToCamelCase(this string? s)
     {
         if (string.IsNullOrEmpty(s) || !char.IsUpper(s[0]))
         {

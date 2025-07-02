@@ -1,4 +1,5 @@
-﻿using Microsoft.SemanticKernel;
+﻿#nullable enable
+using Microsoft.SemanticKernel;
 
 namespace MeshWeaver.AI;
 

@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿#nullable enable
+using System.Reflection;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,8 +13,8 @@ public static class ServiceProviderExtensions
 
     public static IServiceProvider SetupModules(
         this IServiceCollection services,
-        IServiceProvider parent,
-        string tag = null
+        IServiceProvider? parent,
+        string? tag = null
     )
     {
         services ??= new ServiceCollection();

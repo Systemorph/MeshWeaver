@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿#nullable enable
+using System.Text.Json;
 using MeshWeaver.Layout;
 using MeshWeaver.Application.Styles;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -9,16 +10,16 @@ namespace MeshWeaver.Blazor;
 
 public static class ViewModelExtensions
 {
-    public static Microsoft.FluentUI.AspNetCore.Components.Icon ToFluentIcon(this Icon icon) =>
+    public static Microsoft.FluentUI.AspNetCore.Components.Icon? ToFluentIcon(this Icon icon) =>
         icon.Provider switch
         {
             FluentIcons.Provider =>
-                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant}.GetInstance(),
+                new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant }.GetInstance(),
             _ => null
         };
 
 
-    internal static  UiControl GetControl(this ISynchronizationStream<JsonElement> stream, ChangeItem<JsonElement> item, string area)
+    internal static UiControl? GetControl(this ISynchronizationStream<JsonElement> stream, ChangeItem<JsonElement> item, string area)
     {
         return item.Value.TryGetProperty(LayoutAreaReference.Areas, out var controls)
                && controls.TryGetProperty(JsonSerializer.Serialize(area), out var node)
@@ -28,6 +29,6 @@ public static class ViewModelExtensions
 
 
     internal static string GetArea(this NamedAreaControl control)
-        => control.Area.ToString();
+        => control.Area?.ToString() ?? string.Empty;
 
 }

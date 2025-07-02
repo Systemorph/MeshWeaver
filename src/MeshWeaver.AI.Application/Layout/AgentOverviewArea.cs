@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿#nullable enable
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -57,7 +58,7 @@ public class AgentOverviewViewModel
         {
             var nodeId = GetNodeId(agent.Name);
             var name = EscapeForMermaid(agent.Name.Wordify());
-            var description = EscapeForMermaid(agent.Description);
+            var description = EscapeForMermaid(agent.Description ?? string.Empty);
             var isDefault = agent == defaultAgent;
             var isDirectlyReachable = IsDirectlyReachableFromDefault(agent, defaultAgent);
 
@@ -196,10 +197,10 @@ public class AgentOverviewViewModel
             .Replace("]", "&#93;");
     }
 
-    private static string TruncateText(string text, int maxLength)
+    private static string TruncateText(string? text, int maxLength)
     {
         if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
-            return text;
+            return text ?? string.Empty;
 
         return text.Substring(0, maxLength - 3) + "...";
     }

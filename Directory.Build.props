@@ -2,6 +2,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <TargetFramework>net9.0</TargetFramework>
     <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <DeployPath>$(SolutionDir)deploy</DeployPath>

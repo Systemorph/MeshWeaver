@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿#nullable enable
+using System.Text.RegularExpressions;
 
 namespace MeshWeaver.Utils;
 

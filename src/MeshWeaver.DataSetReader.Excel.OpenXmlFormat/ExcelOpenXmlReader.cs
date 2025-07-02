@@ -1,4 +1,5 @@
-﻿using System.Data;
+﻿#nullable enable
+using System.Data;
 using System.Globalization;
 using System.Xml.Linq;
 using MeshWeaver.DataSetReader.Excel.Utils;
@@ -10,19 +11,19 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
     {
         #region Members
 
-        private XlsxWorkbook _workbook;
+        private XlsxWorkbook _workbook = null!;
         private bool _isValid;
         private bool _isClosed;
         private bool _isFirstRead;
-        private string _exceptionMessage;
+        private string _exceptionMessage = string.Empty;
         private int _depth;
         private int _resultIndex;
         private int _emptyRowCount;
-        private ZipWorker _zipWorker;
-        private Stream _sheetStream;
-        private object[] _cellsValues;
-        private object[] _savedCellsValues;
-        private Queue<XElement> _sheetRows;
+        private ZipWorker _zipWorker = null!;
+        private Stream _sheetStream = null!;
+        private object[] _cellsValues = null!;
+        private object[] _savedCellsValues = null!;
+        private Queue<XElement> _sheetRows = null!;
 
         private bool _disposed;
         private bool _isFirstRowAsColumnNames;

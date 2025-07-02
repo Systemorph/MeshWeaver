@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿#nullable enable
+using System.Collections.Immutable;
 using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
@@ -53,10 +54,10 @@ public static class StandardReducers
     {
         var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
         return new(
-            updatedInstances, 
-            changedBy, 
-            ChangeType.Patch, 
-            stream.Hub.Version, 
+            updatedInstances,
+            changedBy,
+            ChangeType.Patch,
+            stream.Hub.Version,
             current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch, stream.Hub.JsonSerializerOptions));
     }
 

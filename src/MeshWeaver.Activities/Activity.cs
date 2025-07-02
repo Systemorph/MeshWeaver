@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿#nullable enable
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -20,7 +21,7 @@ public record Activity(string Category, IMessageHub Hub) : ActivityBase<Activity
                 });
                 foreach (var completedAction in completedActions)
                     completedAction.Invoke(ret.Log);
-                taskCompletionSource.SetResult();
+                taskCompletionSource?.SetResult();
                 return ret;
             }
 
@@ -30,8 +31,8 @@ public record Activity(string Category, IMessageHub Hub) : ActivityBase<Activity
 
     private readonly List<Action<ActivityLog>> completedActions = new();
     private readonly object completionLock = new();
-    private TaskCompletionSource taskCompletionSource;
-    public async Task Complete(Action<ActivityLog> completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
+    private TaskCompletionSource? taskCompletionSource;
+    public async Task Complete(Action<ActivityLog>? completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
     {
         if (completedAction != null)
             completedActions.Add(completedAction);

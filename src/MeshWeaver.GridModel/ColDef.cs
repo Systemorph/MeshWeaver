@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.GridModel
+﻿#nullable enable
+namespace MeshWeaver.GridModel
 {
     public record ColDef
     {
@@ -6,35 +7,35 @@
         public ColDef() { }
 
         // The field of the row to get the cells data from
-        public string Field { get; init; }
+        public string? Field { get; init; }
 
-        public object ColId { get; init; }
+        public object? ColId { get; init; }
 
         // The name to render in the column header. If not specified and field is specified, the field name will be used as the header name.
-        public string HeaderName { get; init; }
-        public object HeaderClass { get; init; }
+        public string? HeaderName { get; init; }
+        public object? HeaderClass { get; init; }
 
         // Function or expression. Gets the value from your data for display. See ValueGetterParams for data bindings
-        public string ValueGetter { get; init; }
+        public string? ValueGetter { get; init; }
 
         // Whether to show the column when the group is open / closed - accepted values "open" and "closed"
-        public string ColumnGroupShow { get; init; } //= "open"; // closed in group
+        public string? ColumnGroupShow { get; init; } //= "open"; // closed in group
 
         // Styling class and options: https://www.ag-grid.com/angular-data-grid/excel-export-data-types/#strings-number-and-booleans
-        public string CellClass { get; init; }
+        public string? CellClass { get; init; }
 
-        public object CellStyle { get; init; }
+        public object? CellStyle { get; init; }
 
         // Function or expression. Formats the value for display
-        public string ValueFormatter { get; init; }
+        public string? ValueFormatter { get; init; }
 
         // undefined / null: Grid renders the value as a string.
         // String: The name of a cell renderer component.
         // Class: Direct reference to a cell renderer component.
         // Function: A function that returns either an HTML string or DOM element for display.
-        public string CellRenderer { get; init; }
+        public string? CellRenderer { get; init; }
 
-        public CellRendererParams CellRendererParams { get; init; }
+        public CellRendererParams? CellRendererParams { get; init; }
 
         // Set to true for this column to be hidden
         public bool? Hide { get; init; }
@@ -47,7 +48,7 @@
         public bool? Resizable { get; init; }
 
         // Pin a column to one side: "left", "right"
-        public string Pinned { get; init; }
+        public string? Pinned { get; init; }
 
         // Set to true to allow sorting on this column
         public bool? Sortable { get; init; }
@@ -56,10 +57,10 @@
         public bool? SuppressMovable { get; init; }
 
         // Set to sort this column. Options: null, 'asc', 'desc'
-        public string Sort { get; init; }
+        public string? Sort { get; init; }
 
         // true for default (text), string for custom, e.g. "agTextColumnFilter" or "agNumberColumnFilter"
-        public object Filter { get; init; }
+        public object? Filter { get; init; }
         public bool? FloatingFilter { get; init; }
 
         public bool? Editable { get; init; }
@@ -78,8 +79,8 @@
         public bool? EnableRowGroup { get; init; }
 
         // Aggregation
-        public string AggFunc { get; init; }
-        public IReadOnlyCollection<string> AllowedAggFuncs { get; init; }
+        public string? AggFunc { get; init; }
+        public IReadOnlyCollection<string>? AllowedAggFuncs { get; init; }
         public bool? EnableValue { get; init; }
 
         // To allow a column to be used as pivot column via the Tool Panel, set enablePivot=true on the required columns.
@@ -89,17 +90,17 @@
         // Set to true to pivot by this column
         public bool? Pivot { get; init; }
         public int? PivotIndex { get; init; }
-        public string PivotComparator { get; init; }
+        public string? PivotComparator { get; init; }
     }
 
     // params for the agGroupCellRenderer CellRenderer
     public record CellRendererParams
     {
         // The value getter for the footer text.
-        public string FooterValueGetter { get; init; }
+        public string? FooterValueGetter { get; init; }
 
         // The renderer to use for inside the cell
-        public string InnerRenderer { get; init; }
+        public string? InnerRenderer { get; init; }
 
         // If true, count is not displayed beside the name.
         public bool SuppressCount { get; init; }
@@ -107,12 +108,12 @@
 
     public record CellStyle
     {
-        public string Color { get; init; }
-        public string BackgroundColor { get; init; }
-        public string Width { get; init; }
-        public string Left { get; init; }
-        public string FontWeight { get; set; }
-        public string TextAlign { get; set; }
+        public string? Color { get; init; }
+        public string? BackgroundColor { get; init; }
+        public string? Width { get; init; }
+        public string? Left { get; init; }
+        public string? FontWeight { get; set; }
+        public string? TextAlign { get; set; }
     }
 
     public static class ColumnGroupShow

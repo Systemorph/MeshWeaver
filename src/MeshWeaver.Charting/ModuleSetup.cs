@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout.Composition;
+﻿#nullable enable
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 

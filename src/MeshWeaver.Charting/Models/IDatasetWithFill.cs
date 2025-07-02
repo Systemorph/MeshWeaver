@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.Charting.Models;
+﻿#nullable enable
+namespace MeshWeaver.Charting.Models;
 
 public interface IDataSetWithFill<out T>
 {
@@ -13,7 +14,7 @@ public interface IDataSetWithFill<out T>
     ///  Axis value                object     { value: number; }
     ///  Shape(fill inside line)   string     'shape'
     /// </summary>
-    object Fill { get; init; }
+    object? Fill { get; init; }
 
     /// <summary>
     ///  Mode                      Type       Values
@@ -26,7 +27,7 @@ public interface IDataSetWithFill<out T>
     ///  Axis value                object     { value: number; }
     ///  Shape(fill inside line)   string     'shape'
     /// </summary>
-    public T WithFill(object fill);
+    public T WithFill(object? fill);
 
     public T WithArea();
     public T WithoutFill();

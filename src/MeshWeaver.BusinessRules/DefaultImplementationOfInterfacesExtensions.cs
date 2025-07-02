@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿#nullable enable
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime;
