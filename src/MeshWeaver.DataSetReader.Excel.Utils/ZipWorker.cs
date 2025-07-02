@@ -18,7 +18,7 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 		/// Gets the exception message.
 		/// </summary>
 		/// <value>The exception message.</value>
-		public string ExceptionMessage { get; private set; }
+		public string ExceptionMessage { get; private set; } = string.Empty;
 
 		#endregion
 

@@ -38,12 +38,12 @@ namespace MeshWeaver.Arithmetics.MapOver
 
         private static ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)> MapOverDelegateProviders = ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)>.Empty;
 
-        private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic)!;
 
 
-        private static readonly MethodInfo MapOverArrayMethod = typeof(MapOverFields).GetMethod(nameof(MapOverArray), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverArrayMethod = typeof(MapOverFields).GetMethod(nameof(MapOverArray), BindingFlags.Static | BindingFlags.NonPublic)!;
 
-        private static readonly MethodInfo MapOverListMethod = typeof(MapOverFields).GetMethod(nameof(MapOverList), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverListMethod = typeof(MapOverFields).GetMethod(nameof(MapOverList), BindingFlags.Static | BindingFlags.NonPublic)!;
 
         //private static readonly MethodInfo MapOnNullableDoubleDelegate = typeof(MapOverFields).GetMethod(nameof(MapOnNullableDouble), BindingFlags.Static | BindingFlags.NonPublic);
 

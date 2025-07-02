@@ -10,7 +10,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 		public const string InlineString = "inlineStr";
 
 		public bool IsEmpty { get; set; }
-		public XlsxDimension Dimension { get; set; }
+		public XlsxDimension? Dimension { get; set; }
 
 		public int ColumnsCount
 		{
@@ -43,7 +43,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 		}
 
 		public string RelationId { get; set; }
-		public string Path { get; set; }
+		public string Path { get; set; } = string.Empty;
 
 		public XlsxWorksheet(string name, int id, string relationId)
 		{

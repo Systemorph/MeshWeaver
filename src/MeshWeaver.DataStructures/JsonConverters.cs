@@ -9,7 +9,7 @@ public class DataSetConverter : JsonConverter
         return objectType == typeof(DataSet);
     }
 
-    public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+    public override object ReadJson(JsonReader reader, Type objectType, object? existingValue, JsonSerializer serializer)
     {
         var dataSet = new DataSet();
         var dataTableConverter = new DataTableConverter();
@@ -18,14 +18,14 @@ public class DataSetConverter : JsonConverter
         if ((string)reader.Value == nameof(DataSet.DataSetName))
         {
             CheckedRead(reader);
-            dataSet.DataSetName = (string)reader.Value;
+            dataSet.DataSetName = (string)reader.Value!;
 
             CheckedRead(reader);
         }
 
         while (reader.TokenType == JsonToken.PropertyName)
         {
-            var tableName = (string)reader.Value;
+            var tableName = (string)reader.Value!;
 
             if (dataSet.Tables.Contains(tableName))
                 throw new InvalidOperationException($"Data contained multiple tables with name '{tableName}'");
@@ -37,9 +37,9 @@ public class DataSetConverter : JsonConverter
         return dataSet;
     }
 
-    public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+    public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
     {
-        var dataSet = (DataSet)value;
+        var dataSet = (DataSet)value!;
         var dataTableConverter = new DataTableConverter();
 
         writer.WriteStartObject();
@@ -52,7 +52,7 @@ public class DataSetConverter : JsonConverter
 
         foreach (var dataTable in dataSet.Tables)
         {
-            writer.WritePropertyName(dataTable.TableName);
+            writer.WritePropertyName(dataTable.TableName!);
             dataTableConverter.WriteJson(writer, dataTable, serializer);
         }
 
@@ -74,12 +74,12 @@ public class DataTableConverter : JsonConverter
         return objectType == typeof(DataTable);
     }
 
-    public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+    public override object ReadJson(JsonReader reader, Type objectType, object? existingValue, JsonSerializer serializer)
     {
-        var dataTable = (DataTable)existingValue;
+        var dataTable = (DataTable)existingValue!;
         if (reader.TokenType == JsonToken.PropertyName)
         {
-            dataTable.TableName = (string)reader.Value;
+            dataTable.TableName = (string)reader.Value!;
             CheckedRead(reader);
         }
         if (reader.TokenType != JsonToken.StartArray)
@@ -107,16 +107,16 @@ public class DataTableConverter : JsonConverter
 
             var row = dataTable.NewRow();
             foreach (var rowValue in rowValues)
-                row[rowValue.Key] = rowValue.Value;
+                row[rowValue.Key] = rowValue.Value ?? DBNull.Value;
             dataTable.Rows.Add(row);
             CheckedRead(reader);
         }
         return dataTable;
     }
 
-    public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+    public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
     {
-        var table = (DataTable)value;
+        var table = (DataTable)value!;
 
         writer.WriteStartArray();
 

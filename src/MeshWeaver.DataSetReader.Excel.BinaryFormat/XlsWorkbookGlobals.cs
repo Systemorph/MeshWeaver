@@ -15,19 +15,19 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		private readonly List<XlsBiffBoundSheet> m_Sheets = new List<XlsBiffBoundSheet>();
 		private readonly List<XlsBiffRecord> m_Styles = new List<XlsBiffRecord>();
 
-		public XlsBiffInterfaceHdr InterfaceHdr { get; set; }
+		public XlsBiffInterfaceHdr? InterfaceHdr { get; set; }
 
-		public XlsBiffRecord MMS { get; set; }
+		public XlsBiffRecord? MMS { get; set; }
 
-		public XlsBiffRecord WriteAccess { get; set; }
+		public XlsBiffRecord? WriteAccess { get; set; }
 
-		public XlsBiffSimpleValueRecord CodePage { get; set; }
+		public XlsBiffSimpleValueRecord? CodePage { get; set; }
 
-		public XlsBiffRecord DSF { get; set; }
+		public XlsBiffRecord? DSF { get; set; }
 
-		public XlsBiffRecord Country { get; set; }
+		public XlsBiffRecord? Country { get; set; }
 
-		public XlsBiffSimpleValueRecord Backup { get; set; }
+		public XlsBiffSimpleValueRecord? Backup { get; set; }
 
 		public List<XlsBiffRecord> Fonts
 		{
@@ -59,8 +59,8 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// Shared String Table of workbook
 		/// </summary>
-		public XlsBiffSST SST { get; set; }
+		public XlsBiffSST? SST { get; set; }
 
-		public XlsBiffRecord ExtSST { get; set; }
+		public XlsBiffRecord? ExtSST { get; set; }
 	}
 }

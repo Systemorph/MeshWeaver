@@ -35,7 +35,7 @@ public sealed class DataSetXmlSerializer : IDataSetSerializer
             xmlTextReader.XmlResolver = null;
 
             var serializer = new XmlSerializer(typeof(DataSet));
-            return (IDataSet)serializer.Deserialize(xmlTextReader);
+            return (IDataSet)serializer.Deserialize(xmlTextReader)!;
         }
     }
 }

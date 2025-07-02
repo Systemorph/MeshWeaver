@@ -36,6 +36,6 @@ public class DataSetJsonSerializer : IDataSetSerializer
     public IDataSet Parse(TextReader reader)
     {
         var serializer = JsonSerializer.CreateDefault(NonIndentedSerializerSettings);
-        return (IDataSet)serializer.Deserialize(reader, typeof(DataSet));
+        return (IDataSet)serializer.Deserialize(reader, typeof(DataSet))!;
     }
 }

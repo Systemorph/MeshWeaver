@@ -13,7 +13,7 @@ namespace MeshWeaver.Reflection
 
         public static IEnumerable<IGrouping<Type, object>> GroupByWithDefaultIfEmpty(this IEnumerable<object> instances)
         {
-            return instances.GroupByWithDefaultIfEmpty(instances.GetType().GetEnumerableElementType());
+            return instances.GroupByWithDefaultIfEmpty(instances.GetType().GetEnumerableElementType() ?? typeof(object));
         }
 
         public static IEnumerable<IGrouping<Type, object>> GroupByWithDefaultIfEmpty(this IEnumerable<object> instances, Type defaultType)

@@ -37,7 +37,7 @@ namespace MeshWeaver.DataStructures
         {
             foreach (var table in dataSet.Tables)
             {
-                var myTable = Tables[table.TableName];
+                var myTable = Tables[table.TableName ?? string.Empty];
                 IDictionary<int, int> map;
                 if (myTable == null)
                 {

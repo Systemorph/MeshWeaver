@@ -69,7 +69,7 @@ namespace MeshWeaver.Reflection
         /// <param name="accessor">The getter or setter method</param>
         /// <param name="throwIfNotAccessor">Optional flag, defining if an exception is thrown in case, the <paramref name="accessor"/> method is no getter or setter</param>
         /// <returns>The related property info</returns>
-        public static PropertyInfo GetProperty(this MethodInfo accessor, bool throwIfNotAccessor = true)
+        public static PropertyInfo? GetProperty(this MethodInfo accessor, bool throwIfNotAccessor = true)
         {
             if (!accessor.IsPropertyAccessor())
             {
@@ -225,7 +225,7 @@ namespace MeshWeaver.Reflection
         /// allow better support for compiler checks and refactoring.
         /// </remarks>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a constructor expression</exception>
-        public static ConstructorInfo GetConstructor<T>(Expression<Func<T>> selector)
+        public static ConstructorInfo? GetConstructor<T>(Expression<Func<T>> selector)
         {
             var body = selector.Body;
             var expression = body as NewExpression;
@@ -297,7 +297,7 @@ namespace MeshWeaver.Reflection
         /// allow better support for renaming and refactoring.
         /// </remarks>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a property</exception>
-        public static PropertyInfo GetProperty<T>(this Expression<Func<T, object>> selector)
+        public static PropertyInfo? GetProperty<T>(this Expression<Func<T, object>> selector)
         {
             return GetPropertyInner(selector, typeof(T));
         }
@@ -317,7 +317,7 @@ namespace MeshWeaver.Reflection
         /// allow better support for renaming and refactoring.
         /// </remarks>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a property</exception>
-        public static PropertyInfo GetProperty<T, TProperty>(this Expression<Func<T, TProperty>> selector)
+        public static PropertyInfo? GetProperty<T, TProperty>(this Expression<Func<T, TProperty>> selector)
         {
             return GetPropertyInner(selector, typeof(T));
         }
@@ -331,7 +331,7 @@ namespace MeshWeaver.Reflection
         /// The usage is similar to the <see cref="GetProperty{T}"/> method
         /// </example>
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a static property</exception>                
-        public static PropertyInfo GetStaticProperty(Expression<Func<object>> selector)
+        public static PropertyInfo? GetStaticProperty(Expression<Func<object>> selector)
         {
             return GetPropertyInner(selector);
         }
@@ -348,7 +348,7 @@ namespace MeshWeaver.Reflection
                 // in case the property is of type object the body itself is the correct expression
                 expression = selector.Body;
 
-            PropertyInfo property = null;
+            PropertyInfo? property = null;
 
             var memberExpression = expression as MemberExpression;
             if (memberExpression != null)

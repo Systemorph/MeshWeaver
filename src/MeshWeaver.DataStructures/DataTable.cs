@@ -27,7 +27,7 @@ namespace MeshWeaver.DataStructures
                     return;
 
                 foreach (var dataTableCollection in DataTableCollections)
-                    dataTableCollection.RenameTable(tableName, value);
+                    dataTableCollection.RenameTable(tableName ?? string.Empty, value ?? string.Empty);
 
                 tableName = value;
             }
@@ -97,7 +97,7 @@ namespace MeshWeaver.DataStructures
             set
             {
                 ReallocateRowItems(i);
-                ItemArray[i] = value;
+                ItemArray[i] = value ?? DBNull.Value;
             }
         }
 

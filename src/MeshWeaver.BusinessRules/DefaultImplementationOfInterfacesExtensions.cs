@@ -58,7 +58,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
             {
                 if (parameterTypes[i].IsByRef)
                 {
-                    parameterTypes[i] = parameterTypes[i].GetElementType();
+                    parameterTypes[i] = parameterTypes[i].GetElementType() ?? typeof(object);
                 }
             }
 
