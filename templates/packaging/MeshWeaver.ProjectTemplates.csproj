@@ -10,12 +10,14 @@
     <TargetFramework>net9.0</TargetFramework>
     <IncludeContentInPack>true</IncludeContentInPack>
     <IncludeBuildOutput>false</IncludeBuildOutput>
-    <ContentTargetFolders>content</ContentTargetFolders>
     <NoWarn>$(NoWarn);NU5128</NoWarn>
-    <NoDefaultExcludes>true</NoDefaultExcludes>
-    <LocalizeTemplates>false</LocalizeTemplates>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <!-- Set default version if not provided -->
+    <Version Condition="'$(Version)' == ''">2.2.0-rc6</Version>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
   </PropertyGroup>
 
   <!-- Generate templates before build -->
@@ -26,7 +28,10 @@
   </Target>
 
   <ItemGroup>
-    <Content Include="../dist/templates/**" Exclude="../dist/templates/bin/**;../dist/templates/obj/**" />
+    <None Include="../dist/templates/**/*" 
+          Exclude="../dist/templates/**/bin/**;../dist/templates/**/obj/**"
+          Pack="true"
+          PackagePath="content/" />
   </ItemGroup>
 
 </Project>
