@@ -27,6 +27,16 @@ MeshWeaver applications are built with three fundamental principles in mind:
 
 This distributed nature means that when you interact with the chat interface, your request might trigger a chain of operations across multiple services, with responses arriving asynchronously as the system processes your request.
 
+### Architecture Patterns
+
+MeshWeaver applications can be organized using various architectural patterns depending on your specific requirements:
+
+- **[Clean Architecture](https://medium.com/multinetinventiv/clean-architecture-part-one-what-is-clean-architecture-3d9f16e831bf)**: MeshWeaver's message-driven design naturally supports clean architecture principles by enforcing clear boundaries between business logic and infrastructure concerns through well-defined message contracts
+- **[Modular Monolith](https://medium.com/design-microservices-architecture-with-patterns/microservices-killer-modular-monolithic-architecture-ac83814f6862)**: Applications can start as modular monoliths where different modules (like Todo, Users, Projects) are deployed together but maintain logical separation through message hubs and distinct addresses
+- **[Vertical Slice Architecture](https://en.wikipedia.org/wiki/Hexagonal_architecture_(software))**: Each feature or business capability can be implemented as a complete vertical slice, from UI layout areas down to data persistence, organized around message hub addresses
+
+The Todo application demonstrates a modular approach where the Todo functionality is encapsulated in its own module with clear message-based interfaces, making it easy to extract into a separate service or integrate with other modules as your application grows.
+
 ## Message Hub Architecture
 
 The heart of MeshWeaver's distributed architecture lies in its message hub system. Each hub represents a logical location in the cloud that becomes active when interactions begin.
