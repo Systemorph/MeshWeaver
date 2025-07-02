@@ -28,6 +28,9 @@ public class Program
         Console.WriteLine($"  cd {outputPath}");
         Console.WriteLine("  dotnet new install .");
         Console.WriteLine("  dotnet new meshweaver-solution -n TestApp");
+        Console.WriteLine();
+        Console.WriteLine("To install from NuGet (recommended):");
+        Console.WriteLine("  dotnet new install MeshWeaver.ProjectTemplates");
     }
 }
 
@@ -81,7 +84,7 @@ public class TemplateGenerator
         CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI"), ["bin", "obj"]);
 
         Console.WriteLine("Copying Todo test project...");
-        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "MeshWeaverApp1.TodoTest"), ["bin", "obj", "TestResults"]);
+        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults"]);
     }
 
     private void UpdateNamespaces()
@@ -99,7 +102,7 @@ public class TemplateGenerator
             ["namespace MeshWeaverApp1.Todo.AI", "using MeshWeaverApp1.Todo"]);
 
         // Update Todo test project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.TodoTest"),
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"),
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo", "typeof(TodoApplicationAttribute)"],
             ["namespace MeshWeaverApp1.Todo", "using MeshWeaverApp1.Todo", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)"]);
     }
@@ -115,8 +118,8 @@ public class TemplateGenerator
             Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"));
 
         File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.TodoTest", "MeshWeaver.Todo.Test.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.TodoTest", "MeshWeaverApp1.TodoTest.csproj"));
+            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaver.Todo.Test.csproj"),
+            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"));
     }
 
     private void UpdateProgramCs()
@@ -254,7 +257,7 @@ public class TemplateGenerator
 
             </Project>
             """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.TodoTest", "MeshWeaverApp1.TodoTest.csproj"), testCsproj);
+        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"), testCsproj);
     }
 
     private void CreateTemplateConfigs()
@@ -352,7 +355,7 @@ public class TemplateGenerator
             PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Todo.AI.csproj" } }
         });
 
-        CreateTemplateConfig("MeshWeaverApp1.TodoTest", new TemplateConfig
+        CreateTemplateConfig("MeshWeaverApp1.Todo.Test", new TemplateConfig
         {
             Schema = "http://json.schemastore.org/template",
             Author = "Systemorph",
@@ -362,7 +365,7 @@ public class TemplateGenerator
             GroupIdentity = "MeshWeaver.Todo.Test",
             ShortName = "meshweaver-test",
             Tags = new { language = "C#", type = "project" },
-            SourceName = "MeshWeaverApp1.TodoTest",
+            SourceName = "MeshWeaverApp1.Todo.Test",
             PreferNameDirectory = true,
             Symbols = new
             {
@@ -376,7 +379,7 @@ public class TemplateGenerator
                     replaces = "net9.0"
                 }
             },
-            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.TodoTest.csproj" } }
+            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Todo.Test.csproj" } }
         });
 
         // Solution template
@@ -409,7 +412,7 @@ public class TemplateGenerator
                 new { path = "MeshWeaverApp1.Portal/MeshWeaverApp1.Portal.csproj" },
                 new { path = "MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" },
                 new { path = "MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" },
-                new { path = "MeshWeaverApp1.TodoTest/MeshWeaverApp1.TodoTest.csproj" }
+                new { path = "MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj" }
             },
             PostActions = new[]
             {
@@ -437,7 +440,7 @@ public class TemplateGenerator
             EndProject
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj", "{44444444-4444-4444-4444-444444444444}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.TodoTest", "MeshWeaverApp1.TodoTest\MeshWeaverApp1.TodoTest.csproj", "{33333333-3333-3333-3333-333333333333}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test\MeshWeaverApp1.Todo.Test.csproj", "{33333333-3333-3333-3333-333333333333}"
             EndProject
             Global
             	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -479,7 +482,7 @@ public class TemplateGenerator
             - **MeshWeaverApp1.Portal**: The main web portal application
             - **MeshWeaverApp1.Todo**: A Todo module demonstrating MeshWeaver data management and layout areas
             - **MeshWeaverApp1.Todo.AI**: AI agent for Todo management with natural language processing
-            - **MeshWeaverApp1.TodoTest**: Unit tests for the Todo module
+            - **MeshWeaverApp1.Todo.Test**: Unit tests for the Todo module
 
             ## Getting Started
 
