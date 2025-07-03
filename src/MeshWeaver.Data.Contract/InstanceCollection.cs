@@ -21,7 +21,7 @@ public record InstanceCollection
         GetKey = identity;
     }
 
-    internal Func<object, object> GetKey { get; init; }
+    internal Func<object, object> GetKey { get; init; } = null!;
 
     public InstanceCollection SetItem(object key, object value) =>
         this with
@@ -43,9 +43,9 @@ public record InstanceCollection
 
     public IEnumerable<T> Get<T>() => Instances.Values.OfType<T>();
 
-    public T Get<T>(object id) => (T)Instances.GetValueOrDefault(id);
+    public T? Get<T>(object id) => (T?)Instances.GetValueOrDefault(id);
 
-    public object GetInstance(object id)
+    public object? GetInstance(object id)
     {
         return Instances.GetValueOrDefault(id);
     }
@@ -98,7 +98,7 @@ public record InstanceCollection
         return this with { Instances = Instances.Remove(id) };
     }
 
-    public virtual bool Equals(InstanceCollection other)
+    public virtual bool Equals(InstanceCollection? other)
     {
         return other is not null &&
                (

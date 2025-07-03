@@ -442,7 +442,7 @@ namespace MeshWeaver.Reflection
 
         private static readonly CreatableObjectStore<Token, Delegate> InnerCache = new CreatableObjectStore<Token, Delegate>(CreateDelegate);
 #pragma warning disable 4014
-        private static readonly MethodInfo AsTaskMethod = ReflectionHelper.GetStaticMethodGeneric(() => TaskCast<MethodInfo, MethodBase>(default)); // <MethodInfo, MethodBase> are used as example of types of one hierarchy
+        private static readonly MethodInfo AsTaskMethod = ReflectionHelper.GetStaticMethodGeneric(() => TaskCast<MethodInfo, MethodBase>(default!)); // <MethodInfo, MethodBase> are used as example of types of one hierarchy
 #pragma warning restore 4014
 
         private static Delegate CreateDelegate(Token token)
@@ -469,7 +469,7 @@ namespace MeshWeaver.Reflection
             var parameterInfos = methodBase.GetParameters();
             var methodCallParameters = allParameters.Skip(methodBase.IsStatic || isCtor ? 0 : 1)
                                                     .Zip(parameterInfos,
-                                                         (pe, pi) => ConvertIfNeeded(pe, pi.ParameterType, pi.Name, token.Args))
+                                                         (pe, pi) => ConvertIfNeeded(pe, pi.ParameterType, pi.Name ?? "", token.Args))
                                                     .ToList();
 
             var constantExpressions = parameterInfos.Skip(methodCallParameters.Count)
@@ -477,14 +477,14 @@ namespace MeshWeaver.Reflection
             methodCallParameters.AddRange(constantExpressions);
 
             if (isCtor)
-                return Expression.New(ctor, methodCallParameters);
+                return Expression.New(ctor!, methodCallParameters);
 
             var methodInfo = methodBase as MethodInfo;
             if (methodInfo != null)
             {
                 Expression body = methodBase.IsStatic
                                           ? Expression.Call(methodInfo, methodCallParameters)
-                                          : Expression.Call(ConvertIfNeeded(allParameters[0], methodBase.DeclaringType, "this", token.Args),
+                                          : Expression.Call(ConvertIfNeeded(allParameters[0], methodBase.DeclaringType!, "this", token.Args),
                                                             methodInfo, methodCallParameters);
 
                 if (methodInfo.ReturnType != typeof(void) && methodInfo.ReturnType != token.ReturnType)
@@ -562,12 +562,12 @@ namespace MeshWeaver.Reflection
 
         private class Token : IEquatable<Token>
         {
-            public static Token Func(MethodBase method, DelegateCacheArgs args, Type returnType, Type[] types)
+            public static Token Func(MethodBase method, DelegateCacheArgs? args, Type returnType, Type[] types)
             {
                 return new Token(method, types, returnType, args);
             }
 
-            public static Token Action(MethodBase method, DelegateCacheArgs args, Type[] types)
+            public static Token Action(MethodBase method, DelegateCacheArgs? args, Type[] types)
             {
                 return new Token(method, types, typeof(void), args);
             }
@@ -580,7 +580,7 @@ namespace MeshWeaver.Reflection
             public readonly DelegateCacheArgs Args;
             private readonly TypeArrayKey typesKey;
 
-            private Token(MethodBase method, Type[] types, Type returnType, DelegateCacheArgs args)
+            private Token(MethodBase method, Type[] types, Type returnType, DelegateCacheArgs? args)
             {
                 if (method == null)
                     throw new ArgumentNullException(nameof(method));
@@ -608,7 +608,7 @@ namespace MeshWeaver.Reflection
 
             #region Equality
 
-            public bool Equals(Token other)
+            public bool Equals(Token? other)
             {
                 if (ReferenceEquals(null, other))
                     return false;
@@ -621,7 +621,7 @@ namespace MeshWeaver.Reflection
                        && Args.Equals(other.Args);
             }
 
-            public sealed override bool Equals(object obj)
+            public sealed override bool Equals(object? obj)
             {
                 if (ReferenceEquals(null, obj))
                     return false;
@@ -642,7 +642,7 @@ namespace MeshWeaver.Reflection
             public override string ToString()
             {
                 var signature = Method.GetSignature();
-                return $"Method: {Method.DeclaringType.GetSpeakingName()} {ReturnType.GetSpeakingName()} {signature}. Args: {Args}";
+                return $"Method: {Method.DeclaringType?.GetSpeakingName() ?? "Unknown"} {ReturnType.GetSpeakingName()} {signature}. Args: {Args}";
             }
         }
 
