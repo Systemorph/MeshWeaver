@@ -14,23 +14,23 @@ public record LabelControl(object Data)
     /// <summary>
     /// Gets or initializes the alignment of the label.
     /// </summary>
-    public object Alignment { get; init; }
+    public object? Alignment { get; init; }
      /// <summary>
     /// Gets or initializes the color of the label.
     /// </summary>
-    public object Color { get; init; }
+    public object? Color { get; init; }
     /// <summary>
     /// Gets or initializes the disabled state of the label.
     /// </summary>
-    public object Disabled { get; init; }
+    public object? Disabled { get; init; }
     /// <summary>
     /// Gets or initializes the typography of the label.
     /// </summary>
-    public object Typo { get; init; }
+    public object? Typo { get; init; }
     /// <summary>
     /// Gets or initializes the weight of the label.
     /// </summary>
-    public object Weight { get; init; }
+    public object? Weight { get; init; }
     /// <summary>
     /// Sets the alignment of the label.
     /// </summary>

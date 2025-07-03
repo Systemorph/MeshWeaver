@@ -7,7 +7,7 @@ public abstract record FormControlBase <TControl>(object Data)
     /// <summary>
     /// The label bound to this control
     /// </summary>
-    public object Label { get; init; }
+    public object? Label { get; init; }
 
 
     /// <summary>
@@ -24,38 +24,38 @@ public abstract record FormControlBase <TControl>(object Data)
     /// <summary>
     /// Whether the number field is disabled.
     /// </summary>
-    public object Disabled { get; init; }
+    public object? Disabled { get; init; }
 
 
     /// <summary>
     /// Whether the number field is required.
     /// </summary>
-    public object Required { get; init; }
+    public object? Required { get; init; }
 
-    public object AutoFocus { get; init; }
+    public object? AutoFocus { get; init; }
     /// <summary>
     /// Gets or initializes the immediate update state of the input control.
     /// </summary>
-    public object Immediate { get; init; }
+    public object? Immediate { get; init; }
     /// <summary>
     /// Gets or initializes the delay for immediate updates of the input control.
     /// </summary>
-    public object ImmediateDelay { get; init; }
+    public object? ImmediateDelay { get; init; }
 
     /// <summary>
     /// Gets or initializes the start icon of the text field control.
     /// </summary>
-    public object IconStart { get; init; }
+    public object? IconStart { get; init; }
 
     /// <summary>
     /// Gets or initializes the end icon of the text field control.
     /// </summary>
-    public object IconEnd { get; init; }
+    public object? IconEnd { get; init; }
 
     /// <summary>
     /// Placeholder to be put in the control.
     /// </summary>
-    public object Placeholder { get; init; }
+    public object? Placeholder { get; init; }
     /// <summary>
     /// Sets the start icon of the text field control.
     /// </summary>

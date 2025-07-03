@@ -21,7 +21,7 @@ public class UserContextMiddleware(RequestDelegate next)
     }
 
 
-    private AccessContext ExtractUserContext(ClaimsPrincipal user)
+    private AccessContext? ExtractUserContext(ClaimsPrincipal user)
     {
         if (user?.Identity?.IsAuthenticated != true)
         {
@@ -30,9 +30,9 @@ public class UserContextMiddleware(RequestDelegate next)
 
         return new AccessContext
         {
-            Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name"),
-            ObjectId = user.FindFirstValue("preferred_username"),
-            Email = user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email"),
+            Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name") ?? string.Empty,
+            ObjectId = user.FindFirstValue("preferred_username") ?? string.Empty,
+            Email = user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email") ?? string.Empty,
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };
     }

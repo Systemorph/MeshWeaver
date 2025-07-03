@@ -10,8 +10,8 @@ namespace MeshWeaver.Messaging;
 public record MessageHubConfiguration
 {
     public Address Address { get; }
-    protected readonly IServiceProvider ParentServiceProvider;
-    public MessageHubConfiguration(IServiceProvider parentServiceProvider, Address address)
+    protected readonly IServiceProvider? ParentServiceProvider;
+    public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
@@ -23,7 +23,7 @@ public record MessageHubConfiguration
 
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
-    public IServiceProvider ServiceProvider { get; set; }
+    public IServiceProvider ServiceProvider { get; set; } = null!;
 
     internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> DisposeActions { get; init; } = [];
 
@@ -32,7 +32,7 @@ public record MessageHubConfiguration
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
 
 
-    internal IMessageHub HubInstance { get; set; }
+    internal IMessageHub HubInstance { get; set; } = null!;
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
         => RegisterForDisposal((m,_) =>
@@ -65,7 +65,7 @@ public record MessageHubConfiguration
 
 
     public ITypeRegistry TypeRegistry { get; }
-    protected virtual ServiceCollection ConfigureServices(IMessageHub parent)
+    protected virtual ServiceCollection ConfigureServices(IMessageHub? parent)
     {
         var services = new ServiceCollection();
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
@@ -116,7 +116,7 @@ public record MessageHubConfiguration
 
 
 
-    protected void CreateServiceProvider(IMessageHub parent)
+    protected void CreateServiceProvider(IMessageHub? parent)
     {
 
         ServiceProvider = ConfigureServices(parent)
@@ -126,9 +126,9 @@ public record MessageHubConfiguration
     public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)
     {
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
-        var parentHub = ParentServiceProvider.GetService<ParentMessageHub>()?.Value;
+        var parentHub = ParentServiceProvider?.GetService<ParentMessageHub>()?.Value;
         CreateServiceProvider(parentHub);
-        var parentHubs = ParentServiceProvider.GetService<HostedHubsCollection>();
+        var parentHubs = ParentServiceProvider?.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         parentHubs?.Add(HubInstance);
@@ -137,7 +137,7 @@ public record MessageHubConfiguration
 
 
 
-    internal ImmutableDictionary<(Type, string), object> Properties { get; init; } = ImmutableDictionary<(Type, string), object>.Empty;
+    internal ImmutableDictionary<(Type, string?), object> Properties { get; init; } = ImmutableDictionary<(Type, string?), object>.Empty;
     internal ImmutableList<Func<SyncPipelineConfig, SyncPipelineConfig>> PostPipeline { get; set; }
 
     public MessageHubConfiguration AddPostPipeline(Func<SyncPipelineConfig, SyncPipelineConfig> pipeline) => this with { PostPipeline = PostPipeline.Add(pipeline) };
@@ -146,7 +146,7 @@ public record MessageHubConfiguration
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         return syncPipeline.AddPipeline((d, next) =>
         {
-            var context = userService.Context;
+            var context = userService?.Context;
             if (context is not null)
                 d = d.SetAccessContext(context);
             return next(d);
@@ -161,30 +161,30 @@ public record MessageHubConfiguration
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
-            userService.SetContext(d.AccessContext);
+            userService?.SetContext(d.AccessContext);
             try
             {
                 return await next.Invoke(d, ct);
             }
             finally
             {
-                userService.SetContext(null);
+                userService?.SetContext(null);
             }
         });
     }
 
     public T? Get<T>(string? context = null) => (T?)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
-    public MessageHubConfiguration Set<T>(T value, string? context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value) };
+    public MessageHubConfiguration Set<T>(T value, string? context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value!) };
 
 
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
-        TypeRegistry.WithType(typeof(T), name);
+        TypeRegistry.WithType(typeof(T), name ?? typeof(T).Name);
         return this;
     }
     public MessageHubConfiguration WithType(Type type, string? name = null)
     {
-        TypeRegistry.WithType(type, name);
+        TypeRegistry.WithType(type, name ?? type.Name);
         return this;
     }
 }

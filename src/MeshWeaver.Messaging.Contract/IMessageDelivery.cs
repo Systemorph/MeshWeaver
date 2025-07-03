@@ -36,7 +36,7 @@ public interface IMessageDelivery
     internal IMessageDelivery WithSender(Address address);
     internal IMessageDelivery WithTarget(Address address);
     IMessageDelivery Forwarded(params IEnumerable<Address> addresses);
-    AccessContext AccessContext { get; }
+    AccessContext? AccessContext { get; }
 
 }
 

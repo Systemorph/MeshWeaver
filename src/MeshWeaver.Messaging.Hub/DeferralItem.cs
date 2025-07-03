@@ -40,7 +40,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
         if (Filter(delivery))
         {
             deferral.Post((delivery, cancellationToken));
-            return null;
+            return null!;
         }
 
         try
@@ -49,7 +49,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
             var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
             if(ret?.State == MessageDeliveryState.Failed)
                 return failure(ret);
-            return ret;
+            return ret!;
         }
         catch (Exception e)
         {

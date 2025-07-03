@@ -54,7 +54,7 @@ public static class EditorExtensions
 
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider, T instance,
-        string id = null)
+        string? id = null)
         => serviceProvider.Edit(Observable.Return(instance), id);
     public static UiControl Edit(
         this IMessageHub hub, Type type,
@@ -62,13 +62,13 @@ public static class EditorExtensions
         => hub.ServiceProvider.Edit(type, id);
     public static UiControl Edit<T>(
         this IMessageHub hub, T instance,
-        string id = null)
+        string? id = null)
         => hub.ServiceProvider.Edit(Observable.Return(instance), id);
 
     public static UiControl Edit<T>(
         this IMessageHub hub,
         IObservable<T> observable,
-        string id = null)
+        string? id = null)
         => hub.ServiceProvider.Edit(observable, id);
     public static EditorControl Edit<T>(
         this IServiceProvider serviceProvider,
@@ -154,17 +154,17 @@ public static class EditorExtensions
 
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider, T instance,
-        string id = null)
+        string? id = null)
         => serviceProvider.Toolbar(Observable.Return(instance), id);
     public static UiControl Toolbar<T>(
         this IMessageHub hub, T instance,
-        string id = null)
+        string? id = null)
         => hub.ServiceProvider.Toolbar(Observable.Return(instance), id);
 
     public static UiControl Toolbar<T>(
         this IMessageHub hub,
         IObservable<T> observable,
-        string id = null)
+        string? id = null)
         => hub.ServiceProvider.Toolbar(observable, id);
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host, 
@@ -175,7 +175,7 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host,
         IObservable<T> observable,
-        string id = null)
+        string? id = null)
         => host.Hub.ServiceProvider.Toolbar(observable, id);
     public static ToolbarControl Toolbar<T>(
         this IServiceProvider serviceProvider,
@@ -359,7 +359,7 @@ public static class EditorExtensions
         PropertyInfo propertyInfo,
         string label,
         JsonPointerReference reference,
-        object parameter = null)
+        object? parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
             return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);

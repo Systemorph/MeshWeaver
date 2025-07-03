@@ -36,7 +36,7 @@ public sealed class MessageHub : IMessageHub
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
         MessageHubConfiguration configuration,
-        IMessageHub parentHub
+        IMessageHub? parentHub
     )
     {
         serviceProvider.Buildup(this);
