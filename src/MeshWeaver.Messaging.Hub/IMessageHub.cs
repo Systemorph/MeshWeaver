@@ -14,7 +14,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 #endif
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
+    IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     Address Address { get; }
     IServiceProvider ServiceProvider { get; }

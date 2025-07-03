@@ -42,12 +42,12 @@ public record EntityStore
         this with
         {
             Collections = reference
-                .Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
+                .Collections.Select(c => new KeyValuePair<string, InstanceCollection?>(
                     c,
                     GetCollection(c)
                 ))
                 .Where(x => x.Value != null)!
-                .ToImmutableDictionary()
+                .ToImmutableDictionary<string,InstanceCollection>()
         };
 
 
@@ -88,12 +88,7 @@ public record EntityStore
             foreach (var u in updated.Instances)
             {
                 var existing = oldValues.GetInstance(u.Key);
-                if(u.Value is null)
-                    if(existing is null)
-                        continue;
-                    else
-                        yield return new EntityUpdate(collection, u.Key, null!) { OldValue = existing };
-                else if (!u.Value.Equals(existing))
+                if (!u.Value.Equals(existing))
                     yield return new EntityUpdate(collection, u.Key, u.Value) { OldValue = existing };
             }
 

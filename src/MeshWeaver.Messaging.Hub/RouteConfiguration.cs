@@ -11,11 +11,11 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
-    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory)
+    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub?> hubFactory)
         where TAddress:Address=>
         RouteAddress<TAddress>((routedAddress, d) =>
         {
-            var hub = hubFactory(routedAddress);
+            var hub = hubFactory.Invoke(routedAddress);
             if (hub == null)
                 return d.NotFound();
             hub.DeliverMessage(d);

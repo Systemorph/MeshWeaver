@@ -92,7 +92,7 @@ internal class HierarchicalRouting
         }
         else
         {
-            var hostedHub = hub.GetHostedHub(delivery.Target, HostedHubCreation.Never);
+            var hostedHub = hub.GetHostedHub(delivery.Target ?? throw new ArgumentNullException(nameof(delivery.Target)), HostedHubCreation.Never);
             if (hostedHub is not null)
             {
                 hostedHub.DeliverMessage(delivery);
