@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
@@ -6,7 +7,20 @@ namespace MeshWeaver.Blazor.Components;
 public partial class DialogView : BlazorView<DialogControl, DialogView>
 {
     private bool isHidden = false;
+    private object? Title { get; set; }
+    private bool IsClosable { get; set; }
+    private string Size { get; set; } = "M";
 
+    protected override void BindData()
+    {
+        base.BindData();
+        if (ViewModel?.Title != null)
+            DataBind(ViewModel.Title, x => x.Title);
+        if (ViewModel?.IsClosable != null)
+            DataBind(ViewModel.IsClosable, x => x.IsClosable);
+        if (ViewModel?.Size != null)
+            DataBind(ViewModel.Size, x => x.Size);
+    }
 
     protected override void OnInitialized()
     {
@@ -16,8 +30,8 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
 
     private string GetDialogStyle()
     {
-        var width = GetDialogWidth(ViewModel.Size);
-        var height = GetDialogHeight(ViewModel.Size);
+        var width = GetDialogWidth(Size);
+        var height = GetDialogHeight(Size);
 
         var style = $"--dialog-width: {width};";
         if (!string.IsNullOrEmpty(height))
@@ -54,7 +68,7 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
 
     private void HandleDialogResult(DialogResult result)
     {
-        if (ViewModel.IsClosable)
+        if (IsClosable)
         {
             isHidden = true;
 

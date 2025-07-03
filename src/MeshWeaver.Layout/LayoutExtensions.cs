@@ -199,8 +199,8 @@ public static class LayoutExtensions
     public static void SetData(
         this ISynchronizationStream<EntityStore> stream,
         string id,
-        object value,
-        string changedBy
+        object? value,
+        string? changedBy
     )
     {
         if (id is null)

@@ -12,11 +12,11 @@ namespace MeshWeaver.Layout
 
         public Orientation? Orientation { get; init; }
 
-        public bool? Wrap { get; init; }
+        public object? Wrap { get; init; }
 
         public ItemTemplateControl WithOrientation(Orientation orientation) => this with { Orientation = orientation };
 
-        public ItemTemplateControl WithWrap(bool wrap) => this with { Wrap = wrap };
+        public ItemTemplateControl WithWrap(object? wrap) => this with { Wrap = wrap };
         protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store)
         {
             var ret = base.Render(host, context, store);

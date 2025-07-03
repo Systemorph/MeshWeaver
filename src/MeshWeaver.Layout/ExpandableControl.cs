@@ -1,12 +1,4 @@
 ﻿namespace MeshWeaver.Layout;
-/// <summary>
-/// Represents a number control.
-/// </summary>
-/// <remarks>
-/// For more information, visit the
-/// <a href="https://www.fluentui-blazor.net/numberfield">Fluent UI Blazor NumberField documentation</a>.
-/// </remarks>
-/// <param name="Data">The data associated with the number control.</param>
 
 /// <summary>
 /// Represents a date control.

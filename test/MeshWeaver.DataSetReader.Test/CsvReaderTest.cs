@@ -24,9 +24,9 @@ namespace MeshWeaver.DataSetReader.Test
         private const string ReportingNodeByCurrency = nameof(ReportingNodeByCurrency);
 
         private Task<(IDataSet DataSet, string Format)> ReadFromStream(Stream stream, DataSetReaderOptions options = null) =>
-            DataSetCsvSerializer.ReadAsync(stream, options ?? new());
+            DataSetCsvSerializer.ReadAsync(stream, options ?? new() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" });
 
-        public CsvReaderTest( ITestOutputHelper output)
+        public CsvReaderTest(ITestOutputHelper output)
             : base(output)
         {
         }

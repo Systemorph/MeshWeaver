@@ -14,7 +14,7 @@ public abstract class ReplaceMethodInTemplateAttribute : Attribute
 public static class TemplateBuilder
 {
     public static TView Build<T, TView>(
-        this Expression<Func<T, TView>> layout,
+        this Expression<Func<T, TView>>? layout,
         string dataContext,
         out IReadOnlyCollection<Type> types
     )

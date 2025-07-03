@@ -53,7 +53,7 @@ namespace MeshWeaver.DataSetReader.Excel
                 }
             }
 
-            return (dataSet, format);
+            return (dataSet, format ?? "");
         }
 
         private static string GetUniqueColumnName(string desiredName, IDataColumnCollection presentColumns)

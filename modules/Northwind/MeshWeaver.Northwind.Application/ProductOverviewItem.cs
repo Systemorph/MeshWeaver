@@ -16,12 +16,12 @@ public record ProductOverviewItem
     /// <summary>
     /// Gets the product name.
     /// </summary>
-    public string ProductName { get; init; }
+    public string? ProductName { get; init; }
     
     /// <summary>
     /// Gets the category name.
     /// </summary>
-    public string CategoryName { get; init; }
+    public string? CategoryName { get; init; }
 
     /// <summary>
     /// Gets the unit price.

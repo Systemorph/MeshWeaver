@@ -121,7 +121,7 @@ public record EntityStore
         };
 }
 
-public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string ChangedBy)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string? ChangedBy)
 {
     public EntityStoreAndUpdates(EntityStore Store, string ChangedBy) : this(Store, [], ChangedBy)
     {

@@ -1,3 +1,7 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor
+@using MeshWeaver.Blazor.Components
+@using Microsoft.FluentUI.AspNetCore.Components
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using FluentHorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @inherits BlazorView<DialogControl, DialogView>
@@ -5,7 +9,7 @@
 <FluentDialog @bind-Hidden="isHidden" Modal="true" OnDialogResult="HandleDialogResult" style="@GetDialogStyle()">
     <FluentDialogHeader>
         <FluentStack HorizontalAlignment="FluentHorizontalAlignment.Left">
-            <FluentLabel Typography="Typography.PaneHeader">@ViewModel.Title</FluentLabel>
+            <FluentLabel Typography="Typography.PaneHeader">@Title</FluentLabel>
         </FluentStack>
     </FluentDialogHeader>
     <FluentDialogBody>
@@ -17,7 +21,7 @@
             </div>
         }
     </FluentDialogBody>
-    @if (ViewModel.IsClosable)
+    @if (IsClosable)
     {
         <FluentDialogFooter>
             <FluentButton Appearance="FluentAppearance.Neutral" OnClick="HandleClose">

@@ -12,10 +12,10 @@ namespace MeshWeaver.Import.Implementation;
 
 public class ImportManager
 {
-    private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
+    private record ImportAddress() : Address("import", Guid.NewGuid().AsString()!);
     public ImportConfiguration Configuration { get; }
 
-    private readonly IMessageHub importHub; 
+    private readonly IMessageHub importHub = null!; 
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
@@ -24,7 +24,7 @@ public class ImportManager
         Workspace = workspace;
         Hub = hub;
         Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
-        importHub = hub.GetHostedHub(new ImportAddress());
+        importHub = hub.GetHostedHub(new ImportAddress())!;
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
@@ -165,7 +165,7 @@ public class ImportManager
         if (importFormat == null)
             throw new ImportException($"Unknown format: {format}");
 
-        return (dataSet, importFormat);
+        return (dataSet, importFormat!);
     }
 
     public static string ImportFailed = "Import Failed. See Activity Log for Errors";

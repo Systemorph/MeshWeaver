@@ -1,4 +1,4 @@
-// /******************************************************************************************************
+﻿// /******************************************************************************************************
 //  * Copyright (c) 2012- Systemorph Ltd. This file is part of Systemorph Platform. All rights reserved. *
 //  ******************************************************************************************************/
 
@@ -37,7 +37,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 			ReadStyles(stylesStream);
 		}
 
-		private List<XlsxWorksheet> _sheets;
+		private List<XlsxWorksheet> _sheets = null!;
 
 		public List<XlsxWorksheet> Sheets
 		{
@@ -45,14 +45,14 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 			set { _sheets = value; }
 		}
 
-		private List<string> _SST;
+		private List<string> _SST = null!;
 
 		public List<string> SST
 		{
 			get { return _SST; }
 		}
 
-		private XlsxStyles _styles;
+		private XlsxStyles _styles = null!;
 
 		public XlsxStyles Styles
 		{
@@ -69,7 +69,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 			{
 				NumFmts = doc.Descendants(SpreadSheetNamespace + XlsxNumFmt.N_numFmt)
 					.Select(
-						el => new XlsxNumFmt((int) el.Attribute(XlsxNumFmt.A_numFmtId), el.Attribute(XlsxNumFmt.A_formatCode).Value))
+						el => new XlsxNumFmt((int) el.Attribute(XlsxNumFmt.A_numFmtId)!, el.Attribute(XlsxNumFmt.A_formatCode)!.Value))
 					.ToList(),
 				CellXfs = doc.Descendants(SpreadSheetNamespace + XlsxXf.CellStyles).Descendants(SpreadSheetNamespace + XlsxXf.N_xf)
 					.Select(
@@ -82,8 +82,8 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 							})
 					.Select(
 						val =>
-							new XlsxXf(val.Id == null ? -1 : (int)val.Id,
-								val.NumFormatId == null ? -1 : (int)val.NumFormatId, val.Value == null ? null : val.Value.Value)).ToList()
+							new XlsxXf(val.Id == null ? -1 : (int)val.Id!,
+								val.NumFormatId == null ? -1 : (int)val.NumFormatId!, val.Value?.Value ?? string.Empty)).ToList()
 			};
 
 
@@ -111,8 +111,8 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 				doc.Descendants(SpreadSheetNamespace + NSheet)
 					.Select(
 						el =>
-							new XlsxWorksheet(el.Attribute(AName).Value, (int) el.Attribute(ASheetId),
-								el.Attribute(Namespaces.Relation + ARid).Value))
+							new XlsxWorksheet(el.Attribute(AName)!.Value, (int) el.Attribute(ASheetId)!,
+								el.Attribute(Namespaces.Relation + ARid)!.Value))
 					.ToList();
 			
 			xmlFileStream.Close();
@@ -124,9 +124,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 			foreach (
 				var param in
 					doc.Descendants(Namespaces.PackageRelation + NRel)
-						.Select(el => new {AId = el.Attribute(AId).Value, ATarget = el.Attribute(ATarget).Value}))
+						.Select(el => new {AId = el.Attribute(AId)!.Value, ATarget = el.Attribute(ATarget)!.Value}))
 			{
-				XlsxWorksheet tempSheet = _sheets.FirstOrDefault(sh => sh.RelationId == param.AId);
+				XlsxWorksheet? tempSheet = _sheets.FirstOrDefault(sh => sh.RelationId == param.AId);
 
 				if (tempSheet != null)
 				{

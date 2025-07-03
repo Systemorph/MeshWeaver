@@ -76,7 +76,7 @@ namespace MeshWeaver.DataSetReader.Csv
             while (string.IsNullOrEmpty(content) && !reader.EndOfStream)
                 content = await reader.ReadLineAsync();
 
-            string format = null;
+            string? format = null;
             if (content != null && content.StartsWith(FormatPrefix))
             {
                 format = content.RemoveRedundantChars(FormatPrefix);
@@ -91,7 +91,7 @@ namespace MeshWeaver.DataSetReader.Csv
 
             var csvFactory = new Factory();
             var isHeaderRow = withHeaderRow;
-            IDataTable dataTable = null;
+            IDataTable? dataTable = null;
 
             if (content != null && !content.StartsWith(TablePrefix))
             {
@@ -149,7 +149,7 @@ namespace MeshWeaver.DataSetReader.Csv
                         csvReader.ReadHeader();
                         var fieldHeaders = csvReader.HeaderRecord;
                         foreach (
-                            var header in fieldHeaders.TakeWhile(header =>
+                            var header in fieldHeaders!.TakeWhile(header =>
                                 !string.IsNullOrWhiteSpace(header)
                             )
                         )
@@ -167,7 +167,7 @@ namespace MeshWeaver.DataSetReader.Csv
                             for (var i = 0; i < dataTable.Columns.Count; i++)
                             {
                                 var sourceValue = i >= record.Length ? null : record[i];
-                                row[i] = string.IsNullOrEmpty(sourceValue) ? null : sourceValue;
+                                row[i] = string.IsNullOrEmpty(sourceValue) ? null! : sourceValue;
                             }
                             dataTable.Rows.Add(row);
                         }
@@ -175,7 +175,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 }
                 content = await reader.ReadLineAsync();
             } while (!exit);
-            return (dataSet, format);
+            return (dataSet, format ?? "");
         }
 
         private static void InitializeDataTableForType(Type type, IDataTable dataTable)
@@ -196,7 +196,7 @@ namespace MeshWeaver.DataSetReader.Csv
 
             foreach (var property in properties)
             {
-                var propertyInfo = property.PropertyInfo;
+                var propertyInfo = property.PropertyInfo!;
                 var propertyType = property.PropertyInfo.PropertyType;
                 if (
                     propertyType.IsGenericType
@@ -223,7 +223,7 @@ namespace MeshWeaver.DataSetReader.Csv
             if (singularQuotesMatches.Count % 2 == 0)
                 return content;
             var sb = new StringBuilder(content);
-            string newLine;
+            string? newLine;
             while ((newLine = await reader.ReadLineAsync()) != null)
             {
                 sb.AppendLine();

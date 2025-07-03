@@ -16,7 +16,7 @@ public static class LayoutTemplates
     /// <param name="value">The value to display in the value box.</param>
     /// <param name="growth">The growth indicator to display in the value box.</param>
     /// <returns>An object representing the value box.</returns>
-    public static UiControl ValueBox(string title, Icon icon, string value, UiControl growth) =>
+    public static UiControl ValueBox(string title, Icon icon, string value, UiControl? growth) =>
         Controls.Stack
             .WithSkin(skin => skin.WithOrientation(Orientation.Horizontal))
             .WithHorizontalGap(10)

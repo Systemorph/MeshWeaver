@@ -8,7 +8,7 @@ namespace MeshWeaver.Import.Implementation;
 public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     : GenericUnpartitionedDataSource<ImportUnpartitionedDataSource>(Source, Workspace)
 {
-    private ImportRequest ImportRequest { get; init; } = new(Source);
+    private ImportRequest ImportRequest { get; init; } = new(Source) { TargetDataSource = null! };
 
     public ImportUnpartitionedDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
         this with

@@ -31,7 +31,7 @@ public record ImportFormat(
 
 
 
-    public async Task<EntityStore> Import(
+    public async Task<EntityStore?> Import(
         ImportRequest importRequest,
         IDataSet dataSet,
         Activity activity
@@ -54,7 +54,7 @@ public record ImportFormat(
     private void Validate(EntityStore importedInstances, Activity activity)
     {
         var hasError = false;
-        var validationCache = new Dictionary<object, object>();
+        var validationCache = new Dictionary<object, object?>();
         foreach (var item in importedInstances.Collections.SelectMany(x => x.Value.Instances.Values))
         {
             if (item == null)

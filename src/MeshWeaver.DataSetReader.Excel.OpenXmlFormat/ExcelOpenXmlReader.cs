@@ -170,8 +170,8 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                     int row;
                     int col;
-                    XlsxDimension.XlsxDim(current.AR.Value!, out col, out row);
-                    object val = current.Val;
+                    XlsxDimension.XlsxDim(current.AR!.Value, out col, out row);
+                    object? val = current.Val;
                     if (current.Val != null)
                     {
                         double number;
@@ -183,7 +183,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                         if (null != current.AT && current.AT.Value == XlsxWorksheet.SharedString) //if string
                         {
-                            var str = val.ToString()!;
+                            var str = val!.ToString();
                             if (!string.IsNullOrEmpty(str))
                                 val = Helpers.ConvertEscapeChars(_workbook.SST[int.Parse(str)]);
                         } // Requested change 4: missing (it appears that if should be else if)
@@ -197,14 +197,14 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
                         }
                         else if (null != current.AS) //if something else
                         {
-                            XlsxXf xf = _workbook.Styles.CellXfs[(int)current.AS];
+                            XlsxXf xf = _workbook.Styles.CellXfs[(int)current.AS!];
                             if (xf.ApplyNumberFormat && val != null && val.ToString() != string.Empty && IsDateTimeStyle(xf.NumFmtId))
                                 val = Helpers.ConvertFromOATime(number);
                         }
                     }
 
                     if (col - 1 < _cellsValues.Length)
-                        _cellsValues[col - 1] = val;
+                        _cellsValues[col - 1] = val!;
                 }
 
                 if (_emptyRowCount > 0)
@@ -269,9 +269,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return AsDataSet(true);
         }
 
-        public DataSet? AsDataSet(bool convertOADateTime)
+        public DataSet AsDataSet(bool convertOADateTime)
         {
-            if (!_isValid) return null;
+            if (!_isValid) return new DataSet();
 
             DataSet dataset = new DataSet();
 
@@ -298,7 +298,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
                 {
                     for (int index = 0; index < _cellsValues.Length; index++)
                     {
-                        if (_cellsValues[index] != null && _cellsValues[index].ToString().Length > 0)
+                        if (_cellsValues[index] != null && _cellsValues[index].ToString()!.Length > 0)
                             Helpers.AddColumnHandleDuplicate(table, _cellsValues[index].ToString()!);
                         else
                             Helpers.AddColumnHandleDuplicate(table, string.Concat(Column, index));
@@ -338,9 +338,9 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             get { return _exceptionMessage; }
         }
 
-        public string? Name
+        public string Name
         {
-            get { return (_resultIndex >= 0 && _resultIndex < ResultsCount) ? _workbook.Sheets[_resultIndex].Name : null; }
+            get { return (_resultIndex >= 0 && _resultIndex < ResultsCount) ? _workbook.Sheets[_resultIndex].Name : string.Empty; }
         }
 
         public void Close()
@@ -457,11 +457,11 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return long.Parse(_cellsValues[i].ToString()!);
         }
 
-        public string? GetString(int i)
+        public string GetString(int i)
         {
-            if (IsDBNull(i)) return null;
+            if (IsDBNull(i)) return string.Empty;
 
-            return _cellsValues[i].ToString();
+            return _cellsValues[i].ToString() ?? string.Empty;
         }
 
         public object GetValue(int i)

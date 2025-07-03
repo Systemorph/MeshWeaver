@@ -20,7 +20,7 @@ namespace MeshWeaver.DataSetReader.Test
         private Task<(IDataSet DataSet, string Format)> ReadFromStream(
             Stream stream,
             DataSetReaderOptions options = null
-        ) => DataSetCsvSerializer.ReadAsync(stream, options ?? new());
+        ) => DataSetCsvSerializer.ReadAsync(stream, options ?? new() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" });
 
         [Fact]
         public async Task BasicStringImportTest()
@@ -35,7 +35,7 @@ namespace MeshWeaver.DataSetReader.Test
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithOrder))
             );
@@ -83,7 +83,7 @@ namespace MeshWeaver.DataSetReader.Test
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions().WithEntityType(typeof(TestImportEntityWithOrder))
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }.WithEntityType(typeof(TestImportEntityWithOrder))
             );
 
             ret.DataSet.Tables.Should().HaveCount(1);
@@ -118,7 +118,7 @@ namespace MeshWeaver.DataSetReader.Test
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithOrder))
                     .WithDelimiter(';')
@@ -154,7 +154,7 @@ namespace MeshWeaver.DataSetReader.Test
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithOrder))
             );
@@ -191,7 +191,7 @@ namespace MeshWeaver.DataSetReader.Test
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithOrder))
             );
@@ -246,7 +246,7 @@ string2,";
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithOrder))
             );
@@ -290,7 +290,7 @@ string2,";
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithListsAndOrder), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithListsAndOrder))
             );
@@ -341,7 +341,7 @@ string2,";
 
             var ret = await ReadFromStream(
                 stream,
-                new DataSetReaderOptions()
+                new DataSetReaderOptions() { EntityType = typeof(TestImportEntityWithListWithoutLength), ContentType = "text/csv" }
                     .WithHeaderRow(false)
                     .WithEntityType(typeof(TestImportEntityWithListWithoutLength))
             );
