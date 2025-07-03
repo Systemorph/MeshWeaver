@@ -13,10 +13,6 @@
         public DimensionTuple Tuple { get; } = tuple;
         object IDataSlice.Data => Data!;
 
-        private static IEnumerable<DataSlice<T>> Trivial(T data, string[] dimensions)
-        {
-            yield return new DataSlice<T>(data, new DimensionTuple(dimensions.Select(d => (d, (object)null))));
-        }
 
         IDataSlice IDataSlice.Enrich(DimensionTuple additionalTuple)
         {

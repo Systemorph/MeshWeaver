@@ -91,9 +91,9 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     }
 
 
-    public TControl WithView(UiControl view) =>
+    public TControl WithView(UiControl? view) =>
         WithView(view, opt => opt.WithId(GetAutoName()));
-    public TControl WithView(UiControl view, string area) =>
+    public TControl WithView(UiControl? view, string area) =>
         WithView(view, opt => opt.WithId(area));
     public TControl WithView<T>(ViewDefinition<T> viewDefinition) where T : UiControl =>
         WithView(Observable.Return(viewDefinition), x => x);

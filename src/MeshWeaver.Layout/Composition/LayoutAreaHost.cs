@@ -22,7 +22,7 @@ public record LayoutAreaHost : IDisposable
     public T? GetVariable<T>(object key) => (T?)variables[key];
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
     public object SetVariable(object key, object? value) => variables[key] = value;
-    public T? GetOrAddVariable<T>(object key, Func<T> factory)
+    public T GetOrAddVariable<T>(object key, Func<T> factory)
     {
         if (!ContainsVariable(key))
         {

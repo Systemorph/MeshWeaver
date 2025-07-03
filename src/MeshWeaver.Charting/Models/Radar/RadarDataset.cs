@@ -5,7 +5,7 @@ namespace MeshWeaver.Charting.Models.Radar;
 /// <summary>
 /// Represents a dataset for a radar chart.
 /// </summary>
-public record RadarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSetBase<RadarDataSet>(Data, Label),
+public record RadarDataSet(IReadOnlyCollection<object> Data, string? Label = null) : DataSetBase<RadarDataSet>(Data, Label),
     IDataSetWithOrder<RadarDataSet>, IDataSetWithPointStyle<RadarDataSet>, IDataSetWithFill<RadarDataSet>, IDataSetWithTension<RadarDataSet>, IDataSetWithPointRadiusAndRotation<RadarDataSet>
 {
     #region General
@@ -130,7 +130,7 @@ public record RadarDataSet(IReadOnlyCollection<object> Data, string Label = null
     /// <summary>
     /// The fill option for the dataset.
     /// </summary>
-    public object Fill { get; init; }
+    public object Fill { get; init; } = null!;
 
     /// <summary>
     /// Sets the fill option for the dataset.

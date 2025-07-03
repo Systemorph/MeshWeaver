@@ -25,7 +25,7 @@ namespace MeshWeaver.DataCubes.Operations
         // ReSharper disable once StaticMemberInGenericType
         private static readonly object Default = new();
 
-        public PreAggregatedCube(IEnumerable<DataSlice<T>> slices, Func<IEnumerable<T>, TAggregated> aggregationFunction = null)
+        public PreAggregatedCube(IEnumerable<DataSlice<T>> slices, Func<IEnumerable<T>, TAggregated>? aggregationFunction = null)
         {
             //this.slicedDimensions = new HashSet<string>(slicedDimensions);
             this.aggregationFunction = aggregationFunction ?? (Func<IEnumerable<T>, TAggregated>)(object)AggregationFunction.GetAggregationFunction<T>();
@@ -45,7 +45,7 @@ namespace MeshWeaver.DataCubes.Operations
 
         private readonly Dictionary<DimensionTuple, TAggregated> preAggregated = new();
 
-        public TAggregated GetData(DimensionTuple tuple)
+        public TAggregated? GetData(DimensionTuple tuple)
         {
             dataByTuples.TryGetValue(tuple, out var ret);
             return ret;
@@ -56,7 +56,7 @@ namespace MeshWeaver.DataCubes.Operations
             // TODO: This is a very naive implementation. Should have more performant intersect and should work with pre-aggregated (2021/05/08, Roland Buergi)
             if (preAggregated.TryGetValue(tuple, out var ret))
                 return ret;
-            return preAggregated[tuple] = aggregationFunction(tuple.Select(GetDataForTuple).Aggregate((x, y) => x.Intersect(y)));
+            return preAggregated[tuple] = aggregationFunction(tuple.Select(t => GetDataForTuple((t.Dimension, t.Value!))).Aggregate((x, y) => x.Intersect(y)));
         }
 
         private IEnumerable<T> GetDataForTuple((string dimension, object value) tuple)

@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.Charting.Models.Segmented;
 
-public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = null) : SegmentDataSetBase<DoughnutDataSet>(Data, Label)
+public record DoughnutDataSet(IReadOnlyCollection<object> Data, string? Label = null) : SegmentDataSetBase<DoughnutDataSet>(Data, Label)
 {
     #region BorderAlign
 
@@ -14,7 +14,7 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = n
     ///     When 'center' is set, the borders of arcs next to each other will overlap.When 'inner' is set, it is guaranteed
     ///     that all borders will not overlap.
     /// </summary>
-    public string BorderAlign { get; init; }
+    public string BorderAlign { get; init; } = null!;
 
     /// <summary>
     /// Sets the border alignment of the arcs.
@@ -34,7 +34,7 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = n
     ///     If this value is an object, the outerStart property defines the outer-start corner's border radius. Similarly, the
     ///     outerEnd, innerStart, and innerEnd properties can also be specified.
     /// </summary>
-    public object BorderRadius { get; init; }
+    public object BorderRadius { get; init; } = null!;
 
     /// <summary>
     /// Sets the border radius of the arcs.
@@ -52,7 +52,7 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = n
     /// <summary>
     ///     Arc border join style.
     /// </summary>
-    public IEnumerable<string> BorderJoinStyle { get; init; }
+    public IEnumerable<string> BorderJoinStyle { get; init; } = null!;
 
     /// <summary>
     /// Sets the border join style of the arcs.
@@ -110,7 +110,7 @@ public record DoughnutDataSet(IReadOnlyCollection<object> Data, string Label = n
     /// <summary>
     ///     Arc border join style when hovered.
     /// </summary>
-    public string HoverBorderJoinStyle { get; init; }
+    public string HoverBorderJoinStyle { get; init; } = null!;
 
     /// <summary>
     /// Sets the border join style of the arcs when hovered.

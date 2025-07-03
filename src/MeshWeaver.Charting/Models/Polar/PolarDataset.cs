@@ -2,14 +2,14 @@
 
 namespace MeshWeaver.Charting.Models.Polar
 {
-    public record PolarDataSet(IReadOnlyCollection<object> Data, string Label = null) : DataSetBase<PolarDataSet>(Data, Label)
+    public record PolarDataSet(IReadOnlyCollection<object> Data, string? Label = null) : DataSetBase<PolarDataSet>(Data, Label)
     {
         #region Styling
         // https://www.chartjs.org/docs/latest/charts/polar.html#styling
         /// <summary>
         /// Arc border join style.
         /// </summary>
-        public string BorderJoinStyle { get; init; }
+        public string BorderJoinStyle { get; init; } = null!;
         #endregion Styling
 
         #region BorderAlign
@@ -20,7 +20,7 @@ namespace MeshWeaver.Charting.Models.Polar
         /// 'inner'
         /// When 'center' is set, the borders of arcs next to each other will overlap.When 'inner' is set, it is guaranteed that all the borders do not overlap.
         /// </summary>
-        public string BorderAlign { get; init; }
+        public string BorderAlign { get; init; } = null!;
         #endregion BorderAlign
 
         #region Interactions
@@ -28,7 +28,7 @@ namespace MeshWeaver.Charting.Models.Polar
         /// <summary>
         /// Arc border join style when hovered.
         /// </summary>
-        public string HoverBorderJoinStyle { get; init; }
+        public string HoverBorderJoinStyle { get; init; } = null!;
 
         /// <summary>
         /// Arc border width when hovered (in pixels).

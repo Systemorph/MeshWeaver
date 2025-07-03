@@ -1,18 +1,13 @@
-﻿#nullable enable
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.GridModel
 {
     public record GridOptions
     {
-        // ReSharper disable once EmptyConstructor
-        public GridOptions()
-        {
-        }
 
         // Columns
-        public IReadOnlyCollection<ColDef>? ColumnDefs { get; init; }
+        public IReadOnlyCollection<ColDef> ColumnDefs { get; init; }
         // Rows: set the data to be displayed as rows in the grid.
         public IReadOnlyCollection<object> RowData { get; init; } = Array.Empty<object>();
 
