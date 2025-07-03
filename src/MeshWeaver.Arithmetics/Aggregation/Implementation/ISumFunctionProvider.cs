@@ -81,20 +81,20 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
     private static readonly MethodInfo ConcatMethod = typeof(Enumerable).GetMethod(
         nameof(Enumerable.Concat),
         BindingFlags.Public | BindingFlags.Static
-    );
+    )!;
     private static readonly MethodInfo ToArrayMethod = typeof(Enumerable).GetMethod(
         nameof(Enumerable.ToArray),
         BindingFlags.Public | BindingFlags.Static
-    );
+    )!;
     private static readonly MethodInfo ToListMethod = typeof(Enumerable).GetMethod(
         nameof(Enumerable.ToList),
         BindingFlags.Public | BindingFlags.Static
-    );
+    )!;
     private static readonly MethodInfo GroupByIdentityPropertiesMethod =
         typeof(GrouperByIdentityProperties).GetMethod(
             nameof(GrouperByIdentityProperties.GroupByIdentityPropertiesAndExecuteLambda),
             BindingFlags.Public | BindingFlags.Static
-        );
+        )!;
     private static readonly HashSet<Type> GenericArrayCastableTypes = new HashSet<Type>
     {
         typeof(IEnumerable<>),
@@ -133,7 +133,7 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
             .GetMethod(
                 nameof(AggregationFunctionIdentityEqualityComparer<object>.Instance),
                 BindingFlags.NonPublic | BindingFlags.Static
-            )
+            )!
             .InvokeAsFunction(key, identityProps);
         var enumSum = Expression.Call(
             GroupByIdentityPropertiesMethod.MakeGenericMethod(enumType),
@@ -173,7 +173,7 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         throw new ArgumentException($"Cannot convert to output type {tVal.Name}");
     }
 
-    private static Type GetEnumerableElementType(Type tVal)
+    private static Type? GetEnumerableElementType(Type tVal)
     {
         if (tVal.IsGenericType && typeof(IEnumerable<>) == tVal.GetGenericTypeDefinition())
             return tVal.GetGenericArguments().First();
@@ -200,8 +200,8 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         {
             return (Delegate)
                 GetDelListSumFunctionWithResultMethod
-                    .MakeGenericMethod(type.GetElementType(), type)
-                    .Invoke(null, null);
+                    .MakeGenericMethod(type.GetElementType()!, type)
+                    .Invoke(null, null)!;
         }
 
         if (type.IsList())
@@ -209,18 +209,18 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
             return (Delegate)
                 GetDelListSumFunctionWithResultMethod
                     .MakeGenericMethod(type.GetGenericArguments().First(), type)
-                    .Invoke(null, null);
+                    .Invoke(null, null)!;
         }
 
         return (Delegate)
-            ClassSumFunctionWithReturnMethod.MakeGenericMethod(type).Invoke(null, null);
+            ClassSumFunctionWithReturnMethod.MakeGenericMethod(type).Invoke(null, null)!;
     }
 
     private static readonly MethodInfo GetDelListSumFunctionWithResultMethod =
         typeof(GenericSumFunctionProvider).GetMethod(
             nameof(ListSumFunctionWithResult),
             BindingFlags.Static | BindingFlags.NonPublic
-        );
+        )!;
 
     private static Delegate ListSumFunctionWithResult<TEl, TArray>()
     {
@@ -241,10 +241,10 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         typeof(GenericSumFunctionProvider).GetMethod(
             nameof(SumFunctionWithResultList),
             BindingFlags.Static | BindingFlags.NonPublic
-        );
+        )!;
 
     private static TArray SumFunctionWithResultList<T, TArray>(
-        TArray ret,
+        TArray? ret,
         TArray x,
         Func<T, T, T> sum
     )
@@ -268,6 +268,7 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         if ((ret.GetType().IsArray) && ret.Count < x.Count)
         {
             var newArray = new T[x.Count];
+            // ReSharper disable once SuspiciousTypeConversion.Global
             Array.Copy((Array)(object)ret, 0, newArray, 0, ret.Count);
             ret = (TArray)(object)newArray;
         }
@@ -291,7 +292,7 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         typeof(GenericSumFunctionProvider).GetMethod(
             nameof(ClassSumAction),
             BindingFlags.Static | BindingFlags.NonPublic
-        );
+        )!;
 
     private static Delegate ClassSumAction<T>()
     {
@@ -486,18 +487,22 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         typeof(GenericSumFunctionProvider).GetMethod(
             nameof(SumDictionaryValueType),
             BindingFlags.Static | BindingFlags.NonPublic
-        );
+        )!;
 
     private static TDictionary SumDictionaryValueType<TKey, TVal, TDictionary>(
         TDictionary ret,
         TDictionary x,
         Func<TVal, TVal, TVal> sum
     )
-        where TDictionary : class, IDictionary<TKey, TVal>
+        where TDictionary : class, IDictionary<TKey, TVal> where TKey : notnull
     {
+        if (ret == null)
+        {
+            throw new ArgumentNullException(nameof(ret));
+        }
+
         foreach (var summand in x)
         {
-            ret = ret ?? (TDictionary)(object)new Dictionary<TKey, TVal>();
             if (!ret.TryGetValue(summand.Key, out var tmp))
                 ret.Add(summand);
             else
@@ -513,15 +518,16 @@ public class GenericSumFunctionProvider : ISumFunctionProvider
         typeof(GenericSumFunctionProvider).GetMethod(
             nameof(SumDictionaryClass),
             BindingFlags.Static | BindingFlags.NonPublic
-        );
+        )!;
 
-    private static TDictionary SumDictionaryClass<TKey, TVal, TDictionary>(
-        TDictionary ret,
+    private static TDictionary? SumDictionaryClass<TKey, TVal, TDictionary>(
+        TDictionary? ret,
         TDictionary x,
         Func<TVal, TVal, TVal> sum
     )
         where TVal : new()
         where TDictionary : class, IDictionary<TKey, TVal>
+        where TKey : notnull
     {
         foreach (var summand in x)
         {
