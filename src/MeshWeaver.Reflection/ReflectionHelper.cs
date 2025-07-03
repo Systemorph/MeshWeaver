@@ -399,7 +399,7 @@ namespace MeshWeaver.Reflection
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a method call</exception>
         public static MethodInfo GetMethod<T>(Expression<Action<T>> selector)
         {
-            return GetMethodInner(selector, typeof(T));
+            return GetMethodInner(selector, typeof(T)) ?? throw new InvalidOperationException("Method not found");
         }
 
         /// <summary>
@@ -417,7 +417,7 @@ namespace MeshWeaver.Reflection
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a static method call</exception>
         public static MethodInfo GetStaticMethod(Expression<Action> selector)
         {
-            return GetMethodInner(selector);
+            return GetMethodInner(selector) ?? throw new InvalidOperationException("Method not found");
         }
 
         /// <summary>
@@ -442,7 +442,7 @@ namespace MeshWeaver.Reflection
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a generic method call</exception>        
         public static MethodInfo GetMethodGeneric<T>(Expression<Action<T>> selector)
         {
-            return GetMethodInner(selector, typeof(T), true);
+            return GetMethodInner(selector, typeof(T), true) ?? throw new InvalidOperationException("Method not found");
         }
 
         /// <summary>
@@ -461,7 +461,7 @@ namespace MeshWeaver.Reflection
         /// <exception cref="ArgumentException">Thrown, if the selector expression does not evaluate to a static generic method call</exception>        
         public static MethodInfo GetStaticMethodGeneric(Expression<Action> selector)
         {
-            return GetMethodInner(selector, generic: true);
+            return GetMethodInner(selector, generic: true) ?? throw new InvalidOperationException("Method not found");
         }
 
         private static MethodInfo? GetMethodInner<TDelegate>(Expression<TDelegate> selector, Type? type = null, bool generic = false)
@@ -472,7 +472,7 @@ namespace MeshWeaver.Reflection
                 throw new ArgumentException("Method selector expected");
 
             var member = expression.Method;
-            if (type != null && member.DeclaringType != type && !member.DeclaringType.IsStatic())
+            if (type != null && member.DeclaringType != type && !member.DeclaringType!.IsStatic())
             {
                 var flags = BindingFlags.Default;
                 flags |= member.IsStatic ? BindingFlags.Static : BindingFlags.Instance;
@@ -490,7 +490,7 @@ namespace MeshWeaver.Reflection
                 : member;
         }
 
-        private static MethodInfo GetMethodWorkaround(Type type, string name, BindingFlags bindingFlags, Type[] parameterTypes)
+        private static MethodInfo? GetMethodWorkaround(Type type, string name, BindingFlags bindingFlags, Type[] parameterTypes)
         {
             if (!type.IsInterface)
                 return type.GetMethod(name, bindingFlags, null, parameterTypes, null);
@@ -501,7 +501,7 @@ namespace MeshWeaver.Reflection
             return q.FirstOrDefault(p => p != null);
         }
 
-        private static PropertyInfo GetPropertyWorkaround(Type type, string name, BindingFlags flags, Type propertyType)
+        private static PropertyInfo? GetPropertyWorkaround(Type type, string name, BindingFlags flags, Type propertyType)
         {
             if (!type.IsInterface)
                 return type.GetProperty(name, flags, null, null, new Type[0], null);

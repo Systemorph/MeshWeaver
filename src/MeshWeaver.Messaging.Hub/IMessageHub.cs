@@ -14,7 +14,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 #endif
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
+    IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     Address Address { get; }
     IServiceProvider ServiceProvider { get; }
@@ -61,7 +61,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 
     IMessageHub GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
         where TAddress : Address
-        => GetHostedHub(address, null, create);
+        => GetHostedHub(address, null!, create);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
     IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_,_) => disposable.DisposeAsync().AsTask());

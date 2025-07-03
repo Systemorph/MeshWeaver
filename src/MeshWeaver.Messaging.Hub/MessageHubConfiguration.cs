@@ -86,9 +86,9 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub,IMessageDelivery, bool> filter = null) => 
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub,IMessageDelivery, bool>? filter = null) => 
         WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)), filter);
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool> filter = null)
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
         return this with
@@ -173,16 +173,16 @@ public record MessageHubConfiguration
         });
     }
 
-    public T Get<T>(string context = null) => (T)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
-    public MessageHubConfiguration Set<T>(T value, string context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value) };
+    public T? Get<T>(string? context = null) => (T?)(Properties.GetValueOrDefault((typeof(T), context)) ?? default(T));
+    public MessageHubConfiguration Set<T>(T value, string? context = null) => this with { Properties = Properties.SetItem((typeof(T), context), value) };
 
 
-    public MessageHubConfiguration WithType<T>(string name = null)
+    public MessageHubConfiguration WithType<T>(string? name = null)
     {
         TypeRegistry.WithType(typeof(T), name);
         return this;
     }
-    public MessageHubConfiguration WithType(Type type, string name = null)
+    public MessageHubConfiguration WithType(Type type, string? name = null)
     {
         TypeRegistry.WithType(type, name);
         return this;

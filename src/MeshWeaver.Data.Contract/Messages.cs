@@ -9,13 +9,13 @@ public record StreamMessage(string StreamId);
 public record DataChangeRequest 
     : IRequest<DataChangeResponse>
 {
-    public string ChangedBy { get; init; }
+    public string ChangedBy { get; init; } = null!;
     public ImmutableList<object> Creations { get; init; } = [];
 
     public ImmutableList<object> Updates { get; init; } = [];
     public ImmutableList<object> Deletions { get; init; } = [];
-    public UpdateOptions Options { get; init; }
-    public string StreamId { get; init; }
+    public UpdateOptions Options { get; init; } = null!;
+    public string StreamId { get; init; } = null!;
 
     public DataChangeRequest WithCreations(params object[] creations)
         => this with { Creations = Creations.AddRange(creations) };
@@ -29,8 +29,8 @@ public record DataChangeRequest
 
     public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
         new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
-    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string changedBy = null, UpdateOptions options = null) =>
-        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy, Options = options };
+    public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string? changedBy = null, UpdateOptions? options = null) =>
+        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy!, Options = options! };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
         new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};
 
@@ -70,7 +70,7 @@ public record DataChangedEvent(
 
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
 {
-    public Address Subscriber { get; init; }
+    public Address Subscriber { get; init; } = null!;
 }
 
 /// <summary>

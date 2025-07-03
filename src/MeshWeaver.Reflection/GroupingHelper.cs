@@ -18,7 +18,8 @@ namespace MeshWeaver.Reflection
 
         public static IEnumerable<IGrouping<Type, object>> GroupByWithDefaultIfEmpty(this IEnumerable<object> instances, Type defaultType)
         {
-            return instances.DefaultIfEmpty().GroupBy(x => x == null ? defaultType : x.GetType()).OrderByTypeInheritance(x=>x.Key);
+            return instances.DefaultIfEmpty().Where(x => x != null).GroupBy(x => x!.GetType())
+                .Cast<IGrouping<Type, object>>().OrderByTypeInheritance(x=>x.Key);
         }
     }
 }

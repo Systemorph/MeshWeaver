@@ -444,7 +444,7 @@ public sealed class MessageHub : IMessageHub
 
     Address IMessageHub.Address => Address; public IMessageDelivery<TMessage> Post<TMessage>(
         TMessage message,
-        Func<PostOptions, PostOptions> configure = null
+        Func<PostOptions, PostOptions>? configure = null
     )
     {
         var options = new PostOptions(Address);
@@ -686,7 +686,7 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable RegisterInherited<TMessage>(
         AsyncDelivery<TMessage> action,
-        DeliveryFilter<TMessage> filter = null
+        DeliveryFilter<TMessage>? filter = null
     )
     {
         var node = new LinkedListNode<AsyncDelivery>(
@@ -711,7 +711,7 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable RegisterInherited<TMessage>(
         SyncDelivery<TMessage> action,
-        DeliveryFilter<TMessage> filter = null
+        DeliveryFilter<TMessage>? filter = null
     ) => RegisterInherited((d, _) => Task.FromResult(action(d)), filter);
 
     public IDisposable Register<TMessage>(
