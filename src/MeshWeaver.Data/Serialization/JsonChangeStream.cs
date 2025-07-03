@@ -300,7 +300,7 @@ public static class JsonSynchronizationStream
         JsonElement updated,
         JsonPatch patch,
         JsonSerializerOptions options,
-        ITypeRegistry typeRegistry = null)
+        ITypeRegistry? typeRegistry = null)
         => patch.Operations.Select(p =>
             {
                 var id = p.Path.Skip(1).FirstOrDefault();

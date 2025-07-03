@@ -50,7 +50,7 @@ namespace MeshWeaver.Connection.Notebook
                 .Build();
             var kernelId = $"{Guid.NewGuid().ToString()}";
 
-            async Task ConnectAsync(object exception = null)
+            async Task ConnectAsync(object? exception = null)
             {
                 var connected =
                     await connection.InvokeAsync<bool>(

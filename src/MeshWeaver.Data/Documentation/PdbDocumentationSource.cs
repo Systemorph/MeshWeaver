@@ -18,7 +18,7 @@ public record PdbDocumentationSource
 
     public IReadOnlyDictionary<string, string> FilesByType { get; }
 
-    public string GetFileNameForType(string typeName)
+    public string? GetFileNameForType(string typeName)
         => FilesByType.GetValueOrDefault(typeName);
 
     public override Stream GetStream(string name)

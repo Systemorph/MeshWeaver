@@ -142,7 +142,7 @@ public static class DataExtensions
 
     public static DataContext AddPartitionedHubSource<TPartition>(this DataContext dataContext,
         Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
-        object id = null) =>
+        object? id = null) =>
         dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)), id);
 
     public static DataContext AddHubSource(
@@ -154,7 +154,7 @@ public static class DataExtensions
 
     public static DataContext AddSource(this DataContext dataContext,
            Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
-           object id = null
+           object? id = null
         ) =>
         dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)), id);
 

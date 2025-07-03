@@ -26,30 +26,30 @@ public sealed record DataContext : IDisposable
         );
     }
 
-    private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; }
+    private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
     public IEnumerable<IDataSource> DataSources => DataSourcesById.Values;
 
     private ImmutableDictionary<object, IDataSource> DataSourcesById { get; set; } =
         ImmutableDictionary<object, IDataSource>.Empty;
 
-    public IDataSource GetDataSourceForId(object id) => DataSourcesById.GetValueOrDefault(id);
+    public IDataSource? GetDataSourceForId(object id) => DataSourcesById.GetValueOrDefault(id);
 
-    public IDataSource GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type)
+    public IDataSource? GetDataSourceForType(Type type) => DataSourcesByType.GetValueOrDefault(type)
           ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetDataSourceForType(type.BaseType));
 
-    public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; }
-    public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; }
+    public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; } = new Dictionary<Type, IDataSource>();
+    public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; } = new Dictionary<string, IDataSource>();
 
-    public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder, object id = null) =>
+    public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder, object? id = null) =>
         this with { DataSourceBuilders = DataSourceBuilders.Add(dataSourceBuilder), };
 
-    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; }
+    public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; } = new Dictionary<string, ITypeSource>();
 
-    public ITypeSource GetTypeSource(string collection) =>
+    public ITypeSource? GetTypeSource(string collection) =>
         TypeSources.GetValueOrDefault(collection);
 
-    public ITypeSource GetTypeSource(Type type) =>
+    public ITypeSource? GetTypeSource(Type type) =>
         TypeSourcesByType.GetValueOrDefault(type)
         ?? (type.BaseType == typeof(object) || type.BaseType == null ? null : GetTypeSource(type.BaseType));
 

@@ -93,6 +93,7 @@ namespace MeshWeaver.Arithmetics
         private static readonly MethodInfo DivideDictionaryMethod = typeof(MultiplicationAndDivisionFunction).GetMethod(nameof(DivideDictionary), BindingFlags.Static | BindingFlags.NonPublic);
 
         private static Dictionary<TKey, TValue> DivideDictionary<TKey, TValue>(IDictionary<TKey, TValue> numerator, IDictionary<TKey, TValue> denominator, Func<TValue, TValue, TValue> DivideFunc)
+            where TKey : notnull
             where TValue : new()
         {
             return numerator.Keys.Where(denominator.ContainsKey).Select(x => new { key = x, top = numerator[x], bottom = denominator[x] })

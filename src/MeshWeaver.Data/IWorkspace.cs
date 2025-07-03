@@ -27,7 +27,7 @@ public interface IWorkspace : IAsyncDisposable
     );
     ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference,  
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration = null);
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration = null);
 
     IObservable<IEnumerable<TType>> GetRemoteStream<TType>(Address address);
 
