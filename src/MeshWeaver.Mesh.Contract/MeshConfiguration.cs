@@ -37,7 +37,7 @@ public class MeshConfiguration
         return this;
     }
     internal Dictionary<Type, object> Properties { get; } = new();
-    public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
+    public T? Get<T>() => (T?)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
     public MeshConfiguration Set<T>(T value)
     {
         Properties[typeof(T)] = value;
