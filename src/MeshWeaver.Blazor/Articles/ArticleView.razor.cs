@@ -12,10 +12,10 @@ namespace MeshWeaver.Blazor.Articles;
 
 public partial class ArticleView
 {
-    private ModelParameter<Article> data;
-    private ActivityLog Log { get; set; }
-    [Inject] private IToastService ToastService { get; set; }
-    private JsonPointerReference ArticlePointer { get; set; }
+    private ModelParameter<Article> data = null!;
+    private ActivityLog Log { get; set; } = null!;
+    [Inject] private IToastService ToastService { get; set; } = null!;
+    private JsonPointerReference ArticlePointer { get; set; } = null!;
     protected override void BindData()
     {
         ArticlePointer = new JsonPointerReference(ViewModel.DataContext);
@@ -27,8 +27,8 @@ public partial class ArticleView
     }
 
     
-    private ModelParameter<Article> ArticleModel { get; set; }
-    private ModelParameter<Article> Convert(Article article)
+    private ModelParameter<Article> ArticleModel { get; set; } = null!;
+    private ModelParameter<Article>? Convert(Article? article)
     {
         if (article == null)
             return null;
@@ -71,13 +71,13 @@ public partial class ArticleView
 
     private MarkdownControl MarkdownControl
     {
-        get => new MarkdownControl(ArticleModel?.Element.Content){Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml)};
+        get => new MarkdownControl(ArticleModel?.Element.Content ?? ""){Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml)};
     }
 
 
-    private string ConvertHtml(object arg)
+    private string ConvertHtml(object? arg)
     {
-        return arg?.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
+        return arg?.ToString()?.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString()) ?? "";
     }
 
 

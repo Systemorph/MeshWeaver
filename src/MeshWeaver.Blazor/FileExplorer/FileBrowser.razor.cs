@@ -7,11 +7,11 @@ namespace MeshWeaver.Blazor.FileExplorer;
 
 public partial class FileBrowser
 {
-    [Inject] private IDialogService DialogService { get; set; }
-    [Inject] private IContentService ContentService { get; set; }
-    [Inject] private NavigationManager NavigationManager { get; set; }
-    [Inject] private IToastService ToastService { get; set; }
-    [Parameter] public string CollectionName { get; set; }
+    [Inject] private IDialogService DialogService { get; set; } = null!;
+    [Inject] private IContentService ContentService { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] private IToastService ToastService { get; set; } = null!;
+    [Parameter] public string CollectionName { get; set; } = "";
     [Parameter] public string CurrentPath { get; set; } = "/";
     [Parameter] public string TopLevelPath { get; set; } = "";
     [Parameter] public bool Embed { get; set; }
@@ -65,7 +65,7 @@ public partial class FileBrowser
     }
 
 
-    private ContentCollection Collection { get; set; }
+    private ContentCollection? Collection { get; set; }
     private IEnumerable<CollectionItem> SelectedItems { get; set; } = new List<CollectionItem>();
 
 
@@ -116,7 +116,7 @@ public partial class FileBrowser
         {
             FolderItem folder => GetLink(folder),
             FileItem file => GetLink(file),
-            _ => null
+            _ => ""
         };
     }
 
@@ -131,7 +131,7 @@ public partial class FileBrowser
 
     FluentInputFile myFileByStream = default!;
     int progressPercent;
-    string progressTitle;
+    string progressTitle = "";
 
 
     private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
@@ -140,9 +140,12 @@ public partial class FileBrowser
         progressTitle = file.ProgressTitle;
         try
         {
-            await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
-            progressPercent = 100;
-            ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
+            if (Collection != null)
+            {
+                await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
+                progressPercent = 100;
+                ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
+            }
         }
         catch(Exception e)
         {
@@ -154,7 +157,7 @@ public partial class FileBrowser
     private async Task OnCompleted(IEnumerable<FluentInputFileEventArgs> files)
     {
         progressPercent = 0;
-        progressTitle = null;
+        progressTitle = "";
         await RefreshContentAsync();
     }
 

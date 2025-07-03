@@ -19,7 +19,7 @@ public partial class DataGridView
         ItemsPerPage = 10
     };
 
-    private IQueryable<JsonObject> QueryableData;
+    private IQueryable<JsonObject> QueryableData = Enumerable.Empty<JsonObject>().AsQueryable();
 
     protected override void BindData()
     {

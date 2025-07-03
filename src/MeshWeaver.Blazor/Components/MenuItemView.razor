@@ -15,7 +15,7 @@
             </FluentButton>
             <FluentMenuButton  ButtonAppearance="@ButtonAppearance"
                 Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;">
-                @foreach (var area in ViewModel.Areas)
+                @foreach (var area in ViewModel.Areas ?? [])
                 {
                     <FluentMenuItem>
                         <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
@@ -30,7 +30,7 @@
         <div Style="@($"width: {Width}; {Style}")">
             <FluentMenuButton Text="@Title" Appearance="@ButtonAppearance"
                 Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
-                @foreach (var area in ViewModel.Areas)
+                @foreach (var area in ViewModel.Areas ?? [])
                 {
                     <FluentMenuItem>
                         <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
@@ -53,7 +53,7 @@ else
 
 @code
 {
-    private string Title { get; set; }
+    private string Title { get; set; } = "";
     private FluentAppearance ButtonAppearance { get; set; } = FluentAppearance.Neutral;
     private string Width { get; set; } = "auto";
     private bool HasSubMenus => ViewModel.Areas?.Any() == true;

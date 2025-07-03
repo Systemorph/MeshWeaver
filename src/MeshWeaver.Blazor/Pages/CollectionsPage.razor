@@ -14,9 +14,9 @@
     </NotAuthorized>
 </AuthorizeView>
 @code {
-    [Parameter] public string FullPath { get; set; }
-    private string Collection { get; set; }
-    private string Path { get; set; }
+    [Parameter] public string FullPath { get; set; } = "";
+    private string Collection { get; set; } = "";
+    private string Path { get; set; } = "";
 
     protected override void OnParametersSet()
     {

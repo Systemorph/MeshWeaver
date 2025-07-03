@@ -18,7 +18,7 @@
    protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
 
-    private string Name;
+    private string Name = "";
     protected override void BindData()
     {
         base.BindData();
@@ -31,13 +31,13 @@
         );
     }
 
-    private Option[] ParseOptions(object o)
+    private Option[]? ParseOptions(object o)
     {
         if (o is JsonElement je)
-            return je.Deserialize<Option[]>(Hub.JsonSerializerOptions);
+            return je.Deserialize<Option[]>(Hub.JsonSerializerOptions) ?? [];
         return (o as IEnumerable)?.Cast<Layout.Option>().Select(option =>
                 new Option(option.GetItem(), option.Text, OptionsExtension.MapToString(option.GetItem(), option.GetItemType()), option.GetItemType()))
-            .ToArray();
+            .ToArray() ?? [];
     }
 
 }

@@ -12,8 +12,8 @@
 
 @code
 {
-    private string ActiveTabId { get; set; }
-    private string Height { get; set; }
+    private string ActiveTabId { get; set; } = "";
+    private string Height { get; set; } = "";
 
     private Orientation Orientation { get; set; }
     protected override void BindData()
@@ -22,7 +22,7 @@
         if (Skin.ActiveTabId != null)
            DataBind(Skin.ActiveTabId, x => x.ActiveTabId);
         else 
-            ActiveTabId = ViewModel.Areas.First().Id.ToString();
+            ActiveTabId = ViewModel.Areas?.FirstOrDefault()?.Id?.ToString() ?? "";
         DataBind(Skin.Height, x => x.Height);
         DataBind(Skin.Orientation, x => x.Orientation);
     }

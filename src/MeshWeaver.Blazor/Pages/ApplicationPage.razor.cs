@@ -8,33 +8,33 @@ namespace MeshWeaver.Blazor.Pages;
 
 public partial class ApplicationPage
 {
-    private LayoutAreaControl ViewModel { get; set; }
+    private LayoutAreaControl ViewModel { get; set; } = null!;
 
     [Inject]
-    private NavigationManager Navigation { get; set; }
+    private NavigationManager Navigation { get; set; } = null!;
 
     [Parameter]
-    public string Application { get; set; }
+    public string Application { get; set; } = "";
     [Parameter]
-    public string Environment { get; set; }
+    public string Environment { get; set; } = "";
 
     [Parameter]
-    public string Area { get; set; }
+    public string Area { get; set; } = "";
 
     [Parameter]
     public string Id
     {
         get;
         set;
-    }
+    } = "";
 
-    private string PageTitle { get; set; }
+    private string PageTitle { get; set; } = "";
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
     private object Address => new ApplicationAddress(Application);
 
-    private LayoutAreaReference Reference { get; set; }
+    private LayoutAreaReference Reference { get; set; } = null!;
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
