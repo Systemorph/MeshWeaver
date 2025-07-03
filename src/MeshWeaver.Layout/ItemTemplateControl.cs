@@ -12,7 +12,7 @@ namespace MeshWeaver.Layout
 
         public Orientation? Orientation { get; init; }
 
-        public bool Wrap { get; init; }
+        public bool? Wrap { get; init; }
 
         public ItemTemplateControl WithOrientation(Orientation orientation) => this with { Orientation = orientation };
 
@@ -38,7 +38,7 @@ namespace MeshWeaver.Layout
                    && LayoutHelperExtensions.DataEquality(Data, other.Data);
         }
 
-        public override int GetHashCode() => 
+        public override int GetHashCode() =>
             HashCode.Combine(base.GetHashCode(),
                 Wrap,
                 View,

@@ -26,36 +26,36 @@ public record LayoutStackSkin : Skin<LayoutStackSkin>
     /// <summary>
     /// Gets or initializes the horizontal alignment of the layout stack.
     /// </summary>
-    public object HorizontalAlignment { get; init; }
+    public object? HorizontalAlignment { get; init; }
 
     /// <summary>
     /// Gets or initializes the vertical alignment of the layout stack.
     /// </summary>
-    public object VerticalAlignment { get; init; }
+    public object? VerticalAlignment { get; init; }
     /// <summary>
     /// Gets or initializes the horizontal gap between elements in the layout stack.
     /// </summary>
-    public object HorizontalGap { get; init; }
+    public object? HorizontalGap { get; init; }
     /// <summary>
     /// Gets or initializes the vertical gap between elements in the layout stack.
     /// </summary>
-    public object VerticalGap { get; init; }
+    public object? VerticalGap { get; init; }
     /// <summary>
     /// Gets or initializes the orientation of the layout stack.
     /// </summary>
-    public object Orientation { get; init; } = Layout.Orientation.Vertical;
+    public object? Orientation { get; init; } = Layout.Orientation.Vertical;
     /// <summary>
     /// Gets or initializes the wrap state of the layout stack.
     /// </summary>
-    public object Wrap { get; init; }
+    public object? Wrap { get; init; }
     /// <summary>
     /// Gets or initializes the width of the layout stack.
     /// </summary>
-    public object Width { get; init; }
+    public object? Width { get; init; }
     /// <summary>
     /// Gets or initializes the height of the layout stack.
     /// </summary>
-    public object Height { get; init; }
+    public object? Height { get; init; }
     /// <summary>
     /// Sets the horizontal alignment of the layout stack.
     /// </summary>
@@ -63,7 +63,7 @@ public record LayoutStackSkin : Skin<LayoutStackSkin>
     /// <returns>A new <see cref="LayoutStackSkin"/> instance with the specified horizontal alignment.</returns>
     public LayoutStackSkin WithHorizontalAlignment(object horizontalAlignment)
         => This with { HorizontalAlignment = horizontalAlignment };
-        /// <summary>
+    /// <summary>
     /// Sets the vertical alignment of the layout stack.
     /// </summary>
     /// <param name="verticalAlignment">The vertical alignment to set.</param>
@@ -75,17 +75,17 @@ public record LayoutStackSkin : Skin<LayoutStackSkin>
     /// </summary>
     /// <param name="horizontalGap">The horizontal gap to set.</param>
     /// <returns>A new <see cref="LayoutStackSkin"/> instance with the specified horizontal gap.</returns>
-    
+
     public LayoutStackSkin WithHorizontalGap(object horizontalGap)
         => This with { HorizontalGap = horizontalGap };
-        /// <summary>
+    /// <summary>
     /// Sets the vertical gap between elements in the layout stack.
     /// </summary>
     /// <param name="verticalGap">The vertical gap to set.</param>
     /// <returns>A new <see cref="LayoutStackSkin"/> instance with the specified vertical gap.</returns>
     public LayoutStackSkin WithVerticalGap(object verticalGap)
         => This with { VerticalGap = verticalGap };
-    
+
     public LayoutStackSkin WithOrientation(object orientation)
         => This with { Orientation = orientation };
     public LayoutStackSkin WithWrap(object wrap)
@@ -97,7 +97,7 @@ public record LayoutStackSkin : Skin<LayoutStackSkin>
 }
 public static class LayoutStackExtensions
 {
-     /// <summary>
+    /// <summary>
     /// Sets the horizontal alignment of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -105,7 +105,7 @@ public static class LayoutStackExtensions
     /// <returns>A new <see cref="StackControl"/> instance with the specified horizontal alignment.</returns>
     public static StackControl WithHorizontalAlignment(this StackControl control, object horizontalAlignment)
         => control.WithSkin(skin => skin.WithHorizontalAlignment(horizontalAlignment));
-        /// <summary>
+    /// <summary>
     /// Sets the vertical alignment of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -114,7 +114,7 @@ public static class LayoutStackExtensions
 
     public static StackControl WithVerticalAlignment(this StackControl control, object verticalAlignment)
         => control.WithSkin(skin => skin.WithVerticalAlignment(verticalAlignment));
-/// <summary>
+    /// <summary>
     /// Sets the horizontal gap between elements in the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -123,7 +123,7 @@ public static class LayoutStackExtensions
     public static StackControl WithHorizontalGap(this StackControl control, object horizontalGap)
         => control.WithSkin(skin => skin.WithHorizontalGap(horizontalGap));
 
- /// <summary>
+    /// <summary>
     /// Sets the vertical gap between elements in the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -131,7 +131,7 @@ public static class LayoutStackExtensions
     /// <returns>A new <see cref="StackControl"/> instance with the specified vertical gap.</returns>
     public static StackControl WithVerticalGap(this StackControl control, object verticalGap)
         => control.WithSkin(skin => skin.WithVerticalGap(verticalGap));
-        /// <summary>
+    /// <summary>
     /// Sets the orientation of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -140,7 +140,7 @@ public static class LayoutStackExtensions
 
     public static StackControl WithOrientation(this StackControl control, object orientation)
         => control.WithSkin(skin => skin.WithOrientation(orientation));
-/// <summary>
+    /// <summary>
     /// Sets the wrap state of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -148,7 +148,7 @@ public static class LayoutStackExtensions
     public static StackControl WithWrap(this StackControl control, object wrap)
         => control.WithSkin(skin => skin.WithWrap(wrap));
 
-/// <summary>
+    /// <summary>
     /// Sets the width of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>
@@ -156,7 +156,7 @@ public static class LayoutStackExtensions
     /// <returns>A new <see cref="StackControl"/> instance with the specified width.</returns>
     public static StackControl WithWidth(this StackControl control, object width)
         => control.WithSkin(skin => skin.WithWidth(width));
-/// <summary>
+    /// <summary>
     /// Sets the height of the layout stack control.
     /// </summary>
     /// <param name="control">The layout stack control.</param>

@@ -40,17 +40,17 @@ public record MenuItemSkin(object Title, object Icon) : Skin<MenuItemSkin>
     /// <summary>
     /// The style to apply to the menu item.
     /// </summary>
-    public object Style { get; init; }
+    public object? Style { get; init; }
 
     /// <summary>
     /// The appearance to apply to the menu item.
     /// </summary>
-    public object Appearance { get; init; }
+    public object? Appearance { get; init; }
 
     /// <summary>
     /// The width to apply to the menu item.
     /// </summary>
-    public object Width { get; init; }
+    public object? Width { get; init; }
 
     /// <summary>
     /// Sets the title of the menu item skin.

@@ -13,7 +13,7 @@ public record ClickedEvent(string Area, string StreamId) : StreamMessage(StreamI
     /// <summary>
     /// Gets or initializes the payload associated with the clicked event.
     /// </summary>
-    public object Payload { get; init; }
+    public object? Payload { get; init; }
 }
 
 /// <summary>
@@ -27,7 +27,7 @@ public record CloseDialogEvent(string Area, string StreamId, DialogCloseState St
     /// <summary>
     /// Gets or initializes the payload associated with the close dialog event.
     /// </summary>
-    public object Payload { get; init; }
+    public object? Payload { get; init; }
 }
 
 /// <summary>

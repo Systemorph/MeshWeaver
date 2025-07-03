@@ -9,5 +9,5 @@ public record MarkdownControl(object Markdown)
     : UiControl<MarkdownControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     public const string Extension = ".md";
-    public object Html { get; init; }
+    public object? Html { get; init; }
 }
