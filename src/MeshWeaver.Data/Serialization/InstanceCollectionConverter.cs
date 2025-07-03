@@ -16,7 +16,7 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
         return new JsonObject(
-            instances.Instances.Select(x => new KeyValuePair<string, JsonNode>(
+            instances.Instances.Select(x => new KeyValuePair<string, JsonNode?>(
                 JsonSerializer.Serialize(x.Key, options),
                 JsonSerializer.SerializeToNode(x.Value, options)
             ))

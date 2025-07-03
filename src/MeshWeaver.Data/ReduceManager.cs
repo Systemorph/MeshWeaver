@@ -51,7 +51,7 @@ public record ReduceManager<TStream>
         Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, string, ChangeItem<TStream>> patchFunction)
         => this with { PatchFunction = patchFunction };
 
-    public Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, string, ChangeItem<TStream>> PatchFunction { get; init; }
+    public Func<ISynchronizationStream<TStream>, TStream, JsonElement, JsonPatch, string, ChangeItem<TStream>>? PatchFunction { get; init; }
 
     public ReduceManager<TStream> AddWorkspaceReference<TReference, TReduced>(
         ReduceFunction<TStream, TReference, TReduced> reducer

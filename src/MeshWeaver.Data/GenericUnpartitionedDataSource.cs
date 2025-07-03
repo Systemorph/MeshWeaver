@@ -17,7 +17,8 @@ public record DataSourceAddress(string Id) : Address(TypeName, Id)
 
 public interface IDataSource : IDisposable
 {
-    ITypeSource GetTypeSource(Type type);
+    ITypeSource? GetTypeSource(Type type);
+    ITypeSource? GetTypeSource(string collectionName);
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     CollectionsReference Reference { get; }
@@ -100,13 +101,13 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     public IReadOnlyCollection<Type> MappedTypes => TypeSources.Keys.ToArray();
 
-    public ITypeSource GetTypeSource(string collectionName) =>
+    public ITypeSource? GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-    public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
+    public ITypeSource? GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
 
-    private IReadOnlyCollection<IDisposable> changesSubscriptions;
+    private IReadOnlyCollection<IDisposable>? changesSubscriptions;
 
 
 
@@ -120,7 +121,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public virtual void Dispose()
     {
         foreach (var stream in Streams.Values)
-            stream.Dispose();
+            stream?.Dispose();
 
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
@@ -129,12 +130,12 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
         var stream = GetStreamForPartition(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
-        return stream.Reduce(reference);
+        return stream?.Reduce(reference) ?? throw new InvalidOperationException("Unable to create stream");
     }
 
     public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
     {
-        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString()), partition);
+        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
         return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
     }
 
@@ -257,6 +258,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
+        if (stream == null) return null;
         stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
             ex =>
             {
@@ -328,6 +330,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
+        if (stream == null) return null;
         stream.Initialize(
             cancellationToken => GetInitialValue(stream, cancellationToken),
             ex =>

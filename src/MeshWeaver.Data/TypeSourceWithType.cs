@@ -8,7 +8,7 @@ public record PartitionedTypeSourceWithType<T, TPartition>(
     object DataSource
 ) : TypeSourceWithType<T>(Workspace, DataSource), IPartitionedTypeSource
 {
-    public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
+    public object? GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
 }
 
 public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)

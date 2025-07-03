@@ -32,11 +32,11 @@ public static class AggregationDelegates<T>
         new ConcurrentDictionary<string, (Func<T, T>, IEqualityComparer<T>)>();
 
     public static (Func<T, T>, IEqualityComparer<T>) GetGroupByDelegateAndEqualityComparer(
-        List<string> identityProperties,
+        List<string>? identityProperties,
         bool isAggregateOver = false
     )
     {
-        identityProperties ??= new List<string>();
+        identityProperties ??= [];
         var properties = isAggregateOver
             ? GetPropertiesOver(identityProperties)
             : GetPropertiesBy(identityProperties);
@@ -109,7 +109,7 @@ public static class AggregationDelegates<T>
     {
         if (identityProperties.Count == 0)
             return GetProperties(identityProperties, _ => true);
-        return identityProperties.Select(typeof(T).GetProperty).ToArray();
+        return identityProperties.Select(typeof(T).GetProperty).ToArray()!;
     }
 
     private static PropertyInfo[] GetPropertiesOver(List<string> identityProperties)
