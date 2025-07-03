@@ -32,12 +32,12 @@ public interface IDataSource : IDisposable
 
 public interface IUnpartitionedDataSource : IDataSource
 {
-    IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config = null);
-    IUnpartitionedDataSource WithType<T>(Func<ITypeSource, ITypeSource> config = null) where T : class;
+    IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config = null);
+    IUnpartitionedDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config = null) where T : class;
 }
 public interface IPartitionedDataSource<in TPartition> : IDataSource
 {
-    IPartitionedDataSource<TPartition> WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config = null) where T : class;
+    IPartitionedDataSource<TPartition> WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null) where T : class;
 }
 
 

@@ -32,7 +32,7 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 			if (null == fileStream) return false;
 
 			IsValid = true;
-			ZipArchive zipFile = null;
+			ZipArchive? zipFile = null;
 
 			try
 			{
@@ -74,16 +74,16 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 			}
 		}
 
-		private Stream GetStreamOrDefault(string filePath)
+		private Stream? GetStreamOrDefault(string filePath)
 		{
 			return zipStreams.TryGetValue(filePath, out var stream) ? stream : null;
 		}
 
-		public Stream GetSharedStringsStream() => GetStreamOrDefault("xl/sharedStrings.xml");
-		public Stream GetStylesStream() => GetStreamOrDefault("xl/styles.xml");
-		public Stream GetWorkbookStream() => GetStreamOrDefault("xl/workbook.xml");
-		public Stream GetWorkbookRelsStream() => GetStreamOrDefault("xl/_rels/workbook.xml.rels");
-		public Stream GetWorksheetStream(string sheetPath)
+		public Stream? GetSharedStringsStream() => GetStreamOrDefault("xl/sharedStrings.xml");
+		public Stream? GetStylesStream() => GetStreamOrDefault("xl/styles.xml");
+		public Stream? GetWorkbookStream() => GetStreamOrDefault("xl/workbook.xml");
+		public Stream? GetWorkbookRelsStream() => GetStreamOrDefault("xl/_rels/workbook.xml.rels");
+		public Stream? GetWorksheetStream(string sheetPath)
 		{
 			//its possible sheetPath starts with /xl. in this case trim the /xl
 			if (sheetPath.StartsWith("/xl/"))

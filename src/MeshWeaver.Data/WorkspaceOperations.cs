@@ -265,7 +265,7 @@ public static class WorkspaceOperations
     }
 
     public static EntityStoreAndUpdates MergeWithUpdates(this EntityStore store, EntityStore updated, string changedBy,
-        UpdateOptions options = null)
+        UpdateOptions? options = null)
     {
         options ??= UpdateOptions.Default;
         var newStore = store.Merge(updated, options);

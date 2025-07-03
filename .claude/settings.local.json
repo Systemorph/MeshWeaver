@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(grep:*)",
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Bash(cat:*)",
+      "Bash(iconv:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

@@ -22,7 +22,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             (equalityFunc, hashCodeFunc) = IdentityEqualityComparerHelper.GetHashAndEqualityForType<T>(props);
         }
         
-        public bool Equals(T x, T y)
+        public bool Equals(T? x, T? y)
         {
             if (x == null)
                 return y == null;
@@ -31,9 +31,9 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return equalityFunc(x, y);
         }
 
-        public int GetHashCode(T obj)
+        public int GetHashCode(T? obj)
         {
-            return hashCodeFunc(obj);
+            return obj == null ? 0 : hashCodeFunc(obj);
         }
     }
 }

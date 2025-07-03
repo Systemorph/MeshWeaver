@@ -24,7 +24,7 @@ internal class ScopeFactory(Assembly[] assemblies) : IScopeFactory
     {
         if (!scopeImplementations.TryGetValue(typeof(TScope), out var type))
             throw new NotSupportedException($"No implementation found for type {typeof(TScope).Name}. Is the compiler installed?");
-        return Activator.CreateInstance(type, identity, state);
+        return (TScope)Activator.CreateInstance(type, identity, state)!;
     }
 }
 

@@ -85,7 +85,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
 
             // Perform the actual call.
             il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, method.DeclaringType);
+            il.Emit(OpCodes.Castclass, method.DeclaringType!);
             for (var i = 0; i < n; ++i)
             {
                 il.Emit(originalParameterTypes[i].IsByRef ? OpCodes.Ldloca : OpCodes.Ldloc, arguments[i]);
@@ -176,7 +176,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
                     // It appears that the best thing we can do is to look for a non-public method having
                     // the right name and parameter types, and hope for the best:
                     var name = new StringBuilder();
-                    var isGeneratedByScript = declaringType.Module.Name == "<Unknown>";
+                    var isGeneratedByScript = declaringType.Module?.Name == "<Unknown>";
                     name.Append(isGeneratedByScript ? declaringType.Name : declaringType.FullName);
                     name.Replace('+', '.');
                     name.Append('.');
@@ -188,11 +188,11 @@ internal static class DefaultImplementationOfInterfacesExtensions
 
                 // Now we have a candidate override. We need to check if it is less specific than any others
                 // that we have already found earlier:
-                if (candidateMethods.Any(cm => implementedInterface.IsAssignableFrom(cm.DeclaringType))) continue;
+                if (candidateMethods.Any(cm => cm.DeclaringType != null && implementedInterface.IsAssignableFrom(cm.DeclaringType))) continue;
 
                 // No, it is the most specific override so far. Add it to the list, but before doing so,
                 // remove all less specific overrides from it:
-                candidateMethods.ExceptWith(candidateMethods.Where(cm => cm.DeclaringType.IsAssignableFrom(implementedInterface)).ToArray());
+                candidateMethods.ExceptWith(candidateMethods.Where(cm => cm.DeclaringType?.IsAssignableFrom(implementedInterface) == true).ToArray());
                 candidateMethods.Add(candidateMethod);
             }
 

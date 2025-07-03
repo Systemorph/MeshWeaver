@@ -15,7 +15,7 @@ public class DataSetConverter : JsonConverter
         var dataTableConverter = new DataTableConverter();
 
         CheckedRead(reader);
-        if ((string)reader.Value == nameof(DataSet.DataSetName))
+        if (reader.Value?.ToString() == nameof(DataSet.DataSetName))
         {
             CheckedRead(reader);
             dataSet.DataSetName = (string)reader.Value!;
@@ -96,11 +96,11 @@ public class DataTableConverter : JsonConverter
 
             while (reader.TokenType == JsonToken.PropertyName)
             {
-                var columnName = (string)reader.Value ?? throw new InvalidOperationException("Column name cannot be null");
+                var columnName = reader.Value?.ToString() ?? throw new InvalidOperationException("Column name cannot be null");
                 CheckedRead(reader);
                 var value = reader.Value;
                 CheckedRead(reader);
-                rowValues.Add(columnName, value);
+                rowValues.Add(columnName, value!);
             }
             foreach (var columnName in rowValues.Keys.Where(columnName => !dataTable.Columns.Contains(columnName)))
                 dataTable.Columns.Add(columnName, typeof(string));

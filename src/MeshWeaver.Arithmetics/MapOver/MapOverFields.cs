@@ -292,8 +292,9 @@ namespace MeshWeaver.Arithmetics.MapOver
         }
 
         private static Dictionary<TKey, TValue> MapOverDictionary<TKey, TValue>(double factor, IDictionary<TKey, TValue> dictionary, Func<double, TValue, TValue> mapOverFunc)
+            where TKey : notnull
         {
-            return dictionary?.ToDictionary(x => x.Key, x => mapOverFunc(factor, x.Value));
+            return dictionary?.ToDictionary(x => x.Key, x => mapOverFunc(factor, x.Value)) ?? new Dictionary<TKey, TValue>();
         }
     }
 }

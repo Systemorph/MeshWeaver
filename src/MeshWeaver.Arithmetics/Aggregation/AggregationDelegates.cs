@@ -51,7 +51,7 @@ public static class AggregationDelegates<T>
     }
 
     public static Func<IEnumerable<T>, IEnumerable<T>> GetAggregateByDelegate(
-        List<string> identityProperties = null
+        List<string>? identityProperties = null
     )
     {
         identityProperties ??= new List<string>();
@@ -94,7 +94,7 @@ public static class AggregationDelegates<T>
     }
 
     public static Func<IEnumerable<T>, IEnumerable<T>> GetAggregateOverDelegate(
-        List<string> identityProperties = null
+        List<string>? identityProperties = null
     )
     {
         identityProperties ??= new List<string>();

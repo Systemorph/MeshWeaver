@@ -138,7 +138,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return attribute?.Type ?? type;
         }
 
-        public bool Equals(T x, T y)
+        public bool Equals(T? x, T? y)
         {
             if (x == null)
                 return y == null;
@@ -156,7 +156,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return subtypeEquality.GetInstance((type1, type2))(x, y);
         }
 
-        public int GetHashCode(T obj)
+        public int GetHashCode(T? obj)
         {
             // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (obj == null) // This is still done on purpose, we might come with null to here and nulls must produce the same hash codes
