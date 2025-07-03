@@ -49,12 +49,12 @@ public record DialogControl
     /// <summary>
     /// Whether the dialog can be closed with the X button
     /// </summary>
-    public bool? IsClosable { get; init; }
+    public object? IsClosable { get; init; }
 
     /// <summary>
     /// The size of the dialog (S, M, L)
     /// </summary>
-    public string? Size { get; init; } = "M";
+    public object? Size { get; init; } = "M";
 
     /// <summary>
     /// Callback when dialog is closed
@@ -64,17 +64,17 @@ public record DialogControl
     /// <summary>
     /// Sets the title of the dialog
     /// </summary>
-    public DialogControl WithTitle(string title) => this with { Title = title };
+    public DialogControl WithTitle(object? title) => this with { Title = title };
 
     /// <summary>
     /// Sets whether the dialog is closable
     /// </summary>
-    public DialogControl WithClosable(bool closable) => this with { IsClosable = closable };
+    public DialogControl WithClosable(object? closable) => this with { IsClosable = closable };
 
     /// <summary>
     /// Sets the size of the dialog
     /// </summary>
-    public DialogControl WithSize(string size) => this with { Size = size };
+    public DialogControl WithSize(object? size) => this with { Size = size };
 
     /// <summary>
     /// Sets the close action for the dialog

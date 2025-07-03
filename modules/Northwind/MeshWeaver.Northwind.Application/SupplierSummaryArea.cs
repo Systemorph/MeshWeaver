@@ -156,7 +156,7 @@ public static class SupplierSummaryArea
             var sliceTemplateValue = dataCube.GetSlices(filterDimension.Key)
                 .SelectMany(x => x.Tuple.Select(t => t.Value))
                 .First();
-            var dimensionType = sliceTemplateValue.GetType();
+            var dimensionType = sliceTemplateValue!.GetType();
 
             var filterValues = filterDimension.Value.Where(f => f.Selected)
                 .Select(fi => ConvertValue(fi.Id, dimensionType)).ToArray();

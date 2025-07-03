@@ -17,12 +17,12 @@ public record LayoutAreaHost : IDisposable
     public ISynchronizationStream<EntityStore> Stream { get; }
     public IMessageHub Hub => Workspace.Hub;
     public IWorkspace Workspace { get; }
-    private readonly Dictionary<object, object> variables = new();
+    private readonly Dictionary<object, object?> variables = new();
 
-    public T GetVariable<T>(object key) => (T)variables[key];
+    public T? GetVariable<T>(object key) => (T?)variables[key];
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
-    public object SetVariable(object key, object value) => variables[key] = value;
-    public T GetOrAddVariable<T>(object key, Func<T> factory)
+    public object SetVariable(object key, object? value) => variables[key] = value;
+    public T? GetOrAddVariable<T>(object key, Func<T> factory)
     {
         if (!ContainsVariable(key))
         {
@@ -65,7 +65,7 @@ public record LayoutAreaHost : IDisposable
         executionHub = Stream.Hub.GetHostedHub(
             new LayoutExecutionAddress(),
             x => x
-        );
+        )!;
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
@@ -88,14 +88,14 @@ public record LayoutAreaHost : IDisposable
         return request.Processed();
     }
 
-    private Task FailRequest(Exception exception, IMessageDelivery request)
+    private Task FailRequest(Exception? exception, IMessageDelivery request)
     {
         logger.LogWarning(exception, "Request failed");
         Hub.Post(new DeliveryFailure(request, exception?.Message), o => o.ResponseFor(request));
         return Task.CompletedTask;
     }
 
-    public object GetControl(string area) =>
+    public object? GetControl(string area) =>
         Stream
             .Current.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
             ?.Instances.GetValueOrDefault(area);
@@ -108,7 +108,7 @@ public record LayoutAreaHost : IDisposable
         => uiControlService.Convert(instance);
 
 
-    internal EntityStoreAndUpdates RenderArea(RenderingContext context, object view, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, object? view, EntityStore store)
     {
         if (view == null)
             return new(store, [], Stream.StreamId);

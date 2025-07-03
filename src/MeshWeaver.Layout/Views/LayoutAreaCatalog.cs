@@ -15,7 +15,7 @@ public static class LayoutAreaCatalogArea
     {
         var layouts = host.GetLayoutAreaDefinitions();
         return layouts
-            .Where(l => !l.Area.StartsWith("$") && !l.IsInvisible)
+            .Where(l => !l.Area.StartsWith("$") && l.IsInvisible == false)
             .OrderBy(x => x.Title)
             .Aggregate(Controls.LayoutGrid.WithSkin(
                 skin => skin
