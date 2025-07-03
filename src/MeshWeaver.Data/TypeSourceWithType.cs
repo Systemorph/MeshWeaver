@@ -48,7 +48,7 @@ public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, 
 {
     public TTypeSource WithQuery(Func<string, T> query) => This with { QueryFunction = query };
 
-    protected Func<string, T> QueryFunction { get; init; }
+    protected Func<string, T>? QueryFunction { get; init; }
 
     public TTypeSource WithKey<TProp>(Func<T, TProp> keyFunc)
         => WithKey(new KeyFunction(o => keyFunc.Invoke((T)o), typeof(TProp)));

@@ -49,7 +49,7 @@ public abstract record PartitionedDataSource<TDataSource, TTypeSource, TPartitio
 
     public abstract TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<TTypeSource, TTypeSource> config)
         where T : class;
-    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config) =>
+    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config) =>
         WithType(partitionFunction, ts => (TTypeSource)(config ?? (x => x)).Invoke(ts));
 
 
@@ -60,8 +60,8 @@ public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object 
     where TDataSource : UnpartitionedDataSource<TDataSource, TTypeSource>
     where TTypeSource : ITypeSource
 {
-    public virtual IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config) =>
-        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+    public virtual IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config) =>
+        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (x => x));
 
     private static readonly MethodInfo WithTypeMethod = ReflectionHelper.GetMethodGeneric<
         UnpartitionedDataSource<TDataSource, TTypeSource>
@@ -69,10 +69,10 @@ public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object 
 
     public TDataSource WithType<T>()
         where T : class => WithType<T>(d => d);
-    public abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
+    public abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config)
         where T : class;
-    IUnpartitionedDataSource IUnpartitionedDataSource.WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(config);
+    IUnpartitionedDataSource IUnpartitionedDataSource.WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
+        WithType<T>(config ?? (x => x));
 
     public IUnpartitionedDataSource WithTypes(IEnumerable<Type> types) =>
         types.Aggregate((IUnpartitionedDataSource)This, (ds, t) => ds.WithType(t, x => x));
@@ -174,11 +174,11 @@ public record GenericUnpartitionedDataSource<TDataSource>(object Id, IWorkspace 
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
 
-    public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(x => (TypeSourceWithType<T>)(config ??(y => y))(x));
+    public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
+        WithType<T>(x => (TypeSourceWithType<T>)(config ?? (y => y))(x));
 
-    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
-        where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Workspace, Id)));
+    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>>? configurator)
+        where T : class => WithTypeSource(typeof(T), (configurator ?? (x => x)).Invoke(new(Workspace, Id)));
 }
 public record GenericPartitionedDataSource<TPartition>(object Id, IWorkspace Workspace)
     : GenericPartitionedDataSource<GenericPartitionedDataSource<TPartition>, TPartition>(Id, Workspace)
@@ -192,8 +192,8 @@ public record GenericPartitionedDataSource<TDataSource, TPartition>(object Id, I
     : TypeSourceBasedPartitionedDataSource<TDataSource, IPartitionedTypeSource, TPartition>(Id, Workspace)
     where TDataSource : GenericPartitionedDataSource<TDataSource, TPartition>
 {
-    public override TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config)
-        => WithTypeSource(typeof(T), config.Invoke(new PartitionedTypeSourceWithType<T, TPartition>(Workspace, partitionFunction, Id)));
+    public override TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config)
+        => WithTypeSource(typeof(T), (config ?? (x => x)).Invoke(new PartitionedTypeSourceWithType<T, TPartition>(Workspace, partitionFunction, Id)));
 }
 
 public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace)

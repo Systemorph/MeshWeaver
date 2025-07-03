@@ -7,7 +7,7 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceStreams
 {
-    internal static ISynchronizationStream CreateWorkspaceStream<TReduced, TReference>(
+    internal static ISynchronizationStream? CreateWorkspaceStream<TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
@@ -30,17 +30,18 @@ public static class WorkspaceStreams
             var dataSource = groups[0].Key;
             if (dataSource == null)
                 throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-            return groups[0].Key
+            return dataSource
                 .GetStreamForPartition(partition)
-                .Reduce(reference, configuration);
+                ?.Reduce(reference, configuration);
         }
 
         var streams = groups.Select(g =>
-                g.Key.GetStreamForPartition(partition))
+                g.Key?.GetStreamForPartition(partition))
+            .Where(s => s != null)
             .ToArray();
 
 
-        var combinedReference = new CombinedStreamReference(streams.Select(s => s.StreamIdentity).ToArray());
+        var combinedReference = new CombinedStreamReference(streams.Select(s => s!.StreamIdentity).ToArray());
 
         var ret = new SynchronizationStream<EntityStore>(
             new StreamIdentity(workspace.Hub.Address, partition),
@@ -92,7 +93,7 @@ c => c
 
 
 
-    internal static object ReduceApplyRules<TStream, TReference, TReduced>(
+    internal static object? ReduceApplyRules<TStream, TReference, TReduced>(
         ChangeItem<TStream> state,
         WorkspaceReference @ref,
         ReduceFunction<TStream, TReference, TReduced> reducer,

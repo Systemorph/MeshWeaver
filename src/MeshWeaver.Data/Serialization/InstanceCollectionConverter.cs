@@ -23,7 +23,7 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         );
     }
 
-    public override InstanceCollection Read(
+    public override InstanceCollection? Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
         JsonSerializerOptions options
@@ -42,8 +42,8 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         {
             Instances = obj.Where(i => i.Key != CollectionProperty )
                 .Select(i => new KeyValuePair<object, object>(
-                    JsonSerializer.Deserialize(i.Key, type, options),
-                    i.Value.Deserialize<object>(options)
+                    JsonSerializer.Deserialize(i.Key, type, options) ?? i.Key,
+                    i.Value.Deserialize<object>(options) ?? new object()
                 ))
                 .ToImmutableDictionary()
         };

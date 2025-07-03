@@ -26,7 +26,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         return UpdateImpl(myCollection);
     }
 
-    private IDisposable workspaceSubscription;
+    private IDisposable? workspaceSubscription;
 
     protected virtual InstanceCollection UpdateImpl(InstanceCollection myCollection) =>
         myCollection;
