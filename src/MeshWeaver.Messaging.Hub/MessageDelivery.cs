@@ -7,7 +7,7 @@ namespace MeshWeaver.Messaging;
 
 public abstract record MessageDelivery(Address Sender, Address Target) : IMessageDelivery
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString();
+    public string Id { get; init; } = Guid.NewGuid().AsString() ?? string.Empty;
 
     private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
         ImmutableDictionary<string, object>.Empty;
@@ -57,11 +57,11 @@ public abstract record MessageDelivery(Address Sender, Address Target) : IMessag
         return this with { Target = address };
     }
 
-    private static readonly MethodInfo WithMessageMethod = typeof(MessageDelivery).GetMethod(nameof(WithMessageImpl), BindingFlags.NonPublic | BindingFlags.Instance);
+    private static readonly MethodInfo WithMessageMethod = typeof(MessageDelivery).GetMethod(nameof(WithMessageImpl), BindingFlags.NonPublic | BindingFlags.Instance)!;
 
     public IMessageDelivery WithMessage(object message)
     {
-        return (IMessageDelivery)WithMessageMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message });
+        return (IMessageDelivery)WithMessageMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message })!;
     }
 
     private IMessageDelivery<TMessage> WithMessageImpl<TMessage>(TMessage message)
@@ -110,6 +110,6 @@ public record MessageDelivery<TMessage>(Address Sender, Address Target, TMessage
 
     protected override object GetMessage()
     {
-        return Message;
+        return Message!;
     }
 }

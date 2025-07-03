@@ -11,7 +11,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
 
-    public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
+    public IMessageHub? GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address
     {
         lock (locker)
@@ -21,7 +21,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             if (create == HostedHubCreation.Always)
             {
                 logger.LogDebug("Creating hosted hub for address {Address}", address);
-                return messageHubs[address] = CreateHub(address, config ?? (x => x));
+                var newHub = CreateHub(address, config ?? (x => x));
+                if (newHub != null)
+                    return messageHubs[address] = newHub;
             }
 
             return null;
@@ -34,7 +36,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
     }
 
-    private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+    private IMessageHub? CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     where TAddress : Address =>
         isDisposing
             ? null
@@ -43,7 +45,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     private bool isDisposing;
     private readonly object locker = new();
 
-    public Task Disposal { get; private set; }
+    public Task? Disposal { get; private set; }
     public void Dispose()
     {
         lock (locker)

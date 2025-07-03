@@ -5,7 +5,7 @@ namespace MeshWeaver.Messaging;
 public record PostOptions(Address Sender)
 {
     public const string RequestId = nameof(RequestId);
-    internal Address Target { get; init; }
+    internal Address Target { get; init; } = null!;
 
     public IReadOnlyDictionary<string, object> Properties
     {

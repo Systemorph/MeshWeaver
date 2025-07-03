@@ -49,7 +49,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     }
 
     private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
-        new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t, t.Name, null))));
+        new(BasicTypes.Select(t => new KeyValuePair<string, TypeDefinition>(t.Name, new TypeDefinition(t, t.Name, null!))));
     private readonly ConcurrentDictionary<Type, string> nameByType =
         new(BasicTypes.Select(t => new KeyValuePair<Type, string>(t, t.Name)));
 
