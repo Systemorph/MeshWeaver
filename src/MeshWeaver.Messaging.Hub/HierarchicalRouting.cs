@@ -5,13 +5,13 @@ namespace MeshWeaver.Messaging;
 
 internal class HierarchicalRouting
 {
-    private readonly IMessageHub parentHub;
+    private readonly IMessageHub? parentHub;
 
     private readonly ILogger<HierarchicalRouting> logger;
     private readonly RouteConfiguration configuration;
     private readonly IMessageHub hub;
 
-    internal HierarchicalRouting(IMessageHub hub, IMessageHub parentHub)
+    internal HierarchicalRouting(IMessageHub hub, IMessageHub? parentHub)
     {
         this.parentHub = parentHub;
         this.hub = hub;
@@ -71,7 +71,7 @@ internal class HierarchicalRouting
             if (hub.Address.Equals(hosted.Host))
             {
                 var nextLevelAddress = hosted.Address;
-                if(nextLevelAddress is HostedAddress hostedInner)
+                if (nextLevelAddress is HostedAddress hostedInner)
                     nextLevelAddress = hostedInner.Host;
                 var hostedHub = hub.GetHostedHub(nextLevelAddress);
                 if (hostedHub is not null)

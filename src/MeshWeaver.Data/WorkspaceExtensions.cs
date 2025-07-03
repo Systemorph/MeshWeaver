@@ -31,7 +31,7 @@ public static class WorkspaceExtensions
 
 
     public static ChangeItem<EntityStore> ApplyChanges(
-        this ISynchronizationStream<EntityStore> stream,
+        this ISynchronizationStream<EntityStore>? stream,
         EntityStoreAndUpdates storeAndUpdates) =>
         new(storeAndUpdates.Store,
             storeAndUpdates.ChangedBy ?? stream.StreamId, 

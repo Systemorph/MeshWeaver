@@ -24,7 +24,7 @@ namespace MeshWeaver.Data.Persistence
         private object[] InitializePartitions { get; init; } = Array.Empty<object>();
 
 
-        protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+        protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
         {
             var partition = (Address)identity.Partition;
             var reference = GetReference();

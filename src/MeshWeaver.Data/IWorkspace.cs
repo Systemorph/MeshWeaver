@@ -21,7 +21,7 @@ public interface IWorkspace : IAsyncDisposable
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
 
-    ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
+    ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
         Address owner,
         WorkspaceReference<TReduced> reference
     );
@@ -29,9 +29,9 @@ public interface IWorkspace : IAsyncDisposable
         WorkspaceReference<TReduced> reference,  
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration = null);
 
-    IObservable<IEnumerable<TType>> GetRemoteStream<TType>(Address address);
+    IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address);
 
-    IObservable<IReadOnlyCollection<T>> GetStream<T>();
+    IObservable<T[]?>? GetStream<T>();
 
     ISynchronizationStream<TReduced> GetRemoteStream<TReduced, TReference>(
         Address address,
@@ -47,5 +47,5 @@ public interface IWorkspace : IAsyncDisposable
 
     void AddDisposable(IDisposable disposable);
     void AddDisposable(IAsyncDisposable disposable);
-    ISynchronizationStream<EntityStore> GetStream(StreamIdentity kvpKey);
+    ISynchronizationStream<EntityStore>? GetStream(StreamIdentity kvpKey);
 }

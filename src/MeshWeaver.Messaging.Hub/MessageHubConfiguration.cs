@@ -15,7 +15,7 @@ public record MessageHubConfiguration
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
-        TypeRegistry  = new TypeRegistry(ParentServiceProvider?.GetService<ITypeRegistry>()).WithType(address.GetType());
+        TypeRegistry = new TypeRegistry(ParentServiceProvider?.GetService<ITypeRegistry>()).WithType(address.GetType());
         PostPipeline = [UserServicePostPipeline];
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
@@ -35,7 +35,7 @@ public record MessageHubConfiguration
     internal IMessageHub HubInstance { get; set; } = null!;
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
-        => RegisterForDisposal((m,_) =>
+        => RegisterForDisposal((m, _) =>
         {
             disposeAction.Invoke(m);
             return Task.CompletedTask;
@@ -86,8 +86,8 @@ public record MessageHubConfiguration
     private record ParentMessageHub(IMessageHub Value);
 
 
-    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub,IMessageDelivery, bool>? filter = null) => 
-        WithHandler<TMessage>((h,d,_) => Task.FromResult(delivery.Invoke(h, d)), filter);
+    public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, IMessageDelivery> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null) =>
+        WithHandler<TMessage>((h, d, _) => Task.FromResult(delivery.Invoke(h, d)), filter);
     public MessageHubConfiguration WithHandler<TMessage>(Func<IMessageHub, IMessageDelivery<TMessage>, CancellationToken, Task<IMessageDelivery>> delivery, Func<IMessageHub, IMessageDelivery, bool>? filter = null)
     {
         TypeRegistry.GetOrAddType(typeof(TMessage));
@@ -109,7 +109,7 @@ public record MessageHubConfiguration
     {
         BuildupActions = BuildupActions.Add((hub, _) =>
         {
-            action(hub); return Task.CompletedTask; 
+            action(hub); return Task.CompletedTask;
         })
     };
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
@@ -219,7 +219,7 @@ public record SyncPipelineConfig
 
     public SyncPipelineConfig AddPipeline(
         Func<IMessageDelivery, SyncDelivery, IMessageDelivery> pipeline)
-        => this with { SyncDelivery = d => pipeline.Invoke(d,  SyncDelivery) };
+        => this with { SyncDelivery = d => pipeline.Invoke(d, SyncDelivery) };
 
     public IMessageHub Hub { get; init; }
 }

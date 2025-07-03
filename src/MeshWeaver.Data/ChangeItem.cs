@@ -1,5 +1,4 @@
-﻿#nullable enable
-using MeshWeaver.Activities;
+﻿using MeshWeaver.Activities;
 
 namespace MeshWeaver.Data;
 

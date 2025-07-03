@@ -9,7 +9,7 @@ public record StreamMessage(string StreamId);
 public record DataChangeRequest 
     : IRequest<DataChangeResponse>
 {
-    public string ChangedBy { get; init; } = null!;
+    public string? ChangedBy { get; init; } = null!;
     public ImmutableList<object> Creations { get; init; } = [];
 
     public ImmutableList<object> Updates { get; init; } = [];

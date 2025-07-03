@@ -26,7 +26,7 @@ public class MessageService : IMessageService
         Address address,
         ILogger<MessageService> logger,
         IMessageHub hub,
-        IMessageHub parentHub
+        IMessageHub? parentHub
         )
     {
         Address = address;
@@ -51,7 +51,7 @@ public class MessageService : IMessageService
 
         executionBuffer.Post(async ct =>
       {
-          CancellationTokenSource timeoutCts = null;
+          CancellationTokenSource? timeoutCts = null;
           try
           {
               // Add a timeout to prevent startup hangs
@@ -148,7 +148,7 @@ public class MessageService : IMessageService
 
 
     public Address Address { get; }
-    public IMessageHub ParentHub { get; }
+    public IMessageHub? ParentHub { get; }
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         deferralContainer.Defer(deferredFilter);
 
@@ -287,11 +287,13 @@ public class MessageService : IMessageService
         return delivery.Forwarded(hub.Address);
     }
 
-    public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
+    public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
         {
             if (isDisposing)
+                return null;
+            if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
             logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
@@ -319,21 +321,26 @@ public class MessageService : IMessageService
             return delivery;
         logger.LogDebug("Deserializing {@Delivery} in {Address}", delivery, Address);
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
+        if (deserializedMessage == null)
+            return delivery.Failed("Deserialization returned null");
         return delivery.WithMessage(deserializedMessage);
     }
 
     private IMessageDelivery PostImpl(object message, PostOptions opt)
-    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt });
+    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt })!;
 
 
-    private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     private IMessageDelivery PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
     {
+        if (message == null)
+            throw new ArgumentNullException(nameof(message));
+        
         if (typeof(TMessage) != message.GetType())
             return (IMessageDelivery<TMessage>)PostImplMethod
                 .MakeGenericMethod(message.GetType())
-                .Invoke(this, [message, opt]);
+                .Invoke(this, [message, opt])!;
 
         var delivery = new MessageDelivery<TMessage>(message, opt);
 

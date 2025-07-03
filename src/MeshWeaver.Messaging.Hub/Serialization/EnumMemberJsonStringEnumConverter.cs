@@ -19,7 +19,7 @@ public sealed class EnumMemberJsonStringEnumConverter<
     : JsonStringEnumConverter<TEnum>(namingPolicy: ResolveNamingPolicy())
     where TEnum : struct, Enum
 {
-    private static JsonNamingPolicy ResolveNamingPolicy()
+    private static JsonNamingPolicy? ResolveNamingPolicy()
     {
         var map = typeof(TEnum).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Select(f => (f.Name, AttributeName: f.GetCustomAttribute<EnumMemberAttribute>()?.Value))
@@ -45,7 +45,7 @@ public sealed class EnumMemberJsonStringEnumConverter : JsonConverterFactory
 {
     public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
 
-    public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options)
+    public override JsonConverter? CreateConverter(Type typeToConvert, JsonSerializerOptions options)
     {
         var typedFactory = typeof(EnumMemberJsonStringEnumConverter<>).MakeGenericType(typeToConvert);
         var innerFactory = (JsonConverterFactory)Activator.CreateInstance(typedFactory)!;

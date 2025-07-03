@@ -25,7 +25,7 @@ public interface IDataSource : IDisposable
 
     ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
 
-    ISynchronizationStream<EntityStore> GetStreamForPartition(object partition);
+    ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition);
     IEnumerable<ITypeSource> TypeSources { get; }
 
 }
@@ -110,7 +110,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
 
 
-    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
+    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
@@ -132,15 +132,15 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
         return stream.Reduce(reference);
     }
 
-    public ISynchronizationStream<EntityStore> GetStreamForPartition(object partition)
+    public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
     {
         var identity = new StreamIdentity(new DataSourceAddress(Id.ToString()), partition);
         return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
     }
 
-    protected abstract ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity);
+    protected abstract ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity);
 
-    protected virtual ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected virtual ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var reference = GetReference();
 
@@ -164,7 +164,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 public record GenericUnpartitionedDataSource(object Id, IWorkspace Workspace)
     : GenericUnpartitionedDataSource<GenericUnpartitionedDataSource>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore> GetStream()
+    public ISynchronizationStream<EntityStore>? GetStream()
         => GetStreamForPartition(null);
 
 }
@@ -183,7 +183,7 @@ public record GenericUnpartitionedDataSource<TDataSource>(object Id, IWorkspace 
 public record GenericPartitionedDataSource<TPartition>(object Id, IWorkspace Workspace)
     : GenericPartitionedDataSource<GenericPartitionedDataSource<TPartition>, TPartition>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore> GetStream()
+    public ISynchronizationStream<EntityStore>? GetStream()
         => GetStreamForPartition(null);
 
 }
@@ -215,7 +215,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     }
 
     protected virtual async Task<EntityStore>
-        GetInitialValue(ISynchronizationStream<EntityStore> stream,
+        GetInitialValue(ISynchronizationStream<EntityStore>? stream,
             CancellationToken cancellationToken)
     {
         var initial = await TypeSources
@@ -249,12 +249,12 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         return initial;
     }
 
-    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
     {
         return SetupDataSourceStream(identity);
     }
 
-    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
         stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
@@ -286,7 +286,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     }
 
     protected virtual async Task<EntityStore>
-        GetInitialValue(ISynchronizationStream<EntityStore> stream,
+        GetInitialValue(ISynchronizationStream<EntityStore>? stream,
             CancellationToken cancellationToken)
     {
         var initial = await TypeSources
@@ -320,12 +320,12 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         return initial;
     }
 
-    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
     {
         return SetupDataSourceStream(identity);
     }
 
-    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
         stream.Initialize(
