@@ -83,7 +83,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                     continue;
 
                 // Use the type discriminator from the attribute if available, otherwise use the type name
-                var typeDiscriminator = attr.TypeDiscriminator?.ToString() ?? attr.DerivedType.FullName;
+                var typeDiscriminator = attr.TypeDiscriminator?.ToString() ?? attr.DerivedType.FullName!;
 
                 // Only add if it's a valid derived type for the base
                 if (IsValidDerivedTypeForBase(baseType, attr.DerivedType))

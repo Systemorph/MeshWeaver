@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Domain;
 
@@ -28,7 +28,7 @@ public class MessageDeliveryConverter(ITypeRegistry typeRegistry) : JsonConverte
             {
                 // Deserialize to the specific type
                 var json = root.GetRawText();
-                return (IMessageDelivery)JsonSerializer.Deserialize(json, typeInfo.Type, options)!;
+                return (IMessageDelivery)JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
             }
         }
 

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MeshWeaver.Domain;
 
@@ -15,7 +15,7 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
         return typeToConvert == typeof(object);
     }
 
-    public override object Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         // Handle different JSON token types
         switch (reader.TokenType)
@@ -65,7 +65,7 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                 {
                     // Deserialize to the specific type using cleaned JSON
                     var json = cleanedElement.GetRawText();
-                    return JsonSerializer.Deserialize(json, typeInfo.Type, options);
+                    return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
                 }
                 catch (NotSupportedException ex) when (ex.Message.Contains("polymorphic interface or abstract type"))
                 {
@@ -120,7 +120,7 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
         return doc.RootElement.Clone();
     }
 
-    public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options)
+    public override void Write(Utf8JsonWriter writer, object? value, JsonSerializerOptions options)
     {
         if (value == null)
         {
