@@ -31,7 +31,7 @@ public sealed class MessageHub : IMessageHub
     public ITypeRegistry TypeRegistry { get; }
     private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
-    private ILogger Logger { get; }
+
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -40,7 +40,7 @@ public sealed class MessageHub : IMessageHub
     )
     {
         serviceProvider.Buildup(this);
-        Logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
+        serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
 
         logger.LogDebug("Starting MessageHub construction for address {Address}", configuration.Address);
@@ -99,7 +99,7 @@ public sealed class MessageHub : IMessageHub
             WithTypeAndRelatedTypesFor(registry.Type);
         }
     }
-    private void WithTypeAndRelatedTypesFor(Type typeToRegister)
+    private void WithTypeAndRelatedTypesFor(Type? typeToRegister)
     {
         if (typeToRegister == null) return;
 
@@ -158,7 +158,7 @@ public sealed class MessageHub : IMessageHub
         Type messageType,
         Type interfaceType,
         object instance,
-        Expression cancellationToken
+        Expression? cancellationToken
     )
     {
         var prm = Expression.Parameter(typeof(IMessageDelivery));
@@ -193,7 +193,7 @@ public sealed class MessageHub : IMessageHub
         return (d, c) => lambda(d, c);
     }
 
-    private record TypeAndHandler(Type Type, AsyncDelivery Action);
+    private record TypeAndHandler(Type Type, AsyncDelivery? Action);
 
 
 
@@ -303,11 +303,17 @@ public sealed class MessageHub : IMessageHub
         Func<IMessageDelivery<TResponse>, TResult> selector,
         CancellationToken cancellationToken
     )
-        => AwaitResponse(
-            Post(request, options),
+    {
+        var delivery = Post(request, options);
+        return delivery is null ? 
+                Task.FromException<TResult>(new ObjectDisposedException("hub is disposed"))
+            :AwaitResponse(
+            delivery,
             selector,
             cancellationToken
         );
+    }
+
     public Task<TResult> AwaitResponse<TResponse, TResult>(
         IMessageDelivery request,
         Func<IMessageDelivery<TResponse>, TResult> selector,
@@ -433,7 +439,7 @@ public sealed class MessageHub : IMessageHub
     {
         if (
             !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
-            || requestId?.ToString() is not string requestIdString
+            || requestId.ToString() is not { } requestIdString
             || !callbacks.TryRemove(requestIdString, out var myCallbacks)
         )
             return delivery;
@@ -444,7 +450,9 @@ public sealed class MessageHub : IMessageHub
         return delivery;
     }
 
-    Address IMessageHub.Address => Address; public IMessageDelivery<TMessage> Post<TMessage>(
+    Address IMessageHub.Address => Address; 
+    
+    public IMessageDelivery<TMessage>? Post<TMessage>(
         TMessage message,
         Func<PostOptions, PostOptions>? configure = null
     )
@@ -460,7 +468,7 @@ public sealed class MessageHub : IMessageHub
                 typeof(TMessage).Name, options.Sender, options.Target, Address);
         }
 
-        return (IMessageDelivery<TMessage>)messageService.Post(message, options);
+        return (IMessageDelivery<TMessage>?)messageService.Post(message, options);
     }
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)

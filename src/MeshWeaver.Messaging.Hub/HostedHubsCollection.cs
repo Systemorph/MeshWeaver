@@ -21,7 +21,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             if (create == HostedHubCreation.Always)
             {
                 logger.LogDebug("Creating hosted hub for address {Address}", address);
-                var newHub = CreateHub(address, config ?? (x => x));
+                var newHub = CreateHub(address, config);
                 if (newHub != null)
                     return messageHubs[address] = newHub;
             }
@@ -93,7 +93,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             hub.Dispose();
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await hub.Disposal.WaitAsync(cts.Token);
+            if(hub.Disposal is not null)
+                await hub.Disposal.WaitAsync(cts.Token);
             logger.LogDebug("Hub {address} disposed successfully", address);
         }
         catch (OperationCanceledException)

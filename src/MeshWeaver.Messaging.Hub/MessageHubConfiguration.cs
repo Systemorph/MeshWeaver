@@ -59,7 +59,10 @@ public record MessageHubConfiguration
         {
             if (!address.Equals(a))
                 return d;
-            f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
+            var hub = f.Hub.GetHostedHub(a, configuration)?.DeliverMessage(d);
+
+            if (hub is null)
+                throw new ArgumentException($"Could not find hub with address {a}");
             return d.Forwarded();
         }));
 

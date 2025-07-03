@@ -24,7 +24,7 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
             root.TryGetProperty("type", out var typeElement) &&
             root.TryGetProperty("id", out var idElement)
         )
-            return ParseAddress(typeElement.GetString(), idElement.GetString());
+            return ParseAddress(typeElement.GetString() ?? throw new InvalidOperationException(), idElement.GetString() ?? throw new InvalidOperationException());
         else
             throw new JsonException("Invalid address object format");
     }
@@ -57,9 +57,8 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
             //throw new JsonException($"Unknown address type: {addressType}");
         }
 
-        var json = $"{{\"Id\":\"{id}\"}}";
-        var address = Activator.CreateInstance(concreteType.Type, [id]);
-        return (Address)address;
+        var address = (Address)Activator.CreateInstance(concreteType!.Type, [id])!;
+        return address;
     }
 
     public override void Write(Utf8JsonWriter writer, Address value, JsonSerializerOptions options)

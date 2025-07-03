@@ -16,10 +16,11 @@ public class MessageService : IMessageService
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline; private readonly DeferralContainer deferralContainer;
-    private readonly CancellationTokenSource hangDetectionCts = new(); private volatile bool isStarted = false;
+    private readonly CancellationTokenSource hangDetectionCts = new(); 
+    private volatile bool isStarted;
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
     private readonly TaskCompletionSource<bool> startupProcessingCompletionSource = new();
-    private volatile int pendingStartupMessages = 0;
+    private volatile int pendingStartupMessages;
 
 
     public MessageService(
@@ -67,7 +68,7 @@ public class MessageService : IMessageService
                   logger.LogDebug("No pending startup messages in {Address}", Address);
 
                   // If there are no pending startup messages, we can dispose the startup deferral immediately
-                  startupDeferral?.Dispose();
+                  startupDeferral.Dispose();
                   logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
               }
               else
@@ -87,7 +88,7 @@ public class MessageService : IMessageService
               // If startup timed out, dispose the startup deferral to unblock any pending operations
               try
               {
-                  startupDeferral?.Dispose();
+                  startupDeferral.Dispose();
                   logger.LogDebug("Startup deferral disposed due to startup timeout in {Address}", Address);
               }
               catch (Exception disposeEx)
@@ -106,7 +107,7 @@ public class MessageService : IMessageService
               // If startup failed, dispose the startup deferral to unblock any pending operations
               try
               {
-                  startupDeferral?.Dispose();
+                  startupDeferral.Dispose();
                   logger.LogDebug("Startup deferral disposed due to startup failure in {Address}", Address);
               }
               catch (Exception disposeEx)
@@ -170,14 +171,14 @@ public class MessageService : IMessageService
                     try
                     {
                         // Wait for startup to complete with a reasonable timeout
-                        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                         timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
                         await startupCompletionSource.Task.WaitAsync(timeoutCts.Token);
 
                         // Startup completed successfully, now it's safe to process the message
                         logger.LogDebug("Startup completed successfully, processing scheduled message {Delivery} in {Address}", delivery, Address);
-                        buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, cancellationToken));
+                        buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, timeoutCts.Token));
                     }
                     catch (OperationCanceledException)
                     {
@@ -224,12 +225,11 @@ public class MessageService : IMessageService
 
         // Before routing to hierarchical routing (which may route to parent hub), 
         // ensure parent hub initialization is complete to avoid race conditions
-        if (ParentHub != null && ParentHub is MessageHub parentMessageHub)
+        if (ParentHub is MessageHub parentMessageHub)
         {
             try
             {
                 // Wait for parent hub to complete startup before routing, but only if it has been initialized
-                if (parentMessageHub.HasStarted != null)
                 {
                     using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
@@ -264,12 +264,12 @@ public class MessageService : IMessageService
                 delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
 
                 logger.LogDebug("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address}",
-                    delivery.Message?.GetType().Name ?? "null", Address);
+                    delivery.Message.GetType().Name, Address);
             }
             catch (Exception e)
             {
                 logger.LogError("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error}",
-                    delivery.Message?.GetType().Name ?? "null", Address, e.Message);
+                    delivery.Message.GetType().Name, Address, e.Message);
 
                 if (delivery.Message is ExecutionRequest er)
                     er.ExceptionCallback?.Invoke(e);
@@ -364,8 +364,8 @@ public class MessageService : IMessageService
         // Dispose hang detection timer first
         try
         {
-            hangDetectionCts?.Cancel();
-            hangDetectionCts?.Dispose();
+            await hangDetectionCts.CancelAsync();
+            hangDetectionCts.Dispose();
         }
         catch (Exception ex)
         {
@@ -468,7 +468,7 @@ public class MessageService : IMessageService
                 // Dispose the startup deferral now that all pending startup messages are processed
                 try
                 {
-                    startupDeferral?.Dispose();
+                    startupDeferral.Dispose();
                     logger.LogDebug("Startup deferral disposed after all pending messages processed in {Address}, remaining: {Remaining}", Address, remaining);
                 }
                 catch (Exception ex)

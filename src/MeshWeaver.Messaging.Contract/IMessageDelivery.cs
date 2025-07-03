@@ -12,7 +12,7 @@ public interface IMessageDelivery
     IReadOnlyDictionary<string, object> Properties { get; }
     string Id { get; }
     Address Sender { get; }
-    Address Target { get; }
+    Address? Target { get; }
     string State { get; }
     object Message { get; }
 
