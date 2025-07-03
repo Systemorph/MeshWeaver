@@ -5,6 +5,6 @@
         /// <summary>
         /// How ticks are generated.
         /// </summary>
-        public string Source { get; init; }
+        public string Source { get; init; } = null!;
     }
 }

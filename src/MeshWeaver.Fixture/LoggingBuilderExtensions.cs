@@ -17,7 +17,7 @@ public static class LoggingBuilderExtensions
     /// <param name="outputHelperAccessor">outputHelperAccessor to register. If not specified, a type singleton is registered</param>
     public static ILoggingBuilder AddXUnitLogger(
         this ILoggingBuilder builder,
-        TestOutputHelperAccessor outputHelperAccessor = null
+        TestOutputHelperAccessor? outputHelperAccessor = null
     )
     {
         builder.Services.TryAddEnumerable(
@@ -34,7 +34,7 @@ public static class LoggingBuilderExtensions
 
 public class TestOutputHelperAccessor
 {
-    public ITestOutputHelper OutputHelper { get; set; }
+    public ITestOutputHelper? OutputHelper { get; set; }
 }
 
 [ProviderAlias("XUnitLogger")]
@@ -42,7 +42,7 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
     : ILoggerProvider, ISupportExternalScope
 {
     private readonly ConcurrentDictionary<string, XUnitLogger> loggers = new();
-    private IExternalScopeProvider scopeProvider;
+    private IExternalScopeProvider scopeProvider = null!;
 
     // ReSharper disable once ParameterHidesMember
     void ISupportExternalScope.SetScopeProvider(IExternalScopeProvider scopeProvider)
@@ -69,14 +69,14 @@ public class XUnitLogger(
 {
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
-    public IDisposable BeginScope<TState>(TState state) => scopeProvider.Push(state);
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => scopeProvider.Push(state);
 
     public void Log<TState>(
         LogLevel logLevel,
         EventId eventId,
         TState state,
-        Exception exception,
-        Func<TState, Exception, string> formatter
+        Exception? exception,
+        Func<TState, Exception?, string> formatter
     )
     {
         if (testOutputHelperAccessor.OutputHelper == null)

@@ -9,6 +9,6 @@ namespace MeshWeaver.Charting.Models.Radar
         /// </summary>
         public int? StartAngle { get; init; }
 
-        public RadialScale Scale { get; init; }
+        public RadialScale Scale { get; init; } = null!;
     }
 }

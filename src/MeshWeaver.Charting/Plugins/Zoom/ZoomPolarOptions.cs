@@ -9,8 +9,8 @@ namespace MeshWeaver.Charting.Plugins.Zoom
     /// </summary>
     public record ZoomPolarOptions : PolarOptions
     {
-        public Pan Pan { get; set; }
+        public Pan Pan { get; set; } = null!;
 
-        public Zoom Zoom { get; set; }
+        public Zoom Zoom { get; set; } = null!;
     }
 }

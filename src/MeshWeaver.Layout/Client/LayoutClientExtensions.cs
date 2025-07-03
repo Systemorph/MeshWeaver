@@ -17,7 +17,7 @@ public static class LayoutClientExtensions
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
         object value,
         string dataContext,
-        JsonPointerReference reference, ModelParameter<JsonElement>? model = null)
+        JsonPointerReference? reference, ModelParameter<JsonElement>? model = null)
     {
         if (reference is not null)
         {
@@ -46,7 +46,7 @@ public static class LayoutClientExtensions
         }
     }
 
-    private static JsonPatch GetPatch<T>(this ISynchronizationStream<JsonElement> stream,
+    private static JsonPatch? GetPatch<T>(this ISynchronizationStream<JsonElement> stream,
         T value,
         JsonPointerReference reference,
         string dataContext,
@@ -130,7 +130,7 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
-    public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T,T> conversion, T defaultValue = default(T))
+    public static T ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T,T>? conversion, T defaultValue = default(T))
     {
         if (conversion != null)
             return conversion.Invoke(value, defaultValue);

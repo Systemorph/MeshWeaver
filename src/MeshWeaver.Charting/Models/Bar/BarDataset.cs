@@ -172,7 +172,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     /// <param name="stack">The stack.</param>
     /// <returns>A new instance of <see cref="BarDataSet"/> with the specified stack.</returns>
     public BarDataSet WithStack(object stack) =>
-        this with { Stack = stack.ToString() };
+        this with { Stack = stack?.ToString() ?? string.Empty };
 
     /// <summary>
     /// Sets whether the bars should be grouped.

@@ -10,6 +10,6 @@
         /// <summary>
         /// Percentage (string ending with %) or amount (number) for added room in the scale range above and below data.
         /// </summary>
-        public object Grace { get; init; }
+        public object Grace { get; init; } = null!;
     }
 }

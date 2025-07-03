@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Text;
 
 namespace MeshWeaver.Data.Documentation;
 
@@ -14,14 +13,14 @@ public record PdbDocumentationSource
     public override string Type => Pdb;
 
 
-    public Func<string, Stream> Sources { get; }
+    public Func<string, Stream?> Sources { get; }
 
     public IReadOnlyDictionary<string, string> FilesByType { get; }
 
     public string? GetFileNameForType(string typeName)
         => FilesByType.GetValueOrDefault(typeName);
 
-    public override Stream GetStream(string name)
+    public override Stream? GetStream(string name)
     => Sources(name);
 
 
@@ -111,7 +110,7 @@ public record PdbDocumentationSource
             : null;
     }
 
-    private static Stream GetEmbeddedSource(MetadataReader reader, DocumentHandle document)
+    private static Stream? GetEmbeddedSource(MetadataReader reader, DocumentHandle document)
     {
         var bytes = (from handle in reader.GetCustomDebugInformation(document)
                      let cdi = reader.GetCustomDebugInformation(handle)
@@ -146,25 +145,6 @@ public record PdbDocumentationSource
         stream.Position = 0;
         return stream;
     }
-    private static Stream DecodeStream(MemoryStream stream, Encoding encoding)
-    {
-        if (stream == null)
-        {
-            throw new ArgumentNullException(nameof(stream));
-        }
-
-        encoding = encoding ?? DefaultEncoding;
-        stream.Position = 0;
-
-        var decodedStream = new MemoryStream();
-        using var reader = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: true);
-        using var writer = new StreamWriter(decodedStream, encoding);
-        writer.Write(reader.ReadToEnd());
-        writer.Flush();
-        decodedStream.Position = 0;
-
-        return decodedStream;
-    }
     private ImmutableList<Func<(DocumentHandle Handle, Document Doc, string TypeName, string Namespace, string DocName), bool>>
         Exclusions
     { get; init; }
@@ -184,13 +164,11 @@ public record PdbDocumentationSource
         var nameInPdb = pdbReader.GetString(document.Name);
         return Path.GetFileName(nameInPdb);
     }
-    private static readonly Encoding DefaultEncoding =
-        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false);
 
     private static readonly Guid EmbeddedSource = new Guid("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
 
 
-    public override string GetPath(string fullType)
+    public override string? GetPath(string fullType)
     {
         var name = FilesByType.GetValueOrDefault(fullType);
         return name == null ? null : $"{Pdb}/{Id}/{name}";

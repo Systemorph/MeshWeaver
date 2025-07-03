@@ -41,18 +41,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     object ISynchronizationStream.Reference => Reference;
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced>(
+    public ISynchronizationStream<TReduced>? Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config
     ) =>
-        (ISynchronizationStream<TReduced>)
+        (ISynchronizationStream<TReduced>?)
             ReduceMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [reference, config]);
 
     private static readonly MethodInfo ReduceMethod = ReflectionHelper.GetMethodGeneric<
         SynchronizationStream<TStream>
-    >(x => x.Reduce<object, WorkspaceReference<object>>(null, null));
+    >(x => x.Reduce<object, WorkspaceReference<object>>(null!, null!));
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference)
@@ -60,7 +60,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Reduce<TReduced, TReference2>(reference, x => x);
 
 
-    public ISynchronizationStream<TReduced> Reduce<TReduced>(WorkspaceReference<TReduced> reference)
+    public ISynchronizationStream<TReduced>? Reduce<TReduced>(WorkspaceReference<TReduced> reference)
         => Reduce(reference, x => x);
 
 
@@ -86,7 +86,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private readonly object disposeLock = new();
 
 
-    public ChangeItem<TStream> Current
+    public ChangeItem<TStream>? Current
     {
         get => current;
     }
@@ -97,7 +97,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public ReduceManager<TStream> ReduceManager { get; init; }
 
-    private void SetCurrent(ChangeItem<TStream> value)
+    private void SetCurrent(ChangeItem<TStream>? value)
     {
         if (isDisposed || value == null)
             return;
@@ -107,9 +107,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
-    public void Update(Func<TStream, ChangeItem<TStream>> update, Func<Exception, Task> exceptionCallback) =>
+    public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)), exceptionCallback);
-    public void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Func<Exception, Task> exceptionCallback) =>
+    public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Func<Exception, Task> exceptionCallback) =>
         InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)), exceptionCallback);
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
@@ -134,11 +134,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Store.OnError(error);
     }
 
-    public void RegisterForDisposal(IDisposable disposable) => synchronizationHub
+    public void RegisterForDisposal(IDisposable disposable) => synchronizationHub?
         .RegisterForDisposal(_ => disposable.Dispose());
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
-        synchronizationHub.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));
+        synchronizationHub!.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));
 
 
     public void OnNext(ChangeItem<TStream> value)
@@ -146,7 +146,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
     }
 
-    public virtual void RequestChange(Func<TStream, ChangeItem<TStream>> update, Func<Exception, Task> exceptionCallback)
+    public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
     {
         // TODO V10: Here we need to inject validations (29.07.2024, Roland Bürgi)
         Update(update, exceptionCallback);
@@ -157,7 +157,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         IMessageHub Hub,
         object Reference,
         ReduceManager<TStream> ReduceManager,
-        Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>> configuration)
+        Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration)
     {
         this.Hub = Hub;
         this.ReduceManager = ReduceManager;
@@ -189,12 +189,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     internal StreamConfiguration<TStream> Configuration { get; }
 
-    private readonly IMessageHub synchronizationHub;
+    private readonly IMessageHub? synchronizationHub;
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback)
-        => synchronizationHub.InvokeAsync(action, exceptionCallback);
+        => synchronizationHub?.InvokeAsync(action, exceptionCallback);
 
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
-        => synchronizationHub.InvokeAsync(action, exceptionCallback);
+        => synchronizationHub?.InvokeAsync(action, exceptionCallback);
 
 
 
@@ -209,13 +209,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return;
             isDisposed = true;
         }
-        synchronizationHub.Dispose();
+        synchronizationHub?.Dispose();
     }
-    private ConcurrentDictionary<string, object> Properties { get; } = new();
-    public T Get<T>(string key) => (T)Properties.GetValueOrDefault(key);
-    public T Get<T>() => (T)Properties.GetValueOrDefault(typeof(T).FullName);
-    public void Set<T>(string key, T value) => Properties[key] = value;
-    public void Set<T>(T value) => Properties[typeof(T).FullName!] = value;
+    private ConcurrentDictionary<string, object?> Properties { get; } = new();
+    public T? Get<T>(string key) => (T?)Properties.GetValueOrDefault(key);
+    public T? Get<T>() => Get<T>(typeof(T).FullName!);
+    public void Set<T>(string key, T? value) => Properties[key] = value;
+    public void Set<T>(T? value) => Properties[typeof(T).FullName!] = value;
 
     private readonly ConcurrentDictionary<int, Task> tasks = new();
     public void BindToTask(Task task)
@@ -231,7 +231,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
-    internal string? ClientId { get; init; } //= Guid.NewGuid().AsString();
+    internal string ClientId { get; init; } = Guid.NewGuid().AsString();
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
 

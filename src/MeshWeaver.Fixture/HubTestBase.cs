@@ -10,17 +10,17 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress(string Id = null) : Address("router", Id ?? "1");
+    protected record RouterAddress(string? Id = null) : Address("router", Id ?? "1");
 
-    protected record HostAddress(string Id = null) : Address("host", Id ?? "1");
+    protected record HostAddress(string? Id = null) : Address("host", Id ?? "1");
 
 
-    protected record ClientAddress(string Id = null) : Address("client", Id ?? "1");
+    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
 
     [Inject]
-    protected IMessageHub Router;
+    protected IMessageHub Router = null!;
     [Inject]
-    protected ILogger<HubTestBase> Logger; protected HubTestBase(ITestOutputHelper output)
+    protected ILogger<HubTestBase> Logger = null!; protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
         // Add debug file logging for message flow tracking
@@ -60,12 +60,12 @@ public class HubTestBase : TestBase
         MessageHubConfiguration configuration
     ) => configuration.WithTypes(AddressTypes);
 
-    protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    protected virtual IMessageHub? GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
         return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
     }
 
-    protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    protected virtual IMessageHub? GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
         return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
     }

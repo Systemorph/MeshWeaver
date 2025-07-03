@@ -5,16 +5,16 @@
         /// <summary>
         /// The minimum item to display.
         /// </summary>
-        public string Min { get; init; }
+        public string Min { get; init; } = null!;
 
         /// <summary>
         /// The maximum item to display.
         /// </summary>
-        public string Max { get; init; }
+        public string Max { get; init; } = null!;
 
         /// <summary>
         /// An array of labels to display.
         /// </summary>
-        public List<string> Labels { get; init; }
+        public List<string> Labels { get; init; } = null!;
     }
 }

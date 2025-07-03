@@ -6,7 +6,7 @@ namespace MeshWeaver.Data.Documentation;
 
 public record DocumentationContext(IMessageHub Hub)
 {
-    public ConcurrentDictionary<(string Type, string Id), DocumentationSource> Sources { get;  } = new();
+    public ConcurrentDictionary<(string Type, string Id), DocumentationSource?> Sources { get;  } = new();
 
     public DocumentationSource? GetSource(string type, string id)
     {
@@ -44,11 +44,11 @@ public abstract record DocumentationSource(string Id)
 {
     internal ImmutableList<string> XmlComments { get; set; } = [];
     public ImmutableDictionary<string, string> DocumentPaths { get; set; } = ImmutableDictionary<string, string>.Empty;
-    public abstract Stream GetStream(string name);
+    public abstract Stream? GetStream(string name);
 
     public abstract string Type { get; }
 
-    public abstract string GetPath(string name);
+    public abstract string? GetPath(string name);
     public abstract string GetDocumentName(string documentId);
 }
 

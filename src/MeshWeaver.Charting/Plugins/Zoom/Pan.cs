@@ -10,18 +10,18 @@
         /// <summary>
         /// Panning directions. Remove the appropriate direction to disable Eg. 'y' would only allow panning in the y direction.
         /// </summary>
-        public string Mode { get; set; }
+        public string Mode { get; set; } = null!;
 
         public double? Sensitivity { get; set; }
 
         /// <summary>
         /// Format the min pan range depending on scale type.
         /// </summary>
-        public Range RangeMin { get; set; }
+        public Range RangeMin { get; set; } = null!;
 
         /// <summary>
         /// Format the max pan range depending on scale type.
         /// </summary>
-        public Range RangeMax { get; set; }
+        public Range RangeMax { get; set; } = null!;
     }
 }

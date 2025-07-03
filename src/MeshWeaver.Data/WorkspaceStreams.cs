@@ -10,7 +10,7 @@ public static class WorkspaceStreams
     internal static ISynchronizationStream? CreateWorkspaceStream<TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var collections = reference.GetCollections();

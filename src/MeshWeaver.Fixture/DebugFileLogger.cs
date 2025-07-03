@@ -29,9 +29,11 @@ public class DebugFileLogger : ILogger
         _logFileName = Path.Combine(LogDirectory, $"debug_{timestamp}_{processId}_{instanceId}_{categoryName.Replace(".", "_")}.log");
     }
 
-    public IDisposable BeginScope<TState>(TState state) => new NoOpDisposable();
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => new NoOpDisposable();
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))
             return;

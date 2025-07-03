@@ -11,19 +11,19 @@
         /// <summary>
         /// Alignment of the axis title. Possible options are 'start', 'center' and 'end'
         /// </summary>
-        public string Align { get; init; }
+        public string Align { get; init; } = null!;
 
         /// <summary>
         /// The text for the title. (i.e. "# of People" or "Response Choices").
         /// </summary>
-        public string Text { get; init; }
+        public string Text { get; init; } = null!;
 
         /// <summary>
         /// Color of label.
         /// </summary>
-        public ChartColor Color { get; init; }
+        public ChartColor Color { get; init; } = null!;
 
-        public Font Font { get; init; }
+        public Font Font { get; init; } = null!;
 
         /// <summary>
         /// Padding to apply around scale labels. Only top, bottom and y are implemented.

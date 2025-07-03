@@ -11,7 +11,7 @@
         /// <summary>
         /// The Intl.NumberFormat options used by the default label formatter.
         /// </summary>
-        public object Format { get; init; }
+        public object Format { get; init; } = null!;
 
         /// <summary>
         /// If defined and stepSize is not specified, the step size will be rounded to this many decimal places.

@@ -122,9 +122,9 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// If true, fill the area under the line.
         /// </summary>
-        public object Fill { get; init; } = null!;
+        public object? Fill { get; init; }
 
-        public TDataSet WithFill(object fill)
+        public TDataSet WithFill(object? fill)
             => This with { Fill = fill };
 
         /// <summary>

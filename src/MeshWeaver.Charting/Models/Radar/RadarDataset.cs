@@ -130,14 +130,14 @@ public record RadarDataSet(IReadOnlyCollection<object> Data, string? Label = nul
     /// <summary>
     /// The fill option for the dataset.
     /// </summary>
-    public object Fill { get; init; } = null!;
+    public object? Fill { get; init; }
 
     /// <summary>
     /// Sets the fill option for the dataset.
     /// </summary>
     /// <param name="fill">The fill option.</param>
     /// <returns>A new instance of <see cref="RadarDataSet"/> with the specified fill option.</returns>
-    public RadarDataSet WithFill(object fill) =>
+    public RadarDataSet WithFill(object? fill) =>
         this with { Fill = fill };
 
     /// <summary>

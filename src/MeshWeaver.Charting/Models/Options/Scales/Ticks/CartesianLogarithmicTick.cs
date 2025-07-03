@@ -6,6 +6,6 @@
         /// <summary>
         /// The Intl.NumberFormat options used by the default label formatter.
         /// </summary>
-        public object Format { get; init; }
+        public object Format { get; init; } = null!;
     }
 }
