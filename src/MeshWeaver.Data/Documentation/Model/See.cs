@@ -5,5 +5,5 @@ namespace MeshWeaver.Data.Documentation.Model;
 public record See
 {
     [XmlAttribute("cref")]
-    public string Cref { get; init; }
+    public string? Cref { get; init; }
 }

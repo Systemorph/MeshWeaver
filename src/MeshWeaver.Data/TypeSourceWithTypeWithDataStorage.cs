@@ -17,7 +17,7 @@ public record TypeSourceWithTypeWithDataStorage<T>
         this.Storage = Storage;
     }
 
-    private InstanceCollection LastSaved { get; set; }
+    private InstanceCollection LastSaved { get; set; } = new();
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
