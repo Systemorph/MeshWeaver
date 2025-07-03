@@ -166,7 +166,7 @@ namespace MeshWeaver.DataSetReader.Csv
                             var row = dataTable.NewRow();
                             for (var i = 0; i < dataTable.Columns.Count; i++)
                             {
-                                var sourceValue = i >= record.Length ? null : record[i];
+                                var sourceValue = i >= record!.Length ? null : record[i];
                                 row[i] = string.IsNullOrEmpty(sourceValue) ? null! : sourceValue;
                             }
                             dataTable.Rows.Add(row);
@@ -204,7 +204,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 )
                 {
                     var genericArguments = propertyType.GetGenericArgumentTypes(typeof(IList<>));
-                    var listElementType = genericArguments[0];
+                    var listElementType = genericArguments![0];
                     for (var i = 0; i < property.Length; i++)
                     {
                         dataTable.Columns.Add(string.Concat(propertyInfo.Name, i), listElementType);
@@ -250,7 +250,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 reader,
                 options.Delimiter,
                 options.IncludeHeaderRow,
-                options.EntityType
+                options.EntityType!
             );
         }
     }

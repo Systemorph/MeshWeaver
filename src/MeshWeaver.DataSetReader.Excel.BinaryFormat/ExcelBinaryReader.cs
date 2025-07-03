@@ -290,12 +290,12 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			if (rec == null) return false;
 			if (rec is XlsBiffIndex)
 			{
-				idx = (XlsBiffIndex?)rec;
+				idx = (XlsBiffIndex)rec;
 			}
 			else if (rec is XlsBiffUncalced)
 			{
 				// Sometimes this come before the index...
-				idx = _stream.Read() as XlsBiffIndex;
+				idx = _stream.Read() as XlsBiffIndex ?? null!;
 			}
 
 			//if (null == idx)
@@ -655,7 +655,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 					if (record is XlsBiffEOF)
 						return false;
 
-					rowRecord = (XlsBiffRow?)record;
+					rowRecord = record as XlsBiffRow ?? null!;
 				} while (rowRecord == null || rowRecord.RowIndex < _rowIndex);
 			}
 

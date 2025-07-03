@@ -80,7 +80,7 @@ public sealed record DataContext : IDisposable
             dataSource.Initialize();
         DataSourcesByType = DataSourcesById.Values
             .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
-        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key), kvp.Value)).ToDictionary();
+        DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key)!, kvp.Value)).ToDictionary();
         TypeSources = DataSourcesById
             .Values
             .SelectMany(ds => ds.TypeSources)

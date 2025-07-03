@@ -1,5 +1,4 @@
-﻿#nullable enable
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -162,7 +161,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     }
 
 
-    public ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction> key)
+    public ITypeRegistry WithKeyFunctionProvider(Func<Type, KeyFunction?> key)
     {
         keyFunctionBuilder.WithKeyFunction(key);
         return this;
