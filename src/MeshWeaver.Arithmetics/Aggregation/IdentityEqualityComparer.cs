@@ -150,8 +150,8 @@ namespace MeshWeaver.Arithmetics.Aggregation
 
         private bool EqualsImpl(T x, T y)
         {
-            var type1 = x.GetType();
-            var type2 = y.GetType();
+            var type1 = x!.GetType();
+            var type2 = y!.GetType();
 
             return subtypeEquality.GetInstance((type1, type2))(x, y);
         }
@@ -167,7 +167,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
 
         private int GetHashCodeImpl(T obj)
         {
-            return subtypeHashCode.GetInstance(obj.GetType())(obj);
+            return subtypeHashCode.GetInstance(obj!.GetType())(obj);
         }
     }
 
@@ -182,7 +182,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             if (identityProps.Length == 0)
             {
                 equalityFunc = (x, y) => (x == null && y == null) || x != null && x.Equals(y);
-                hashCodeFunc = x => x.GetHashCode();
+                hashCodeFunc = x => x?.GetHashCode() ?? 0;
                 return (equalityFunc, hashCodeFunc);
             }
 

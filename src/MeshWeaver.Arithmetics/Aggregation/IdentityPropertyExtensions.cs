@@ -47,11 +47,11 @@ public static class IdentityPropertyExtensions
 
     public static bool HasIdentityProperties(
         this Type type,
-        Func<PropertyInfo, bool> predicate = null
+        Func<PropertyInfo, bool>? predicate = null
     )
     {
         var identityProperties = type.GetIdentityProperties();
-        return predicate == null ? identityProperties.Any() : identityProperties.Any(predicate);
+        return predicate is null ? identityProperties.Any() : identityProperties.Any(predicate);
     }
 
     public static PropertyInfo[] GetIdentityOrSimilarProperties(this Type type)
