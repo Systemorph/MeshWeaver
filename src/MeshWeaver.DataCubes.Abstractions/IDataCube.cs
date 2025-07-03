@@ -22,7 +22,7 @@ namespace MeshWeaver.DataCubes
         
         IDataCube<T> Filter(Func<T, bool> filter);
 
-        IDataCube<T> Filter(DimensionTuple tuple) => Filter(tuple.AsEnumerable().ToArray());
+        IDataCube<T> Filter(DimensionTuple tuple) => Filter(tuple.AsEnumerable().Select(x => (x.Dimension, x.Value!)).ToArray());
 
         public static IDataCube<T> operator +(IDataCube<T> a, IDataCube<T> b) => Sum(a, b);
         public static IDataCube<T> operator +(IDataCube<T> a, double b) => Sum(a, b);

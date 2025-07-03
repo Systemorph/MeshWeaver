@@ -143,20 +143,20 @@ public static class DataExtensions
     public static DataContext AddPartitionedHubSource<TPartition>(this DataContext dataContext,
         Func<PartitionedHubDataSource<TPartition>, PartitionedHubDataSource<TPartition>> configuration,
         object? id = null) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)), id);
+        dataContext.WithDataSource(_ => configuration.Invoke(new PartitionedHubDataSource<TPartition>(id ?? DefaultId, dataContext.Workspace)));
 
     public static DataContext AddHubSource(
         this DataContext dataContext,
         Address address,
         Func<UnpartitionedHubDataSource, IUnpartitionedDataSource> configuration
     ) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)), address);
+        dataContext.WithDataSource(_ => configuration.Invoke(new UnpartitionedHubDataSource(address, dataContext.Workspace)));
 
     public static DataContext AddSource(this DataContext dataContext,
            Func<GenericUnpartitionedDataSource, IUnpartitionedDataSource> configuration,
            object? id = null
         ) =>
-        dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)), id);
+        dataContext.WithDataSource(_ => configuration.Invoke(new GenericUnpartitionedDataSource(id ?? DefaultId, dataContext.Workspace)));
 
     public static object DefaultId => Guid.NewGuid().AsString();
 
@@ -206,10 +206,6 @@ public static class DataExtensions
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-        if (typeName is null)
-        {
-            return "{}";
-        }
 
         // Try to find the type by the given name first
         if (!typeRegistry.TryGetType(typeName, out var typeDefinition))
@@ -222,7 +218,7 @@ public static class DataExtensions
             }
         }
 
-        var type = typeDefinition.Type;
+        var type = typeDefinition!.Type;
 
         // Use System.Text.Json schema generation first
         var options = hub.JsonSerializerOptions;
@@ -250,7 +246,7 @@ public static class DataExtensions
                     // Get the actual PropertyInfo from the declaring type
                     var declaringType = ctx.PropertyInfo.DeclaringType;
                     var propertyName = ctx.PropertyInfo.Name;
-                    var actualPropertyInfo = declaringType?.GetProperty(propertyName.ToPascalCase()); 
+                    var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!); 
                     if (actualPropertyInfo != null)
                     {
                         var propertyDescription = actualPropertyInfo.GetXmlDocsSummary();
@@ -265,48 +261,9 @@ public static class DataExtensions
             }
         });
 
-        return schema?.ToJsonString() ?? "{}";
+        return schema.ToJsonString();
     }
 
-    private static object[] GetPotentialInheritors(Type baseType, ITypeRegistry typeRegistry)
-    {
-        var inheritors = new List<object>();
-
-        // Find all registered types that inherit from or implement the base type
-        foreach (var kvp in typeRegistry.Types)
-        {
-            var registeredType = kvp.Value.Type;
-
-            // Skip the base type itself
-            if (registeredType == baseType)
-                continue;
-
-            // Check if this type is assignable to the base type (inheritance/implementation)
-            if (baseType.IsAssignableFrom(registeredType))
-            {
-                inheritors.Add(new
-                {
-                    @type = "object",
-                    title = registeredType.Name,
-                    description = $"Inheritor: {registeredType.FullName}",
-                    allOf = new[]
-                    {
-                        new { @ref = $"#/definitions/{kvp.Key}" }
-                    },
-                    properties = new
-                    {
-                        @type = new
-                        {
-                            @type = "string",
-                            @const = kvp.Key // The specific type name for this inheritor
-                        }
-                    }
-                });
-            }
-        }
-
-        return inheritors.ToArray();
-    }
     private static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
     {
         var workspace = hub.GetWorkspace();
@@ -331,12 +288,12 @@ public static class DataExtensions
 
             types.Add(new TypeDescription(
                 Name: typeDefinition.CollectionName,
-                DisplayName: typeDefinition.DisplayName ?? typeDefinition.CollectionName.Wordify(),
+                DisplayName: typeDefinition.DisplayName,
                 Description: description,
                 hub.Address
             ));
         }
 
-        return types.OrderBy(t => t.DisplayName ?? t.Name);
+        return types.OrderBy(t => t.DisplayName);
     }
 }

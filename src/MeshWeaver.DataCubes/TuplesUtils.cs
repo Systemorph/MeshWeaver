@@ -30,14 +30,14 @@ public static class TuplesUtils<T>
         .Select(p => new PropertyToDimensionDescriptor(
             p.Property,
             p.Property.GetReflector(),
-            new DimensionDescriptor(p.DimensionAttribute.Name, p.DimensionAttribute.Type)
+            new DimensionDescriptor(p.DimensionAttribute!.Name, p.DimensionAttribute.Type)
         ))
         .ToDictionaryValidated(x => x.Descriptor.SystemName);
 
     public static PropertyReflector GetReflector(string dimension)
     {
         PropertiesByDimension.TryGetValue(dimension, out var ret);
-        return ret?.Reflector;
+        return ret?.Reflector!;
     }
 
     public static IEnumerable<DataSlice<T>> GetDimensionTuples(
@@ -69,7 +69,7 @@ public static class TuplesUtils<T>
     {
         var filters = tupleFilter.Select(CreateComparer).Where(x => x != default).ToArray();
         if (filters.Length == 0)
-            return null;
+            return null!;
         return CombineFilters(filters);
     }
 
@@ -83,16 +83,16 @@ public static class TuplesUtils<T>
     {
         var dimensionReflector = GetReflector(valueTuple.dimension);
         if (dimensionReflector == null)
-            return null;
+            return null!;
 
         if (valueTuple.value is null)
             return t => dimensionReflector.GetValue(t) == null;
 
         if (valueTuple.value is int number)
-            return t => (int)dimensionReflector.GetValue(t) == number;
+            return t => (int)dimensionReflector.GetValue(t)! == number;
 
         if (valueTuple.value is string pattern)
-            return t => MatchesStringPattern((string)dimensionReflector.GetValue(t), pattern);
+            return t => MatchesStringPattern((string)dimensionReflector.GetValue(t)!, pattern);
 
         if (valueTuple.value is IEnumerable<string> patterns)
             return t =>

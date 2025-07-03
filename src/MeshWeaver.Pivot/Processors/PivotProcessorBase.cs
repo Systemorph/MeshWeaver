@@ -24,8 +24,8 @@ public abstract class PivotProcessorBase<
         TPivotBuilder
     >
 {
-    protected internal IPivotConfiguration<TAggregate, ColumnGroup> ColumnConfig { get; init; }
-    protected internal IPivotConfiguration<TAggregate, RowGroup> RowConfig { get; init; }
+    protected internal IPivotConfiguration<TAggregate, ColumnGroup>? ColumnConfig { get; init; }
+    protected internal IPivotConfiguration<TAggregate, RowGroup>? RowConfig { get; init; }
 
     protected internal TPivotBuilder PivotBuilder { get; set; } = pivotBuilder;
     protected IWorkspace Workspace { get; } = workspace;

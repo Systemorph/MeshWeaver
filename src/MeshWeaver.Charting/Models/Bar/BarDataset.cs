@@ -14,9 +14,8 @@ namespace MeshWeaver.Charting.Models.Bar;
 [SuppressMessage("ReSharper", "InconsistentNaming")]
 public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null) : DataSetBase<BarDataSet>(Data, Label), IDataSetWithOrder<BarDataSet>, IDataSetWithPointStyle<BarDataSet>, IDataSetWithStack<BarDataSet>
 {
-    public BarDataSet(IEnumerable Data, string? label = null) : this(Data.Cast<object>().ToArray())
+    public BarDataSet(IEnumerable Data, string? label = null) : this(Data.Cast<object>().ToArray(), label)
     {
-        Label = label;
     }
 
     #region General
@@ -35,7 +34,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     /// <summary>
     /// The base axis of the dataset. 'x' for vertical bars and 'y' for horizontal bars.
     /// </summary>
-    public string IndexAxis { get; init; }
+    public string IndexAxis { get; init; } = null!;
 
     /// <summary>
     /// The drawing order of dataset. Also affects order for stacking, tooltip and legend.
@@ -50,19 +49,19 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     /// <summary>
     /// The ID of the group to which this dataset belongs to (when stacked, each group will be a separate stack). Defaults to dataset type.
     /// </summary>
-    public string Stack { get; init; }
+    public string Stack { get; init; } = null!;
 
     public BarDataSet WithStack(string stack) => this with { Stack = stack };
 
     /// <summary>
     /// The ID of the x axis to plot this dataset on.
     /// </summary>
-    public string XAxisID { get; init; }
+    public string XAxisID { get; init; } = null!;
 
     /// <summary>
     /// The ID of the y axis to plot this dataset on.
     /// </summary>
-    public string YAxisID { get; init; }
+    public string YAxisID { get; init; } = null!;
     #endregion
 
     #region Styling
@@ -70,12 +69,12 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     /// <summary>
     /// Which edge to skip drawing the border for. Options are 'bottom', 'left', 'top', and 'right'.
     /// </summary>
-    public IEnumerable<string> BorderSkipped { get; init; }
+    public IEnumerable<string> BorderSkipped { get; init; } = null!;
 
     /// <summary>
     /// The bar border radius (in pixels).
     /// </summary>
-    public object BorderRadius { get; init; }
+    public object BorderRadius { get; init; } = null!;
 
     /// <summary>
     /// Set this to ensure that bars have a minimum length in pixels.
@@ -122,7 +121,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     /// <summary>
     /// Manually set width of each bar in pixels. If set to 'flex', it computes "optimal" sample widths that globally arrange bars side by side. If not set (default), bars are equally sized based on the smallest interval.
     /// </summary>
-    public object BarThickness { get; init; }
+    public object BarThickness { get; init; } = null!;
     #endregion BarThickness
 
     #region MaxBarThickness
@@ -133,7 +132,7 @@ public record BarDataSet(IReadOnlyCollection<object> Data, string? Label = null)
     public double? MaxBarThickness { get; init; }
     #endregion MaxBarThickness
 
-    public Scale Scale { get; init; }
+    public Scale Scale { get; init; } = null!;
 
     /// <summary>
     /// Sets the bar percentage for the dataset.
@@ -212,7 +211,7 @@ public record FloatingBarDataSet : BarDataSet
         new Parsing($"{nameof(WaterfallBar.Label).ToCamelCase()}",
             $"{nameof(WaterfallBar.Range).ToCamelCase()}");
 
-    public FloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
+    public FloatingBarDataSet(IEnumerable Data, string? label = null) : base(Data, label)
     {
     }
 
@@ -220,7 +219,7 @@ public record FloatingBarDataSet : BarDataSet
     {
     }
 
-    public FloatingBarDataSet(IEnumerable dataFrom, IEnumerable dataTo, string label = null) : this(ConvertToFloatingData(dataFrom, dataTo), label)
+    public FloatingBarDataSet(IEnumerable dataFrom, IEnumerable dataTo, string? label = null) : this(ConvertToFloatingData(dataFrom, dataTo)!, label)
     {
 
     }
@@ -229,7 +228,7 @@ public record FloatingBarDataSet : BarDataSet
     {
         var dataFromArray = dataFrom?.Cast<object>().ToArray();
         var dataToArray = dataTo?.Cast<object>().ToArray();
-        if (dataFromArray == null || dataToArray == null) return null;
+        if (dataFromArray == null || dataToArray == null) return Array.Empty<object>();
 
         var rangeData = dataFromArray.Zip(dataToArray, (from, to) => new[] { from, to });
         return rangeData.Cast<object>().ToArray();
@@ -238,7 +237,7 @@ public record FloatingBarDataSet : BarDataSet
 
 public record HorizontalFloatingBarDataSet : BarDataSet, IChartOptionsConfiguration
 {
-    public HorizontalFloatingBarDataSet(IEnumerable Data, string label = null) : base(Data, label)
+    public HorizontalFloatingBarDataSet(IEnumerable Data, string? label = null) : base(Data, label)
     {
     }
 

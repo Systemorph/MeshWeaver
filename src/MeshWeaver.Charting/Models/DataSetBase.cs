@@ -3,7 +3,7 @@
 namespace MeshWeaver.Charting.Models;
 
 // https://www.chartjs.org/docs/3.5.1/general/data-structures.html
-public abstract record DataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label) : DataSet(Data, Label) where TDataSet : DataSetBase<TDataSet>
+public abstract record DataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string? Label) : DataSet(Data, Label) where TDataSet : DataSetBase<TDataSet>
 {
     protected TDataSet This => (TDataSet)this;
 
@@ -12,7 +12,7 @@ public abstract record DataSetBase<TDataSet>(IReadOnlyCollection<object> Data, s
     /// </summary>
     /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <typeparamref name="TDataSet"/> with the specified label.</returns>
-    public TDataSet WithLabel(string label) =>
+    public TDataSet WithLabel(string? label) =>
         This with { Label = label };
 
     /// <summary>
@@ -92,7 +92,7 @@ public record Parsing(string XAxisKey, string YAxisKey);
 
 internal record TimePointData
 {
-    public string X { get; init; }
+    public string X { get; init; } = null!;
     public double? Y { get; init; }
 }
 

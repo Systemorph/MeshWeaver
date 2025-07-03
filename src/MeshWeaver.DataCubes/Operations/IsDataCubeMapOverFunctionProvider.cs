@@ -5,7 +5,7 @@ namespace MeshWeaver.DataCubes.Operations
 {
     public class IsDataCubeMapOverFunctionProvider : IMapOverFunctionProvider
     {
-        private static readonly MethodInfo CreateMapOverDataCubeMethod = typeof(IsDataCubeMapOverFunctionProvider).GetMethod(nameof(CreateMapOverDataCube), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo? CreateMapOverDataCubeMethod = typeof(IsDataCubeMapOverFunctionProvider).GetMethod(nameof(CreateMapOverDataCube), BindingFlags.Static | BindingFlags.NonPublic);
 
         private static Func<double, IDataCube<TElement>, IDataCube<TElement>> CreateMapOverDataCube<TElement>(ArithmeticOperation method)
         {
@@ -14,8 +14,8 @@ namespace MeshWeaver.DataCubes.Operations
 
         public Delegate GetDelegate(Type type, ArithmeticOperation method)
         {
-            return (Delegate)CreateMapOverDataCubeMethod.MakeGenericMethod(type.GetDataCubeElementType())
-                                                        .Invoke(null, new object[] { method });
+            return (Delegate)CreateMapOverDataCubeMethod!.MakeGenericMethod(type.GetDataCubeElementType()!)
+                                                        .Invoke(null, new object[] { method })!;
         }
     }
 }

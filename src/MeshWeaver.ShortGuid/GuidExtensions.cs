@@ -10,10 +10,10 @@ public static class GuidExtensions
         return new CSharpVitamins.ShortGuid(id);
     }
 
-    public static string? AsString(this Guid guid)
+    public static string AsString(this Guid guid)
     {
         if (guid == Guid.Empty)
-            return null;
+            return string.Empty;
 
         return new CSharpVitamins.ShortGuid(guid).ToString();
     }

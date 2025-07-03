@@ -1,16 +1,16 @@
 ﻿namespace MeshWeaver.Charting.Models.Segmented;
 
-public abstract record SegmentDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label) : DataSetBase<TDataSet>(Data, Label) where TDataSet : SegmentDataSetBase<TDataSet>
+public abstract record SegmentDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string? Label) : DataSetBase<TDataSet>(Data, Label) where TDataSet : SegmentDataSetBase<TDataSet>
 {
     /// <summary>
     /// The portion of the chart that is cut out of the middle. If string and ending with '%', percentage of the chart radius. number is considered to be pixels.
     /// </summary>
-    public object Cutout { get; init; }
+    public object Cutout { get; init; } = null!;
 
     /// <summary>
     /// The outer radius of the chart. If string and ending with '%', percentage of the maximum radius. number is considered to be pixels.
     /// </summary>
-    public object Radius { get; init; }
+    public object Radius { get; init; } = null!;
 
     /// <summary>
     /// Starting angle to draw arcs from.

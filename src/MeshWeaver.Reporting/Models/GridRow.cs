@@ -8,7 +8,7 @@ namespace MeshWeaver.Reporting.Models
         public object Data { get; }
         public object Style { get; set; }
 
-        public GridRow(RowGroup rowGroup, object row)
+        public GridRow(RowGroup rowGroup, object? row)
         {
             RowGroup = rowGroup;
             Data = row;

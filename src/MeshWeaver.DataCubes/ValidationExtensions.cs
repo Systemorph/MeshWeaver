@@ -2,7 +2,7 @@
 
 public static class ValidationExtensions
 {
-    public static Dictionary<TKey, TElement> ToDictionaryValidated<TElement, TKey>(this IEnumerable<TElement> enumerable, Func<TElement, TKey> keySelector)
+    public static Dictionary<TKey, TElement> ToDictionaryValidated<TElement, TKey>(this IEnumerable<TElement> enumerable, Func<TElement, TKey> keySelector) where TKey : notnull
     {
         var result = new Dictionary<TKey, TElement>();
         var duplicates = new List<TKey>();

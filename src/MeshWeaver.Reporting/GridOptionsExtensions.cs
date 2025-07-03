@@ -1,21 +1,14 @@
 ﻿using System.Collections.Immutable;
 using System.Text.RegularExpressions;
-using MeshWeaver.DataCubes;
 using MeshWeaver.GridModel;
 using MeshWeaver.Reporting.Models;
 
 namespace MeshWeaver.Reporting
 {
     // TODO V10: move to the builder (2021/12/08, Ekaterina Mishina)
-    public class GridRowSelector
+    public class GridRowSelector(string dimension)
     {
-        private readonly string dimension;
         private readonly IList<Func<GridRow, bool>> orConditions = new List<Func<GridRow, bool>>();
-
-        public GridRowSelector(string dimension)
-        {
-            this.dimension = dimension;
-        }
 
         public void Level(params int[] levels)
         {
@@ -26,7 +19,7 @@ namespace MeshWeaver.Reporting
         {
             var ret = Regex
                 .Match(
-                    gridRow.RowGroup.GrouperName.ToString(),
+                    gridRow.RowGroup.GrouperName,
                     $"{dimension}[0-9]{{0,}}$",
                     RegexOptions.IgnoreCase
                 )
@@ -51,7 +44,7 @@ namespace MeshWeaver.Reporting
         public static GridOptions HideRowValuesForDimension(
             this GridOptions gridOptions,
             string dimension,
-            Func<GridRowSelector, GridRowSelector> rowSelectorFunc = null
+            Func<GridRowSelector, GridRowSelector>? rowSelectorFunc = null
         )
         {
             var gridRowSelector = new GridRowSelector(dimension);
@@ -172,7 +165,7 @@ namespace MeshWeaver.Reporting
 
         public static IReadOnlyCollection<ColDef> Modify(
             this IReadOnlyCollection<ColDef> definitions,
-            string systemNameRegex,
+            string? systemNameRegex,
             Func<ColDef, ColDef> definitionModifier
         )
         {
@@ -180,7 +173,7 @@ namespace MeshWeaver.Reporting
                 x =>
                     Regex
                         .Match(
-                            x is ColGroupDef g ? g.GroupId.ToString() : x.ColId.ToString(),
+                            x is ColGroupDef g ? g.GroupId.ToString()! : x.ColId.ToString()!,
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )
