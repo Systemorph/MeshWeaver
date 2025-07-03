@@ -99,7 +99,7 @@ public abstract record UiControl : IUiControl
     public UiControl WithMeta(object meta) => this with { Meta = meta };
     public UiControl WithPageTitle(object pageTitle) => this with { PageTitle = pageTitle };
 
-    public virtual bool Equals(UiControl other)
+    public virtual bool Equals(UiControl? other)
     {
         if (other is null)
             return false;

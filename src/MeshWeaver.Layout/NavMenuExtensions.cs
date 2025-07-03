@@ -32,7 +32,7 @@ public static class NavMenuExtensions
                     config)
         );
     public static LayoutDefinition WithNavMenu(this LayoutDefinition layout,
-        object title, string href, Icon icon = null)
+        object title, string href, Icon? icon = null)
         => layout.WithNavMenu((menu, _, _) => menu.WithNavLink(title, href, icon));
 
     public static TContainer WithViews<TContainer>(this TContainer container, params IEnumerable<UiControl> views)

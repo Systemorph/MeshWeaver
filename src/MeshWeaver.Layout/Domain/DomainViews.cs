@@ -12,7 +12,7 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class DomainViews
 {
-    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
+    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration>? configuration = null)
         => config
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)

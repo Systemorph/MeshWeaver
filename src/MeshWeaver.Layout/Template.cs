@@ -16,7 +16,7 @@ public static class Template
     [ReplaceBindMethod]
     public static TView Bind<T, TView>(T data,
         Expression<Func<T, TView>> dataTemplate,
-        string id = null)
+        string? id = null)
         where TView : UiControl => BindObject(data, dataTemplate, id);
 
     /// <summary>

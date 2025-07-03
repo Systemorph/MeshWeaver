@@ -33,7 +33,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
 
     public LayoutAreaControl WithProgressMessage(string progressMessage) => this with { ProgressMessage = progressMessage };
 
-    public virtual bool Equals(LayoutAreaControl other)
+    public virtual bool Equals(LayoutAreaControl? other)
     {
         if(other is null) return false;
         if(ReferenceEquals(this, other)) return true;
