@@ -26,7 +26,8 @@ namespace MeshWeaver.Data.Persistence
 
         protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
         {
-            var partition = (Address)identity.Partition;
+            if (identity.Partition is not Address partition)
+                return null;
             var reference = GetReference();
             var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
                 partition,

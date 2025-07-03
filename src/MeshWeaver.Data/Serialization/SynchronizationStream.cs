@@ -31,7 +31,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <summary>
     /// My current state deserialized as snapshot
     /// </summary>
-    private ChangeItem<TStream> current;
+    private ChangeItem<TStream>? current;
 
 
     /// <summary>
@@ -231,7 +231,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 }
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
-    internal string ClientId { get; init; } //= Guid.NewGuid().AsString();
+    internal string? ClientId { get; init; } //= Guid.NewGuid().AsString();
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
 

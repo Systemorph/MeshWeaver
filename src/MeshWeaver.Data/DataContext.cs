@@ -22,7 +22,7 @@ public sealed record DataContext : IDisposable
             KeyFunctionBuilder.GetFromProperties(
                 type,
                 type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
-            )
+            ) ?? null
         );
     }
 

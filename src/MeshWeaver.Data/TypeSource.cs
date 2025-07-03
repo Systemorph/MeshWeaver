@@ -15,7 +15,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
         TypeDefinition = typeRegistry.GetTypeDefinition(type, typeName:type.Name);
     }
 
-    public ITypeDefinition TypeDefinition { get; init; } 
+    public ITypeDefinition TypeDefinition { get; init; } = null!; 
 
     protected TTypeSource This => (TTypeSource)this;
 
