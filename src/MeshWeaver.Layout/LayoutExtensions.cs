@@ -148,7 +148,7 @@ public static class LayoutExtensions
         this IMessageHub hub,
         Address address,
         string area,
-        string id = null
+        string? id = null
     ) => hub.GetWorkspace()
         .GetRemoteStream(address, new LayoutAreaReference(area) { Id = id })
         .GetControlStream(area)
@@ -254,7 +254,7 @@ public static class LayoutExtensions
     
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
+        Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     )
     {
         return config

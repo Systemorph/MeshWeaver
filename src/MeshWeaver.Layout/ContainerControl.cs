@@ -224,7 +224,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     }
 
 
-    public virtual bool Equals(ContainerControl<TControl> other)
+    public virtual bool Equals(ContainerControl<TControl>? other)
     {
         if (other is null) return false;
         if (ReferenceEquals(this, other))

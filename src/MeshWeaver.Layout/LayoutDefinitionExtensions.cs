@@ -39,7 +39,7 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, IObservable<UiControl>> generator,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) =>
         layout
             .WithView(c => c.Area == area, generator)
@@ -130,7 +130,7 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
         IObservable<ViewDefinition<T>> generator,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) where T:UiControl =>
         layout.WithView(c => c.Area == area, generator)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
@@ -164,7 +164,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout, 
         Func<RenderingContext, bool> context, 
         object view,
-        LayoutAreaDefinition layoutAreaDefinition = null) =>
+        LayoutAreaDefinition? layoutAreaDefinition = null) =>
         layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, view, s))
             .WithAreaDefinition(layoutAreaDefinition);
 
@@ -172,7 +172,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout, 
         string area, 
         UiControl view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
         ) =>
         layout
             .WithView(c => c.Area == area, view)
@@ -181,7 +181,7 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
-        LayoutAreaDefinition areaDefinition = null)
+        LayoutAreaDefinition? areaDefinition = null)
         => layout
             .WithRenderer(context,
                 (a, c, s)
@@ -203,7 +203,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        LayoutAreaDefinition areaDefinition = null) where T:UiControl
+        LayoutAreaDefinition? areaDefinition = null) where T:UiControl
         => layout
             .WithView(context, 
                 (a, ctx) 
@@ -214,7 +214,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) where T : UiControl => layout.WithView(c => c.Area == area, view)
         .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 

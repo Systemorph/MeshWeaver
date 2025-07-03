@@ -17,7 +17,7 @@ public static class LayoutClientExtensions
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
         object value,
         string dataContext,
-        JsonPointerReference reference, ModelParameter<JsonElement> model = null)
+        JsonPointerReference reference, ModelParameter<JsonElement>? model = null)
     {
         if (reference is not null)
         {
@@ -70,9 +70,9 @@ public static class LayoutClientExtensions
 
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, 
-        string dataContext = null, 
-        Func<object,T, T> conversion = null,
-        T defaultValue = default(T)) =>
+        string? dataContext = null, 
+        Func<object,T, T>? conversion = null,
+        T? defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
             .Select(x => conversion is not null ? conversion.Invoke(x,defaultValue) : stream.Hub.ConvertSingle(x, null, defaultValue))
             .DistinctUntilChanged();
@@ -97,7 +97,7 @@ public static class LayoutClientExtensions
         // Use Convert.ChangeType for flexible conversion
         return (T)Convert.ChangeType(value, typeof(T));
     }
-    private static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string dataContext = null)
+    private static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
         var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext));
 

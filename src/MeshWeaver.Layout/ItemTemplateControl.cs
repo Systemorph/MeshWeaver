@@ -24,7 +24,7 @@ namespace MeshWeaver.Layout
             return renderedView with { Updates = ret.Updates.Concat(renderedView.Updates) };
         }
 
-        public virtual bool Equals(ItemTemplateControl other)
+        public virtual bool Equals(ItemTemplateControl? other)
         {
             if (other is null)
                 return false;
