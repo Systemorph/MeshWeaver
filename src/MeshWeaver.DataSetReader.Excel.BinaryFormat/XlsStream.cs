@@ -10,7 +10,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 	internal class XlsStream
 	{
 		private readonly XlsFat _fat;
-		private XlsFat _minifat;
+		private XlsFat _minifat = null!;
 		private readonly Stream _fileStream;
 		private readonly XlsHeader _hdr;
 		private readonly uint _startSector;

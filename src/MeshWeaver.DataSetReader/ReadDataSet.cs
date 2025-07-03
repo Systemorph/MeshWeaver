@@ -16,8 +16,8 @@ public record DataSetReaderOptions
 {
     public char Delimiter { get; init; } = ',';
     public bool IncludeHeaderRow { get; init; } = true;
-    public Type EntityType { get; init; }
-    public string ContentType { get; init; }
+    public required Type EntityType { get; init; }
+    public required string ContentType { get; init; }
 
     /// <summary>
     /// Defines delimiter for csv and strings of csv format

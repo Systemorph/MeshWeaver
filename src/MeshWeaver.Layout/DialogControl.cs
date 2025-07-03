@@ -29,7 +29,7 @@ public record DialogControl
     /// <summary>
     /// The title of the dialog
     /// </summary>
-    public object Title { get; init; } = "Dialog";
+    public object? Title { get; init; } = "Dialog";
 
     /// <summary>
     /// The content to display in the dialog
@@ -49,17 +49,17 @@ public record DialogControl
     /// <summary>
     /// Whether the dialog can be closed with the X button
     /// </summary>
-    public bool IsClosable { get; init; }
+    public bool? IsClosable { get; init; }
 
     /// <summary>
     /// The size of the dialog (S, M, L)
     /// </summary>
-    public string Size { get; init; } = "M";
+    public string? Size { get; init; } = "M";
 
     /// <summary>
     /// Callback when dialog is closed
     /// </summary>
-    internal Func<DialogCloseActionContext, Task> CloseAction { get; init; }
+    internal Func<DialogCloseActionContext, Task>? CloseAction { get; init; }
 
     /// <summary>
     /// Sets the title of the dialog
@@ -98,7 +98,7 @@ public record DialogControl
         // If Content is a UiControl, render it in the ContentArea like ItemTemplateControl does
         if (Content is UiControl contentControl)
         {
-            var renderedContent = host.RenderArea(GetContextForArea(context,nameof(ContentArea)), contentControl, ret.Store);
+            var renderedContent = host.RenderArea(GetContextForArea(context, nameof(ContentArea)), contentControl, ret.Store);
             return renderedContent with { Updates = ret.Updates.Concat(renderedContent.Updates) };
         }
 

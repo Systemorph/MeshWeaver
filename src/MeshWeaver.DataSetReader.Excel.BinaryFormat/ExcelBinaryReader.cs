@@ -11,20 +11,20 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 	{
 		#region Members
 
-		private Stream _file;
-		private XlsHeader _hdr;
-		private List<XlsWorksheet> _sheets;
-		private XlsBiffStream _stream;
-		private DataSet _workbookData;
-		private XlsWorkbookGlobals _globals;
+		private Stream _file = null!;
+		private XlsHeader _hdr = null!;
+		private List<XlsWorksheet> _sheets = null!;
+		private XlsBiffStream _stream = null!;
+		private DataSet _workbookData = null!;
+		private XlsWorkbookGlobals _globals = null!;
 		private ushort _version;
 		private Encoding _encoding;
 		private bool _isValid;
 		private bool _isClosed;
 		private readonly Encoding _defaultEncoding = Encoding.UTF8;
-		private string _exceptionMessage;
-		private object[] _cellsValues;
-		private uint[] _dbCellAddrs;
+		private string _exceptionMessage = null!;
+		private object[] _cellsValues = null!;
+		private uint[] _dbCellAddrs = null!;
 		private int _dbCellAddrsIndex;
 		private bool _canRead;
 		private int _sheetIndex;
@@ -33,7 +33,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		private int _maxCol;
 		private int _lastRowIndex;
 		private bool _noIndex;
-		private XlsBiffRow _currentRowRecord;
+		private XlsBiffRow _currentRowRecord = null!;
 		private readonly ReadOption _readOption = ReadOption.Strict;
 
 		private bool _isFirstRead;
@@ -82,12 +82,12 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 					if (_sheets != null) _sheets.Clear();
 				}
 
-				_workbookData = null;
-				_sheets = null;
-				_stream = null;
-				_globals = null;
-				_encoding = null;
-				_hdr = null;
+				_workbookData = null!;
+				_sheets = null!;
+				_stream = null!;
+				_globals = null!;
+				_encoding = null!;
+				_hdr = null!;
 
 				_disposed = true;
 			}
@@ -123,7 +123,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 
 			do
 			{
-				XlsBiffRow row = _stream.ReadAt(offs) as XlsBiffRow;
+				XlsBiffRow? row = _stream.ReadAt(offs) as XlsBiffRow;
 				if (row == null) break;
 
 				offs += row.Size;
@@ -140,7 +140,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			_stream.Seek(0, SeekOrigin.Begin);
 
 			XlsBiffRecord rec = _stream.Read();
-			XlsBiffBOF bof = rec as XlsBiffBOF;
+			XlsBiffBOF? bof = rec as XlsBiffBOF;
 
 			if (bof == null || bof.Type != BIFFTYPE.WorkbookGlobals)
 			{
@@ -278,12 +278,12 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 
 		private bool ReadWorkSheetGlobals(XlsWorksheet sheet, out XlsBiffIndex idx, out XlsBiffRow row)
 		{
-			idx = null;
-			row = null;
+			idx = null!;
+			row = null!;
 
 			_stream.Seek((int)sheet.DataOffset, SeekOrigin.Begin);
 
-			XlsBiffBOF bof = _stream.Read() as XlsBiffBOF;
+			XlsBiffBOF? bof = _stream.Read() as XlsBiffBOF;
 			if (bof == null || bof.Type != BIFFTYPE.Worksheet) return false;
 
 			XlsBiffRecord rec = _stream.Read();
@@ -312,8 +312,8 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 
 
 			XlsBiffRecord trec;
-			XlsBiffDimensions dims = null;
-			XlsBiffRow rowRecord = null;
+			XlsBiffDimensions? dims = null;
+			XlsBiffRow? rowRecord = null;
 
 			do
 			{
@@ -348,7 +348,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			//		.Debug("Got row {0}, rec: id={1},rowindex={2}, rowColumnStart={3}, rowColumnEnd={4}", rowRecord.Offset,
 			//			rowRecord.ID, rowRecord.RowIndex, rowRecord.FirstDefinedColumn, rowRecord.LastDefinedColumn);
 
-			row = rowRecord;
+			row = rowRecord!;
 
 			if (dims != null)
 			{
@@ -705,7 +705,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		{
 			if (_sheetIndex == ResultsCount) return;
 
-			_dbCellAddrs = null;
+			_dbCellAddrs = null!;
 
 			_isFirstRead = false;
 
@@ -740,19 +740,19 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		}
 
 
-		private Exception Fail(string message, Exception cause = null)
+		private Exception Fail(string message, Exception? cause = null)
 		{
 			_isValid = false;
 
 			_file.Close();
 			_isClosed = true;
 
-			_workbookData = null;
-			_sheets = null;
-			_stream = null;
-			_globals = null;
-			_encoding = null;
-			_hdr = null;
+			_workbookData = null!;
+			_sheets = null!;
+			_stream = null!;
+			_globals = null!;
+			_encoding = null!;
+			_hdr = null!;
 
 			return new FormatException(message, cause);
 		}
@@ -841,7 +841,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 					return value.ToString();
 
 				default:
-					XlsBiffFormatString fmtString;
+					XlsBiffFormatString? fmtString;
 					if (_globals.Formats.TryGetValue(format, out fmtString))
 					{
 						string fmt = fmtString.Value;
@@ -888,7 +888,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			return AsDataSet(false);
 		}
 
-		public DataSet AsDataSet(bool convertOADateTime)
+		public DataSet? AsDataSet(bool convertOADateTime)
 		{
 			if (!_isValid) return null;
 
@@ -919,7 +919,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			get { return _exceptionMessage; }
 		}
 
-		public string Name
+		public string? Name
 		{
 			get
 			{
@@ -984,7 +984,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		{
 			if (IsDBNull(i)) return false;
 
-			return Boolean.Parse(_cellsValues[i].ToString());
+			return Boolean.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public DateTime GetDateTime(int i)
@@ -1001,7 +1001,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			}
 
 			// otherwise proceed with conversion attempts
-			string valString = val.ToString();
+			string valString = val.ToString()!;
 			double dVal;
 
 			try
@@ -1020,45 +1020,45 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		{
 			if (IsDBNull(i)) return decimal.MinValue;
 
-			return decimal.Parse(_cellsValues[i].ToString());
+			return decimal.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public double GetDouble(int i)
 		{
 			if (IsDBNull(i)) return double.MinValue;
 
-			return double.Parse(_cellsValues[i].ToString());
+			return double.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public float GetFloat(int i)
 		{
 			if (IsDBNull(i)) return float.MinValue;
 
-			return float.Parse(_cellsValues[i].ToString());
+			return float.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public short GetInt16(int i)
 		{
 			if (IsDBNull(i)) return short.MinValue;
 
-			return short.Parse(_cellsValues[i].ToString());
+			return short.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public int GetInt32(int i)
 		{
 			if (IsDBNull(i)) return int.MinValue;
 
-			return int.Parse(_cellsValues[i].ToString());
+			return int.Parse(_cellsValues[i].ToString()!);
 		}
 
 		public long GetInt64(int i)
 		{
 			if (IsDBNull(i)) return long.MinValue;
 
-			return long.Parse(_cellsValues[i].ToString());
+			return long.Parse(_cellsValues[i].ToString()!);
 		}
 
-		public string GetString(int i)
+		public string? GetString(int i)
 		{
 			if (IsDBNull(i)) return null;
 
@@ -1103,7 +1103,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			throw new NotSupportedException();
 		}
 
-		public long GetBytes(int i, long fieldOffset, byte[] buffer, int bufferoffset, int length)
+		public long GetBytes(int i, long fieldOffset, byte[]? buffer, int bufferoffset, int length)
 		{
 			throw new NotSupportedException();
 		}
@@ -1113,7 +1113,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			throw new NotSupportedException();
 		}
 
-		public long GetChars(int i, long fieldoffset, char[] buffer, int bufferoffset, int length)
+		public long GetChars(int i, long fieldoffset, char[]? buffer, int bufferoffset, int length)
 		{
 			throw new NotSupportedException();
 		}

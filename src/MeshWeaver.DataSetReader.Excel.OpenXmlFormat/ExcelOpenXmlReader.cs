@@ -46,10 +46,10 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
         private void ReadGlobals()
         {
             _workbook = new XlsxWorkbook(
-                _zipWorker.GetWorkbookStream(),
-                _zipWorker.GetWorkbookRelsStream(),
-                _zipWorker.GetSharedStringsStream(),
-                _zipWorker.GetStylesStream());
+                _zipWorker.GetWorkbookStream()!,
+                _zipWorker.GetWorkbookRelsStream()!,
+                _zipWorker.GetSharedStringsStream()!,
+                _zipWorker.GetStylesStream()!);
 
             CheckDateTimeNumFmts(_workbook.Styles.NumFmts);
         }
@@ -90,7 +90,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
         {
             if (_sheetStream != null) _sheetStream.Close();
 
-            _sheetStream = _zipWorker.GetWorksheetStream(sheet.Path);
+            _sheetStream = _zipWorker.GetWorksheetStream(sheet.Path)!;
 
             if (null == _sheetStream) return;
 
@@ -137,7 +137,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             if (_savedCellsValues != null)
             {
                 _cellsValues = _savedCellsValues;
-                _savedCellsValues = null;
+                _savedCellsValues = null!;
                 _depth++;
 
                 return true;
@@ -150,7 +150,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                 XElement xrow = _sheetRows.Dequeue();
 
-                var rowIndex = (int)xrow.Attribute(RowReferenceAttribute);
+                var rowIndex = (int)xrow.Attribute(RowReferenceAttribute)!;
                 if (rowIndex != (_depth + 1))
                     if (rowIndex != (_depth + 1))
                     {
@@ -170,7 +170,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                     int row;
                     int col;
-                    XlsxDimension.XlsxDim(current.AR.Value, out col, out row);
+                    XlsxDimension.XlsxDim(current.AR.Value!, out col, out row);
                     object val = current.Val;
                     if (current.Val != null)
                     {
@@ -183,13 +183,13 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                         if (null != current.AT && current.AT.Value == XlsxWorksheet.SharedString) //if string
                         {
-                            var str = val.ToString();
+                            var str = val.ToString()!;
                             if (!string.IsNullOrEmpty(str))
                                 val = Helpers.ConvertEscapeChars(_workbook.SST[int.Parse(str)]);
                         } // Requested change 4: missing (it appears that if should be else if)
                         else if (null != current.AT && current.AT.Value == XlsxWorksheet.InlineString) //if string inline
                         {
-                            val = Helpers.ConvertEscapeChars(current.Val);
+                            val = Helpers.ConvertEscapeChars(current.Val!);
                         }
                         else if (null != current.AT && current.AT.Value == "b") //boolean
                         {
@@ -209,7 +209,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
 
                 if (_emptyRowCount > 0)
                 {
-                    _savedCellsValues = _cellsValues;
+                    _savedCellsValues = _cellsValues!;
                     return ReadSheetRow(sheet);
                 }
                 _depth++;
@@ -269,7 +269,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             return AsDataSet(true);
         }
 
-        public DataSet AsDataSet(bool convertOADateTime)
+        public DataSet? AsDataSet(bool convertOADateTime)
         {
             if (!_isValid) return null;
 
@@ -299,7 +299,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
                     for (int index = 0; index < _cellsValues.Length; index++)
                     {
                         if (_cellsValues[index] != null && _cellsValues[index].ToString().Length > 0)
-                            Helpers.AddColumnHandleDuplicate(table, _cellsValues[index].ToString());
+                            Helpers.AddColumnHandleDuplicate(table, _cellsValues[index].ToString()!);
                         else
                             Helpers.AddColumnHandleDuplicate(table, string.Concat(Column, index));
                     }
@@ -338,7 +338,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             get { return _exceptionMessage; }
         }
 
-        public string Name
+        public string? Name
         {
             get { return (_resultIndex >= 0 && _resultIndex < ResultsCount) ? _workbook.Sheets[_resultIndex].Name : null; }
         }
@@ -398,7 +398,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
         {
             if (IsDBNull(i)) return false;
 
-            return Boolean.Parse(_cellsValues[i].ToString());
+            return Boolean.Parse(_cellsValues[i].ToString()!);
         }
 
         public DateTime GetDateTime(int i)
@@ -419,45 +419,45 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
         {
             if (IsDBNull(i)) return decimal.MinValue;
 
-            return decimal.Parse(_cellsValues[i].ToString());
+            return decimal.Parse(_cellsValues[i].ToString()!);
         }
 
         public double GetDouble(int i)
         {
             if (IsDBNull(i)) return double.MinValue;
 
-            return double.Parse(_cellsValues[i].ToString());
+            return double.Parse(_cellsValues[i].ToString()!);
         }
 
         public float GetFloat(int i)
         {
             if (IsDBNull(i)) return float.MinValue;
 
-            return float.Parse(_cellsValues[i].ToString());
+            return float.Parse(_cellsValues[i].ToString()!);
         }
 
         public short GetInt16(int i)
         {
             if (IsDBNull(i)) return short.MinValue;
 
-            return short.Parse(_cellsValues[i].ToString());
+            return short.Parse(_cellsValues[i].ToString()!);
         }
 
         public int GetInt32(int i)
         {
             if (IsDBNull(i)) return int.MinValue;
 
-            return int.Parse(_cellsValues[i].ToString());
+            return int.Parse(_cellsValues[i].ToString()!);
         }
 
         public long GetInt64(int i)
         {
             if (IsDBNull(i)) return long.MinValue;
 
-            return long.Parse(_cellsValues[i].ToString());
+            return long.Parse(_cellsValues[i].ToString()!);
         }
 
-        public string GetString(int i)
+        public string? GetString(int i)
         {
             if (IsDBNull(i)) return null;
 
@@ -502,12 +502,12 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
                     if (_zipWorker != null) _zipWorker.Dispose();
                 }
 
-                _zipWorker = null;
-                _sheetStream = null;
+                _zipWorker = null!;
+                _sheetStream = null!;
 
-                _workbook = null;
-                _cellsValues = null;
-                _savedCellsValues = null;
+                _workbook = null!;
+                _cellsValues = null!;
+                _savedCellsValues = null!;
 
                 _disposed = true;
             }
@@ -541,7 +541,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             throw new NotSupportedException();
         }
 
-        public long GetBytes(int i, long fieldOffset, byte[] buffer, int bufferoffset, int length)
+        public long GetBytes(int i, long fieldOffset, byte[]? buffer, int bufferoffset, int length)
         {
             throw new NotSupportedException();
         }
@@ -551,7 +551,7 @@ namespace MeshWeaver.DataSetReader.Excel.OpenXmlFormat
             throw new NotSupportedException();
         }
 
-        public long GetChars(int i, long fieldoffset, char[] buffer, int bufferoffset, int length)
+        public long GetChars(int i, long fieldoffset, char[]? buffer, int bufferoffset, int length)
         {
             throw new NotSupportedException();
         }

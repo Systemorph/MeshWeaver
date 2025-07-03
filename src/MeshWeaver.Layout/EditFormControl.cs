@@ -28,15 +28,15 @@ public record PropertySkin : Skin<PropertySkin>
     /// <summary>
     /// Gets or initializes the description of the item.
     /// </summary>
-    public object Description { get; init; }
+    public object? Description { get; init; }
 
     /// <summary>
     /// Gets or initializes the name of the item.
     /// </summary>
-    public object Name { get; init; }
+    public object? Name { get; init; }
 
     /// <summary>
     /// Gets or initializes the label of the item.
     /// </summary>
-    public object Label { get; set; }
+    public object? Label { get; set; }
 }

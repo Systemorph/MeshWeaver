@@ -13,8 +13,8 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 	{
 		private readonly byte[] _bytes;
 		private readonly Stream _stream;
-		private XlsFat _fat;
-		private XlsFat _minifat;
+		private XlsFat _fat = null!;
+		private XlsFat _minifat = null!;
 
 		private XlsHeader(Stream stream)
 		{
@@ -164,7 +164,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// Returns mini FAT table
 		/// </summary>
-		public XlsFat GetMiniFAT()
+		public XlsFat? GetMiniFAT()
 		{
 			if (_minifat == null)
 				ReadMiniFAT();
@@ -176,7 +176,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// Returns full FAT table, including DIF sectors
 		/// </summary>
-		public XlsFat FAT
+		public XlsFat? FAT
 		{
 			get
 			{

@@ -25,17 +25,17 @@ public record LayoutGridSkin : Skin<LayoutGridSkin>
     /// <summary>
     /// Gets or initializes the adaptive rendering state of the layout grid.
     /// </summary>
-    public object AdaptiveRendering { get; init; }
+    public object? AdaptiveRendering { get; init; }
 
     /// <summary>
     /// Gets or initializes the justification of the layout grid.
     /// </summary>
-    public object Justify { get; init; }
+    public object? Justify { get; init; }
 
     /// <summary>
     /// Gets or initializes the spacing between items in the layout grid.
     /// </summary>
-    public object Spacing { get; init; }
+    public object? Spacing { get; init; }
 
     /// <summary>
     /// Sets the adaptive rendering state of the layout grid.

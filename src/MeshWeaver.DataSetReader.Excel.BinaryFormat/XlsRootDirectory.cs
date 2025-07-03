@@ -12,7 +12,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 	internal class XlsRootDirectory
 	{
 		private readonly List<XlsDirectoryEntry> _entries;
-		private readonly XlsDirectoryEntry _root;
+		private readonly XlsDirectoryEntry _root = null!;
 
 		/// <summary>
 		/// Creates Root Directory catalog from XlsHeader
@@ -20,7 +20,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <param name="hdr">XlsHeader object</param>
 		public XlsRootDirectory(XlsHeader hdr)
 		{
-			XlsStream stream = new XlsStream(hdr, hdr.RootDirectoryEntryStart, false, null);
+			XlsStream stream = new XlsStream(hdr, hdr.RootDirectoryEntryStart, false, null!);
 			byte[] array = stream.ReadStream();
 			List<XlsDirectoryEntry> entries = new List<XlsDirectoryEntry>();
 			for (int i = 0; i < array.Length; i += XlsDirectoryEntry.Length)
@@ -67,7 +67,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// </summary>
 		/// <param name="entryName">String name of entry</param>
 		/// <returns>Entry if found, null otherwise</returns>
-		public XlsDirectoryEntry FindEntry(string entryName)
+		public XlsDirectoryEntry? FindEntry(string entryName)
 		{
 			return _entries.FirstOrDefault(e => e.EntryName == entryName);
 		}

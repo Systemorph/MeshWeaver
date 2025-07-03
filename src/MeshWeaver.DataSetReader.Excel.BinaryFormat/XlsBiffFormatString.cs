@@ -13,7 +13,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 	{
 
         private Encoding m_UseEncoding =  Encoding.Default;
-		private string m_value;
+		private string m_value = null!;
 		
         internal XlsBiffFormatString(byte[] bytes, uint offset, ExcelBinaryReader reader)
 			: base(bytes, offset, reader)
@@ -50,7 +50,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// String text
 		/// </summary>
-        public string Value
+        public string? Value
         {
             get
             {

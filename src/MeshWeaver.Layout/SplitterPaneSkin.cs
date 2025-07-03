@@ -8,32 +8,32 @@
         /// <summary>
         /// Gets or initializes a value indicating whether the pane is collapsible.
         /// </summary>
-        public bool Collapsible { get; init; }
+        public bool? Collapsible { get; init; }
 
         /// <summary>
         /// Gets or initializes a value indicating whether the pane is collapsed.
         /// </summary>
-        public bool Collapsed { get; init; }
+        public bool? Collapsed { get; init; }
 
         /// <summary>
         /// Gets or initializes the maximum size of the pane.
         /// </summary>
-        public string Max { get; init; }
+        public string? Max { get; init; }
 
         /// <summary>
         /// Gets or initializes the minimum size of the pane.
         /// </summary>
-        public string Min { get; init; }
+        public string? Min { get; init; }
 
         /// <summary>
         /// Gets or initializes a value indicating whether the pane is resizable.
         /// </summary>
-        public bool Resizable { get; init; } = true;
+        public bool? Resizable { get; init; } = true;
 
         /// <summary>
         /// Gets or initializes the size of the pane.
         /// </summary>
-        public string Size { get; init; }
+        public string? Size { get; init; }
 
         /// <summary>
         /// Sets the collapsible state of the pane.

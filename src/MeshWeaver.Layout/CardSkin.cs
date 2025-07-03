@@ -12,22 +12,22 @@ public record CardSkin : Skin<CardSkin>
     /// <summary>
     /// Gets or initializes the area restriction state of the card.
     /// </summary>
-    public object AreaRestricted { get; init; }
+    public object? AreaRestricted { get; init; }
 
     /// <summary>
     /// Gets or initializes the height of the card.
     /// </summary>
-    public object Height { get; init; }
+    public object? Height { get; init; }
 
     /// <summary>
     /// Gets or initializes the width of the card.
     /// </summary>
-    public object Width { get; init; }
+    public object? Width { get; init; }
 
     /// <summary>
     /// Gets or initializes the minimal style state of the card.
     /// </summary>
-    public object MinimalStyle { get; init; }
+    public object? MinimalStyle { get; init; }
 
     /// <summary>
     /// Sets the area restriction state of the card.

@@ -10,9 +10,9 @@
         /// <summary>
         /// Path to initialize the file browser.
         /// </summary>
-        public object Path { get; init; } 
+        public object? Path { get; init; }
 
-        public object PathCreation { get; init; }
+        public object? PathCreation { get; init; }
 
         public FileBrowserControl CreatePath()
             => this with { PathCreation = true };
@@ -20,6 +20,6 @@
         public FileBrowserControl WithTopLevel(string path)
             => this with { TopLevelPath = path };
 
-        public string TopLevelPath { get; init; }
+        public string? TopLevelPath { get; init; }
     }
 }

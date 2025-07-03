@@ -17,17 +17,17 @@ public record TextAreaControl : InputFormControlBase<TextAreaControl>
     /// <summary>
     /// Gets or initializes the number of rows for the text area control.
     /// </summary>
-    public object Rows { get; init; }
+    public object? Rows { get; init; }
 
     /// <summary>
     /// Gets or initializes the number of columns for the text area control.
     /// </summary>
-    public object Cols { get; init; }
+    public object? Cols { get; init; }
 
     /// <summary>
     /// Use TextAreaResize for values. Controls the resizability of text areas
     /// </summary>
-    public object Resize { get; init; }
+    public object? Resize { get; init; }
 
 
     /// <summary>
