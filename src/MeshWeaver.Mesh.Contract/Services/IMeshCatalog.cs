@@ -6,7 +6,7 @@ namespace MeshWeaver.Mesh.Services;
 public interface IMeshCatalog
 {
     MeshConfiguration Configuration { get; }
-    Task<MeshNode> GetNodeAsync(Address address);
+    Task<MeshNode?> GetNodeAsync(Address address);
 
     Task UpdateAsync(MeshNode node);
 

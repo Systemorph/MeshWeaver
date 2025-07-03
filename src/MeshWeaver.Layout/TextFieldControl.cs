@@ -12,7 +12,7 @@ public record
     /// <summary>
     /// Gets or initializes the autocomplete attribute of the text field control.
     /// </summary>
-    public object Autocomplete { get; init; }
+    public object? Autocomplete { get; init; }
 
 
     /// <summary>

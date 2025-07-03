@@ -12,16 +12,16 @@ public interface IInputFormControl : IFormControl
     /// <summary>
     /// Maximum length for the form control input.
     /// </summary>
-    object MaxLength { get; init; }
+    object? MaxLength { get; init; }
 
     /// <summary>
     /// Minimum length for the form control input.
     /// </summary>
-    object MinLength { get; init; }
+    object? MinLength { get; init; }
 
     /// <summary>
     /// Size of the form control.
     /// </summary>
-    object Size { get; init; }
+    object? Size { get; init; }
 
 }

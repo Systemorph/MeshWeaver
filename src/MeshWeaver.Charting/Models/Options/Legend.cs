@@ -19,7 +19,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Alignment of the legend.
         /// </summary>
-        public string Align { get; init; }
+        public string? Align { get; init; }
 
         /// <summary>
         /// Maximum height of the legend, in pixels.
@@ -39,24 +39,24 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// A callback that is called when a 'click' event is registered on top of a label item.
         /// </summary>
-        public object OnClick { get; init; }
+        public object? OnClick { get; init; }
 
         /// <summary>
         /// A callback that is called when a 'mousemove' event is registered on top of a label item.
         /// </summary>
-        public object OnHover { get; init; }
+        public object? OnHover { get; init; }
 
         /// <summary>
         /// A callback that is called when a 'mousemove' event is registered outside of a previously hovered label item. Arguments: [event, legendItem, legend].
         /// </summary>
-        public object OnLeave { get; init; }
+        public object? OnLeave { get; init; }
 
         /// <summary>
         /// Legend will show datasets in reverse order
         /// </summary>
         public bool? Reverse { get; init; }
 
-        public LegendLabel Labels { get; init; }
+        public LegendLabel? Labels { get; init; }
 
         /// <summary>
         /// true for rendering the legends from right to left.
@@ -66,9 +66,9 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// This will force the text direction 'rtl' or 'ltr' on the canvas for rendering the legend, regardless of the css specified on the canvas
         /// </summary>
-        public string TextDirection { get; init; }
+        public string? TextDirection { get; init; }
 
-        public Title Title { get; init; }
+        public Title? Title { get; init; }
 
         public Legend AtPosition(Positions pos) => this with { Position = pos };
 

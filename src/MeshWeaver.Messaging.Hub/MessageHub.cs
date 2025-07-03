@@ -305,9 +305,9 @@ public sealed class MessageHub : IMessageHub
     )
     {
         var delivery = Post(request, options);
-        return delivery is null ? 
+        return delivery is null ?
                 Task.FromException<TResult>(new ObjectDisposedException("hub is disposed"))
-            :AwaitResponse(
+            : AwaitResponse(
             delivery,
             selector,
             cancellationToken
@@ -450,8 +450,8 @@ public sealed class MessageHub : IMessageHub
         return delivery;
     }
 
-    Address IMessageHub.Address => Address; 
-    
+    Address IMessageHub.Address => Address;
+
     public IMessageDelivery<TMessage>? Post<TMessage>(
         TMessage message,
         Func<PostOptions, PostOptions>? configure = null

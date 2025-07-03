@@ -16,7 +16,7 @@ public class MessageService : IMessageService
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline; private readonly DeferralContainer deferralContainer;
-    private readonly CancellationTokenSource hangDetectionCts = new(); 
+    private readonly CancellationTokenSource hangDetectionCts = new();
     private volatile bool isStarted;
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
     private readonly TaskCompletionSource<bool> startupProcessingCompletionSource = new();
@@ -336,7 +336,7 @@ public class MessageService : IMessageService
     {
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-        
+
         if (typeof(TMessage) != message.GetType())
             return (IMessageDelivery<TMessage>)PostImplMethod
                 .MakeGenericMethod(message.GetType())

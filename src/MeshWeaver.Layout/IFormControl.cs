@@ -13,7 +13,7 @@ public interface IFormControl : IUiControl
     /// <summary>
     /// Label of the form component.
     /// </summary>
-    object Label { get; init; }
+    object? Label { get; init; }
 
     /// <summary>
     /// Sets the label of the form component.
@@ -25,40 +25,40 @@ public interface IFormControl : IUiControl
     /// <summary>
     /// Whether the form control is disabled.
     /// </summary>
-    object Disabled { get; init; }
+    object? Disabled { get; init; }
 
     /// <summary>
     /// Whether the form control is required.
     /// </summary>
-    object Required { get; init; }
+    object? Required { get; init; }
 
     /// <summary>
     /// Whether the form control should auto-focus.
     /// </summary>
-    object AutoFocus { get; init; }
+    object? AutoFocus { get; init; }
 
     /// <summary>
     /// Gets or initializes the immediate update state of the input control.
     /// </summary>
-    object Immediate { get; init; }
+    object? Immediate { get; init; }
 
     /// <summary>
     /// Gets or initializes the delay for immediate updates of the input control.
     /// </summary>
-    object ImmediateDelay { get; init; }
+    object? ImmediateDelay { get; init; }
 
     /// <summary>
     /// Gets or initializes the start icon of the text field control.
     /// </summary>
-    object IconStart { get; init; }
+    object? IconStart { get; init; }
 
     /// <summary>
     /// Gets or initializes the end icon of the text field control.
     /// </summary>
-    object IconEnd { get; init; }
+    object? IconEnd { get; init; }
 
     /// <summary>
     /// Placeholder to be put in the control.
     /// </summary>
-    object Placeholder { get; init; }
+    object? Placeholder { get; init; }
 }

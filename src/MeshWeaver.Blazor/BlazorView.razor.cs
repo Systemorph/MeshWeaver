@@ -19,27 +19,27 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
-    [Inject] protected ILogger<TView> Logger { get; set; }
-    [Inject] protected PortalApplication PortalApplication { get; set; }
-    [Inject] protected IJSRuntime JSRuntime { get; set; }
+    [Inject] protected ILogger<TView> Logger { get; set; } = null!;
+    [Inject] protected PortalApplication PortalApplication { get; set; } = null!;
+    [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
     protected IMessageHub Hub => PortalApplication.Hub;
-    [Parameter] public TViewModel ViewModel { get; set; }
+    [Parameter] public TViewModel ViewModel { get; set; } = default(TViewModel)!;
 
-    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; }
-    [Parameter] public string Area { get; set; }
+    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; } = null!;
+    [Parameter] public string Area { get; set; } = null!;
 
-    [CascadingParameter(Name = "Context")] public object Context { get; set; }
+    [CascadingParameter(Name = "Context")] public object? Context { get; set; }
 
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
 
     [CascadingParameter(Name = nameof(DataContext))]
-    public string DataContext { get; set; }
+    public string? DataContext { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
-    public ModelParameter<JsonElement> Model { get; set; }
+    public ModelParameter<JsonElement>? Model { get; set; }
 
-    protected string Style { get; set; }
+    protected string? Style { get; set; }
 
     protected override void OnParametersSet()
     {
@@ -56,8 +56,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
 
-    protected string Class { get; set; }
-    protected string Id { get; set; }
+    protected string? Class { get; set; }
+    protected string? Id { get; set; }
 
     protected List<IDisposable> Disposables { get; } = new();
 
