@@ -216,7 +216,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     }
 
     protected virtual async Task<EntityStore>
-        GetInitialValue(ISynchronizationStream<EntityStore>? stream,
+        GetInitialValue(ISynchronizationStream<EntityStore> stream,
             CancellationToken cancellationToken)
     {
         var initial = await TypeSources
@@ -288,7 +288,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     }
 
     protected virtual async Task<EntityStore>
-        GetInitialValue(ISynchronizationStream<EntityStore>? stream,
+        GetInitialValue(ISynchronizationStream<EntityStore> stream,
             CancellationToken cancellationToken)
     {
         var initial = await TypeSources

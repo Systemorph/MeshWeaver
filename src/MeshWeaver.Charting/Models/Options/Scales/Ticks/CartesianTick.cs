@@ -6,12 +6,12 @@
         /// <summary>
         /// The tick alignment along the axis. Can be 'start', 'center', or 'end'.
         /// </summary>
-        public string Align { get; init; }
+        public string Align { get; init; } = null!;
 
         /// <summary>
         /// The tick alignment perpendicular to the axis. Can be 'near', 'center', or 'far'.
         /// </summary>
-        public string CrossAlign { get; init; }
+        public string CrossAlign { get; init; } = null!;
 
         /// <summary>
         /// The number of ticks to examine when deciding how many labels will fit. Setting a smaller value will be faster, but may be less accurate when there is large variability in label length.
@@ -36,7 +36,7 @@
         /// <summary>
         /// Distance in pixels to offset the label from the centre point of the tick (in the x-direction for the x-axis, and the y-direction for the y-axis). Note: this can cause labels at the edges to be cropped by the edge of the canvas.
         /// </summary>
-        public string LabelOffset { get; init; }
+        public string LabelOffset { get; init; } = null!;
 
         /// <summary>
         /// Maximum rotation for tick labels when rotating to condense labels. Note: Rotation doesn't occur until necessary. Note: Only applicable to horizontal scales.

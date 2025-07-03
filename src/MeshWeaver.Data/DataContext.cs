@@ -41,7 +41,7 @@ public sealed record DataContext : IDisposable
     public IReadOnlyDictionary<Type, IDataSource> DataSourcesByType { get; private set; } = new Dictionary<Type, IDataSource>();
     public IReadOnlyDictionary<string, IDataSource> DataSourcesByCollection { get; private set; } = new Dictionary<string, IDataSource>();
 
-    public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder, object? id = null) =>
+    public DataContext WithDataSource(DataSourceBuilder dataSourceBuilder) =>
         this with { DataSourceBuilders = DataSourceBuilders.Add(dataSourceBuilder), };
 
     public IReadOnlyDictionary<string, ITypeSource> TypeSources { get; private set; } = new Dictionary<string, ITypeSource>();
@@ -102,7 +102,7 @@ public sealed record DataContext : IDisposable
         }
     }
 
-    public string GetCollectionName(Type type)
+    public string? GetCollectionName(Type type)
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
 
 

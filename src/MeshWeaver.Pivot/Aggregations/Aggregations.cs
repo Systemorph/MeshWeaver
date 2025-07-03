@@ -14,9 +14,9 @@ namespace MeshWeaver.Pivot.Aggregations
         public Aggregations<TTransformed, TNewIntermediate, TAggregate> WithAggregation<TNewIntermediate>(Func<IEnumerable<TTransformed>, TNewIntermediate> newAggregation)
         {
             return new Aggregations<TTransformed, TNewIntermediate, TAggregate>
-                   {
-                       Aggregation = newAggregation
-                   };
+            {
+                Aggregation = newAggregation
+            };
         }
 
         public Aggregations<TTransformed, TIntermediate, TAggregate> WithAggregationOfAggregates(Func<IEnumerable<TIntermediate>, TIntermediate> newAggregationOfAggregates)
@@ -27,11 +27,11 @@ namespace MeshWeaver.Pivot.Aggregations
         public Aggregations<TTransformed, TIntermediate, TNewAggregate> WithResultTransformation<TNewAggregate>(Func<TIntermediate, TNewAggregate> newResultTransformation)
         {
             return new Aggregations<TTransformed, TIntermediate, TNewAggregate>
-                   {
-                       Aggregation = Aggregation,
-                       AggregationOfAggregates = AggregationOfAggregates,
-                       ResultTransformation = newResultTransformation
-                   };
+            {
+                Aggregation = Aggregation,
+                AggregationOfAggregates = AggregationOfAggregates,
+                ResultTransformation = newResultTransformation
+            };
         }
     }
 

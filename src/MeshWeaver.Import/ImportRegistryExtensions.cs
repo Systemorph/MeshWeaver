@@ -61,7 +61,7 @@ public static class ImportExtensions
     ) where T : class
     {
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
-        return dataContext.WithDataSource(_ => ConfigureDataSource(configuration ?? (x => x), dataContext.Workspace, source).WithType<T>(), source);
+        return dataContext.WithDataSource(_ => ConfigureDataSource(configuration ?? (x => x), dataContext.Workspace, source).WithType<T>());
     }
 
     public static DataContext FromEmbeddedResource(
@@ -71,7 +71,7 @@ public static class ImportExtensions
     )
     {
         return dataContext
-            .WithDataSource(_ => ConfigureDataSource(configuration, dataContext.Workspace, resource), resource);
+            .WithDataSource(_ => ConfigureDataSource(configuration, dataContext.Workspace, resource));
     }
 
     private static ImportUnpartitionedDataSource ConfigureDataSource(

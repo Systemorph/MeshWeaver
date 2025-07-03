@@ -8,8 +8,8 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
 {
     private bool isHidden = false;
     private object? Title { get; set; }
-    private bool IsClosable { get; set; }
-    private string Size { get; set; } = "M";
+    private bool? IsClosable { get; set; }
+    private object? Size { get; set; }
 
     protected override void BindData()
     {
@@ -30,8 +30,9 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
 
     private string GetDialogStyle()
     {
-        var width = GetDialogWidth(Size);
-        var height = GetDialogHeight(Size);
+        var size = Size?.ToString() ?? "M";
+        var width = GetDialogWidth(size);
+        var height = GetDialogHeight(size);
 
         var style = $"--dialog-width: {width};";
         if (!string.IsNullOrEmpty(height))
@@ -68,7 +69,7 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
 
     private void HandleDialogResult(DialogResult result)
     {
-        if (IsClosable)
+        if (IsClosable == true)
         {
             isHidden = true;
 

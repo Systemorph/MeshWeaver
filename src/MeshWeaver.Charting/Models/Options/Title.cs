@@ -9,12 +9,12 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Alignment of the title.
         /// </summary>
-        public string Align { get; init; }
+        public string Align { get; init; } = null!;
 
         /// <summary>
         /// Color of text.
         /// </summary>
-        public ChartColor Color { get; init; }
+        public ChartColor Color { get; init; } = null!;
 
         /// <summary>
         /// Is the legend title displayed.
@@ -34,7 +34,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Font of the title.
         /// </summary>
-        public Font Font { get; init; }
+        public Font Font { get; init; } = null!;
 
         /// <summary>
         /// Number of pixels to add above and below the title text.
@@ -45,7 +45,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// Title text.
         /// string or string[]
         /// </summary>
-        public object Text { get; init; }
+        public object Text { get; init; } = null!;
 
         public Title AtPosition(Positions position) => this with { Position = position };
 

@@ -288,10 +288,10 @@ public static class JsonSynchronizationStream
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
         JsonElement currentJson,
-        JsonPatch patch,
+        JsonPatch? patch,
         string changedBy)
     {
-        return stream.ReduceManager.PatchFunction.Invoke(stream, currentState, currentJson, patch, changedBy);
+        return stream.ReduceManager.PatchFunction?.Invoke(stream, currentState, currentJson, patch, changedBy);
     }
 
 

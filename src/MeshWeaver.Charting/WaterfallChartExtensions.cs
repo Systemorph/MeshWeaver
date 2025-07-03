@@ -135,9 +135,9 @@ internal static class WaterfallChartExtensions
         where TOptions : WaterfallChartOptions<TOptions>
 
     {
-        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
+        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range!, d.label, d.delta, styling)).ToList();
+        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range!, d.label, d.delta, styling)).ToList();
+        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range!, d.label, d.delta, styling)).ToList();
 
         var barDataSetModifier = options.BarDataSetModifier;
 

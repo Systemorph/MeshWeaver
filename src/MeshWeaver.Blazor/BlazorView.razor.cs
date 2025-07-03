@@ -77,7 +77,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
     protected void DataBind<T>(
-        object value, 
+        object? value, 
         Expression<Func<TView, T>> propertySelector, 
         Func<object,T, T> conversion = null,
         T defaultValue = default(T))
