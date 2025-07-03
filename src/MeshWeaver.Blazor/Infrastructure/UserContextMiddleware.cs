@@ -17,7 +17,7 @@ public class UserContextMiddleware(RequestDelegate next)
             userService.SetContext(userContext);
         }
         // Continue the middleware pipeline
-        await next(context);  
+        await next(context);
     }
 
 

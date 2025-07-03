@@ -50,9 +50,9 @@ public sealed class MessageHub : IMessageHub
 
         this.hostedHubs = hostedHubs;
         ServiceProvider = serviceProvider;
-        Configuration = configuration; 
-        
-        
+        Configuration = configuration;
+
+
         messageService = new MessageService(configuration.Address,
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
 
@@ -92,7 +92,7 @@ public sealed class MessageHub : IMessageHub
                 .Where(x => x != null)
         )
         {
-            if (registry.Action != null)
+            if (registry!.Action != null)
                 Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
             registeredTypes.Add(registry.Type);
@@ -126,7 +126,7 @@ public sealed class MessageHub : IMessageHub
         logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
     }
 
-    private TypeAndHandler GetTypeAndHandler(Type type, object instance)
+    private TypeAndHandler? GetTypeAndHandler(Type type, object instance)
     {
         if (
             !type.IsGenericType
@@ -139,7 +139,7 @@ public sealed class MessageHub : IMessageHub
         if (type.GetGenericTypeDefinition() == typeof(IMessageHandler<>))
             return new(
                 genericArgs.First(),
-                CreateDelivery(genericArgs.First(), type, instance, null)
+                CreateDelivery(genericArgs.First(), type, instance, Expression.Constant(cancellationToken))
             );
         if (type.GetGenericTypeDefinition() == typeof(IMessageHandlerAsync<>))
             return new(
@@ -234,7 +234,8 @@ public sealed class MessageHub : IMessageHub
                 Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
         }
 
-        delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
+        if (Rules.First != null)
+            delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
 
         return FinishDelivery(delivery);
     }
@@ -400,7 +401,7 @@ public sealed class MessageHub : IMessageHub
             if (d.Message is DeliveryFailure failure)
             {
                 tcs.SetException(new DeliveryFailureException(failure));
-                return d.Failed(failure.Message);
+                return d.Failed(failure.Message ?? "Delivery failed");
             }
 
             var ret = await callback(d, ct);
@@ -432,7 +433,8 @@ public sealed class MessageHub : IMessageHub
     {
         if (
             !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
-            || !callbacks.TryRemove(requestId.ToString(), out var myCallbacks)
+            || requestId?.ToString() is not string requestIdString
+            || !callbacks.TryRemove(requestIdString, out var myCallbacks)
         )
             return delivery;
 
@@ -467,7 +469,7 @@ public sealed class MessageHub : IMessageHub
         return messageService.RouteMessageAsync(ret, default);
     }
 
-    public IMessageHub GetHostedHub<TAddress1>(
+    public IMessageHub? GetHostedHub<TAddress1>(
         TAddress1 address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         HostedHubCreation create
@@ -495,7 +497,7 @@ public sealed class MessageHub : IMessageHub
 
     public bool IsDisposing => Disposal != null;
 
-    public Task Disposal { get; private set; }
+    public Task? Disposal { get; private set; }
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
 
     private readonly object locker = new(); public void Dispose()
@@ -570,7 +572,8 @@ public sealed class MessageHub : IMessageHub
                     }
                     logger.LogInformation("STARTING DisposeHostedHubs for hub {address}", Address);
                     hostedHubs.Dispose();
-                    await hostedHubs.Disposal;
+                    if (hostedHubs.Disposal != null)
+                        await hostedHubs.Disposal;
                     logger.LogInformation("COMPLETED DisposeHostedHubs for hub {address}", Address);
                     RunLevel = MessageHubRunLevel.HostedHubsDisposed;
                 }
@@ -648,7 +651,7 @@ public sealed class MessageHub : IMessageHub
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         messageService.Defer(deferredFilter);
 
-    private readonly ConcurrentDictionary<(string Conext, Type Type), object> properties = new();
+    private readonly ConcurrentDictionary<(string Conext, Type Type), object?> properties = new();
 
     public void Set<T>(T obj, string context = "")
     {
@@ -658,7 +661,7 @@ public sealed class MessageHub : IMessageHub
     public T Get<T>(string context = "")
     {
         properties.TryGetValue((context, typeof(T)), out var ret);
-        return (T)ret;
+        return (T)ret!;
     }
 
 

@@ -27,15 +27,15 @@ public class Workspace : IWorkspace
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
 
-    public IObservable<IEnumerable<TType>> GetRemoteStream<TType>(Address address)
+    public IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address)
     {
         return GetRemoteStream(
             address,
             new CollectionReference(Hub.TypeRegistry.GetOrAddType(typeof(TType), typeof(TType).Name))
-            ).Select(x => x.Value.Instances.Values.OfType<TType>());
+            )?.Select(x => x.Value.Instances.Values.OfType<TType>());
     }
 
-    public IObservable<IReadOnlyCollection<T>> GetStream<T>()
+    public IObservable<T[]?>? GetStream<T>()
     {
         var collection = DataContext.GetTypeSource(typeof(T));
         if (collection == null)
@@ -44,11 +44,11 @@ public class Workspace : IWorkspace
             .Select(x => x.Value.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
-    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
+    public ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
         Address id,
         WorkspaceReference<TReduced> reference
     ) =>
-        (ISynchronizationStream<TReduced>)
+        (ISynchronizationStream<TReduced>?)
             GetSynchronizationStreamMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [id, reference]);
@@ -56,7 +56,7 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo GetSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.GetRemoteStream<object, WorkspaceReference<object>>(default, default)
+            x.GetRemoteStream<object, WorkspaceReference<object>>(null!, null!)
         );
 
 
@@ -103,7 +103,7 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference, 
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
     {
         return (ISynchronizationStream<TReduced>) ReduceManager.ReduceStream(
@@ -120,11 +120,11 @@ public class Workspace : IWorkspace
             ReduceManager.ReduceStream<EntityStore>(
     this,
     new CollectionsReference(types
-            .Select(t =>
-                DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
-                    ? name
-                    : throw new ArgumentException($"Type {t.FullName} is unknown.")
-            ).ToArray()),
+        .Select(t =>
+            DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
+                ? name
+                : throw new ArgumentException($"Type {t.FullName} is unknown.")
+        ).ToArray()!),
     x => x);
  
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
@@ -170,10 +170,10 @@ public class Workspace : IWorkspace
         asyncDisposables.Add(disposable);
     }
 
-    public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
+    public ISynchronizationStream<EntityStore>? GetStream(StreamIdentity identity)
     {
         var ds = DataContext.GetDataSourceForId(identity.Owner);
-        return ds.GetStreamForPartition(identity.Partition);
+        return ds?.GetStreamForPartition(identity.Partition);
     }
 
 
@@ -205,7 +205,7 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo SubscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.SubscribeToClient<object, WorkspaceReference<object>>(default)
+            x.SubscribeToClient<object, WorkspaceReference<object>>(null!)
         );
 
     private void SubscribeToClient<TReduced, TReference>(SubscribeRequest request)

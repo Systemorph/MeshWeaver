@@ -47,7 +47,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
         {
             // TODO V10: Add logging here. (30.07.2024, Roland Bürgi)
             var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
-            if(ret?.State == MessageDeliveryState.Failed)
+            if (ret?.State == MessageDeliveryState.Failed)
                 return failure(ret);
             return ret!;
         }

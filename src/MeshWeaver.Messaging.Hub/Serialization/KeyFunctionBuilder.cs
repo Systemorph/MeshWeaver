@@ -9,7 +9,7 @@ namespace MeshWeaver.Messaging.Serialization;
 
 public class KeyFunctionBuilder
 {
-    private readonly List<Func<Type, KeyFunction>> factories =
+    private readonly List<Func<Type, KeyFunction?>> factories =
     [
         type =>
             GetFromProperty(
@@ -34,7 +34,7 @@ public class KeyFunctionBuilder
             ),
     ];
 
-    public static KeyFunction GetFromProperties(
+    public static KeyFunction? GetFromProperties(
         Type type,
         IReadOnlyCollection<PropertyInfo> properties
     )
@@ -75,7 +75,7 @@ public class KeyFunctionBuilder
         );
     }
 
-    private static KeyFunction GetFromProperty(Type type, PropertyInfo property)
+    private static KeyFunction? GetFromProperty(Type type, PropertyInfo? property)
     {
         if (property == null)
             return null;
@@ -94,10 +94,10 @@ public class KeyFunctionBuilder
             );
     }
 
-    public KeyFunction GetKeyFunction(Type elementType) =>
+    public KeyFunction? GetKeyFunction(Type elementType) =>
         factories.Select(f => f(elementType)).FirstOrDefault(f => f != null);
 
-    public void WithKeyFunction(Func<Type, KeyFunction> factory)
+    public void WithKeyFunction(Func<Type, KeyFunction?> factory)
         => factories.Add(factory);
 
 }

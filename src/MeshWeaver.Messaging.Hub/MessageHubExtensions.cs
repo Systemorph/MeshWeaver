@@ -35,7 +35,7 @@ public static class MessageHubExtensions
 
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
-        if(instance is JsonObject jObj)
+        if (instance is JsonObject jObj)
             return (jObj[EntitySerializationExtensions.TypeProperty]?.ToString() ?? string.Empty, jObj[EntitySerializationExtensions.TypeProperty]?.ToString() ?? string.Empty);
 
         var s = instance.ToString();
@@ -62,9 +62,9 @@ public static class MessageHubExtensions
             throw new InvalidOperationException($"Address {address} is not in the correct format. Expected format is AddressType/AddressId");
         var type = hub.GetTypeRegistry().GetType(split[0]);
 
-        if(type is null)
+        if (type is null)
             throw new InvalidOperationException($"Unknown address type {split[0]} for {address}. Expected format is AddressType/AddressId");
 
-        return (Address)Activator.CreateInstance(type, [string.Join('/',split.Skip(1))])!;
+        return (Address)Activator.CreateInstance(type, [string.Join('/', split.Skip(1))])!;
     }
 }

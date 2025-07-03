@@ -56,10 +56,10 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         return Task.CompletedTask;
     }, exceptionCallback);
 
-    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default) 
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default) 
         where TAddress : Address;
 
-    IMessageHub GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
         where TAddress : Address
         => GetHostedHub(address, null!, create);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
@@ -76,6 +76,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
-    Task Disposal { get; }
+    Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 }

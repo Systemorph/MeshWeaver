@@ -145,7 +145,7 @@ public record ReduceManager<TStream>
     public ISynchronizationStream ReduceStream<TReduced>(
         IWorkspace workspace,
         WorkspaceReference reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
     ) =>
         ReduceStreams
             .OfType<ReduceWorkspaceStream<TReduced>>()
@@ -186,7 +186,7 @@ internal delegate ISynchronizationStream<TReduced> ReduceStream<TStream, TReduce
 internal delegate ISynchronizationStream<TStream> ReduceWorkspaceStream<TStream>(
     IWorkspace workspace,
     WorkspaceReference reference,
-    Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>> configuration
+    Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration
 );
 
 public delegate ISynchronizationStream<TReduced> ReducedStreamProjection<

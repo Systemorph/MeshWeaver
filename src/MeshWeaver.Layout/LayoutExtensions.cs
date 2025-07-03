@@ -136,7 +136,7 @@ public static class LayoutExtensions
     }
 
     public static IObservable<object> GetControlStream(
-        this ISynchronizationStream<EntityStore> synchronizationItems,
+        this ISynchronizationStream<EntityStore>? synchronizationItems,
         string area
     ) =>
         synchronizationItems.Select(i =>
