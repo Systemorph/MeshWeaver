@@ -185,7 +185,7 @@ public static class LayoutDefinitionExtensions
         => layout
             .WithRenderer(context,
                 (a, c, s)
-                    => a.RenderArea(c, (ViewDefinition)view.Invoke, s))
+                    => a.RenderArea(c, (ViewDefinition)view.Invoke!, s))
             .WithAreaDefinition(areaDefinition!);
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,

@@ -329,7 +329,7 @@ public static class EditorExtensions
                     host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)!))
             .Select(x => 
                 ConvertToOptions(
-                    x.Value, 
+                    x!.Value, 
                     host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)!));
     }
 

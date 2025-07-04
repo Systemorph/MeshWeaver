@@ -32,7 +32,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     {
         typeRegistry.WithType<TViewModel>();
         return WithView((i, s, a) => 
-            i is not TViewModel vm ? null! : StandardView<TViewModel, TView>(vm, s, a));
+            i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
     }
 
     public ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area) =>

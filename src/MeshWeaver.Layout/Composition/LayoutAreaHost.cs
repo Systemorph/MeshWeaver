@@ -124,7 +124,7 @@ public record LayoutAreaHost : IDisposable
         var ret = ((IUiControl)control).Render(this, context, store);
         foreach (var (a, c) in ret.Updates
                      .Where(x => x.Collection == LayoutAreaReference.Areas)
-                     .Select(x => (x.Id.ToString()!, Control: x.Value as UiControl))
+                     .Select(x => (x.Id!.ToString()!, Control: x.Value as UiControl))
                      .Where(x => x.Control != null))
             RegisterForDisposal(a!, c!);
 
@@ -194,7 +194,7 @@ public record LayoutAreaHost : IDisposable
     private IObservable<T> GetStream<T>(EntityReference reference) where T : class
     {
         return Stream!
-            .Reduce(reference)
+            .Reduce(reference)!
             .Select(ci => Convert<T>(ci)!)
             .Where(x => x is not null)
             .DistinctUntilChanged();

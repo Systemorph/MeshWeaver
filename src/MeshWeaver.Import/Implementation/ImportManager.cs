@@ -126,7 +126,7 @@ public class ImportManager
     {
         var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
         var imported = await format.Import(importRequest, dataSet, activity);
-        return imported;
+        return imported!;
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(
