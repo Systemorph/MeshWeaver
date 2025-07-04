@@ -9,9 +9,9 @@ namespace MeshWeaver.Pivot.Grouping;
 
 public class DimensionPivotGrouper<T, TDimension, TGroup>
     (string id, Func<T, int, object> selector, DimensionCache dimensionCache) :
-    SelectorPivotGrouper<T,object, TGroup> (id, selector)
+    SelectorPivotGrouper<T, object, TGroup>(id, selector)
     where TGroup : class, IGroup, new()
-    where TDimension: class, INamed
+    where TDimension : class, INamed
 {
     protected DimensionCache DimensionCache { get; } = dimensionCache;
     public DimensionPivotGrouper(
@@ -24,7 +24,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
         this.DimensionDescriptor = dimensionDescriptor;
     }
 
-    public DimensionDescriptor DimensionDescriptor { get; }
+    public DimensionDescriptor DimensionDescriptor { get; } = null!;
 
     protected override IOrderedEnumerable<IGrouping<object, T>> Order(
         IEnumerable<IGrouping<object, T>> groups
@@ -32,7 +32,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     {
         if (!typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
             return groups.OrderBy(g => g.Key == null).ThenBy(g => GetDisplayName(g.Key));
-        
+
         return groups.OrderBy(g => g.Key == null).ThenBy(g => GetOrder(g.Key));
     }
 
@@ -59,7 +59,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
         return new TGroup
         {
             Id = value,
-            DisplayName = displayName?.ToString(),
+            DisplayName = displayName?.ToString() ?? value.ToString() ?? "",
             GrouperName = Id,
             Coordinates = ImmutableList<object>.Empty.Add(value)
         };

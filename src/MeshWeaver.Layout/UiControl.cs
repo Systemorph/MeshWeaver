@@ -112,7 +112,7 @@ public abstract record UiControl : IUiControl
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
                Readonly == other.Readonly &&
-               (Skins).SequenceEqual(other.Skins ?? []) &&
+               (Skins).SequenceEqual(other.Skins) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
     }
@@ -217,8 +217,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             return Task.CompletedTask;
         });
 
-    public new TControl AddSkin(Skin skin)
+    public new TControl AddSkin(Skin? skin)
     {
+        if (skin == null) return This;
         return This with { Skins = Skins.Add(skin) };
     }
 

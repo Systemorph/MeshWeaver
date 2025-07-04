@@ -30,7 +30,7 @@ namespace MeshWeaver.Pivot.Grouping
         {
             var propertiesToHideHashSet = new HashSet<string>(propertiesToHide);
             var propertiesForProcessing = ValueType
-                .GetPropertiesForProcessing(null)
+                .GetPropertiesForProcessing(null!)
                 .Where(p =>
                     !propertiesToHideHashSet.Contains(p.SystemName)
                     && !p.Property.HasAttribute<DimensionAttribute>()
@@ -52,26 +52,26 @@ namespace MeshWeaver.Pivot.Grouping
         {
             foreach (var column in Columns)
             {
-                var prop = ValueType.GetProperty(column.Id.ToString());
+                var prop = ValueType.GetProperty(column.Id?.ToString() ?? "");
                 if (prop != null)
                     yield return (
-                        new ColumnGroup(column.Id, column.DisplayName, prop.Name),
+                        new ColumnGroup(column.Id ?? "", column.DisplayName, prop.Name),
                         x =>
                         {
                             if (x == null)
-                                return null;
+                                return "";
                             var reflector = prop.GetReflector();
-                            return reflector.GetValue(x);
+                            return reflector.GetValue(x) ?? "";
                         }
                     );
                 else
                     yield return (
                         new ColumnGroup(
-                            column.Id,
+                            column.Id ?? "",
                             column.DisplayName,
                             PivotConst.PropertyPivotGrouperName
                         ),
-                        x => x
+                        x => x == null ? "" : x
                     );
             }
         }

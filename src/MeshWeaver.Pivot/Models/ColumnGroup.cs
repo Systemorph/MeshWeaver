@@ -30,7 +30,7 @@ namespace MeshWeaver.Pivot.Models
             return this with { Children = Children.AddRange(children) };
         }
 
-        public virtual bool Equals(ColumnGroup other)
+        public virtual bool Equals(ColumnGroup? other)
         {
             if (ReferenceEquals(null, other))
                 return false;

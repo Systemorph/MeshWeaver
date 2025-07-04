@@ -15,17 +15,17 @@ public record PivotChartModel
 public record PivotChartRow
 {
     public ChartType DataSetType { get; set; }
-    public object Stack { get; set; }
+    public object Stack { get; set; } = null!;
     public double? SmoothingCoefficient { get; set; }
     public bool Filled { get; set; }
-    public PivotElementDescriptor Descriptor { get; init; }
+    public PivotElementDescriptor Descriptor { get; init; } = null!;
     public List<(object ColSystemName, double? Value)> DataByColumns { get; init; } = new();
 }
 
 public record PivotElementDescriptor
 {
-    public object Id { get; init; }
-    public string DisplayName { get; init; }
+    public object Id { get; init; } = null!;
+    public string DisplayName { get; init; } = null!;
     public List<(object Id, string DisplayName, object GrouperName)> Coordinates { get; set; } =
         new();
 }

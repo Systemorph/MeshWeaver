@@ -115,7 +115,7 @@ public static class LayoutExtensions
         var first = true;
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream?.Hub.JsonSerializerOptions);
+        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream!.Hub.JsonSerializerOptions);
 
         return stream
             .Where(i =>
@@ -129,8 +129,8 @@ public static class LayoutExtensions
                     first = false;
                     var evaluated = referencePointer
                         .Evaluate(i.Value);
-                    return evaluated is null ? default
-                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
+                    return evaluated is null ? default!
+                        : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
                 }
             );
     }
@@ -139,9 +139,9 @@ public static class LayoutExtensions
         this ISynchronizationStream<EntityStore>? synchronizationItems,
         string area
     ) =>
-        synchronizationItems.Select(i =>
+        synchronizationItems!.Select(i =>
             i.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
-                ?.Instances.GetValueOrDefault(area)
+                ?.Instances.GetValueOrDefault(area)!
         );
 
     public static IObservable<object> GetControlStream(
@@ -179,7 +179,7 @@ public static class LayoutExtensions
     ) =>
         stream
             .Reduce(reference)
-            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
 
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
@@ -231,14 +231,14 @@ public static class LayoutExtensions
         store.Collections.TryGetValue(LayoutAreaReference.Areas, out var instances) &&
            instances.Instances.TryGetValue(area, out var ret)
             ? (TControl)ret
-            : null;
+            : null!;
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference
     ) =>
         stream
             .Reduce(reference)
-            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions));
+            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<JsonElement> stream,
@@ -248,8 +248,8 @@ public static class LayoutExtensions
             .Reduce(reference)
             .Select(x =>
                 x.Value.ValueKind == JsonValueKind.Undefined
-                    ? default(T)
-                    : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)
+                    ? default!
+                    : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!
             ); 
     
     public static MessageHubConfiguration AddLayoutClient(

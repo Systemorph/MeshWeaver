@@ -106,16 +106,16 @@ public class Workspace : IWorkspace
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
     {
-        return (ISynchronizationStream<TReduced>) ReduceManager.ReduceStream(
+        return (ISynchronizationStream<TReduced>?) ReduceManager.ReduceStream(
             this,
             reference, 
             configuration
-        ); 
+        ) ?? throw new InvalidOperationException("Failed to create stream"); 
     }
 
 
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
-        => (ISynchronizationStream<EntityStore>)
+        => (ISynchronizationStream<EntityStore>?)
             
             ReduceManager.ReduceStream<EntityStore>(
     this,
@@ -125,7 +125,7 @@ public class Workspace : IWorkspace
                 ? name
                 : throw new ArgumentException($"Type {t.FullName} is unknown.")
         ).ToArray()!),
-    x => x);
+    x => x) ?? throw new InvalidOperationException("Failed to create stream");
  
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 

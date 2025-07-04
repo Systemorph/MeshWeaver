@@ -91,23 +91,23 @@ public static class WorkspaceOperations
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-            stream.Update(store =>
+            stream!.Update(store =>
             {
                 activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
                 try
                 {
 
                     var updates = group.GroupBy(x => (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
-                        .Aggregate(new EntityStoreAndUpdates(store, [], change.ChangedBy),
+                        .Aggregate(new EntityStoreAndUpdates(store!, [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
                                 if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                                 {
                                     var instances =
                                         new InstanceCollection(g.Select(x => x.Instance)
-                                            .ToDictionary(g.Key.TypeSource.TypeDefinition.GetKey))
+                                            .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
                                         {
-                                            GetKey = g.Key.TypeSource.TypeDefinition.GetKey
+                                            GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
                                         };
                                     var updated = change.Options?.Snapshot == true
                                         ? instances
@@ -125,12 +125,12 @@ public static class WorkspaceOperations
                                 if (g.Key.Op == OperationType.Remove)
                                 {
                                     var instances = g.Select(i => (i.Instance,
-                                        Key: g.Key.TypeSource.TypeDefinition.GetKey(i.Instance))).ToArray();
-                                    var newStore = storeAndUpdates.Store.Update(g.Key.TypeSource.CollectionName,
+                                        Key: g.Key.TypeSource!.TypeDefinition.GetKey(i.Instance))).ToArray();
+                                    var newStore = storeAndUpdates.Store.Update(g.Key.TypeSource!.CollectionName,
                                         c => c.Remove(instances.Select(x => x.Key)));
                                     return new EntityStoreAndUpdates(newStore,
                                         storeAndUpdates.Updates.Concat(instances.Select(i =>
-                                            new EntityUpdate(g.Key.TypeSource.CollectionName, i.Key, null)
+                                            new EntityUpdate(g.Key.TypeSource!.CollectionName, i.Key, (object?)null)
                                             {
                                                 OldValue = i.Instance
                                             })), change.ChangedBy ?? stream.StreamId);
@@ -231,11 +231,11 @@ public static class WorkspaceOperations
     }
 
     public static IReadOnlyCollection<T> GetData<T>(this EntityStore store)
-        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name).Get<T>().ToArray();
+        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)!.Get<T>().ToArray();
 
-    public static T GetData<T>(this EntityStore store, object id)
-        => (T)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Instances
-            .GetValueOrDefault(id);
+    public static T? GetData<T>(this EntityStore store, object id)
+        => (T?)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Instances
+            ?.GetValueOrDefault(id) ?? default;
 
 
 

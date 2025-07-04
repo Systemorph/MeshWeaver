@@ -14,12 +14,12 @@ public interface IUiControlService
 
 public class UiControlService(IMessageHub hub) : IUiControlService
 {
-    private ImmutableList<Func<object, UiControl>> rules = [o => o as UiControl ?? DefaultConversion(o)];
+    private ImmutableList<Func<object, UiControl?>> rules = [o => o as UiControl ?? DefaultConversion(o)];
     public UiControl Convert(object o) => 
         rules.Select(r => r.Invoke(o))
-            .First(x => x is not null);
+            .First(x => x is not null)!;
 
-    public void AddRule(Func<object, UiControl> rule)
+    public void AddRule(Func<object, UiControl?> rule)
     {
         rules = rules.Insert(0, rule);
     }
@@ -37,6 +37,6 @@ public class UiControlService(IMessageHub hub) : IUiControlService
             return ro.ToControl();
 
         var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
-        return Controls.Html(instance.ToDisplayString(mimeType));
+        return Controls.Html(instance!.ToDisplayString(mimeType));
     }
 }

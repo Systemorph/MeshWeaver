@@ -6,7 +6,7 @@ namespace MeshWeaver.Charting.Pivot;
 
 public interface IPivotWaterfallChartBuilder : IPivotChartBuilder
 {
-    IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null);
+    IPivotWaterfallChartBuilder WithLegendItems(string? incrementsLabel = null, string? decrementsLabel = null, string? totalLabel = null);
     IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> func);
     IPivotWaterfallChartBuilder WithRangeOptionsBuilder(Func<ChartOptions, ChartOptions> func);
 

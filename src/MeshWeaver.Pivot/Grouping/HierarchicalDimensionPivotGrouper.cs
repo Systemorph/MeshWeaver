@@ -48,7 +48,8 @@ namespace MeshWeaver.Pivot.Grouping
 
             var grouped = selectedObjects.GroupBy(x => x.Key, x => x.Object);
 
-            var ordered = Order(grouped).ToArray();
+            var orderedNonNull = grouped.Where(g => g.Key != null).Cast<IGrouping<object, T>>();
+            var ordered = Order(orderedNonNull).ToArray();
 
             // stop parsing if there are no more data on the lower levels
             //if (ordered.Length == 1 && ordered.First().Key == null)
@@ -66,7 +67,7 @@ namespace MeshWeaver.Pivot.Grouping
                 .Select(x => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
                     x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
                     x.ToArray(),
-                    x.Key
+                    x.Key ?? nullGroupPrivate
                 ))
                 .ToArray();
         }
@@ -100,7 +101,7 @@ namespace MeshWeaver.Pivot.Grouping
                 return new(this, subGroup, aggregationFunctions);
 
             var groupManager = subGroup;
-            var maxLevel = Math.Min(DimensionOptions.GetLevelMax<TDimension>(),DimensionCache.GetMaxHierarchyDataLevel(typeof(TDimension)));
+            var maxLevel = Math.Min(DimensionOptions.GetLevelMax<TDimension>(), DimensionCache.GetMaxHierarchyDataLevel(typeof(TDimension)));
             var minLevel = DimensionOptions.GetLevelMin<TDimension>();
             for (var i = maxLevel; i >= minLevel; i--)
             {

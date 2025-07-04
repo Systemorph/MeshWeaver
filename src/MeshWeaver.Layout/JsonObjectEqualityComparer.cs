@@ -5,7 +5,7 @@ namespace MeshWeaver.Layout;
 /// <summary>
 /// Provides a custom equality comparer for JSON objects.
 /// </summary>
-public class JsonObjectEqualityComparer : IEqualityComparer<object>
+public class JsonObjectEqualityComparer : IEqualityComparer<object?>
 {
     /// <summary>
     /// Gets the singleton instance of the <see cref="JsonObjectEqualityComparer"/> class.

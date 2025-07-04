@@ -61,14 +61,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
     public ISynchronizationStream<TReduced>? Reduce<TReduced>(WorkspaceReference<TReduced> reference)
-        => Reduce(reference, x => x);
+        => Reduce(reference, (Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>?)(x => x));
 
 
     public ISynchronizationStream<TReduced> Reduce<TReduced, TReference2>(
         TReference2 reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config)
         where TReference2 : WorkspaceReference =>
-        ReduceManager.ReduceStream(this, reference, config);
+        ReduceManager.ReduceStream(this, reference, config) ?? throw new InvalidOperationException("Failed to create reduced stream");
 
     public virtual IDisposable Subscribe(IObserver<ChangeItem<TStream>> observer)
     {

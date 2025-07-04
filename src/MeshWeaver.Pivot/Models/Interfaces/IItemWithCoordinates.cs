@@ -12,9 +12,9 @@ public interface IItemWithCoordinates
 
 public abstract record ItemWithCoordinates() : IItemWithCoordinates
 {
-    public object Id { get; init; }
-    public string DisplayName { get; init; }
+    public object Id { get; init; } = null!;
+    public string DisplayName { get; init; } = null!;
     public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
 
-    public string GrouperName { get; init; }
+    public string GrouperName { get; init; } = null!;
 }

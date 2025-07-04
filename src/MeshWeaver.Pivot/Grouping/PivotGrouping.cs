@@ -13,7 +13,7 @@
         public IdentityWithOrderKey<TGroup> IdentityWithOrderKey { get; }
 
         public TGroup Identity => IdentityWithOrderKey.Identity;
-        
+
         public object OrderKey => IdentityWithOrderKey.OrderKey;
     }
 
@@ -30,7 +30,7 @@
 
         public object OrderKey { get; }
 
-        public virtual bool Equals(IdentityWithOrderKey<TGroup> other)
+        public virtual bool Equals(IdentityWithOrderKey<TGroup>? other)
         {
             if (ReferenceEquals(null, other))
                 return false;
@@ -41,7 +41,7 @@
 
         public override int GetHashCode()
         {
-            return EqualityComparer<TGroup>.Default.GetHashCode(Identity);
+            return Identity == null ? 0 : EqualityComparer<TGroup>.Default.GetHashCode(Identity);
         }
     }
 }

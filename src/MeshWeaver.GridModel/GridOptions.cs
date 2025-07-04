@@ -7,9 +7,9 @@ namespace MeshWeaver.GridModel
     {
 
         // Columns
-        public IReadOnlyCollection<ColDef> ColumnDefs { get; init; }
+        public IReadOnlyCollection<ColDef> ColumnDefs { get; init; } = [];
         // Rows: set the data to be displayed as rows in the grid.
-        public IReadOnlyCollection<object> RowData { get; init; } = Array.Empty<object>();
+        public IReadOnlyCollection<object> RowData { get; init; } = [];
 
         // A default column definition. Set properties for all columns
 
@@ -124,7 +124,7 @@ namespace MeshWeaver.GridModel
             if (ReferenceEquals(other, this))
                 return true;
 
-            return (ColumnDefs?.SequenceEqual(other.ColumnDefs ?? Enumerable.Empty<ColDef>()) ?? other.ColumnDefs is null) &&
+            return (ColumnDefs.SequenceEqual(other.ColumnDefs)) &&
                    RowData.SequenceEqual(other.RowData, JsonObjectEqualityComparer.Instance) &&
                    EqualityComparer<ColDef>.Default.Equals(DefaultColDef, other.DefaultColDef) &&
                    EqualityComparer<ColGroupDef>.Default.Equals(DefaultColGroupDef, other.DefaultColGroupDef) &&
@@ -204,7 +204,7 @@ namespace MeshWeaver.GridModel
             hash.Add(ProcessSecondaryColDef);
             hash.Add(OnFirstDataRendered);
             hash.Add(ColumnHoverHighlight);
-            hash.Add(DomLayout);
+            hash.Add(DomLayout?.GetHashCode() ?? 0);
             return hash.ToHashCode();
         }
     }

@@ -14,7 +14,7 @@ namespace MeshWeaver.Charting.Pivot
             x => x
         };
         private bool WithTotals { get; set; } = false;
-        private PivotModel PivotModel { get; set; }
+        private PivotModel PivotModel { get; set; } = null!;
 
         // TODO V10: do not instantiate this model, only inside build method and return from build (2022/10/06, Ekaterina Mishina)
         private PivotChartModel PivotChartModel { get; set; } = new();
@@ -37,7 +37,7 @@ namespace MeshWeaver.Charting.Pivot
         private void MapPivotToChartModel(ChartType defaultChartType)
         {
             PivotChartModel.RowGroupings.UnionWith(
-                PivotModel.Rows.Select(x => x.RowGroup?.GrouperName).ToHashSet()
+                PivotModel.Rows.Select(x => x.RowGroup?.GrouperName).Where(x => x != null).Cast<object>()
             );
 
             //build column coordinate map

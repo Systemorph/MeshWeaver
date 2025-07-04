@@ -11,18 +11,18 @@ namespace MeshWeaver.Layout;
 /// </summary>
 public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
 {
-    private readonly ITypeRegistry _typeRegistry;
+    private readonly ITypeRegistry? _typeRegistry;
 
     public SkinListConverter(ITypeRegistry typeRegistry)
     {
-        _typeRegistry = typeRegistry;
+        _typeRegistry = typeRegistry ?? throw new ArgumentNullException(nameof(typeRegistry));
     }
 
     // Parameterless constructor for use with JsonConverterAttribute
     public SkinListConverter()
     {
         // Type registry will be null - we'll need to handle this case
-        _typeRegistry = null;
+        _typeRegistry = null!;
     }
 
     public override bool CanConvert(Type typeToConvert)
@@ -33,7 +33,7 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
     public override ImmutableList<Skin> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Null)
-            return null;
+            return ImmutableList<Skin>.Empty;
 
         if (reader.TokenType != JsonTokenType.StartArray)
             throw new JsonException($"Expected StartArray token, got {reader.TokenType}");
@@ -63,7 +63,7 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
                     var typeName = typeElement.GetString();
                     if (!string.IsNullOrEmpty(typeName))
                     {
-                        Type skinType = null;
+                        Type? skinType = null;
 
                         // Try to get type from registry first, then fall back to Type.GetType
                         if (_typeRegistry?.TryGetType(typeName, out var typeInfo) == true)
@@ -72,14 +72,14 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
                         }
                         else
                         {
-                            skinType = Type.GetType(typeName);
+                            skinType = Type.GetType(typeName!);
                         }
 
                         if (skinType != null && typeof(Skin).IsAssignableFrom(skinType))
                         {
                             // Deserialize to the specific skin type
                             var json = root.GetRawText();
-                            var skin = (Skin)JsonSerializer.Deserialize(json, skinType, options);
+                            var skin = (Skin?)JsonSerializer.Deserialize(json, skinType, options);
                             if (skin != null)
                                 result.Add(skin);
                         }

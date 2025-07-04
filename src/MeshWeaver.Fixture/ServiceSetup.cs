@@ -10,7 +10,7 @@ public class ServiceSetup
 {
     public readonly ServiceCollection Services = CreateServiceCollection();
     public readonly List<Action<IServiceProvider>> Initializations = new();
-    public IServiceProvider ServiceProvider { get; private set; }
+    public IServiceProvider ServiceProvider { get; private set; } = null!;
 
     protected static ServiceCollection CreateServiceCollection()
     {
@@ -44,7 +44,7 @@ public class ServiceSetup
             initialize(ServiceProvider);
     }
 
-    internal void SetOutputHelper(ITestOutputHelper output)
+    internal void SetOutputHelper(ITestOutputHelper? output)
     {
         if (output != null)
             ServiceProvider.GetRequiredService<TestOutputHelperAccessor>().OutputHelper = output;

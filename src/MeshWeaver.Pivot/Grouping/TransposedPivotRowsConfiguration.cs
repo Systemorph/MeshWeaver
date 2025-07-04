@@ -9,7 +9,7 @@ namespace MeshWeaver.Pivot.Grouping
     {
         private Type TransposedValue { get; }
 
-        public TransposedPivotRowsConfiguration([NotNull]Type transposedValue)
+        public TransposedPivotRowsConfiguration([NotNull] Type transposedValue)
         {
             TransposedValue = transposedValue;
         }
@@ -31,7 +31,7 @@ namespace MeshWeaver.Pivot.Grouping
                 var reflector = property.Property.GetReflector();
                 yield return (new RowGroup(property.SystemName, property.DisplayName, PivotConst.PropertyPivotGrouperName), x => new Dictionary<string, object>
                                                                                                                                  {
-                                                                                                                                     { PivotConst.DefaultValueName, x == null ? null : reflector.GetValue(x) }
+                                                                                                                                     { PivotConst.DefaultValueName, x == null ? "" : (reflector.GetValue(x) ?? "") }
                                                                                                                                  });
             }
         }

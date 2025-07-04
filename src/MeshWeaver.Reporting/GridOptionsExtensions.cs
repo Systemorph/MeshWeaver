@@ -99,7 +99,7 @@ namespace MeshWeaver.Reporting
         {
             return gridOptions with
             {
-                AutoGroupColumnDef = definitionModifier(gridOptions.AutoGroupColumnDef)
+                AutoGroupColumnDef = definitionModifier(gridOptions.AutoGroupColumnDef ?? new ColDef())
             };
         }
 
@@ -108,7 +108,7 @@ namespace MeshWeaver.Reporting
             Func<ColDef, ColDef> definitionModifier
         )
         {
-            return def with { DefaultColDef = definitionModifier(def.DefaultColDef) };
+            return def with { DefaultColDef = definitionModifier(def.DefaultColDef ?? new ColDef()) };
         }
 
         public static GridOptions WithDefaultColumnGroup(
@@ -116,7 +116,7 @@ namespace MeshWeaver.Reporting
             Func<ColGroupDef, ColGroupDef> definitionModifier
         )
         {
-            return def with { DefaultColGroupDef = definitionModifier(def.DefaultColGroupDef) };
+            return def with { DefaultColGroupDef = definitionModifier(def.DefaultColGroupDef ?? new ColGroupDef()) };
         }
 
         public static GridOptions WithRowStyle(this GridOptions def, CellStyle style)
@@ -144,8 +144,7 @@ namespace MeshWeaver.Reporting
         {
             if (def is ColGroupDef cg)
             {
-                var modifiedColumnGroup =
-                    definitionFilter == null || definitionFilter(cg)
+                var modifiedColumnGroup = definitionFilter(cg)
                         ? (ColGroupDef)definitionModifier(cg)
                         : cg;
                 return modifiedColumnGroup with
@@ -158,7 +157,7 @@ namespace MeshWeaver.Reporting
                 };
             }
 
-            return definitionFilter == null || definitionFilter(def)
+            return definitionFilter(def)
                 ? definitionModifier(def)
                 : def;
         }
@@ -191,7 +190,7 @@ namespace MeshWeaver.Reporting
         public static ColDef WithNumberFormat(
             this ColDef def,
             string locales,
-            string options = null
+            string? options = null
         )
         {
             options ??= "{ maximumFractionDigits: 2 }";
@@ -269,7 +268,7 @@ namespace MeshWeaver.Reporting
                     x.RowGroup != null
                     && Regex
                         .Match(
-                            x.RowGroup.Id.ToString(),
+                            x.RowGroup.Id?.ToString() ?? string.Empty,
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )
@@ -286,7 +285,7 @@ namespace MeshWeaver.Reporting
         {
             var rowsWithModifiedDefinitions = rows.Select(row =>
                 {
-                    if (rowFilter == null || rowFilter(row))
+                    if (rowFilter(row))
                         return rowModifier(row);
                     return row;
                 })

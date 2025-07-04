@@ -45,45 +45,45 @@ public static class StandardReducers
                         && pointer.Skip(1).Equals(u.Id)).ToArray());
     }
 
-    private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
+    private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
         var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
-        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions, typeRegistry));
+        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
     }
-    private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch patch, string changedBy)
+    private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
+        var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
         return new(
             updatedInstances,
             changedBy,
             ChangeType.Patch,
             stream.Hub.Version,
-            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch, stream.Hub.JsonSerializerOptions));
+            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch!, stream.Hub.JsonSerializerOptions));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.Get<object>(reference.Id), current.Version);
+            return new(current.Value.Get<object>(reference.Id)!, current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Id == reference.Id);
         if (change == null)
-            return null;
-        return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+            return null!;
+        return new(change.Value!, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
     }
 
     private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, EntityReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value.ReduceImpl(reference)!, current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
         if (change is not null)
             return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
 
         return new(
-            current.Value.ReduceImpl(reference),
-            null,
+            current.Value.ReduceImpl(reference)!,
+            default,
             ChangeType.Full,
             current.Version,
             ImmutableArray<EntityUpdate>.Empty);
@@ -100,27 +100,27 @@ public static class StandardReducers
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value.ReduceImpl(reference)!, current.Version);
 
 
         var changes =
             current.Updates.Where(x => reference.Collections.Contains(x.Collection))
                 .ToArray();
         if (!changes.Any())
-            return null;
+            return null!;
         return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<InstanceCollection> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value.ReduceImpl(reference)!, current.Version);
 
 
         var changes =
             current.Updates.Where(x => reference.Name == x.Collection)
                 .ToArray();
         if (!changes.Any())
-            return null;
+            return null!;
         return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, PartitionedWorkspaceReference<EntityStore> reference, bool initial) =>
@@ -131,11 +131,11 @@ public static class StandardReducers
         ReduceEntityStoreTo(current, (dynamic)reference.Reference, initial);
 
 
-    private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch, string changedBy)
+    private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch? patch, string changedBy)
     {
         var updates = new List<EntityUpdate>();
         foreach (var g in
-                 patch.Operations
+                 patch!.Operations
                      .GroupBy(p => p.Path.First()))
         {
             var allChanges = g.ToArray();
@@ -156,7 +156,7 @@ public static class StandardReducers
                         var elements = currentStore.GetCollection(collection);
                         if (elements is null || !elements.Instances.Any())
                             throw new ArgumentException("An invalid patch was supplied.");
-                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, null) { OldValue = x.Value }));
+                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, (object?)null) { OldValue = x.Value }));
                         currentStore = currentStore.Remove(collection);
                         break;
                     default:
@@ -176,7 +176,7 @@ public static class StandardReducers
             }))
             {
                 var collection = allChanges.First().Path.First();
-                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions);
+                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions)!;
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
                     throw new InvalidOperationException(
@@ -188,18 +188,18 @@ public static class StandardReducers
                 {
                     case OperationType.Add:
                         var entity = stream.GetEntity(entityPointer, updatedJson);
-                        currentCollection = currentCollection.Update(id, entity);
+                        currentCollection = currentCollection.Update(id!, entity!);
                         updates.Add(new(collection, id, entity));
                         break;
                     case OperationType.Replace:
                         entity = stream.GetEntity(entityPointer, updatedJson);
-                        var oldInstance = currentCollection.GetInstance(id);
-                        currentCollection = currentCollection.Update(id, entity);
+                        var oldInstance = currentCollection.GetInstance(id!);
+                        currentCollection = currentCollection.Update(id!, entity!);
                         updates.Add(new(collection, id, entity) { OldValue = oldInstance });
                         break;
                     case OperationType.Remove:
                         oldInstance = currentCollection.GetInstance(id);
-                        updates.Add(new(collection, id, null) { OldValue = oldInstance });
+                        updates.Add(new(collection, id!, (object?)null) { OldValue = oldInstance });
                         currentCollection = currentCollection.Remove(id);
                         break;
                     default:
@@ -216,11 +216,11 @@ public static class StandardReducers
     private static object GetEntity(this ISynchronizationStream<EntityStore> stream, JsonPointer entityPointer, JsonElement updatedJson)
     {
         var entity = entityPointer.Evaluate(updatedJson);
-        return entity?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
+        return entity?.Deserialize<object>(stream.Hub.JsonSerializerOptions)!;
     }
     private static InstanceCollection DeserializeCollection(this ISynchronizationStream<EntityStore> stream, JsonElement updatedJson, JsonPointer pointer)
     {
-        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
+        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
     }
 
 }

@@ -15,13 +15,14 @@ namespace MeshWeaver.Pivot.Grouping
                         var id = keySelector(o);
                         return new TGroup
                         {
-                            Id = id.ToString(),
-                            DisplayName = o.DisplayName,
+                            Id = id?.ToString() ?? "",
+                            DisplayName = o?.DisplayName ?? "",
                             GrouperName = name,
-                            Coordinates = [id.ToString()]
+                            Coordinates = [id?.ToString() ?? ""]
                         };
                     }),
                 name
-            ) { }
+            )
+        { }
     }
 }

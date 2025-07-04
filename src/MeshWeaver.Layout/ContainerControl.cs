@@ -56,7 +56,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     /// <returns>A configured <see cref="NamedAreaControl"/> instance.</returns>
     protected virtual NamedAreaControl GetNamedArea(Func<NamedAreaControl, NamedAreaControl> options)
     {
-        return options.Invoke(new(null) { Id = GetAutoName() });
+        return options.Invoke(new((UiControl?)null) { Id = GetAutoName() });
     }
     /// <summary>
     /// Adds a view to the container control with the specified options.
@@ -85,7 +85,7 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             Renderers = Renderers.Add((host, context, store) =>
             {
                 var areaContext = GetContextForArea(context, area.Id.ToString()!);
-                return host.RenderArea(areaContext, view, store);
+                return host.RenderArea(areaContext, view!, store);
             })
         };
     }
@@ -121,8 +121,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
     private NamedAreaControl Evaluate(Func<NamedAreaControl, NamedAreaControl>? area)
     {
         if (area is null)
-            return new(null) { Id = GetAutoName() };
-        return area.Invoke(new(null) { Id = GetAutoName() });
+            return new((UiControl?)null) { Id = GetAutoName() };
+        return area.Invoke(new((UiControl?)null) { Id = GetAutoName() });
     }
 
     public TControl WithView(IObservable<ViewDefinition> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)

@@ -27,7 +27,7 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
         configuration.ViewBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null);
+            .FirstOrDefault(x => x != null)!;
 
     public UiControl GetCatalog(EntityRenderingContext context)
     {
@@ -97,9 +97,9 @@ public record DomainViewConfiguration
             );
     }
 
-    internal ImmutableList<Func<EntityRenderingContext, UiControl>> ViewBuilders { get; init; }
-    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
-    internal ImmutableList<Func<EntityRenderingContext, UiControl>> CatalogBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl?>> ViewBuilders { get; init; }
+    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl?>> PropertyViewBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl?>> CatalogBuilders { get; init; } = [];
 
     private UiControl DefaultViewBuilder(EntityRenderingContext context)
     {
@@ -115,9 +115,9 @@ public record DomainViewConfiguration
 
 
 
-    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl> viewBuilder)
+    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl?> viewBuilder)
         => this with { ViewBuilders = ViewBuilders.Add(viewBuilder) };
-    public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl> viewBuilder)
+    public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl?> viewBuilder)
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
@@ -140,7 +140,7 @@ public record DomainViewConfiguration
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
-                            .FirstOrDefault(x => x != null)
+                            .FirstOrDefault(x => x != null)!
                     );
     }
 
@@ -151,14 +151,14 @@ public record DomainViewConfiguration
         CatalogBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null);
+            .FirstOrDefault(x => x != null)!;
 }
 
 public record EntityRenderingContext(
     LayoutAreaHost Host,
     ITypeDefinition TypeDefinition,
-    string IdString,
-    object Id,
+    string? IdString,
+    object? Id,
     RenderingContext RenderingContext);
 
 public record PropertyRenderingContext(EntityRenderingContext EntityContext, PropertyInfo Property);
