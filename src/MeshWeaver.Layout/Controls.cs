@@ -56,7 +56,7 @@ public static class Controls
     /// <param name="icon">The icon of the navigation link.</param>
     /// <param name="href">The href of the navigation link.</param>
     /// <returns>A new instance of <see cref="NavLinkControl"/>.</returns>
-    public static NavLinkControl NavLink(object title, Icon icon, object href) => new(title, icon, href);
+    public static NavLinkControl NavLink(object title, Icon? icon, object href) => new(title, icon, href);
 
     /// <summary>
     /// Gets a new instance of <see cref="StackControl"/>.
@@ -164,7 +164,7 @@ public static class Controls
     /// <param name="title">The title of the menu item.</param>
     /// <param name="icon">The icon of the menu item.</param>
     /// <returns>A new instance of <see cref="MenuItemControl"/>.</returns>
-    public static MenuItemControl MenuItem(object title, object? icon = null) => new(title, icon);
+    public static MenuItemControl MenuItem(object title, object? icon = null) => new(title, icon ?? "");
 
     /// <summary>
     /// Creates a new instance of <see cref="DialogControl"/> with the specified content and title.
@@ -172,7 +172,7 @@ public static class Controls
     /// <param name="content">The content to display in the dialog.</param>
     /// <param name="title">The title of the dialog.</param>
     /// <returns>A new instance of <see cref="DialogControl"/>.</returns>
-    public static DialogControl Dialog(object content, object? title = null) => new(content) { Title = title ?? "Dialog" };
+    public static DialogControl Dialog(object content, object? title = null) => new(content) { Title = title };
 
     public static LayoutAreaControl LayoutArea(object address, string area, object? id = null)
         => LayoutArea(address, new LayoutAreaReference(area) { Id = id });

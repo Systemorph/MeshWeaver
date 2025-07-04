@@ -41,7 +41,7 @@ public static class NorthwindDataCubeLayoutAreaExtensions
                             )
                             .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
                     )
-            );
+            )!;
 
     /// <summary>
     /// Retrieves Northwind data cubes filtered by the specified year.

@@ -55,7 +55,7 @@ public static class EditorExtensions
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider, T instance,
         string? id = null)
-        => serviceProvider.Edit(Observable.Return(instance), id);
+        => serviceProvider.Edit(Observable.Return(instance), id!);
     public static UiControl Edit(
         this IMessageHub hub, Type type,
         string id)
@@ -63,7 +63,7 @@ public static class EditorExtensions
     public static UiControl Edit<T>(
         this IMessageHub hub, T instance,
         string? id = null)
-        => hub.ServiceProvider.Edit(Observable.Return(instance), id);
+        => hub.ServiceProvider.Edit(Observable.Return(instance), id!);
 
     public static UiControl Edit<T>(
         this IMessageHub hub,

@@ -43,7 +43,7 @@ public abstract record ListControlBase<TControl>(object Data, object Options)
     /// <param name="options">The options to set.</param>
     /// <returns>A new instance of the list control with the specified options.</returns>
     public TControl WithOptions<T>(IEnumerable<T> options) => 
-        WithOptions((object)options.Select(o => (Option)new Option<T>(o, o.ToString())).ToArray());
+        WithOptions((object)options.Select(o => (Option)new Option<T>(o, o?.ToString() ?? "")).ToArray());
 
 }
 
@@ -55,7 +55,7 @@ public abstract record Option(string Text)
 
 public record Option<TItem>(TItem Item, string Text) : Option(Text)
 {
-    public override object GetItem() => Item;
+    public override object GetItem() => Item!;
     public override Type GetItemType()
         => typeof(TItem);
 }

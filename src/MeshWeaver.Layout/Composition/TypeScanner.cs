@@ -32,7 +32,7 @@ public static class TypeScanner
         else
         {
             foreach (var property in instance.GetType().GetProperties())
-            foreach (var ret in ScanFor<T>(property.GetValue(instance)))
+            foreach (var ret in ScanFor<T>(property.GetValue(instance)!))
                 yield return ret;
         }
     }

@@ -125,7 +125,7 @@ public record DomainViewConfiguration
     {
         var id = Guid.NewGuid().AsString();
         var stream = host.Workspace
-            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
+            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id!));
 
         var typeDefinition = context.TypeDefinition;
         host.RegisterForDisposal(stream

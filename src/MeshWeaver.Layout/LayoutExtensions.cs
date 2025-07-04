@@ -43,7 +43,7 @@ public static class LayoutExtensions
                                         layoutArea,
                                         workspace.Hub.ServiceProvider
                                             .GetRequiredService<IUiControlService>(),
-                                        configuration)
+                                        configuration!)
                                     .RenderLayoutArea()
                         )
                 );
@@ -299,7 +299,7 @@ public static class LayoutExtensions
     public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
         => Controls.LayoutArea(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
         {
-            Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name}/{name}"
+            Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name!}/{name}"
         }).ToString();
 
     public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout, params Assembly[] assemblies)
@@ -310,7 +310,7 @@ public static class LayoutExtensions
                 menu,
                 (mm, assembly) =>
                     layout.Hub.GetDocumentationService().Context
-                        .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name)
+                        .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name!)
                         ?.DocumentPaths
                         .Aggregate
                         (

@@ -136,7 +136,7 @@ public static class LayoutDefinitionExtensions
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
         ;
 
-    private static LayoutAreaDefinition CreateLayoutAreaDefinition(this LayoutDefinition layout, string area, Func<LayoutAreaDefinition, LayoutAreaDefinition> options, Delegate delgate)
+    private static LayoutAreaDefinition CreateLayoutAreaDefinition(this LayoutDefinition layout, string area, Func<LayoutAreaDefinition, LayoutAreaDefinition>? options, Delegate? delgate)
     {
         LayoutAreaDefinition ret = new(area, $"{layout.Hub.Address}/{area}");
         if (delgate is not null)
@@ -195,7 +195,7 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition)
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition)
         => layout.WithView(c => c.Area == area, view)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 

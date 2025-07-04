@@ -41,7 +41,7 @@ public static class SalesComparisonWIthPreviousYearArea
                     .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
                     .ToBarChart(
                         builder => builder
-                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString().Equals("2023")))
+                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals("2023") == true))
                             .WithChartBuilder(o =>
                                 o.WithDataLabels(d =>
                                     d.WithAnchor(DataLabelsAnchor.End)

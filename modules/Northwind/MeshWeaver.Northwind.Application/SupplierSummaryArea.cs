@@ -132,7 +132,7 @@ public static class SupplierSummaryArea
                     .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
                     .ToDataCube()
             )
-    );
+    )!;
 
     // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
     private static IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube(

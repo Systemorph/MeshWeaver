@@ -21,8 +21,8 @@ public record LayoutAreaHost : IDisposable
 
     public T? GetVariable<T>(object key) => variables.TryGetValue(key, out var value) ? (T?)value : default;
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
-    public object SetVariable(object key, object? value) => variables[key] = value;
-    public T GetOrAddVariable<T>(object key, Func<T> factory)
+    public object? SetVariable(object key, object? value) => variables[key] = value;
+    public T? GetOrAddVariable<T>(object key, Func<T> factory)
     {
         if (!ContainsVariable(key))
         {
@@ -124,9 +124,9 @@ public record LayoutAreaHost : IDisposable
         var ret = ((IUiControl)control).Render(this, context, store);
         foreach (var (a, c) in ret.Updates
                      .Where(x => x.Collection == LayoutAreaReference.Areas)
-                     .Select(x => (x.Id.ToString(), Control: x.Value as UiControl))
+                     .Select(x => (x.Id.ToString()!, Control: x.Value as UiControl))
                      .Where(x => x.Control != null))
-            RegisterForDisposal(a, c);
+            RegisterForDisposal(a!, c!);
 
         return ret;
     }
@@ -139,7 +139,7 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.Update(store =>
         {
-            var changes = RemoveViews(store, context.Area);
+            var changes = RemoveViews(store ?? new EntityStore(), context.Area);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(
@@ -156,12 +156,12 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void SubscribeToDataStream<T>(string id, IObservable<T> stream)
-        => RegisterForDisposal(id, stream.Subscribe(x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x))));
+        => RegisterForDisposal(id, stream.Subscribe(x => Update(LayoutAreaReference.Data, coll => coll.SetItem(id, x!))));
 
     public void Update(string collection, Func<InstanceCollection, InstanceCollection> update)
     {
         Stream.Update(ws =>
-            Stream.ApplyChanges(ws.MergeWithUpdates((ws ?? new()).Update(collection, update), Stream.StreamId)),
+            Stream.ApplyChanges((ws ?? new EntityStore()).MergeWithUpdates((ws ?? new EntityStore()).Update(collection, update), Stream.StreamId)),
             ex =>
             {
                 logger.LogWarning(ex, "Cannot update {Collection}", collection);
@@ -170,7 +170,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateData(string id, object data)
-        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
+        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data!));
 
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
@@ -193,9 +193,9 @@ public record LayoutAreaHost : IDisposable
 
     private IObservable<T> GetStream<T>(EntityReference reference) where T : class
     {
-        return Stream
+        return Stream!
             .Reduce(reference)
-            .Select(ci => Convert<T>(ci))
+            .Select(ci => Convert<T>(ci)!)
             .Where(x => x is not null)
             .DistinctUntilChanged();
     }
@@ -289,7 +289,7 @@ public record LayoutAreaHost : IDisposable
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityUpdate(LayoutAreaReference.Areas, i.Key, null) { OldValue = i.Value }), Stream.StreamId);
+            new EntityUpdate(LayoutAreaReference.Areas, i.Key, (object?)null) { OldValue = i.Value }), Stream.StreamId!);
     }
 
 
@@ -309,7 +309,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateProgress(string area, ProgressControl progress)
-        => Stream.ApplyChanges(new(Stream.Current.Value, [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId));
+        => Stream.ApplyChanges(new(Stream.Current?.Value ?? new EntityStore(), [new(LayoutAreaReference.Areas, area, progress)], Stream.StreamId));
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
@@ -319,7 +319,7 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start rendering of {area}", context.Area);
             var view = await generator.Invoke(this, context, ct);
 
-            UpdateArea(context, view);
+            UpdateArea(context, view!);
             logger.LogDebug("End rendering of {area}", context.Area);
         }, ex =>
         {
@@ -337,7 +337,7 @@ public record LayoutAreaHost : IDisposable
                 InvokeAsync(async ct =>
                 {
                     var view = await vd.Invoke(this, context, ct);
-                    UpdateArea(context, view);
+                    UpdateArea(context, view!);
                 }, ex =>
                 {
                     FailRendering(ex);

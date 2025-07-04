@@ -33,7 +33,7 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, data);
+        return new ItemTemplateControl(view, data!);
     }
 
     /// <summary>
@@ -96,7 +96,7 @@ public static class Template
     }
 
     private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
-        () => ItemTemplateNonGeneric<object, UiControl>(null, null)
+        () => ItemTemplateNonGeneric<object, UiControl>(null, null!)
     );
 
     /// <summary>
@@ -113,7 +113,7 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, data);
+        return new ItemTemplateControl(view, data!);
     }
 
     private class ReplaceBindMethodAttribute : ReplaceMethodInTemplateAttribute
