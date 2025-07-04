@@ -69,7 +69,7 @@ public static class EditorExtensions
         this IMessageHub hub,
         IObservable<T> observable,
         string? id = null)
-        => hub.ServiceProvider.Edit(observable, id);
+        => hub.ServiceProvider.Edit(observable, id!);
     public static EditorControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable
@@ -155,17 +155,17 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider, T instance,
         string? id = null)
-        => serviceProvider.Toolbar(Observable.Return(instance), id);
+        => serviceProvider.Toolbar(Observable.Return(instance), id!);
     public static UiControl Toolbar<T>(
         this IMessageHub hub, T instance,
         string? id = null)
-        => hub.ServiceProvider.Toolbar(Observable.Return(instance), id);
+        => hub.ServiceProvider.Toolbar(Observable.Return(instance), id!);
 
     public static UiControl Toolbar<T>(
         this IMessageHub hub,
         IObservable<T> observable,
         string? id = null)
-        => hub.ServiceProvider.Toolbar(observable, id);
+        => hub.ServiceProvider.Toolbar(observable, id!);
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host, 
         T instance,
@@ -176,7 +176,7 @@ public static class EditorExtensions
         this LayoutAreaHost host,
         IObservable<T> observable,
         string? id = null)
-        => host.Hub.ServiceProvider.Toolbar(observable, id);
+        => host.Hub.ServiceProvider.Toolbar(observable, id!);
     public static ToolbarControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable, 
@@ -326,11 +326,11 @@ public static class EditorExtensions
         return host.Workspace
             .GetStream(
                 new CollectionReference(
-                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)))
+                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)!))
             .Select(x => 
                 ConvertToOptions(
                     x.Value, 
-                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)));
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)!));
     }
 
 
@@ -350,7 +350,7 @@ public static class EditorExtensions
     }
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) => 
-        new(propertyInfo.Name.ToCamelCase());
+        new(propertyInfo.Name.ToCamelCase()!);
 
 
     private static UiControl RenderControl(
@@ -362,9 +362,9 @@ public static class EditorExtensions
         object? parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);
+            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter)).WithLabel(label);
+            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }

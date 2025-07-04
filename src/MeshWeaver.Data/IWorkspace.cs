@@ -16,7 +16,7 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(IReadOnlyCollection<object> instances, Activity activity, IMessageDelivery request);
     void Delete(object instance, Activity activity, IMessageDelivery request) => Delete([instance], activity, request);
 
-    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery request);
+    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery? request);
 
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }

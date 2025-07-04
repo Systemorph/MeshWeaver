@@ -267,7 +267,7 @@ public static class JsonSynchronizationStream
                     if (x.Updates.Count == 0)
                         return null;
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions, stream.Reference as WorkspaceReference);
-                    currentJson = patch!.Apply(currentJson.Value);
+                    currentJson = patch.Apply(currentJson.Value);
                     stream.Set(currentJson);
                     return new DataChangedEvent
                     (
@@ -318,7 +318,7 @@ public static class JsonSynchronizationStream
                 var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
                 return new EntityUpdate(
                         collection,
-                        (object?)(id == null ? null : JsonSerializer.Deserialize<object>(id, options)!),
+                        id == null ? null : JsonSerializer.Deserialize<object>(id, options)!,
                         pointer.Evaluate(updated)!
                     )
                     { OldValue = pointer.Evaluate(current) };
@@ -352,7 +352,7 @@ public static class JsonSynchronizationStream
             var pointer = id == null ? null : JsonPointer.Create(id);
             return new EntityUpdate(
                 reference.Name,
-                (object?)(id == null ? null : JsonSerializer.Deserialize<object>(id, options)!),
+                id == null ? null : JsonSerializer.Deserialize<object>(id, options)!,
                 pointer?.Evaluate(updated) ?? updated
             )
             { OldValue = id is null ? current.Instances : current.Instances.GetValueOrDefault(id) };

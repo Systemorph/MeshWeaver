@@ -9,14 +9,13 @@ public record StreamMessage(string StreamId);
 public record DataChangeRequest 
     : IRequest<DataChangeResponse>
 {
-    public string? ChangedBy { get; init; } = null!;
+    public string? ChangedBy { get; init; } 
     public ImmutableList<object> Creations { get; init; } = [];
 
     public ImmutableList<object> Updates { get; init; } = [];
     public ImmutableList<object> Deletions { get; init; } = [];
-    public UpdateOptions Options { get; init; } = null!;
-    public string StreamId { get; init; } = null!;
-
+    public UpdateOptions? Options { get; init; } 
+    public string? StreamId { get; init; } 
     public DataChangeRequest WithCreations(params object[] creations)
         => this with { Creations = Creations.AddRange(creations) };
 
@@ -65,7 +64,7 @@ public record DataChangedEvent(
     long Version,
     RawJson Change,
     ChangeType ChangeType,
-    string ChangedBy
+    string? ChangedBy
 );
 
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>

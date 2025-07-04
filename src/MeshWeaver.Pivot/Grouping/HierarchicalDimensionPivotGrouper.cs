@@ -14,7 +14,7 @@ namespace MeshWeaver.Pivot.Grouping
             TIntermediate,
             TAggregate
         >(
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         );
 
@@ -93,7 +93,7 @@ namespace MeshWeaver.Pivot.Grouping
             TIntermediate,
             TAggregate
         >(
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         )
         {
@@ -107,7 +107,7 @@ namespace MeshWeaver.Pivot.Grouping
             {
                 groupManager = AddChildren(i, groupManager, aggregationFunctions);
             }
-            return groupManager;
+            return groupManager!;
         }
 
 
@@ -116,7 +116,7 @@ namespace MeshWeaver.Pivot.Grouping
             TAggregate
         >(
             int level,
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         )
         {

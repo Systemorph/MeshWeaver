@@ -166,7 +166,7 @@ public static class LayoutDefinitionExtensions
         object view,
         LayoutAreaDefinition? layoutAreaDefinition = null) =>
         layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, view, s))
-            .WithAreaDefinition(layoutAreaDefinition);
+            .WithAreaDefinition(layoutAreaDefinition!);
 
     public static LayoutDefinition WithView(
         this LayoutDefinition layout, 
@@ -185,8 +185,8 @@ public static class LayoutDefinitionExtensions
         => layout
             .WithRenderer(context,
                 (a, c, s)
-                    => a.RenderArea(c, view.Invoke, s))
-            .WithAreaDefinition(areaDefinition);
+                    => a.RenderArea(c, (ViewDefinition)view.Invoke, s))
+            .WithAreaDefinition(areaDefinition!);
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -208,7 +208,7 @@ public static class LayoutDefinitionExtensions
             .WithView(context, 
                 (a, ctx) 
                     => Observable.Return<UiControl>(view(a, ctx)))
-            .WithAreaDefinition(areaDefinition);
+            .WithAreaDefinition(areaDefinition!);
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,

@@ -68,7 +68,7 @@ public class SkinListConverter : JsonConverter<ImmutableList<Skin>>
                         // Try to get type from registry first, then fall back to Type.GetType
                         if (_typeRegistry?.TryGetType(typeName, out var typeInfo) == true)
                         {
-                            skinType = typeInfo.Type;
+                            skinType = typeInfo!.Type;
                         }
                         else
                         {
