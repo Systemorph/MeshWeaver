@@ -15,7 +15,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
     where TGroup : class, IGroup, new()
 {
     private readonly ITypeRegistry typeRegistry = Workspace.DataContext.TypeRegistry;
-    internal ImmutableList<PivotGroupingConfigItem<T, TGroup>> ConfigItems { get; init; }
+    internal ImmutableList<PivotGroupingConfigItem<T, TGroup>>? ConfigItems { get; init; }
 
     protected PivotGroupingConfigItem<T, TGroup> CreateDefaultAutomaticNumbering()
     {
@@ -24,17 +24,20 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
         {
             return new(new(_ =>
             {
-                var keyFunction = typeRegistry.GetKeyFunction(typeof(T)).Function;
+                var keyFunction = typeRegistry.GetKeyFunction(typeof(T))?.Function;
+                if (keyFunction == null)
+                    throw new InvalidOperationException($"No key function found for type {typeof(T)}");
+
                 var grouper = Activator.CreateInstance(
                     typeof(NamedPivotGrouper<,>).MakeGenericType(typeof(T), typeof(TGroup)),
                     PivotConst.AutomaticEnumerationPivotGrouperName,
                     keyFunction
                 );
-                return (IPivotGrouper<T, TGroup>)grouper;
+                return (IPivotGrouper<T, TGroup>)grouper!;
             }));
         }
 
-        return new(new (_ => new AutomaticEnumerationPivotGrouper<T, TGroup>()));
+        return new(new(_ => new AutomaticEnumerationPivotGrouper<T, TGroup>()));
     }
 
 
@@ -71,7 +74,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
         return ConfigItems?.Insert(0, configItem) ?? ImmutableList.Create(configItem);
     }
 
-    protected PivotGroupingConfigItem<T, TGroup> Default { get; init; }
+    protected PivotGroupingConfigItem<T, TGroup> Default { get; init; } = null!;
 
     public IEnumerator<PivotGroupingConfigItem<T, TGroup>> GetEnumerator()
     {

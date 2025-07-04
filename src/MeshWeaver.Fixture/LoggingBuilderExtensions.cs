@@ -17,7 +17,7 @@ public static class LoggingBuilderExtensions
     /// <param name="outputHelperAccessor">outputHelperAccessor to register. If not specified, a type singleton is registered</param>
     public static ILoggingBuilder AddXUnitLogger(
         this ILoggingBuilder builder,
-        TestOutputHelperAccessor? outputHelperAccessor = null
+        TestOutputHelperAccessor? outputHelperAccessor = default
     )
     {
         builder.Services.TryAddEnumerable(
@@ -69,7 +69,7 @@ public class XUnitLogger(
 {
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => scopeProvider.Push(state);
+    public IDisposable? BeginScope<TState>(TState state) => scopeProvider.Push(state);
 
     public void Log<TState>(
         LogLevel logLevel,

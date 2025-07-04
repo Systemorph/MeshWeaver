@@ -32,10 +32,10 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     {
         typeRegistry.WithType<TViewModel>();
         return WithView((i, s, a) => 
-            i is not TViewModel vm ? null : StandardView<TViewModel, TView>(vm, s, a));
+            i is not TViewModel vm ? null! : StandardView<TViewModel, TView>(vm, s, a));
     }
 
-    public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area) =>
+    public ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area) =>
         ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
 
     public const string ViewModel = nameof(ViewModel);
@@ -49,7 +49,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
             typeof(TView),
             new Dictionary<string, object>
             {
-                { ViewModel, instance },
+                { ViewModel, instance! },
                 { nameof(Stream), stream },
                 { nameof(Area), area }
             }
@@ -64,7 +64,7 @@ public record LayoutClientConfiguration(IMessageHub Hub)
             viewType,
             new Dictionary<string, object>
             {
-                { ViewModel, instance },
+                { ViewModel, instance! },
                 { nameof(Stream), stream },
                 { nameof(Area), area }
             }

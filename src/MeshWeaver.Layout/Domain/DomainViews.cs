@@ -49,7 +49,7 @@ public static class DomainViews
             var typeDefinition = typeSource.TypeDefinition;
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
-            var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType);
+            var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType)!;
             return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
         }
         catch (Exception e)
@@ -163,10 +163,10 @@ public static class DomainViews
         );
     }
 
-    public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
+    public static string? GetDetailsUri(this IMessageHub hub, Type type, object id) =>
         GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
-    public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, Type type, object id)
+    public static LayoutAreaReference? GetDetailsReference(this IMessageHub hub, Type type, object id)
     {
         var collection = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type);
         if (collection == null)

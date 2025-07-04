@@ -9,7 +9,7 @@ namespace MeshWeaver.Pivot.Processors
         private readonly IDictionary<
             object,
             HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
-        > subAggregates;
+        > subAggregates = null!;
         public ICollection<PivotGrouping<TGroup, TIntermediate>> AggregatedGroupings { get; }
 
         // TODO V10: add aggregated grouping here as a property Agg of agg (2022/06/14, Ekaterina Mishina)
@@ -19,10 +19,10 @@ namespace MeshWeaver.Pivot.Processors
             IDictionary<
                 TGroup,
                 HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
-            > subAggregates
+            >? subAggregates
         )
         {
-            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id, x => x.Value);
+            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id, x => x.Value) ?? new Dictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>();
             //this.subAggregates.Add("Agg",);
             AggregatedGroupings = aggregatedGroupings;
             foreach (var agg in AggregatedGroupings)
@@ -38,7 +38,7 @@ namespace MeshWeaver.Pivot.Processors
             }
         }
 
-        public PivotGrouping<TGroup, TIntermediate> Total { get; set; }
+        public PivotGrouping<TGroup, TIntermediate>? Total { get; set; }
 
         public IList<object> Transform<TValue>(
             ICollection<Func<TAggregate, TValue>> valueSelectors,

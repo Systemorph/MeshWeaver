@@ -49,7 +49,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
                     slices => slices.GroupBy(_ => IPivotGrouper<TElement, TGroup>.TopGroup),
                     IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName
                 ),
-                null,
+                null!,
                 aggregationFunctions
             );
 
@@ -58,7 +58,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             TIntermediate,
             TAggregate,
             TGroup
-        > subGroupManager = null;
+        >? subGroupManager = null;
         foreach (var tuple in Dimensions.Reverse())
         {
             subGroupManager = CreateSubGroupManager(
@@ -70,7 +70,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             );
         }
 
-        return subGroupManager;
+        return subGroupManager!;
 
     }
 
@@ -81,7 +81,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
         TAggregate,
         TGroup
     > CreateSubGroupManager<TIntermediate, TAggregate>(
-        PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup> subGroup,
+        PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>? subGroup,
         Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregationFunctions,
         IPivotGrouper<DataSlice<TElement>, TGroup> grouper
     )
@@ -91,24 +91,24 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
         {
             // TODO V10: make initialization here for all groupers&managers (2022/01/27, Ekaterina Mishina)
             var groupManager = hierarchicalGrouper.GetPivotGroupManager(
-                subGroup,
+                subGroup!,
                 aggregationFunctions
             );
             return groupManager;
         }
 
-        return new(grouper, subGroup, aggregationFunctions);
+        return new(grouper, subGroup!, aggregationFunctions);
     }
 
-    public IPivotGrouper<DataSlice<TElement>, TGroup> Grouper { get; set; }
+    public IPivotGrouper<DataSlice<TElement>, TGroup>? Grouper { get; set; }
 
     protected PivotGroupBuilder<DataSlice<TElement>, TGroup> GetGroupBuilder(
         DimensionDescriptor dimension,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     ) =>
         new(dimensionCache => PivotGroupingExtensions<TGroup>.GetPivotGrouper<TElement>(
-            dimensionCache, 
-            dimension, 
+            dimensionCache,
+            dimension,
             hierarchicalDimensionOptions));
 
 }

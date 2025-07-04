@@ -8,11 +8,11 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 {
 
 
-    private readonly ITypeRegistry typeRegistry;
+    private readonly ITypeRegistry typeRegistry = null!;
     protected TypeSource(IWorkspace workspace, object dataSource, Type type)
     {
         typeRegistry = workspace.Hub.TypeRegistry;
-        TypeDefinition = typeRegistry.GetTypeDefinition(type, typeName:type.Name);
+        TypeDefinition = typeRegistry.GetTypeDefinition(type, typeName:type.Name)!;
     }
 
     public ITypeDefinition TypeDefinition { get; init; } = null!; 

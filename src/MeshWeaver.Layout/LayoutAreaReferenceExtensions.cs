@@ -23,7 +23,7 @@ public static class LayoutAreaQueryString
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="key">The key of the query string parameter.</param>
     /// <returns>The value of the query string parameter, or <c>null</c> if the parameter is not found.</returns>
-    public static string GetQueryStringParamValue(this LayoutAreaHost layoutArea, string key)
+    public static string? GetQueryStringParamValue(this LayoutAreaHost layoutArea, string key)
         => layoutArea.GetQueryStringParams()
             .FirstOrDefault(x => x.Key == key).Value;
     

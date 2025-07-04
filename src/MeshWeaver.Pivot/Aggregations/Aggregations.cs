@@ -173,8 +173,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TAggregate, TAggregate>
             {
                 Name = "Max",
-                Aggregation = enumerable => enumerable.Max(),
-                AggregationOfAggregates = max => max.Max()
+                Aggregation = enumerable => enumerable.Max()!,
+                AggregationOfAggregates = max => max.Max()!
             };
         }
 
@@ -183,8 +183,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TTransformed, TNewAggregate>
             {
                 Name = "Max",
-                Aggregation = enumerable => enumerable.Max(selector),
-                AggregationOfAggregates = max => max.Max()
+                Aggregation = enumerable => enumerable.Max(selector)!,
+                AggregationOfAggregates = max => max.Max()!
             };
         }
 
@@ -197,8 +197,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TAggregate, TAggregate>
             {
                 Name = "Min",
-                Aggregation = enumerable => enumerable.Min(),
-                AggregationOfAggregates = min => min.Min()
+                Aggregation = enumerable => enumerable.Min()!,
+                AggregationOfAggregates = min => min.Min()!
             };
         }
 
@@ -207,8 +207,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TTransformed, TNewAggregate>
             {
                 Name = "Min",
-                Aggregation = enumerable => enumerable.Min(selector),
-                AggregationOfAggregates = min => min.Min()
+                Aggregation = enumerable => enumerable.Min(selector)!,
+                AggregationOfAggregates = min => min.Min()!
             };
         }
 

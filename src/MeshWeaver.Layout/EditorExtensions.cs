@@ -273,7 +273,7 @@ public static class EditorExtensions
 
         var displayAttribute = propertyInfo.GetCustomAttribute<DisplayAttribute>();
         var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
-        string label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
+        string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
@@ -339,14 +339,14 @@ public static class EditorExtensions
         var elementType = 
             collection is Array array 
                 ? array.GetType().GetElementType()
-                : collection.GetType().GetInterfaces().Select(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>) ? i.GenericTypeArguments.First() : null).FirstOrDefault();
+                : collection.GetType().GetInterfaces().Select(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>) ? i.GenericTypeArguments.First() : null).FirstOrDefault(x => x != null);
         if (elementType == null)
         {
             throw new ArgumentException("Collection does not have a generic type argument.");
         }
 
         var optionType = typeof(Option<>).MakeGenericType(elementType);
-        return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString().Wordify())).ToArray();
+        return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString()!.Wordify())!).ToArray();
     }
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) => 
@@ -357,7 +357,7 @@ public static class EditorExtensions
         LayoutAreaHost host,
         Type controlType,
         PropertyInfo propertyInfo,
-        string label,
+        string? label,
         JsonPointerReference reference,
         object? parameter = null)
     {
@@ -471,12 +471,12 @@ public static class EditorExtensions
         var displayNameSelector =
             typeof(INamed).IsAssignableFrom(dimensionType.Type)
                 ? (Func<object, string>)(x => ((INamed)x).DisplayName)
-                : o => o.ToString();
+                : o => o.ToString()!;
 
         var keyType = dimensionType.GetKeyType();
         var optionType = typeof(Option<>).MakeGenericType(keyType);
         return instances.Instances
-            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])).ToArray();
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])!).ToArray();
     }
 
 }

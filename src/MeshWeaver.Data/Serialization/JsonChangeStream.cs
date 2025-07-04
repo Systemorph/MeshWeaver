@@ -29,7 +29,7 @@ public static class JsonSynchronizationStream
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
-        TaskCompletionSource<TReduced> tcs2 = null;
+        TaskCompletionSource<TReduced>? tcs2 = null;
         var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
                 hub,
@@ -48,6 +48,7 @@ public static class JsonSynchronizationStream
                 reduced
                 .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
+                .Select(x => x!)
         .Subscribe(e =>
         {
             logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -59,7 +60,7 @@ public static class JsonSynchronizationStream
 
 
         var request = hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
-        var task = hub.RegisterCallback(request, c =>
+        var task = hub.RegisterCallback(request!, c =>
         {
             logger.LogInformation("Retrieved {reference} from {owner}.", reduced.Reference, reduced.Owner);
             return c;
@@ -74,8 +75,8 @@ public static class JsonSynchronizationStream
                         first = false;
                         var jsonElement = JsonDocument.Parse(delivery.Message.Change.Content).RootElement;
                         ((ISynchronizationStream)reduced).Set<JsonElement?>(jsonElement);
-                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions));
-                        return request.Processed();
+                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions)!);
+                        return request!.Processed();
                     }
                     reduced.DeliverMessage(delivery);
                     return delivery.Forwarded();
@@ -124,7 +125,7 @@ public static class JsonSynchronizationStream
             );
 
         var reduced =
-            (ISynchronizationStream<TReduced>)fromWorkspace
+            fromWorkspace as ISynchronizationStream<TReduced>
             ?? throw new DataSourceConfigurationException(
                 $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
             );
@@ -158,6 +159,7 @@ public static class JsonSynchronizationStream
             reduced
                 .ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
+                .Select(x => x!)
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
@@ -203,7 +205,7 @@ public static class JsonSynchronizationStream
                         currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
                         stream.Stream.Update(
                             _ => new ChangeItem<TStream>(
-                                currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions),
+                                currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions)!,
                                 stream.Stream.Hub.Version), ex => SyncFailed(delivery, stream.Stream, ex)
                             );
 
@@ -213,7 +215,7 @@ public static class JsonSynchronizationStream
                         (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
                         stream.Stream.Update(
                             state =>
-                                stream.Stream.ToChangeItem(state,
+                                stream.Stream.ToChangeItem(state!,
                                     currentJson.Value,
                                     patch,
                                     delivery.Message.ChangedBy ?? stream.ClientId),
@@ -239,7 +241,7 @@ public static class JsonSynchronizationStream
     }
 
 
-    private static IObservable<DataChangedEvent> ToDataChanged<TReduced>(
+    private static IObservable<DataChangedEvent?> ToDataChanged<TReduced>(
         this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) =>
         stream
             .Where(predicate)
@@ -249,23 +251,23 @@ public static class JsonSynchronizationStream
                 if (currentJson is null || x.ChangeType == ChangeType.Full)
                 {
                     var previousJson = currentJson;
-                    currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value.GetType(), stream.Hub.JsonSerializerOptions);
+                    currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value?.GetType() ?? typeof(object), stream.Hub.JsonSerializerOptions);
                     if (Equals(previousJson, currentJson))
                         return null;
                     stream.Set(currentJson);
                     return new(
                         stream.ClientId,
                         x.Version,
-                        new RawJson(currentJson.ToString()),
+                        new RawJson(currentJson.ToString() ?? string.Empty),
                         ChangeType.Full,
-                        x.ChangedBy);
+                        x.ChangedBy ?? string.Empty);
                 }
                 else
                 {
                     if (x.Updates.Count == 0)
                         return null;
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions, stream.Reference as WorkspaceReference);
-                    currentJson = patch.Apply(currentJson.Value);
+                    currentJson = patch!.Apply(currentJson.Value);
                     stream.Set(currentJson);
                     return new DataChangedEvent
                     (
@@ -273,7 +275,7 @@ public static class JsonSynchronizationStream
                         x.Version,
                         new RawJson(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
                         x.ChangeType,
-                        x.ChangedBy
+                        x.ChangedBy ?? string.Empty
                     );
                 }
 
@@ -284,7 +286,7 @@ public static class JsonSynchronizationStream
 
 
 
-    public static ChangeItem<TReduced> ToChangeItem<TReduced>(
+    public static ChangeItem<TReduced>? ToChangeItem<TReduced>(
         this ISynchronizationStream<TReduced> stream,
         TReduced currentState,
         JsonElement currentJson,
@@ -310,14 +312,14 @@ public static class JsonSynchronizationStream
                 // This fixes the bug where JsonPatch paths contain full type names 
                 // but CollectionsReference expects short names from TypeRegistry
                 var collection = typeRegistry?.TryGetType(rawCollection, out var typeDefinition) == true
-                    ? typeDefinition.CollectionName
+                    ? typeDefinition!.CollectionName
                     : rawCollection;
 
                 var pointer = id == null ? JsonPointer.Create(collection) : JsonPointer.Create(collection, id);
                 return new EntityUpdate(
                         collection,
-                        id == null ? null : JsonSerializer.Deserialize<object>(id, options),
-                        pointer.Evaluate(updated)
+                        (object?)(id == null ? null : JsonSerializer.Deserialize<object>(id, options)!),
+                        pointer.Evaluate(updated)!
                     )
                     { OldValue = pointer.Evaluate(current) };
             })
@@ -328,12 +330,12 @@ public static class JsonSynchronizationStream
     {
         if (request.ChangeType == ChangeType.Full)
         {
-            return (JsonDocument.Parse(request.Change.Content).RootElement, null);
+            return (JsonDocument.Parse(request.Change.Content).RootElement, null!);
         }
 
         if (currentJson is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options);
+        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options)!;
         return (patch.Apply(currentJson.Value), patch);
     }
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
@@ -350,7 +352,7 @@ public static class JsonSynchronizationStream
             var pointer = id == null ? null : JsonPointer.Create(id);
             return new EntityUpdate(
                 reference.Name,
-                id == null ? null : JsonSerializer.Deserialize<object>(id, options),
+                (object?)(id == null ? null : JsonSerializer.Deserialize<object>(id, options)!),
                 pointer?.Evaluate(updated) ?? updated
             )
             { OldValue = id is null ? current.Instances : current.Instances.GetValueOrDefault(id) };
@@ -362,14 +364,14 @@ public static class JsonSynchronizationStream
     {
         if (request.ChangeType == ChangeType.Full)
         {
-            return (JsonDocument.Parse(request.Change.Content).RootElement.Deserialize<InstanceCollection>(), null);
+            return (JsonDocument.Parse(request.Change.Content).RootElement.Deserialize<InstanceCollection>()!, null!);
         }
 
         if (current is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options);
+        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options)!;
         var updated = patch.Apply(current);
-        return (updated, patch);
+        return (updated!, patch);
     }
 
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
@@ -392,7 +394,7 @@ public static class JsonSynchronizationStream
                 if (last == null && first == null)
                     return e;
                 if (first == null)
-                    return e.WithCreations(last);
+                    return e.WithCreations(last!);
                 if (last == null)
                     return e.WithDeletions(first);
 
@@ -402,7 +404,7 @@ public static class JsonSynchronizationStream
 
     internal static JsonPatch ToJsonPatch(this IEnumerable<EntityUpdate> updates, 
         JsonSerializerOptions options,
-        WorkspaceReference streamReference)
+        WorkspaceReference? streamReference)
     {
         return streamReference switch
         {

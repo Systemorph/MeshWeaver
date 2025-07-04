@@ -4,9 +4,9 @@ using MeshWeaver.Pivot.Models.Interfaces;
 namespace MeshWeaver.Pivot.Grouping
 {
     public class SelectorPivotGrouper<T, TSelected, TGroup>(
-        string id, 
-        Func<T, int, TSelected> selector) 
-        : IPivotGrouper<T,TGroup>
+        string id,
+        Func<T, int, TSelected> selector)
+        : IPivotGrouper<T, TGroup>
         where TGroup : class, IGroup, new()
     {
         protected Func<T, int, TSelected> Selector { get; } = selector;
@@ -39,7 +39,7 @@ namespace MeshWeaver.Pivot.Grouping
                 .Select(x => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
                     x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
                     x.ToArray(),
-                    x.Key
+                    (object)(x.Key == null ? nullGroupPrivate.Id : x.Key)
                 ))
                 .ToArray();
         }
@@ -64,10 +64,10 @@ namespace MeshWeaver.Pivot.Grouping
             var id = value;
             return new TGroup
             {
-                DisplayName = id.ToString(),
-                Id = id,
+                DisplayName = id?.ToString() ?? "",
+                Id = id!,
                 GrouperName = Id,
-                Coordinates = ImmutableList<object>.Empty.Add(id)
+                Coordinates = ImmutableList<object>.Empty.Add(id!)
             };
         }
     }

@@ -19,7 +19,7 @@ public record LayoutAreaHost : IDisposable
     public IWorkspace Workspace { get; }
     private readonly Dictionary<object, object?> variables = new();
 
-    public T? GetVariable<T>(object key) => (T?)variables[key];
+    public T? GetVariable<T>(object key) => variables.TryGetValue(key, out var value) ? (T?)value : default;
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
     public object SetVariable(object key, object? value) => variables[key] = value;
     public T GetOrAddVariable<T>(object key, Func<T> factory)
@@ -29,7 +29,7 @@ public record LayoutAreaHost : IDisposable
             SetVariable(key, factory.Invoke());
         }
 
-        return GetVariable<T>(key);
+        return GetVariable<T>(key) ?? factory();
     }
 
     public LayoutDefinition LayoutDefinition { get; }
@@ -74,7 +74,7 @@ public record LayoutAreaHost : IDisposable
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
             InvokeAsync(() => control.ClickAction.Invoke(
-                new(request.Message.Area, request.Message.Payload, Hub, this)
+                new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
             ), ex => FailRequest(ex, request));
         return request.Processed();
     }
@@ -83,7 +83,7 @@ public record LayoutAreaHost : IDisposable
     {
         if (GetControl(request.Message.Area) is DialogControl { CloseAction: not null } control)
             InvokeAsync(() => control.CloseAction.Invoke(
-                new(request.Message.Area, request.Message.State, request.Message.Payload, Hub, this)
+                new(request.Message.Area, request.Message.State, request.Message.Payload ?? new object(), Hub, this)
             ), ex => FailRequest(ex, request));
         return request.Processed();
     }
@@ -97,7 +97,7 @@ public record LayoutAreaHost : IDisposable
 
     public object? GetControl(string area) =>
         Stream
-            .Current.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+            .Current?.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
             ?.Instances.GetValueOrDefault(area);
 
 
@@ -204,7 +204,7 @@ public record LayoutAreaHost : IDisposable
     {
         var result = ci.Value;
         if (result is null)
-            return null;
+            return null!;
 
 
         if (result is T t)
@@ -237,7 +237,7 @@ public record LayoutAreaHost : IDisposable
 
                     foreach (var item in enumerable)
                         list.Add(item);
-                    return list as T;
+                    return (T)list;
                 }
             }
         }

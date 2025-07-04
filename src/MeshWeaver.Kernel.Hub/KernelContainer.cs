@@ -25,10 +25,10 @@ public class KernelContainer : IDisposable
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private IMeshCatalog meshCatalog;
-    private IMessageHub executionHub;
-    private ILogger<KernelContainer> logger;
-    private IUiControlService uiControlService;
+    private IMeshCatalog meshCatalog = null!;
+    private IMessageHub executionHub = null!;
+    private ILogger<KernelContainer> logger = null!;
+    private IUiControlService uiControlService = null!;
     private void Initialize(IMessageHub hub)
     {
         this.meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
@@ -41,8 +41,8 @@ public class KernelContainer : IDisposable
             new SynchronizationStream<ImmutableDictionary<string, object>>(
                 new(Guid.NewGuid().AsString(), Hub.Address),
                 Hub,
-                null,
-                null,
+                default,
+                default,
                 null
             );
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
@@ -50,7 +50,7 @@ public class KernelContainer : IDisposable
         DisposeOnTimeout();
     }
 
-    private ISynchronizationStream<ImmutableDictionary<string, object>> AreasStream { get; set; }
+    private ISynchronizationStream<ImmutableDictionary<string, object>> AreasStream { get; set; } = null!;
 
 
     /// <summary>
@@ -73,7 +73,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => uiControlService.Convert(a.Value.GetValueOrDefault(ctx.Area)))
+                        .Select(a => uiControlService.Convert(a.Value.GetValueOrDefault(ctx.Area) ?? new object()))
                 )
             )
             .AddMeshTypes()
@@ -168,7 +168,7 @@ public class KernelContainer : IDisposable
     private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, DeliveryFailure deliveryFailure)
     {
         kernelHub.Post(deliveryFailure, o => o.ResponseFor(request));
-        return request.Failed(deliveryFailure.Message);
+        return request.Failed(deliveryFailure.Message ?? string.Empty);
     }
 
     private void PublishEventToContext(KernelEvent @event)
@@ -198,7 +198,7 @@ public class KernelContainer : IDisposable
             UpdateView(viewId, view);
     }
 
-    private string GetViewId(KernelCommand command)
+    private string? GetViewId(KernelCommand command)
     {
         if (command is not SubmitCode submit)
             return null;
@@ -206,7 +206,7 @@ public class KernelContainer : IDisposable
         if(submit.Parameters.TryGetValue(ViewId, out var ret))
             return ret;
 
-        return command.Parent is not null ? GetViewId(command.Parent) : null;
+        return command.Parent != null ? GetViewId(command.Parent) : null;
     }
 
     private void UpdateView(string viewId, object view)
@@ -220,7 +220,7 @@ public class KernelContainer : IDisposable
                 {
                     Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
                 }
-        , null);
+        , default);
     }
 
     private void HandleNotebookEvent(KernelEvent @event)
@@ -232,7 +232,7 @@ public class KernelContainer : IDisposable
         {
             UpdateView(viewId, retProduced.Value);
             if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
-                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
+                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId) ?? string.Empty)]);
         }
         var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
         var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
@@ -247,8 +247,8 @@ public class KernelContainer : IDisposable
         return @event.Command is SubmitCode submit3 && submit3.Parameters.ContainsKey(IframeUrl);
     }
 
-    private IMessageHub Hub { get; set; }
-    public CompositeKernel Kernel { get; set; }
+    private IMessageHub Hub { get; set; } = null!;
+    public CompositeKernel Kernel { get; set; } = null!;
 
     protected CompositeKernel CreateKernel()
     {
@@ -293,7 +293,7 @@ public class KernelContainer : IDisposable
 
         return Task.CompletedTask;
     }
-    private string FormatControl(UiControl control, string iframeUrl, string viewId)
+    private string? FormatControl(UiControl? control, string iframeUrl, string viewId)
     {
 
         var style = control?.Style?.ToString() ?? string.Empty;
@@ -338,7 +338,7 @@ public class KernelContainer : IDisposable
             if(!string.IsNullOrEmpty(request.Message.IFrameUrl))
                 submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
         }
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), null); 
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), default); 
         return request.Processed();
     }
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
@@ -350,7 +350,7 @@ public class KernelContainer : IDisposable
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), null);
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), default);
         return request.Processed();
     }
 

@@ -54,7 +54,7 @@ c => c
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         ret.Initialize(async ct => await streams
             .ToAsyncEnumerable()
-            .SelectAwait(async x => await x.FirstAsync())
+            .SelectAwait(async x => await x!.FirstAsync())
             .AggregateAsync(new EntityStore(), (x, y) =>
             x.Merge(y.Value), cancellationToken: ct), ex =>
         {
@@ -63,9 +63,9 @@ c => c
         });
 
         foreach (var stream in streams)
-            ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => 
+            ret.RegisterForDisposal(stream!.Skip(1).Subscribe(s => 
                 ret.Update(
-                    current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)),
+                    current => ret.ApplyChanges(current!.MergeWithUpdates(s.Value!, s.ChangedBy ?? string.Empty)),
                     ex =>
                     {
                         logger.LogError(ex, "cannot apply changes to stream for {Address}",
@@ -76,7 +76,7 @@ c => c
                 )
             );
 
-        return ret.Reduce(reference, configuration);
+        return ret.Reduce(reference, configuration ?? (c => c));
     }
 
 

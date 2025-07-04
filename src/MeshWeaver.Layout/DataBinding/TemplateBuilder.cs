@@ -20,9 +20,9 @@ public static class TemplateBuilder
     )
         where TView : UiControl
     {
-        var rootParameter = layout.Parameters.First();
+        var rootParameter = layout!.Parameters.First();
         var visitor = new TemplateBuilderVisitor(rootParameter, "");
-        var body = visitor.Visit(layout.Body);
+        var body = visitor.Visit(layout.Body)!;
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
         types = visitor.DataBoundTypes;
@@ -46,7 +46,7 @@ public static class TemplateBuilder
             typeof(JsonPointerReference).GetConstructor(
                 BindingFlags.Public | BindingFlags.Instance,
                 new[] { typeof(string) }
-            );
+            )!;
         internal readonly List<Type> DataBoundTypes = new();
 
         private Expression GetBinding(string path, Type type)
@@ -90,7 +90,7 @@ public static class TemplateBuilder
             )
             {
                 var slashIfNotEmpty = string.IsNullOrEmpty(path) ? string.Empty : "/";
-                return GetBinding($"{path}{slashIfNotEmpty}{args.First()}", node.Method.ReturnType);
+                return GetBinding($"{path}{slashIfNotEmpty}{((ConstantExpression)args.First()).Value}", node.Method.ReturnType);
             }
 
             var replaceMethodAttribute =

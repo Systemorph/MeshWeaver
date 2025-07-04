@@ -38,7 +38,7 @@ namespace MeshWeaver.Pivot.Grouping
                 .Select(x => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
                     x.Key ?? nullGroupPrivate,
                     x.ToArray(),
-                    x.Key
+                    (object)(x.Key ?? nullGroupPrivate)
                 ))
                 .ToArray();
         }

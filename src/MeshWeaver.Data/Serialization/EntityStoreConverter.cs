@@ -12,7 +12,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
     public override EntityStore Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var doc = JsonDocument.ParseValue(ref reader);
-        return Deserialize(doc.RootElement.AsNode(), options);
+        return Deserialize(doc.RootElement.AsNode()!, options);
     }
 
     public override void Write(Utf8JsonWriter writer, EntityStore value, JsonSerializerOptions options)
@@ -43,7 +43,7 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
         var newStore =
             new EntityStore()
             {
-                Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value, options)).ToImmutableDictionary(),
+                Collections = obj.Where(kvp => kvp.Key != "$type").Select(kvp => DeserializeCollection(kvp.Key, kvp.Value!, options)).ToImmutableDictionary(),
                 GetCollectionName = valueType => typeRegistry.GetOrAddType(valueType, valueType.Name)
             };
 
