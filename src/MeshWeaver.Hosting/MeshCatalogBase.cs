@@ -14,13 +14,13 @@ public abstract class MeshCatalogBase : IMeshCatalog
     public MeshConfiguration Configuration { get; }
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new(){SlidingExpiration = TimeSpan.FromMinutes(5)};
-    private readonly IMessageHub persistence;
+    private readonly IMessageHub? persistence;
     private readonly ILogger<MeshCatalogBase> logger;
     protected MeshCatalogBase(IMessageHub hub, MeshConfiguration configuration)
     {
         Configuration = configuration;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
-        persistence = hub.GetHostedHub(new PersistenceAddress());
+        persistence = hub.GetHostedHub(new PersistenceAddress())!;
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
             var assembly = Assembly.LoadFrom(assemblyLocation);

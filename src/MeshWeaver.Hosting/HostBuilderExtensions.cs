@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting
         (
             this IHostApplicationBuilder hostBuilder,
             Address address,
-            Func<MeshHostApplicationBuilder, MeshBuilder> configuration = null)
+            Func<MeshHostApplicationBuilder, MeshBuilder>? configuration = null)
         {
             var builder = new MeshHostApplicationBuilder(hostBuilder, address);
             if (configuration != null)

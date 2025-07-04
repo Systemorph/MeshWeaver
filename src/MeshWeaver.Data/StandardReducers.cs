@@ -1,5 +1,4 @@
-﻿#nullable enable
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
@@ -64,7 +63,7 @@ public static class StandardReducers
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.Get<object>(reference.Id)!, current.Version);
+            return new(current.Value?.Get<object>(reference.Id), current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Id == reference.Id);
         if (change == null)
@@ -75,15 +74,15 @@ public static class StandardReducers
     private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, EntityReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference)!, current.Version);
+            return new(current.Value?.ReduceImpl(reference), current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
         if (change is not null)
             return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
 
         return new(
-            current.Value.ReduceImpl(reference)!,
-            default,
+            current.Value?.ReduceImpl(reference)!,
+            null,
             ChangeType.Full,
             current.Version,
             ImmutableArray<EntityUpdate>.Empty);
@@ -100,7 +99,7 @@ public static class StandardReducers
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference)!, current.Version);
+            return new(current.Value?.ReduceImpl(reference)!, current.Version);
 
 
         var changes =
@@ -108,12 +107,12 @@ public static class StandardReducers
                 .ToArray();
         if (!changes.Any())
             return null!;
-        return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
+        return new(current.Value?.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<InstanceCollection> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference)!, current.Version);
+            return new(current.Value?.ReduceImpl(reference)!, current.Version);
 
 
         var changes =
@@ -121,7 +120,7 @@ public static class StandardReducers
                 .ToArray();
         if (!changes.Any())
             return null!;
-        return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
+        return new(current.Value?.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, PartitionedWorkspaceReference<EntityStore> reference, bool initial) =>
         ReduceEntityStoreTo(current, (dynamic)reference.Reference, initial);
@@ -156,7 +155,7 @@ public static class StandardReducers
                         var elements = currentStore.GetCollection(collection);
                         if (elements is null || !elements.Instances.Any())
                             throw new ArgumentException("An invalid patch was supplied.");
-                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, (object?)null) { OldValue = x.Value }));
+                        updates.AddRange(elements.Instances.Select(x => new EntityUpdate(collection, x.Key, null) { OldValue = x.Value }));
                         currentStore = currentStore.Remove(collection);
                         break;
                     default:
@@ -188,18 +187,18 @@ public static class StandardReducers
                 {
                     case OperationType.Add:
                         var entity = stream.GetEntity(entityPointer, updatedJson);
-                        currentCollection = currentCollection.Update(id!, entity!);
+                        currentCollection = currentCollection.Update(id, entity);
                         updates.Add(new(collection, id, entity));
                         break;
                     case OperationType.Replace:
                         entity = stream.GetEntity(entityPointer, updatedJson);
-                        var oldInstance = currentCollection.GetInstance(id!);
-                        currentCollection = currentCollection.Update(id!, entity!);
+                        var oldInstance = currentCollection.GetInstance(id);
+                        currentCollection = currentCollection.Update(id, entity);
                         updates.Add(new(collection, id, entity) { OldValue = oldInstance });
                         break;
                     case OperationType.Remove:
                         oldInstance = currentCollection.GetInstance(id);
-                        updates.Add(new(collection, id!, (object?)null) { OldValue = oldInstance });
+                        updates.Add(new(collection, id, null) { OldValue = oldInstance });
                         currentCollection = currentCollection.Remove(id);
                         break;
                     default:
