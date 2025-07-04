@@ -54,7 +54,7 @@ public static class OrdersSummaryArea
                                 .Select(order => new OrderSummaryItem(
                                     tuple.Value.GetData<Customer>(
                                         order.CustomerId
-                                    ).CompanyName,
+                                    )?.CompanyName,
                                     tuple.Value.GetData<OrderDetails>()
                                         .Where(d => d.OrderId == order.OrderId)
                                         .Sum(d => d.UnitPrice * d.Quantity),

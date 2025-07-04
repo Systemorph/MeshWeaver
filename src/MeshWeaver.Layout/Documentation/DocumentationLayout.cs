@@ -60,7 +60,7 @@ public static class DocumentationLayout
             .Select(a => new
             {
                 Assembly = a,
-                Source = documentationService.GetSource(PdbDocumentationSource.Pdb, a.GetName().Name)
+                Source = documentationService.GetSource(PdbDocumentationSource.Pdb, a.GetName().Name!)
                         as PdbDocumentationSource
             }
             )
@@ -76,14 +76,14 @@ public static class DocumentationLayout
                 {
                     Control =
                         Controls.LayoutArea(layout.Hub.Address,
-                    new(nameof(Doc)) { Id = source.GetPath(type.FullName) })
+                    new(nameof(Doc)) { Id = source!.GetPath(type.FullName!) })
                     ,
-                    TabName = source.GetDocumentName(type.FullName),
+                    TabName = source!.GetDocumentName(type.FullName!),
                 }
                     : null)
                 .Where(x => x is { Control.Reference.Id: not null })
                 .Aggregate(tabs, (t, s) =>
-                    t.WithView(s.Control.WithProgressMessage(s.TabName), s.TabName)));
+                    t.WithView(s!.Control.WithProgressMessage(s.TabName), s.TabName)));
     }
     public static LayoutDefinition WithEmbeddedDocument(
         this LayoutDefinition layout,
@@ -92,10 +92,10 @@ public static class DocumentationLayout
         string name
     )
     {
-        var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name);
+        var source = layout.Hub.GetDocumentationService().GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name!);
         return layout.WithDocumentation(contextFilter,
                 (tabs, _, _) => tabs.WithView(
-                    Controls.LayoutArea(layout.Hub.Address, new(nameof(Doc)) { Id = source.GetPath(name) })
+                    Controls.LayoutArea(layout.Hub.Address, new(nameof(Doc)) { Id = source!.GetPath(name) })
                         .WithProgressMessage(name),
                     name
                 )
@@ -104,7 +104,7 @@ public static class DocumentationLayout
     }
 
     public static LayoutAreaReference GetLayoutAreaReferenceForEmbeddedResource(this Assembly assembly, string resource)
-        => new(nameof(Doc)) { Id = $"Embedded/{assembly.GetName().Name}/{resource}" };
+        => new(nameof(Doc)) { Id = $"Embedded/{assembly.GetName().Name!}/{resource}" };
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 

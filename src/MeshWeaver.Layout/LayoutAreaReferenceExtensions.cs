@@ -14,8 +14,8 @@ public static class LayoutAreaQueryString
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <returns>A read-only collection of key-value pairs representing the query string parameters.</returns>
-    public static IReadOnlyCollection<KeyValuePair<string, string>> GetQueryStringParams(this LayoutAreaHost layoutArea)
-        => layoutArea.GetOrAddVariable(QueryStringParams, () => Parse((string)layoutArea.Reference.Id));
+    public static IReadOnlyCollection<KeyValuePair<string, string>>? GetQueryStringParams(this LayoutAreaHost layoutArea)
+        => layoutArea.GetOrAddVariable(QueryStringParams, () => Parse((string?)layoutArea.Reference.Id ?? ""));
 
     /// <summary>
     /// Gets the value of the specified query string parameter for the layout area.
@@ -25,7 +25,7 @@ public static class LayoutAreaQueryString
     /// <returns>The value of the query string parameter, or <c>null</c> if the parameter is not found.</returns>
     public static string? GetQueryStringParamValue(this LayoutAreaHost layoutArea, string key)
         => layoutArea.GetQueryStringParams()
-            .FirstOrDefault(x => x.Key == key).Value;
+            ?.FirstOrDefault(x => x.Key == key).Value;
     
     /// <summary>
     /// Gets the values of the specified query string parameter for the layout area.
@@ -35,9 +35,9 @@ public static class LayoutAreaQueryString
     /// <returns>A read-only collection of values for the query string parameter.</returns>
     public static IReadOnlyCollection<string> GetQueryStringParamValues(this LayoutAreaHost layoutArea, string key)
         => layoutArea.GetQueryStringParams()
-            .Where(x => x.Key == key)
+            ?.Where(x => x.Key == key)
             .Select(x => x.Value)
-            .ToArray();
+            .ToArray() ?? Array.Empty<string>();
 
     /// <summary>
     /// Parses the specified query string into a collection of key-value pairs.

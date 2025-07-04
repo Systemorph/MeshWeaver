@@ -38,7 +38,7 @@ public static class TemplateBuilder
         public TemplateBuilderVisitor(ParameterExpression rootParameter, string rootName)
         {
             this.rootParameter = rootParameter;
-            bindings.Add(rootParameter, rootParameter.Name);
+            bindings.Add(rootParameter, rootParameter.Name!);
             rootBindingExpression = GetBinding(rootName, rootParameter.Type);
         }
 
@@ -90,7 +90,7 @@ public static class TemplateBuilder
             )
             {
                 var slashIfNotEmpty = string.IsNullOrEmpty(path) ? string.Empty : "/";
-                return GetBinding($"{path}{slashIfNotEmpty}{((ConstantExpression)args.First()).Value}", node.Method.ReturnType);
+                return GetBinding($"{path}{slashIfNotEmpty}{((ConstantExpression)args.First()!).Value!}", node.Method.ReturnType);
             }
 
             var replaceMethodAttribute =
@@ -101,11 +101,11 @@ public static class TemplateBuilder
                     ? replaceMethodAttribute.Replace(node.Method)
                     : node.Method;
             if (
-                args.Zip(method.GetParameters(), (a, p) => p.ParameterType.IsAssignableFrom(a.Type))
+                args.Zip(method.GetParameters(), (a, p) => p.ParameterType.IsAssignableFrom(a!.Type))
                     .Any(x => !x)
             )
-                method = TrySubstituteMethod(method, args.Select(a => a.Type).ToArray());
-            return Expression.Call(obj, method, args);
+                method = TrySubstituteMethod(method, args.Select(a => a!.Type).ToArray());
+            return Expression.Call(obj, method, args!);
         }
 
         private MethodInfo TrySubstituteMethod(MethodInfo method, Type[] types)

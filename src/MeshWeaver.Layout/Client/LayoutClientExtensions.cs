@@ -73,7 +73,7 @@ public static class LayoutClientExtensions
         string? dataContext = null, 
         Func<object,T, T>? conversion = null,
         T? defaultValue = default(T)) =>
-        stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
+        stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
             .Select(x => conversion is not null ? conversion.Invoke(x, defaultValue!) : stream.Hub.ConvertSingle(x, null, defaultValue!))
             .DistinctUntilChanged();
 
@@ -84,7 +84,7 @@ public static class LayoutClientExtensions
         return pointer.Evaluate(model.Element);
     }
 
-    public static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value, string dataContext)
+    public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value, string dataContext)
     {
         if (value is JsonPointerReference reference)
             return reference.Pointer.StartsWith('/')
@@ -99,7 +99,7 @@ public static class LayoutClientExtensions
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
-        var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext));
+        var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext ?? ""));
 
         if (stream.Current == null)
             return default!;

@@ -15,7 +15,7 @@ public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
     private static PropertyColumnControl CreateControl(PropertyInfo property)
     {
         return (PropertyColumnControl)
-            Activator.CreateInstance(typeof(PropertyColumnControl<>).MakeGenericType(property.PropertyType));
+            Activator.CreateInstance(typeof(PropertyColumnControl<>).MakeGenericType(property.PropertyType))!;
     }
 
 
@@ -63,7 +63,7 @@ public record  PropertyViewBuilder(ITypeDefinition TypeDefinition)
 public record PropertyViewBuilder<T>(ITypeDefinition TypeDefinition) : PropertyViewBuilder(TypeDefinition)
 {
     public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector)
-        => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty());
+        => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty()!);
     public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyColumnControl,PropertyColumnControl> configuration)
-        => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty(), configuration);
+        => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty()!, configuration);
 }

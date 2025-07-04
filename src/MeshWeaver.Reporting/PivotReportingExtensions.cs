@@ -26,7 +26,7 @@ public static class PivotReportingExtensions
             TIntermediate,
             TAggregate
         > pivotBuilder,
-        Func<GridOptions, GridOptions> gridOptionsPostProcessor = null
+        Func<GridOptions, GridOptions>? gridOptionsPostProcessor = null
     )
     {
         return new DataCubeReportBuilder<IDataCube<TElement>, TElement, TIntermediate, TAggregate>(

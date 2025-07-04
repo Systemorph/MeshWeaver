@@ -19,17 +19,17 @@ namespace MeshWeaver.Layout.DataBinding
         public static IObservable<T> Debounce<T>(
             this IObservable<T> source,
             TimeSpan dueTime,
-            IScheduler scheduler = null)
+            IScheduler? scheduler = null)
         {
-            scheduler = scheduler ?? DefaultScheduler.Instance;
+            scheduler ??= DefaultScheduler.Instance;
 
             return Observable.Create<T>(observer =>
             {
                 var serialDisposable = new SerialDisposable();
                 var hasValue = false;
-                var value = default(T);
+                var value = default(T)!;
                 var hasEmitted = false;
-                var lastEmitted = default(T);
+                var lastEmitted = default(T)!;
                 var gate = new object();
 
                 var sourceSubscription = source.Subscribe(
@@ -48,7 +48,7 @@ namespace MeshWeaver.Layout.DataBinding
                                     {
                                         if (!hasEmitted || !EqualityComparer<T>.Default.Equals(lastEmitted, value))
                                         {
-                                            observer.OnNext(value);
+                                            observer.OnNext(value!);
                                             lastEmitted = value;
                                             hasEmitted = true;
                                         }
@@ -69,7 +69,7 @@ namespace MeshWeaver.Layout.DataBinding
                                 {
                                     if (!hasEmitted || !EqualityComparer<T>.Default.Equals(lastEmitted, value))
                                     {
-                                        observer.OnNext(value);
+                                        observer.OnNext(value!);
                                     }
                                 }
                                 observer.OnCompleted();
