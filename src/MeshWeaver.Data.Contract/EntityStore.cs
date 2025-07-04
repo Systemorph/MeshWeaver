@@ -12,7 +12,7 @@ public record EntityStore
     public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } =
         ImmutableDictionary<string, InstanceCollection>.Empty;
 
-    public Func<Type, string> GetCollectionName { get; init; } = null!;
+    public Func<Type, string>? GetCollectionName { get; init; } = null!;
 
 
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
@@ -128,7 +128,7 @@ public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate>
     }
 }
 
-public record EntityUpdate(string Collection, object Id, object Value)
+public record EntityUpdate(string Collection, object? Id, object? Value)
 {
     public object? OldValue { get; init; }
 }

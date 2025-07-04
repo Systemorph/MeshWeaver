@@ -55,7 +55,7 @@ namespace MeshWeaver.Pivot.Grouping
 
         private class GrouperNameVisitor : ExpressionVisitor
         {
-            public string GrouperName;
+            public string? GrouperName;
 
             protected override Expression VisitNew(NewExpression node)
             {

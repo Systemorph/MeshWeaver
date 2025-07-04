@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery request)
+    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery? request)
     {
         if (change.Creations.Any())
         {
@@ -53,14 +53,14 @@ public static class WorkspaceOperations
             );
     }
 
-    private static Task UpdateFailed(IWorkspace workspace, IMessageDelivery delivery, Exception exception)
+    private static Task UpdateFailed(IWorkspace workspace, IMessageDelivery? delivery, Exception? exception)
     {
         if (delivery is not null)
             workspace.Hub.Post(new DeliveryFailure(delivery, exception?.ToString()), o => o.ResponseFor(delivery));
         return Task.CompletedTask;
     }
 
-    private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery request)
+    private static Activity StartUpdate(Activity activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
     {
         activity.LogInformation("Starting Update");
         workspace.UpdateStreams(change, activity, request);
@@ -68,7 +68,7 @@ public static class WorkspaceOperations
     }
 
 
-    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery request)
+    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery? request)
     {
         foreach (var group in
                  change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
@@ -91,7 +91,7 @@ public static class WorkspaceOperations
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-            stream!.Update(store =>
+            stream!.Update(async (store,_) =>
             {
                 activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
                 try
@@ -130,7 +130,7 @@ public static class WorkspaceOperations
                                         c => c.Remove(instances.Select(x => x.Key)));
                                     return new EntityStoreAndUpdates(newStore,
                                         storeAndUpdates.Updates.Concat(instances.Select(i =>
-                                            new EntityUpdate(g.Key.TypeSource!.CollectionName, i.Key, (object?)null)
+                                            new EntityUpdate(g.Key.TypeSource!.CollectionName, i.Key, null)
                                             {
                                                 OldValue = i.Instance
                                             })), change.ChangedBy ?? stream.StreamId);
@@ -139,14 +139,14 @@ public static class WorkspaceOperations
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                             });
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
-                    activityPart.Complete();
+                    await activityPart.Complete();
                     return stream.ApplyChanges(updates);
                 }
                 catch (Exception ex)
                 {
                     activityPart.LogError("Error updating Stream {identity}: {exception}", stream.StreamIdentity,
                         ex.Message);
-                    activityPart.Complete();
+                    await activityPart.Complete();
                     return null;
                 }
 
@@ -234,8 +234,9 @@ public static class WorkspaceOperations
         => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)!.Get<T>().ToArray();
 
     public static T? GetData<T>(this EntityStore store, object id)
-        => (T?)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Instances
-            ?.GetValueOrDefault(id) ?? default;
+        => (T?)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T))
+                                   ?? typeof(T).Name)?.Instances.GetValueOrDefault(id)
+           ?? default;
 
 
 

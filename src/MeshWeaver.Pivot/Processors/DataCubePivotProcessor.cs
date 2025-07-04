@@ -19,7 +19,7 @@ namespace MeshWeaver.Pivot.Processors
     {
         public DataCubePivotProcessor(
             IPivotConfiguration<TAggregate, ColumnGroup> colConfig,
-            IPivotConfiguration<TAggregate, RowGroup> rowConfig,
+            IPivotConfiguration<TAggregate, RowGroup>? rowConfig,
             DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder,
             IWorkspace workspace
         )

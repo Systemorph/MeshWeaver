@@ -32,7 +32,7 @@ public class Workspace : IWorkspace
         return GetRemoteStream(
             address,
             new CollectionReference(Hub.TypeRegistry.GetOrAddType(typeof(TType), typeof(TType).Name))
-            )?.Select(x => x.Value.Instances.Values.OfType<TType>());
+            )?.Select(x => x.Value!.Instances.Values.OfType<TType>());
     }
 
     public IObservable<T[]?>? GetStream<T>()
@@ -41,7 +41,7 @@ public class Workspace : IWorkspace
         if (collection == null)
             return null;
         return GetStream(typeof(T))
-            .Select(x => x.Value.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
+            .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
     public ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
@@ -135,7 +135,7 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery request)
+    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery? request)
     {
         this.Change(change, activity, request);
     }

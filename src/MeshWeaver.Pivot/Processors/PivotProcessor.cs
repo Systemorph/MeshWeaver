@@ -20,7 +20,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
 {
     public PivotProcessor(
         IPivotConfiguration<TAggregate, ColumnGroup> colConfig,
-        IPivotConfiguration<TAggregate, RowGroup> rowConfig,
+        IPivotConfiguration<TAggregate, RowGroup>? rowConfig,
         PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder,
         IWorkspace workspace
     )
@@ -34,7 +34,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
     protected override PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(
         DimensionCache dimensionCache, IReadOnlyCollection<T> transformed)
     {
-        PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup> columnGroupManager = null;
+        PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup>? columnGroupManager = null;
 
         foreach (var groupConfig in PivotBuilder.ColumnGroupConfig)
         {
@@ -43,21 +43,22 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
             );
         }
 
-        return columnGroupManager;
+        return columnGroupManager!;
     }
 
     protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<T> objects)
     {
-        var types = objects.Select(o => o.GetType()).Distinct().ToArray();
+        var types = objects.Select(o => o?.GetType()).Distinct().ToArray();
         var dimensionProperties = types
+            .Where(t => t != null)
             .SelectMany(t =>
-                t.GetProperties()
+                t!.GetProperties()
                     .Select(p => (Property: p, Dimension: p.GetCustomAttribute<DimensionAttribute>()?.Type )))
             .Where(x => x.Dimension != null)
             .Select(x =>
             {
                 var reflector = x.Property.GetReflector();
-                return (x.Dimension, IdAccessor: (Func<T, object>)(e => reflector.GetValue(e)));
+                return (x.Dimension!, IdAccessor: (Func<T, object>)(e => reflector.GetValue(e) ?? new object()));
             })
             .ToArray();
 
@@ -72,7 +73,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
         RowGroup
     > GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<T> transformed)
     {
-        PivotGroupManager<T, TIntermediate, TAggregate, RowGroup> rowGroupManager = null;
+        PivotGroupManager<T, TIntermediate, TAggregate, RowGroup>? rowGroupManager = null;
         foreach (var groupConfig in PivotBuilder.RowGroupConfig)
         {
             rowGroupManager = groupConfig.GetGroupManager(dimensionCache, rowGroupManager,
@@ -81,7 +82,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
 
         }
 
-        return rowGroupManager;
+        return rowGroupManager!;
     }
 
 }
