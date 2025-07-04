@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Domain;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Data;
 
@@ -9,7 +8,7 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
 
     private readonly ITypeRegistry typeRegistry = null!;
-    protected TypeSource(IWorkspace workspace, object dataSource, Type type)
+    protected TypeSource(IWorkspace workspace, Type type)
     {
         typeRegistry = workspace.Hub.TypeRegistry;
         TypeDefinition = typeRegistry.GetTypeDefinition(type, typeName:type.Name)!;
@@ -21,6 +20,9 @@ public abstract record TypeSource<TTypeSource> : ITypeSource
 
     public virtual InstanceCollection Update(ChangeItem<EntityStore> changeItem)
     {
+        if(changeItem.Value is null)
+            throw new ArgumentNullException(nameof(changeItem), "Change item value cannot be null.");
+
         var myCollection = changeItem.Value.Reduce(new CollectionReference(TypeDefinition.CollectionName));
 
         return UpdateImpl(myCollection);

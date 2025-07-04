@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting
             {
                 Mesh.Post(new DeliveryFailure(delivery)
                 {
-                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace
+                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace!
                 },
                     o => o.ResponseFor(delivery));
                 return delivery.Failed(e.Message);
@@ -101,7 +101,7 @@ namespace MeshWeaver.Hosting
         }
 
         protected abstract Task<IMessageDelivery> RouteImplAsync(IMessageDelivery delivery,
-            MeshNode node,
+            MeshNode? node,
             Address address,
             CancellationToken cancellationToken);
 

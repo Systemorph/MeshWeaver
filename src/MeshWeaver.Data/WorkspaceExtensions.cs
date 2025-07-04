@@ -7,20 +7,25 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceExtensions
 {
-    public static IReadOnlyDictionary<object, object>? GetDataById<T>(this EntityStore state) =>
-        state?.Reduce(new CollectionReference(state.GetCollectionName(typeof(T))))?.Instances;
-    public static bool Has(this EntityStore state, Type type) =>
-        state?.Reduce(new CollectionReference(state.GetCollectionName(type)))?.Instances.Count > 0;
+    public static IReadOnlyDictionary<object, object> GetDataById<T>(this EntityStore state) =>
+        state.Reduce(new CollectionReference(state.GetCollectionName!(typeof(T)))).Instances;
+
+    public static bool Has(this EntityStore? state, Type type)
+    {
+        var collection = state?.GetCollectionName?.Invoke(type);
+        return collection is not null && state!.Reduce(new CollectionReference(collection)).Instances.Count > 0;
+
+    }
 
     public static IObservable<T?> GetObservable<T>(this IWorkspace workspace, object id) =>
         workspace.GetStream(typeof(T))
-            .Select(ws => ws.Value.GetData<T>(id));
+            .Select(ws => ws.Value!.GetData<T>(id));
 
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
         var stream = workspace.GetStream(typeof(T));
 
-        return stream.Select(ws => ws.Value.GetData<T>()?.ToArray())
+        return stream.Select(ws => ws.Value?.GetData<T>().ToArray())
             .Where(x => x != null)
             .Select(x => x!.ToArray());
     }

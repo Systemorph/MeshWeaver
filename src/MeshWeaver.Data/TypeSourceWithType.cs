@@ -43,7 +43,7 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, object DataSource)
-    : TypeSource<TTypeSource>(Workspace, DataSource, typeof(T))
+    : TypeSource<TTypeSource>(Workspace, typeof(T))
     where TTypeSource : TypeSourceWithType<T, TTypeSource>
 {
     public TTypeSource WithQuery(Func<string, T?> query) => This with { QueryFunction = query };
