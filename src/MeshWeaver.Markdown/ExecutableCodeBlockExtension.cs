@@ -1,4 +1,5 @@
-﻿using Markdig;
+﻿using System.Collections.Immutable;
+using Markdig;
 using Markdig.Parsers;
 using Markdig.Renderers;
 using Markdig.Renderers.Html;
@@ -49,7 +50,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
     public const string Execute = "execute";
     public const string Render = "render";
-    public IReadOnlyDictionary<string, string?> Args { get; set; } = [];
+    public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
     public SubmitCodeRequest? SubmitCode { get; set; }
 
     public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
