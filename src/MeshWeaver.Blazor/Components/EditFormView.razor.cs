@@ -42,7 +42,7 @@ public partial class EditFormView
     {
         var ret = new ModelParameter<JsonElement>(jsonObject, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
         ret.ElementChanged += OnModelChanged!;
-        return ret!;
+        return ret;
     }
 
     private void Reset()

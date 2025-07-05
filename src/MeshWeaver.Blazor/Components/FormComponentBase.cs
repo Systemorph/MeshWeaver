@@ -40,7 +40,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             var needsUpdate = !EqualityComparer<TValue>.Default.Equals(this.data, value);
             this.data = value;
             if (needsUpdate)
-                if (DataPointer is not null) UpdatePointer(this.data!, DataPointer);
+                if (DataPointer is not null && this.data is not null) UpdatePointer(this.data, DataPointer);
         }
     }
 
@@ -67,7 +67,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => UpdatePointer(ConvertToData(x), Pointer!))
+            .Subscribe(x => { if (Pointer is not null) UpdatePointer(ConvertToData(x)!, Pointer); })
         );
         DataBind(ViewModel.Data, x => x.data, ConversionToValue!);
         Pointer = ViewModel.Data as JsonPointerReference;
@@ -78,7 +78,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         if (v is JsonElement je)
         {
             return default(JsonElement).Equals(je)
-                ? default!
+                ? default
                 : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
         }
 

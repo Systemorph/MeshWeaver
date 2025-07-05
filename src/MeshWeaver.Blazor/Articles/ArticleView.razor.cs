@@ -22,7 +22,7 @@ public partial class ArticleView
         DataBind(
             ArticlePointer,
             x => x.data,
-            (jsonObject,_) => Convert((Article)jsonObject)
+            (jsonObject,_) => Convert(jsonObject as Article)
         );
     }
 

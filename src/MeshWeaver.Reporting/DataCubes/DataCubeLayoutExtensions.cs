@@ -14,11 +14,11 @@ public record FilterItem(object Id, string Label, bool Selected);
 
 public record DataCubeFilter(IReadOnlyCollection<Dimension> AvailableDimensions)
 {
-    public string SelectedDimension { get; init; } = AvailableDimensions.FirstOrDefault()?.SystemName;
+    public string? SelectedDimension { get; init; } = AvailableDimensions.FirstOrDefault()?.SystemName;
     public ImmutableDictionary<string, ImmutableList<FilterItem>> FilterItems { get; init; } 
         = ImmutableDictionary<string, ImmutableList<FilterItem>>.Empty;
-    public string Search { get; init; }
-    public virtual bool Equals(DataCubeFilter other)
+    public string? Search { get; init; }
+    public virtual bool Equals(DataCubeFilter? other)
     {
         if (other == null)
             return false;
@@ -102,9 +102,9 @@ public static class DataCubeLayoutExtensions
     public static DataCubeFilter Update(this DataCubeFilter filter, IDataCube cube)
         => filter with
         {
-            FilterItems = filter.FilterItems.SetItem(filter.SelectedDimension,
-                filter.FilterItems.GetValueOrDefault(filter.SelectedDimension) ?? cube
-                    .GetSlices(filter.SelectedDimension)
+            FilterItems = filter.FilterItems.SetItem(filter.SelectedDimension!,
+                filter.FilterItems.GetValueOrDefault(filter.SelectedDimension!) ?? cube
+                    .GetSlices(filter.SelectedDimension!)
                     .SelectMany(s => s.Tuple.Select(
                         // todo get dimension pairs of type and ids from dataSlices
                         // go to the workspace and take observable of this type

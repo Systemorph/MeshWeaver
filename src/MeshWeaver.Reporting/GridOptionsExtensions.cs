@@ -259,7 +259,7 @@ namespace MeshWeaver.Reporting
 
         public static IReadOnlyCollection<GridRow> Modify(
             this IReadOnlyCollection<GridRow> rows,
-            string systemNameRegex,
+            string? systemNameRegex,
             Func<GridRow, GridRow> rowModifier
         )
         {
