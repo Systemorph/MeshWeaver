@@ -6,15 +6,15 @@ namespace MeshWeaver.ContentCollections;
 public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub hub) : ContentCollection(config, hub)
 {
     public string BasePath { get; } = config.BasePath;
-    private FileSystemWatcher watcher;
+    private FileSystemWatcher? watcher;
 
     public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
     {
         if (path is null)
-            return Task.FromResult<Stream>(null);
+            return Task.FromResult<Stream>(Stream.Null);
         var fullPath = Path.Combine(BasePath, path.TrimStart('/'));
         if (!File.Exists(fullPath))
-            return Task.FromResult<Stream>(null);
+            return Task.FromResult<Stream>(Stream.Null);
         return Task.FromResult<Stream>(File.OpenRead(fullPath));
     }
     
@@ -80,7 +80,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
     public override void Dispose()
     {
         watcher?.Dispose();
-        watcher = null;
+        watcher = null!;
         base.Dispose();
     }
 
@@ -129,7 +129,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
     public override Task CreateFolderAsync(string path)
     {
         if(!Directory.Exists(path))
-            Directory.CreateDirectory(Path.Combine(BasePath, path!));
+            Directory.CreateDirectory(Path.Combine(BasePath, path));
         return Task.CompletedTask;
     }
 

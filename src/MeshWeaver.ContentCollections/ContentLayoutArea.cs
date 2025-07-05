@@ -67,6 +67,6 @@ public static class ContentLayoutArea
         ?? Observable.Return(new MarkdownControl($":warning: Article {id} not found in collection {collection}."));
 
     public static IObservable<object> GetArticle(this IMessageHub hub, string collection, string id)
-        => hub.GetContentService().GetArticle(collection, id);
+        => hub.GetContentService().GetArticle(collection, id) ?? Observable.Empty<object>();
 
 }

@@ -112,7 +112,7 @@ public static class MarkdownExtensions
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
-                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
 
             };
 
@@ -124,8 +124,18 @@ public static class MarkdownExtensions
         }
         catch
         {
-
-            ret = new();
+            ret = new Article
+            {
+                Name = string.Empty,
+                Collection = string.Empty,
+                PrerenderedHtml = string.Empty,
+                Content = string.Empty,
+                Url = string.Empty,
+                Path = string.Empty,
+                CodeSubmissions = [],
+                Title = string.Empty,
+                Source = string.Empty
+            };
         }
 
         // Remove the YAML block from the content
@@ -140,7 +150,7 @@ public static class MarkdownExtensions
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
-            CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+            CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
             AuthorDetails = ret.Authors.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray()
         };
     }

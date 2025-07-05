@@ -1,5 +1,4 @@
-﻿#nullable enable
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -30,22 +29,25 @@ public abstract class ContentCollection : IDisposable
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
             x => x);
-        ret.Initialize(InitializeAsync, null);
+        ret.Initialize(InitializeAsync, _ => Task.CompletedTask);
         return ret;
     }
     protected IMessageHub Hub { get; }
-    public string Collection => config.Name;
-    public string DisplayName => config.DisplayName ?? config.Name.Wordify();
+    public string Collection => config.Name!;
+    public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
 
     public IObservable<object> GetMarkdown(string path)
-        => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent()).Select(x => x?.Value);
+        => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent())!
+            .Where(x => x.Value != null)
+            .Select(x => x.Value!);
 
 
     public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)
-        => markdownStream.Select(x => x.Value.Instances.Values);
+        => markdownStream.Where(x => x.Value != null)
+            .Select(x => x.Value!.Instances.Values);
 
 
-    public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
+    public abstract Task<Stream?> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
@@ -60,13 +62,13 @@ public abstract class ContentCollection : IDisposable
             .Deserialize<ImmutableDictionary<string, Author>>(
                 content
             );
-        return ret.Select(x =>
+        return ret?.Select(x =>
             new KeyValuePair<string, Author>(
                 x.Key,
                 x.Value with
                 {
                     ImageUrl = x.Value.ImageUrl is null ? null : $"static/{Collection}/{x.Value.ImageUrl}"
-                })).ToImmutableDictionary();
+                })).ToImmutableDictionary() ?? ImmutableDictionary<string, Author>.Empty;
     }
 
     public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
@@ -101,27 +103,34 @@ public abstract class ContentCollection : IDisposable
             await GetStreams(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x.Path), x => (object)x, cancellationToken: ct)
+                .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x!.Path), x => (object)x!, cancellationToken: ct)
         );
         AttachMonitor();
         return ret;
     }
     protected void UpdateArticle(string path)
     {
-        markdownStream.Update(async (x, ct) =>
+        markdownStream.Update((x, ct) =>
         {
-            var tuple = await GetStreamAsync(path, ct);
-            if (tuple.Stream is null)
-                return null;
-            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-            return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
-        }, null);
+            return Task.Run(async () =>
+            {
+                var tuple = await GetStreamAsync(path, ct);
+                if (tuple.Stream is null)
+                    return null;
+                var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+                if(article is null)
+                    return null;
+                return new ChangeItem<InstanceCollection>(x!.SetItem(article.Name, article), Hub.Version);
+            });
+        }, _ => Task.CompletedTask);
     }
 
-    protected abstract Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
+    protected abstract Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
-    private async Task<MarkdownElement> ParseArticleAsync(Stream stream, string path, DateTime lastModified, CancellationToken ct)
+    private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
     {
+        if (stream is null)
+            return null;
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(ct);
 
@@ -144,7 +153,7 @@ public abstract class ContentCollection : IDisposable
     public abstract Task DeleteFolderAsync(string folderPath);
 
     public abstract Task DeleteFileAsync(string filePath);
-    protected abstract IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
+    protected abstract IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
 
 
 

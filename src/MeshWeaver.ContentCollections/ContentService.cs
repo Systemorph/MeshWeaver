@@ -28,12 +28,14 @@ public class ContentService : IContentService
 
     private readonly IReadOnlyDictionary<string, ContentCollection> collections;
 
-    public ContentCollection GetCollection(string collection)
+    public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
     public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = GetCollection(collection);
+        if (coll == null)
+            throw new ArgumentException($"Collection '{collection}' not found");
         return coll.GetContentAsync(path, ct);
     }
 
@@ -43,7 +45,9 @@ public class ContentService : IContentService
         var allCollections = 
             string.IsNullOrEmpty(catalogOptions.Collection)
             ? collections.Values
-            : [collections[catalogOptions.Collection]];
+            : collections.TryGetValue(catalogOptions.Collection, out var collection) 
+                ? [collection] 
+                : [];
         return (await allCollections.Select(c => c.GetMarkdown(catalogOptions))
                 .CombineLatest()
                 .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
@@ -72,7 +76,7 @@ public class ContentService : IContentService
         };
     }
 
-    public IObservable<object> GetArticle(string collection, string article)
+    public IObservable<object>? GetArticle(string collection, string article)
     {
         return GetCollection(collection)?.GetMarkdown(article);
     }
