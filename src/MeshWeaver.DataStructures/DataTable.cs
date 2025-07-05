@@ -92,13 +92,18 @@ namespace MeshWeaver.DataStructures
         {
             get
             {
-                return i < ItemArray.Length ? ItemArray[i] : null;
+                return i < ItemArray.Length ? RemoveDbNull(ItemArray[i]) : null;
             }
             set
             {
                 ReallocateRowItems(i);
                 ItemArray[i] = value ?? DBNull.Value;
             }
+        }
+
+        private object? RemoveDbNull(object item)
+        {
+            return item is DBNull ? null : item;
         }
 
         private void ReallocateRowItems(int i)

@@ -63,7 +63,7 @@ namespace MeshWeaver.DataSetReader.Csv
             return sb.ToString();
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> Parse(
+        public static async Task<(IDataSet DataSet, string? Format)> Parse(
             StreamReader reader,
             char delimiter,
             bool withHeaderRow,
@@ -175,7 +175,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 }
                 content = await reader.ReadLineAsync();
             } while (!exit);
-            return (dataSet, format ?? "");
+            return (dataSet, format);
         }
 
         private static void InitializeDataTableForType(Type type, IDataTable dataTable)
@@ -240,7 +240,7 @@ namespace MeshWeaver.DataSetReader.Csv
             return Regex.Match(content, $"[^{prefix}]*\\w", RegexOptions.Compiled).Value;
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> ReadAsync(
+        public static async Task<(IDataSet DataSet, string? Format)> ReadAsync(
             Stream stream,
             DataSetReaderOptions options
         )

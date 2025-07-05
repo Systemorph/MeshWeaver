@@ -6,7 +6,7 @@ namespace MeshWeaver.DataSetReader;
 /// Implementations of the <see cref="ReadDataSet"/> read the data from a source and returns the data
 /// in a <see cref="IDataSet"/> which then can be further processed in the import
 /// </summary>
-public delegate Task<(IDataSet DataSet, string Format)> ReadDataSet(
+public delegate Task<(IDataSet DataSet, string? Format)> ReadDataSet(
     Stream stream,
     DataSetReaderOptions options,
     CancellationToken cancellationToken

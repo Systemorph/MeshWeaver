@@ -14,7 +14,7 @@ public class PortalApplication(IMessageHub hub, IRoutingService routingService) 
                 .Configuration
                 .PortalConfiguration
                 .Aggregate(DefaultPortalConfig(c, routingService), 
-                    (cc, ccc) => ccc.Invoke(cc)));
+                    (cc, ccc) => ccc.Invoke(cc)))!;
 
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config, IRoutingService routingService)
         => config.WithInitialization(async (hub, _) =>

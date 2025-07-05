@@ -98,7 +98,7 @@ namespace MeshWeaver.Pivot.Grouping
         )
         {
             if (Flat)
-                return new(this, subGroup, aggregationFunctions);
+                return new(this, subGroup!, aggregationFunctions);
 
             var groupManager = subGroup;
             var maxLevel = Math.Min(DimensionOptions.GetLevelMax<TDimension>(), DimensionCache.GetMaxHierarchyDataLevel(typeof(TDimension)));
@@ -127,7 +127,7 @@ namespace MeshWeaver.Pivot.Grouping
                 Selector
             );
 
-            return new(grouper, subGroup, aggregationFunctions);
+            return new(grouper, subGroup!, aggregationFunctions);
         }
     }
 }

@@ -15,7 +15,7 @@ public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView>
     where TView : SkinnedView<TControl, TSkin, TView>
 {
     [Parameter]
-    public TSkin? Skin { get; set; }
+    public required TSkin Skin { get; set; }
 
     protected override void BindData()
     {

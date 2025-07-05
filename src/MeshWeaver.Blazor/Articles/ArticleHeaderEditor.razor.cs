@@ -21,7 +21,7 @@ public partial class ArticleHeaderEditor
         catch(Exception ex)
         {
             ShowError(ex.Message);
-            Model?.Reset();
+            Model!.Reset();
         }
 
     }
@@ -35,7 +35,7 @@ public partial class ArticleHeaderEditor
 
     private void Reset()
     {
-        Model.Reset();
+        Model!.Reset();
         InvokeAsync(StateHasChanged);
     }
 

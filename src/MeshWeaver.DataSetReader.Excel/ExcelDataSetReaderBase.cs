@@ -9,7 +9,7 @@ namespace MeshWeaver.DataSetReader.Excel
     {
         public const string Format = "Format";
 
-        protected (IDataSet DataSet, string Format) ReadDataSetFromFile(Stream stream)
+        protected (IDataSet DataSet, string? Format) ReadDataSetFromFile(Stream stream)
         {
             var spreadsheetDocument = SpreadsheetDocument.Open(stream, false);
             var format = spreadsheetDocument.CustomFilePropertiesPart?.Properties?.Elements<CustomDocumentProperty>()
@@ -53,7 +53,7 @@ namespace MeshWeaver.DataSetReader.Excel
                 }
             }
 
-            return (dataSet, format ?? "");
+            return (dataSet, format);
         }
 
         private static string GetUniqueColumnName(string desiredName, IDataColumnCollection presentColumns)

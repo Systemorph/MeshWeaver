@@ -203,7 +203,7 @@ namespace MeshWeaver.Pivot.Builder
 
             Aggregations = Aggregations with
             {
-                Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                 AggregationOfAggregates = aggregations.AggregationOfAggregates,
                 ResultTransformation = aggregations.ResultTransformation,
                 Name = aggregations.Name
@@ -241,7 +241,7 @@ namespace MeshWeaver.Pivot.Builder
                     TNewAggregate
                 >
                 {
-                    Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                    Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                     AggregationOfAggregates = aggregations.AggregationOfAggregates,
                     ResultTransformation = aggregations.ResultTransformation,
                     Name = aggregations.Name
@@ -275,7 +275,7 @@ namespace MeshWeaver.Pivot.Builder
                 PropertiesToHide = PropertiesToHide,
                 Aggregations = new Aggregations<DataSlice<TElement>, TNewAggregate, TNewAggregate>
                 {
-                    Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                    Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                     AggregationOfAggregates = aggregations.AggregationOfAggregates,
                     ResultTransformation = aggregations.ResultTransformation,
                     Name = aggregations.Name
