@@ -32,7 +32,7 @@ namespace MeshWeaver.Pivot.Processors
 
         protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<DataSlice<TElement>> objects)
         {
-            var types = 
+            var types =
                 PivotBuilder
                     .SliceColumns
                     .Dimensions
@@ -44,7 +44,7 @@ namespace MeshWeaver.Pivot.Processors
                     .Select(d => d.Dim)
                     )
                 .Distinct()
-                    .Select(dim => (Dimension:dim.Type, IdAccessor:(Func<DataSlice<TElement>,object>)(slice => slice.Tuple.GetValue(dim.SystemName))))
+                    .Select(dim => (Dimension: dim.Type, IdAccessor: (Func<DataSlice<TElement>, object>)(slice => slice.Tuple.GetValue(dim.SystemName))))
                 .ToArray();
             return GetStream(objects, types);
         }
@@ -60,7 +60,7 @@ namespace MeshWeaver.Pivot.Processors
 
         protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
-            var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache,PivotBuilder.Aggregations);
+            var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;
         }
 

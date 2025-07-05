@@ -17,7 +17,7 @@ public static class DataGridControlExtensions
         return ToDataGrid(area, elements, typeof(T), x => x.AutoMapProperties());
     }
     [ReplaceToDataGrid]
-    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, IReadOnlyCollection<T> elements, Func<PropertyViewBuilder<T>, PropertyViewBuilder> configuration)
+    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, IReadOnlyCollection<T> elements, Func<PropertyViewBuilder<T>, PropertyViewBuilder>? configuration)
     {
         return ToDataGrid(area, elements, typeof(T), configuration == null ? null : c => configuration.Invoke((PropertyViewBuilder<T>)c));
     }
@@ -26,13 +26,13 @@ public static class DataGridControlExtensions
     {
         return ToDataGrid(area, elements, typeof(T), x => x.AutoMapProperties());
     }
-    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, object elements, Func<PropertyViewBuilder, PropertyViewBuilder> configuration)
+    public static DataGridControl ToDataGrid<T>(this LayoutAreaHost area, object elements, Func<PropertyViewBuilder, PropertyViewBuilder>? configuration)
     {
         return ToDataGrid(area, elements, typeof(T), configuration);
     }
 
     public static DataGridControl ToDataGrid(this LayoutAreaHost area, object elements, Type type, Func<PropertyViewBuilder, PropertyViewBuilder>? configuration = null) =>
-        area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(type)!.ToDataGrid(elements,  configuration);
+        area.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetTypeDefinition(type)!.ToDataGrid(elements, configuration);
 
     public static DataGridControl ToDataGrid(this ITypeDefinition typeDefinition, object elements,  Func<PropertyViewBuilder, PropertyViewBuilder>? configuration = null)
     {

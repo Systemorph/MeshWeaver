@@ -131,7 +131,7 @@ namespace MeshWeaver.Pivot.Grouping
 
         private static readonly MethodInfo GetReportGrouperMethod =
             ReflectionHelper.GetStaticMethodGeneric(
-                () => GetPivotGrouper<object, object>(null,  null, null, null)
+                () => GetPivotGrouper<object, object>(null, null, null, null)
             );
 
         private static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(

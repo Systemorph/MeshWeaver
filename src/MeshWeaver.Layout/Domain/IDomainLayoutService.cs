@@ -27,7 +27,7 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
         configuration.ViewBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null)!;
+            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No view builder found for the context");
 
     public UiControl GetCatalog(EntityRenderingContext context)
     {
@@ -140,7 +140,7 @@ public record DomainViewConfiguration
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
-                            .FirstOrDefault(x => x != null)!
+                            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No property view builder found")
                     );
     }
 
@@ -151,7 +151,7 @@ public record DomainViewConfiguration
         CatalogBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null)!;
+            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No catalog builder found for the context");
 }
 
 public record EntityRenderingContext(

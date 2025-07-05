@@ -53,7 +53,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
             .Where(t => t != null)
             .SelectMany(t =>
                 t!.GetProperties()
-                    .Select(p => (Property: p, Dimension: p.GetCustomAttribute<DimensionAttribute>()?.Type )))
+                    .Select(p => (Property: p, Dimension: p.GetCustomAttribute<DimensionAttribute>()?.Type)))
             .Where(x => x.Dimension != null)
             .Select(x =>
             {

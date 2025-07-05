@@ -48,7 +48,7 @@ namespace MeshWeaver.Layout.DataBinding
                                     {
                                         if (!hasEmitted || !EqualityComparer<T>.Default.Equals(lastEmitted, value))
                                         {
-                                            observer.OnNext(value!);
+                                            observer.OnNext(value);
                                             lastEmitted = value;
                                             hasEmitted = true;
                                         }
@@ -69,7 +69,7 @@ namespace MeshWeaver.Layout.DataBinding
                                 {
                                     if (!hasEmitted || !EqualityComparer<T>.Default.Equals(lastEmitted, value))
                                     {
-                                        observer.OnNext(value!);
+                                        observer.OnNext(value);
                                     }
                                 }
                                 observer.OnCompleted();
