@@ -12,24 +12,24 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     where TViewModel : UiControl, IFormControl
     where TView : FormComponentBase<TViewModel, TView, TValue>
 {
-    private TValue data;
+    private TValue data = default!;
 
     public const string Edit = nameof(Edit);
-    protected string Label { get; set; }
+    protected string? Label { get; set; }
     protected int ImmediateDelay { get; set; }
-    private JsonPointerReference DataPointer { get; set; }
+    private JsonPointerReference? DataPointer { get; set; }
 
     protected bool AutoFocus { get; set; }
     protected bool Immediate { get; set; }
-    protected Icon IconStart { get; set; }
-    protected Icon IconEnd { get; set; }
-    protected string Placeholder { get; set; }
+    protected Icon? IconStart { get; set; }
+    protected Icon? IconEnd { get; set; }
+    protected string? Placeholder { get; set; }
     protected bool Disabled { get; set; }
     protected bool Readonly { get; set; }
     protected bool Required { get; set; }
 
 
-    private Subject<TValue> valueUpdateSubject;
+    private Subject<TValue>? valueUpdateSubject;
 
     protected TValue Value
     {
@@ -40,7 +40,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             var needsUpdate = !EqualityComparer<TValue>.Default.Equals(this.data, value);
             this.data = value;
             if (needsUpdate)
-                UpdatePointer(this.data, DataPointer);
+                UpdatePointer(this.data, DataPointer!);
         }
     }
 
@@ -67,7 +67,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => UpdatePointer(ConvertToData(x), Pointer))
+            .Subscribe(x => UpdatePointer(ConvertToData(x), Pointer!))
         );
         DataBind(ViewModel.Data, x => x.data, ConversionToValue);
         Pointer = ViewModel.Data as JsonPointerReference;
@@ -151,6 +151,6 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         return !Equals(data, v);
     }
 
-    protected JsonPointerReference Pointer { get; set; }
+    protected JsonPointerReference? Pointer { get; set; }
 
 }

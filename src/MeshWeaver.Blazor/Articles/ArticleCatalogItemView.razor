@@ -45,7 +45,7 @@
 
 @code
 {
-    private Article Data { get; set; }
+    private Article Data { get; set; } = null!;
     private string PublishedDate => Data.Published is null 
         ? "unpublished" 
         : Data.Published.Value.Year == DateTime.Now.Year 

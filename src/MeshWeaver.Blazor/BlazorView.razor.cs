@@ -79,11 +79,11 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected void DataBind<T>(
         object? value, 
         Expression<Func<TView, T>> propertySelector, 
-        Func<object,T, T> conversion = null,
-        T defaultValue = default(T))
+        Func<object,T, T>? conversion = null,
+        T defaultValue = default!)
     {
         var expr = propertySelector?.Body as MemberExpression;
-        Action<object> setter = expr?.Member is PropertyInfo pi 
+        Action<object?> setter = expr?.Member is PropertyInfo pi 
             ? o => pi.SetValue(this,o) 
             : expr?.Member is FieldInfo fi 
                 ? o => fi.SetValue(this, o) 

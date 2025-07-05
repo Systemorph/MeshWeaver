@@ -7,21 +7,21 @@ namespace MeshWeaver.Blazor.Articles;
 
 public partial class ArticleHeaderEditor
 {
-    [Inject] private IToastService ToastService { get; set; }
-    [Inject] private IContentService ContentService { get; set; }
+    [Inject] private IToastService ToastService { get; set; } = null!;
+    [Inject] private IContentService ContentService { get; set; } = null!;
 
     private void SaveAsync()
     {
         try
         {
-            Collection.SaveArticleAsync(Model.Submit());
+            Collection.SaveArticleAsync(Model!.Submit());
             ShowSuccess();
-            Model.Confirm();
+            Model!.Confirm();
         }
         catch(Exception ex)
         {
             ShowError(ex.Message);
-            Model.Reset();
+            Model!.Reset();
         }
 
     }
@@ -29,9 +29,9 @@ public partial class ArticleHeaderEditor
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        Collection = ContentService.GetCollection(CollectionName);
+        Collection = ContentService.GetCollection(CollectionName!)!;
     }
-    private ContentCollection Collection { get; set; }
+    private ContentCollection Collection { get; set; } = null!;
 
     private void Reset()
     {

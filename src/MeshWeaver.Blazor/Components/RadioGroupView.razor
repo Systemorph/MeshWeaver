@@ -18,7 +18,7 @@
    protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
 
-    private string Name = "";
+    private string? Name { get; set; }
     protected override void BindData()
     {
         base.BindData();

@@ -23,8 +23,8 @@
 
 @code
 {
-    private ViewDescriptor ViewDescriptor { get; set; }
-    private string ViewModelDataContext { get; set; }
+    private ViewDescriptor? ViewDescriptor { get; set; }
+    private string? ViewModelDataContext { get; set; }
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);

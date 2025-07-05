@@ -15,10 +15,10 @@
 }
 
 @code {
-    [Parameter] public string Name { get; set; }
-    [Parameter] public string Html { get; set; }
-    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
-    private IJSObjectReference jsModule;
+    [Parameter] public string? Name { get; set; }
+    [Parameter] public string? Html { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object>? AdditionalAttributes { get; set; }
+    private IJSObjectReference? jsModule;
     private ElementReference MathBlockElement;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

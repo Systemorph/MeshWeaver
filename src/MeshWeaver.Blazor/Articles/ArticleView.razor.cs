@@ -75,9 +75,9 @@ public partial class ArticleView
     }
 
 
-    private string ConvertHtml(object? arg)
+    private string? ConvertHtml(object? arg)
     {
-        return arg?.ToString()?.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString()) ?? "";
+        return arg?.ToString()?.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
     }
 
 

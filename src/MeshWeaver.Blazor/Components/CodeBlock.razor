@@ -12,9 +12,9 @@
 </div>
 
 @code {
-    [Parameter] public string Html { get; set; }
+    [Parameter] public string? Html { get; set; }
     private ElementReference CodeBlockElement;
-    private IJSObjectReference jsModule;
+    private IJSObjectReference? jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

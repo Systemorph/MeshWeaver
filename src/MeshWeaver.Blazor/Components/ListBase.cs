@@ -26,7 +26,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         base.BindData();
     }
 
-    private object lastParsedOptions;
+    private object? lastParsedOptions;
     private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
         if (options is JsonElement je)
@@ -59,22 +59,22 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             {
                 var pointer = JsonPointer.Parse($"{DataContext}/{p.Pointer}");
                 Options = ret;
-                SetValue(ConversionToValue(pointer.Evaluate(Stream.Current.Value), ret?.FirstOrDefault()));
+                SetValue(ConversionToValue(pointer.Evaluate(Stream.Current.Value), ret?.FirstOrDefault()!));
 
             }
 
         }
-        return ret;
+        return ret ?? [];
     }
 
 
     protected override Option ConversionToValue(object value, Option defaultValue)
         {
             if (Options is null)
-                return null;
+                return null!;
             var itemType = Options.FirstOrDefault()?.ItemType;
             if (itemType == null)
-                return null;
+                return null!;
 
             var mapToString = OptionsExtension.MapToString(value, itemType);
             return Options.FirstOrDefault(x =>

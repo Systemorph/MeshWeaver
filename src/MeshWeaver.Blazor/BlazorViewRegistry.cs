@@ -24,7 +24,7 @@ public static class BlazorViewRegistry
 {
     internal static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
+        Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config
         .AddData()
         .AddLayoutClient(c => 
@@ -33,15 +33,14 @@ public static class BlazorViewRegistry
         .AddMeshTypes()
     ;
     #region Standard Formatting
-    private static ViewDescriptor DefaultFormatting(
+    private static ViewDescriptor? DefaultFormatting(
         IMessageHub hub,
         object instance,
         ISynchronizationStream<JsonElement> stream,
         string area
     )
     {
-        var control = instance as UiControl;
-        if (control == null)
+        if (instance is not UiControl control)
             return null;
 
         control = control.PopSkin(out var skin);
@@ -124,7 +123,7 @@ public static class BlazorViewRegistry
         string area
     )
     {
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
+        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault() ?? "text/html";
         var output = Controls.Html(instance.ToDisplayString(mimeType));
         return new ViewDescriptor(
             typeof(HtmlView),

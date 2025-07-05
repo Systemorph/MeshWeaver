@@ -18,16 +18,16 @@
     
 @code
 {
-    private Appearance Appearance { get; set; }
-    private string BackgroundColor { get; set; }
+    private Appearance Appearance { get; set; } = Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral;
+    private string? BackgroundColor { get; set; }
     private bool Circular { get; set; }
-    private string Color { get; set; }
-    private string Content { get; set; }
-    private Icon DismissIcon { get; set; }
-    private string DismissTitle { get; set; }
-    private string Fill { get; set; }
-    private string Height { get; set; }
-    private string Width { get; set; }
+    private string? Color { get; set; }
+    private string? Content { get; set; }
+    private Icon? DismissIcon { get; set; }
+    private string? DismissTitle { get; set; }
+    private string? Fill { get; set; }
+    private string? Height { get; set; }
+    private string? Width { get; set; }
 
     protected override void BindData()
     {

@@ -8,28 +8,28 @@ public partial class NamedAreaView
 {
     [Parameter] public bool Top { get; set; }
 
-    private UiControl RootControl { get; set; }
+    private UiControl? RootControl { get; set; }
 
 
-    private string ProgressMessage { get; set; }
+    private string? ProgressMessage { get; set; }
     private bool ShowProgress { get; set; }
 
-    private IDisposable subscription = null;
-    private string PageTitle { get; set; }
-    private IDictionary<string, object> MetaAttributes { get; set; }
+    private IDisposable? subscription = null;
+    private string? PageTitle { get; set; }
+    private IDictionary<string, object>? MetaAttributes { get; set; }
 
-    private string AreaToBeRendered { get; set; }
+    private string? AreaToBeRendered { get; set; }
     protected override void BindData()
     {
         subscription?.Dispose();
         subscription = null;
         RootControl = null;
-        AreaToBeRendered = ViewModel.Area.ToString();
+        AreaToBeRendered = ViewModel.Area?.ToString();
         base.BindData();
         DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);
-        if (AreaToBeRendered != null && Stream != null)
-            AddBinding(Stream.GetControlStream(AreaToBeRendered)
+        if (AreaToBeRendered is not null && Stream is not null)
+            AddBinding(Stream.GetControlStream(AreaToBeRendered!)
                 .Subscribe(x =>
                 {
                     InvokeAsync(() =>

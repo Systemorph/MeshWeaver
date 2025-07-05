@@ -2,11 +2,11 @@
 <LayoutAreaView ViewModel="@ViewModel" Top="@Top"/>
 
 @code {
-    [Parameter] public string Address { get; set; }
-    [Parameter] public string Area { get; set; }
-    [Parameter] public string Id { get; set; }
+    [Parameter] public string? Address { get; set; }
+    [Parameter] public string? Area { get; set; }
+    [Parameter] public string? Id { get; set; }
     [Parameter] public bool ShowProgress { get; set; }
-    [Parameter] public string ProgressMessage { get; set; } = "Loading";
+    [Parameter] public string? ProgressMessage { get; set; } = "Loading";
     [Parameter] public bool Top { get; set; }
 
     private LayoutAreaControl ViewModel =>

@@ -53,9 +53,9 @@ else
 
 @code
 {
-    private string Title { get; set; } = "";
+    private string? Title { get; set; }
     private FluentAppearance ButtonAppearance { get; set; } = FluentAppearance.Neutral;
-    private string Width { get; set; } = "auto";
+    private string? Width { get; set; } = "auto";
     private bool HasSubMenus => ViewModel.Areas?.Any() == true;
     private bool HasTopLevelAction => ViewModel.IsClickable;
 

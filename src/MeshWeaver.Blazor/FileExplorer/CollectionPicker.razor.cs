@@ -6,10 +6,10 @@ namespace MeshWeaver.Blazor.FileExplorer;
 
 public partial class CollectionPicker
 {
-    private IReadOnlyCollection<Option<string>> collections;
-    [Inject] private IContentService ContentService { get; set; }
-    [Parameter] public string NullLabel { get; set; }
-    private string SelectedCollection { get; set; }
+    private IReadOnlyCollection<Option<string>>? collections;
+    [Inject] private IContentService ContentService { get; set; } = null!;
+    [Parameter] public string? NullLabel { get; set; }
+    private string? SelectedCollection { get; set; }
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
@@ -24,12 +24,12 @@ public partial class CollectionPicker
                 .Prepend(new Option<string>() { Text = NullLabel });
 
         collections = options.ToArray();
-        if (NullLabel is null && SelectedCollection is null && collections.Any())
+        if (NullLabel is null && SelectedCollection is null && collections!.Any())
         {
-            await OnValueChanged(collections.First().Value);
+            await OnValueChanged(collections!.First().Value!);
         }
     }
-    private async Task OnValueChanged(string collection)
+    private async Task OnValueChanged(string? collection)
     {
         if (SelectedCollection == collection)
             return;

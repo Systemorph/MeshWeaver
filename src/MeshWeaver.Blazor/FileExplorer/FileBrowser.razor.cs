@@ -11,9 +11,9 @@ public partial class FileBrowser
     [Inject] private IContentService ContentService { get; set; } = null!;
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private IToastService ToastService { get; set; } = null!;
-    [Parameter] public string CollectionName { get; set; } = "";
-    [Parameter] public string CurrentPath { get; set; } = "/";
-    [Parameter] public string TopLevelPath { get; set; } = "";
+    [Parameter] public string? CollectionName { get; set; } = "";
+    [Parameter] public string? CurrentPath { get; set; } = "/";
+    [Parameter] public string? TopLevelPath { get; set; } = "";
     [Parameter] public bool Embed { get; set; }
     [Parameter]public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
@@ -38,17 +38,17 @@ public partial class FileBrowser
         if (Collection is null)
             return;
 
-        CollectionItems = await Collection.GetCollectionItemsAsync(CurrentPath);
+        CollectionItems = await Collection.GetCollectionItemsAsync(CurrentPath!);
         SelectedItems = [];
     }
 
     private void NavigateToFolder(string folderName)
     {
-        var newPath = CurrentPath.EndsWith("/")
-            ? $"{CurrentPath}{folderName}"
-            : $"{CurrentPath}/{folderName}";
+        var newPath = CurrentPath!.EndsWith("/")
+            ? $"{CurrentPath!}{folderName}"
+            : $"{CurrentPath!}/{folderName}";
 
-        NavigationManager.NavigateTo($"/collections/{CollectionName}{newPath}");
+        NavigationManager.NavigateTo($"/collections/{CollectionName!}{newPath}");
     }
 
 

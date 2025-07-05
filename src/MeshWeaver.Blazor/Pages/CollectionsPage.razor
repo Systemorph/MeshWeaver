@@ -14,16 +14,16 @@
     </NotAuthorized>
 </AuthorizeView>
 @code {
-    [Parameter] public string FullPath { get; set; } = "";
-    private string Collection { get; set; } = "";
-    private string Path { get; set; } = "";
+    [Parameter] public string? FullPath { get; set; } = "";
+    private string? Collection { get; set; } = "";
+    private string? Path { get; set; } = "";
 
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
         if (!string.IsNullOrEmpty(FullPath))
         {
-            var split = FullPath.Split('/');
+            var split = FullPath!.Split('/');
             Collection = split[0];
             Path = string.Join('/', split.Skip(1));
         }

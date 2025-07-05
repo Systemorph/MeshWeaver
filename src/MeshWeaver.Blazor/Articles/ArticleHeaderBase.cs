@@ -72,11 +72,11 @@ public abstract class ArticleHeaderBase : ComponentBase
     }
     protected string EditLink => $"/article/edit/{CollectionName}/{Name}";
     protected string ThumbnailPath => $"/static/{CollectionName}/{Thumbnail}";
-    protected string GetEmbedUrl(string videoUrl)
+    protected string GetEmbedUrl(string? videoUrl)
     {
-        if (videoUrl.Contains("youtube.com/watch"))
+        if (videoUrl?.Contains("youtube.com/watch") == true)
         {
-            var videoId = videoUrl.Split("v=")[1];
+            var videoId = videoUrl!.Split("v=")[1];
             var ampersandPosition = videoId.IndexOf('&');
             if (ampersandPosition != -1)
             {
@@ -84,7 +84,7 @@ public abstract class ArticleHeaderBase : ComponentBase
             }
             return $"https://www.youtube.com/embed/{videoId}";
         }
-        return videoUrl;
+        return videoUrl ?? string.Empty;
     }
     [Parameter]
     public EventCallback<ArticleDisplayMode> DisplayModeChanged { get; set; }

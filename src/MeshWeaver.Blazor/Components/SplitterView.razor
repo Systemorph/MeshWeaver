@@ -16,9 +16,9 @@
 
 @code
 {
-    private string Width { get; set; }
-    private string Height { get; set; }
-    protected Orientation Orientation { get; set; }
+    private string? Width { get; set; }
+    private string? Height { get; set; }
+    protected Orientation Orientation { get; set; } = Orientation.Horizontal;
 
     protected override void BindData()
     {

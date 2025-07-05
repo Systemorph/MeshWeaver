@@ -14,12 +14,12 @@ public partial class ApplicationPage
     private NavigationManager Navigation { get; set; } = null!;
 
     [Parameter]
-    public string Application { get; set; } = "";
+    public string? Application { get; set; } = "";
     [Parameter]
-    public string Environment { get; set; } = "";
+    public string? Environment { get; set; } = "";
 
     [Parameter]
-    public string Area { get; set; } = "";
+    public string? Area { get; set; } = "";
 
     [Parameter]
     public string Id
@@ -28,11 +28,11 @@ public partial class ApplicationPage
         set;
     } = "";
 
-    private string PageTitle { get; set; } = "";
+    private string? PageTitle { get; set; } = "";
 
     [Parameter(CaptureUnmatchedValues = true)]
-    public IReadOnlyDictionary<string, object> Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-    private object Address => new ApplicationAddress(Application);
+    public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
+    private object Address => new ApplicationAddress(Application!);
 
     private LayoutAreaReference Reference { get; set; } = null!;
     protected override async Task OnParametersSetAsync()
@@ -44,7 +44,7 @@ public partial class ApplicationPage
         if (!string.IsNullOrEmpty(query))
             id += "?" + query;
         
-        Reference = new((string)WorkspaceReference.Decode(Area))
+        Reference = new((string)WorkspaceReference.Decode(Area!))
         {
             Id = id,
         };
@@ -56,18 +56,18 @@ public partial class ApplicationPage
         {
             ShowProgress = true
         };
-        PageTitle = $"{ViewModel.ProgressMessage} - {Application}";
+        PageTitle = $"{ViewModel.ProgressMessage} - {Application!}";
 
     }
 
 
-    private string GetDisplayNameFromId()
+    private string? GetDisplayNameFromId()
     {
         // TODO V10: This is very hand woven.
         // We need some configurability for how to create DisplayArea, PageTitle, etc.  (14.08.2024, Roland Bürgi)
 
         if (Reference.Id is null)
-            return null;
+            return null!;
 
         return Reference.Id.ToString()!.Split("?").First().Split("/").Last();
     }

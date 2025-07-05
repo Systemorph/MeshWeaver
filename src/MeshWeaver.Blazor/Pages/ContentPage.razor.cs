@@ -6,10 +6,10 @@ namespace MeshWeaver.Blazor.Pages;
 
 public partial class ContentPage : IDisposable
 {
-    private Stream Content { get; set; }
-    private string ContentType { get; set; }
-    IDisposable ArticleStreamSubscription { get; set; }
-    [Inject] private PortalApplication PortalApplication { get; set; }
+    private Stream? Content { get; set; }
+    private string? ContentType { get; set; }
+    IDisposable? ArticleStreamSubscription { get; set; }
+    [Inject] private PortalApplication PortalApplication { get; set; } = null!;
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
@@ -17,10 +17,10 @@ public partial class ContentPage : IDisposable
         if (collection is null || string.IsNullOrEmpty(Path))
             return;
 
-        ContentType = collection.GetContentType(Path);
+        ContentType = collection.GetContentType(Path!);
         if(ContentType != "text/markdown")
         {
-            Content = await collection.GetContentAsync(Path);
+            Content = await collection.GetContentAsync(Path!);
         }
 
     }
