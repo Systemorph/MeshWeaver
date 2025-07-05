@@ -140,9 +140,9 @@ public static class LayoutExtensions
         string area
     ) =>
         synchronizationItems!.Select(i =>
-            i.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+            i.Value?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
                 ?.Instances.GetValueOrDefault(area)!
-        );
+        ).Where(x => x is not null);
 
     public static IObservable<object> GetControlStream(
         this IMessageHub hub,
@@ -178,20 +178,23 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference)
-            .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
+            .Reduce(reference)!
+            .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
+            .Select(x => x.Value!.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
 
     public static IObservable<object> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))
-        .Select(x => x.Value);
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
+        .Where(x => x.Value != null)
+        .Select(x => x.Value!);
 
     public static IObservable<T> GetDataStream<T>(
         this ISynchronizationStream<EntityStore> stream,
         string id
-    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))
-        .Select(x => (T)x.Value)
+    ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
+        .Where(x => x.Value != null)
+        .Select(x => (T)x.Value!)
         .DistinctUntilChanged()
     ;
 
@@ -207,11 +210,11 @@ public static class LayoutExtensions
             throw new ArgumentNullException(nameof(id));
         stream.Update(s =>
             stream.ApplyChanges(
-                s.MergeWithUpdates(
-                    s.Update(LayoutAreaReference.Data,
-                        c => c.SetItem(id, value)
+                (s ?? new EntityStore()).MergeWithUpdates(
+                    (s ?? new EntityStore()).Update(LayoutAreaReference.Data,
+                        c => c.SetItem(id, value!)
                     ),
-                    changedBy
+                    changedBy ?? string.Empty
                 )
             ),
             ex =>
@@ -237,7 +240,8 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference)
+            .Reduce(reference)!
+            .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
             .Select(x => x.Value.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
 
     public static IObservable<T> GetDataStream<T>(
@@ -245,7 +249,7 @@ public static class LayoutExtensions
         JsonPointerReference reference
     ) =>
         stream
-            .Reduce(reference)
+            .Reduce(reference)!
             .Select(x =>
                 x.Value.ValueKind == JsonValueKind.Undefined
                     ? default!
@@ -312,12 +316,12 @@ public static class LayoutExtensions
                     layout.Hub.GetDocumentationService().Context
                         .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name!)
                         ?.DocumentPaths
-                        .Aggregate
+                        ?.Aggregate
                         (
                             mm,
                             (m, i) =>
                                 m.WithNavLink(i.Key, layout.DocumentationPath(assembly, i.Key))
-                        )
+                        ) ?? mm
             )
         );
 }

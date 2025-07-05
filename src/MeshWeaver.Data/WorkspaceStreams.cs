@@ -56,7 +56,7 @@ c => c
             .ToAsyncEnumerable()
             .SelectAwait(async x => await x!.FirstAsync())
             .AggregateAsync(new EntityStore(), (x, y) =>
-            x.Merge(y.Value), cancellationToken: ct), ex =>
+            y.Value is null ? x : x.Merge(y.Value), cancellationToken: ct), ex =>
         {
             logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address);
             return Task.CompletedTask;

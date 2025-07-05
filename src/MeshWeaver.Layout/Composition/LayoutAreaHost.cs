@@ -97,7 +97,7 @@ public record LayoutAreaHost : IDisposable
 
     public object? GetControl(string area) =>
         Stream
-            .Current?.Value.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
+            .Current?.Value?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
             ?.Instances.GetValueOrDefault(area);
 
 

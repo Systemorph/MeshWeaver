@@ -277,6 +277,7 @@ public static class WorkspaceOperations
     }
 
     private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(
+#pragma warning disable IDE0060
         this IWorkspace workspace,
         IReadOnlyCollection<object> instances)
     {

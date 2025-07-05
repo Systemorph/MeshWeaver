@@ -26,7 +26,7 @@ public class ModelParameter<TModel> : ModelParameter
 
     public void Update(JsonPatch patch)
     {
-        Element = patch.Apply(Element);
+        Element = patch.Apply(Element) ?? Element;
         ElementChanged?.Invoke(this, Element!);
     }
 
