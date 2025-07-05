@@ -70,13 +70,13 @@ namespace MeshWeaver.Pivot.Grouping
                         .FirstOrDefault();
 
                     if (grouperNameVariable is ConstantExpression c)
-                        GrouperName = (string)c.Value;
+                        GrouperName = (string?)c.Value;
                 }
                 return base.VisitNew(node);
             }
         }
 
-        private static string GetGrouperName<TTransformed, TSelected>(
+        private static string? GetGrouperName<TTransformed, TSelected>(
             Expression<Func<TTransformed, TSelected>> selector
         )
         {
@@ -227,7 +227,7 @@ namespace MeshWeaver.Pivot.Grouping
             );
         }
 
-        public static PropertyInfo GetProperty<TTransformed, TSelected>(
+        public static PropertyInfo? GetProperty<TTransformed, TSelected>(
             Expression<Func<TTransformed, TSelected>> selector
         )
         {

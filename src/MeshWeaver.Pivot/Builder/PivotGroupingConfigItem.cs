@@ -36,7 +36,7 @@ namespace MeshWeaver.Pivot.Builder
                 );
                 return groupManager;
             }
-            return new(grouper, subGroup, aggregationFunctions);
+            return new(grouper, subGroup!, aggregationFunctions);
         }
     }
 }

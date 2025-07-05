@@ -49,7 +49,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
                     slices => slices.GroupBy(_ => IPivotGrouper<TElement, TGroup>.TopGroup),
                     IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName
                 ),
-                null,
+                null!,
                 aggregationFunctions
             );
 
