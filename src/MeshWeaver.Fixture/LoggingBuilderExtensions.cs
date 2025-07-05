@@ -69,7 +69,7 @@ public class XUnitLogger(
 {
     public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
-    public IDisposable? BeginScope<TState>(TState state) => scopeProvider.Push(state);
+    public IDisposable BeginScope<TState>(TState state) where TState: notnull => scopeProvider.Push(state);
 
     public void Log<TState>(
         LogLevel logLevel,

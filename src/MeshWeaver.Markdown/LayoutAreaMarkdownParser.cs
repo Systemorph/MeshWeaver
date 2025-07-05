@@ -62,7 +62,7 @@ public class LayoutAreaMarkdownParser : BlockParser
 
 
 
-    private string ReadToken(ref StringSlice slice)
+    private string? ReadToken(ref StringSlice slice)
     {
         var isInsideQuote = false;
         var token = new StringBuilder();

@@ -75,6 +75,8 @@ public static class LayoutClientExtensions
         T? defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
             .Select(x => conversion is not null ? conversion.Invoke(x!, defaultValue!) : stream.Hub.ConvertSingle(x, null, defaultValue!))
+            .Where(x => x is T)
+            .Select(x => (T)x!)
             .DistinctUntilChanged();
 
 
@@ -118,7 +120,9 @@ public static class LayoutClientExtensions
         {
             var ret = jsonPointer.Evaluate(s.Value);
             return ret is null ? default : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
-        });
+        })
+        .Where(x => x is not null)
+        .Select(x => x!)!;
     }
 
     private static string GetPointer(string pointer, string dataContext)

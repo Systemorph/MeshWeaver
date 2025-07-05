@@ -72,7 +72,7 @@ public record DomainViewConfiguration
 
         var id = Guid.NewGuid().AsString();
         host.RegisterForDisposal(stream
-            .Select(i => i!.Value.Instances.Values.Select(o =>
+            .Select(i => i?.Value?.Instances.Values.Select(o =>
             {
                 var serialized = typeDefinition.SerializeEntityAndId(o,
                     context.Host.Hub.JsonSerializerOptions);
@@ -82,7 +82,7 @@ public record DomainViewConfiguration
                         $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
                 }.ToHref(host.Hub.Address);
                 return serialized;
-            }))
+            }) ?? [])
 
             .Subscribe(x => host.UpdateData(id, x))
         );
@@ -129,7 +129,7 @@ public record DomainViewConfiguration
 
         var typeDefinition = context.TypeDefinition;
         host.RegisterForDisposal(stream
-            .Select(e => typeDefinition.SerializeEntityAndId(e!.Value, context.Host.Hub.JsonSerializerOptions))
+            .Select(e => typeDefinition.SerializeEntityAndId(e?.Value ?? throw new InvalidOperationException("Entity value is null"), context.Host.Hub.JsonSerializerOptions))
             .Subscribe(e => host.UpdateData(id,e))
         );
 

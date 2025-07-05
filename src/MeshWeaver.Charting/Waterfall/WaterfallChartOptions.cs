@@ -33,7 +33,7 @@ public record WaterfallChartOptions<TOptions>
     private TOptions This => (TOptions)this;
 
     public TOptions WithLegendItems(string? incrementsLabel = null, string? decrementsLabel = null, string? totalLabel = null)
-        => This with { IncrementsLabel = incrementsLabel, DecrementsLabel = decrementsLabel, TotalLabel = totalLabel, };
+        => This with { IncrementsLabel = incrementsLabel ?? ChartConst.Hidden, DecrementsLabel = decrementsLabel ?? ChartConst.Hidden, TotalLabel = totalLabel ?? ChartConst.Hidden, };
 
     public TOptions WithConnectors(Func<LineDataSet, LineDataSet>? connectorLineModifier = null)
         => This with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };

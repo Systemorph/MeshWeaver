@@ -4,6 +4,7 @@ using Markdig.Renderers;
 using Markdig.Renderers.Html;
 using Markdig.Syntax;
 using MeshWeaver.Kernel;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Markdown;
 
@@ -48,10 +49,10 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
     public const string Execute = "execute";
     public const string Render = "render";
-    public IReadOnlyDictionary<string, string> Args { get; set; }
-    public SubmitCodeRequest SubmitCode { get; set; }
+    public IReadOnlyDictionary<string, string?> Args { get; set; } = [];
+    public SubmitCodeRequest? SubmitCode { get; set; }
 
-    public static IEnumerable<KeyValuePair<string, string>> ParseArguments(string arguments)
+    public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
     {
         var linear = (arguments ?? string.Empty).Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
 
@@ -61,7 +62,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
             if (arg.StartsWith("--"))
             {
                 var key = arg.Substring(2).ToLowerInvariant();
-                string value = null;
+                string? value = null;
                 if (i + 1 < linear.Length)
                     if (linear[i + 1].StartsWith("--"))
                     {
@@ -76,14 +77,14 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     }
 
-    public SubmitCodeRequest GetSubmitCodeRequest()
+    public SubmitCodeRequest? GetSubmitCodeRequest()
     {
         if(Args.TryGetValue(Execute, out var executionId))
-            return new(string.Join('\n', Lines.Lines)) { Id = executionId };
+            return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString() };
         if (SubmitCode is not null)
             return SubmitCode;
         if (Args.TryGetValue(Render, out var renderId))
-            return new(string.Join('\n', Lines.Lines)) { Id = renderId };
+            return new(string.Join('\n', Lines.Lines)) { Id = renderId ?? Guid.NewGuid().AsString() };
         return null;
     }
 

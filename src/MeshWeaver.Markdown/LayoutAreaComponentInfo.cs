@@ -33,7 +33,7 @@ public class LayoutAreaComponentInfo : ContainerBlock
     public string Area { get; }
 
     public object Address { get;  }
-    public object Id { get;}
+    public object? Id { get;}
 
     public LayoutAreaReference Reference =>
         new (Area) { Id = Id };
