@@ -11,7 +11,7 @@ public abstract class ModelParameter
 public class ModelParameter<TModel> : ModelParameter
 {
     private readonly Func<ModelParameter<TModel>,JsonPointerReference, object>? getReference;
-    public event EventHandler<TModel>? ElementChanged; 
+    public event EventHandler<TModel>? ElementChanged = null!; 
     public ModelParameter(TModel model, Func<ModelParameter<TModel>, JsonPointerReference, object>? getReference)
     {
         this.getReference = getReference;
@@ -26,14 +26,14 @@ public class ModelParameter<TModel> : ModelParameter
 
     public void Update(JsonPatch patch)
     {
-        Element = patch.Apply(Element)!;
-        ElementChanged?.Invoke(this, Element);
+        Element = patch.Apply(Element);
+        ElementChanged?.Invoke(this, Element!);
     }
 
     public void Update(Func<TModel, TModel> update)
     {
         Element = update(Element);
-        ElementChanged?.Invoke(this, Element);
+        ElementChanged?.Invoke(this, Element!);
     }
 
 
@@ -44,7 +44,7 @@ public class ModelParameter<TModel> : ModelParameter
         return Element;
     }
 
-    public bool IsUpToDate => Element?.Equals(LastSubmitted) ?? false;
+    public bool IsUpToDate => Element!.Equals(LastSubmitted);
 
     public override void Confirm()
     {

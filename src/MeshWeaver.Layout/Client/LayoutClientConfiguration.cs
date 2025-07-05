@@ -11,9 +11,9 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 {
     private readonly ITypeRegistry typeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-    public delegate ViewDescriptor ViewMap(object instance, ISynchronizationStream<JsonElement> stream, string area);
+    public delegate ViewDescriptor? ViewMap(object instance, ISynchronizationStream<JsonElement> stream, string area);
 
-    public delegate ViewDescriptor ViewMap<in T>(T instance, ISynchronizationStream<JsonElement> stream, string area);
+    public delegate ViewDescriptor? ViewMap<in T>(T instance, ISynchronizationStream<JsonElement> stream, string area);
 
     public ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> PortalConfiguration { get; init; } 
         = [];

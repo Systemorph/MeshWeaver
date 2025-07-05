@@ -64,6 +64,6 @@ public record PropertyViewBuilder<T>(ITypeDefinition TypeDefinition) : PropertyV
 {
     public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector)
         => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty()!);
-    public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyColumnControl,PropertyColumnControl> configuration)
+    public PropertyViewBuilder<T> WithColumn<TProp>(Expression<Func<T, TProp>> propertySelector, Func<PropertyColumnControl, PropertyColumnControl> configuration)
         => (PropertyViewBuilder<T>)AddColumn(propertySelector.GetProperty()!, configuration);
 }
