@@ -90,7 +90,7 @@ public partial class LayoutAreaView
             AreaStream = Address!.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
-            DialogStream = SetupDialogAreaMonitoring(AreaStream);
+            DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
         }
 
@@ -98,9 +98,9 @@ public partial class LayoutAreaView
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
 
-    private ISynchronizationStream<JsonElement> SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
+    private ISynchronizationStream<JsonElement>? SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
     {
-        return areaStream.Reduce(
+        return areaStream?.Reduce(
             new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
     }
 

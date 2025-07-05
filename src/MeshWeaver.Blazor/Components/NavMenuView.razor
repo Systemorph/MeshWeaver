@@ -31,7 +31,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin.Width, x => x.Width);
+        DataBind(Skin?.Width, x => x.Width);
         DataBind(Skin.Collapsible, x => x.Collapsible);
         DataBind(Skin.Expanded, x => x.Expanded);
     }

@@ -18,7 +18,7 @@ public partial class ArticleView
     private JsonPointerReference ArticlePointer { get; set; } = null!;
     protected override void BindData()
     {
-        ArticlePointer = new JsonPointerReference(ViewModel.DataContext);
+        ArticlePointer = new JsonPointerReference(ViewModel.DataContext ?? "/");
         DataBind(
             ArticlePointer,
             x => x.data,
@@ -33,7 +33,7 @@ public partial class ArticleView
         if (article == null)
             return null;
         var ret = ArticleModel = new ModelParameter<Article>(article, (_,_) => throw new NotImplementedException());
-        ret.ElementChanged += OnModelChanged;
+        ret.ElementChanged += OnModelChanged!;
         return ret;
     }
 
@@ -62,7 +62,7 @@ public partial class ArticleView
         return base.DisposeAsync();
     }
 
-    private void OnModelChanged(object sender, Article e)
+    private void OnModelChanged(object? sender, Article e)
     {
         InvokeAsync(StateHasChanged);
     }

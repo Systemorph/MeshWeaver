@@ -21,7 +21,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         DataBind(
             ViewModel.Options,
             x => x.Options,
-            ConvertOptions
+            ConvertOptions!
         );
         base.BindData();
     }
@@ -30,7 +30,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
         if (options is JsonElement je)
-            options = je.Deserialize<IReadOnlyCollection<object>>(Hub.JsonSerializerOptions);
+            options = je.Deserialize<IReadOnlyCollection<object>>(Hub.JsonSerializerOptions) ?? [];
         if(options is IReadOnlyCollection<object> optionsEnum && lastParsedOptions is IReadOnlyCollection<object> lastOptionsEnumerable && optionsEnum.Count == lastOptionsEnumerable.Count && optionsEnum.Zip(lastOptionsEnumerable, (x,y) => x.Equals(y)).All(x => x))
             return Options;
         lastParsedOptions = options;
@@ -41,14 +41,14 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         if (Model is not null && ret?.FirstOrDefault() is { } o && ViewModel.Data is JsonPointerReference reference)
         {
             var el = JsonPointer.Parse($"{DataContext}/{reference.Pointer}").Evaluate(Stream.Current.Value);
-            if (el.HasValue)
+            if (el.HasValue && el.Value.ValueKind != JsonValueKind.Null)
             {
                 var val = el.Value.Deserialize<object>();
                 if (val is not null)
                 {
                     var mapToString = OptionsExtension.MapToString(val, o.ItemType);
                     var option = ret.FirstOrDefault(x => x.ItemString == mapToString);
-                    SetValue(option);
+                    SetValue(option!);
                 }
             }
 
@@ -58,7 +58,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             if (ViewModel.Data is JsonPointerReference p)
             {
                 var pointer = JsonPointer.Parse($"{DataContext}/{p.Pointer}");
-                Options = ret;
+                Options = ret ?? [];
                 SetValue(ConversionToValue(pointer.Evaluate(Stream.Current.Value), ret?.FirstOrDefault()!));
 
             }
@@ -68,7 +68,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     }
 
 
-    protected override Option ConversionToValue(object value, Option defaultValue)
+    protected override Option? ConversionToValue(object value, Option defaultValue)
         {
             if (Options is null)
                 return null!;
@@ -77,7 +77,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
                 return null!;
 
             var mapToString = OptionsExtension.MapToString(value, itemType);
-            return Options.FirstOrDefault(x =>
+            return Options?.FirstOrDefault(x =>
                     x.ItemString == mapToString);
 
         }
@@ -90,7 +90,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         base.UpdatePointer(value, reference);
     }
 
-    protected override object ConvertToData(Option value) => value?.Item;
+    protected override object? ConvertToData(Option? value) => value?.Item;
     protected override bool NeedsUpdate(Option value)
     {
         if (Value is null)

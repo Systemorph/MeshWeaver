@@ -79,7 +79,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected void DataBind<T>(
         object? value, 
         Expression<Func<TView, T>> propertySelector, 
-        Func<object,T, T>? conversion = null,
+        Func<object?,T?, T?>? conversion = null,
         T defaultValue = default!)
     {
         var expr = propertySelector?.Body as MemberExpression;
@@ -136,7 +136,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void UpdatePointer(object value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, DataContext, reference, Model);
+        Stream.UpdatePointer(value, DataContext ?? "/", reference, Model);
     }
 
 

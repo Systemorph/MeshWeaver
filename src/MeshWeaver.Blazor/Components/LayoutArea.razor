@@ -11,8 +11,8 @@
 
     private LayoutAreaControl ViewModel =>
         new(
-            Address,
-            new(Area) { Id = Id }
+            Address ?? string.Empty,
+            new(Area ?? "") { Id = Id }
         )
         {
             ShowProgress = ShowProgress,

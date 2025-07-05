@@ -1,7 +1,7 @@
 @inherits SkinnedView<PropertySkin, PropertyView>
 
 <dt>
-    <label for="@Skin.Name">@Name</label>
+    <label for="@(Skin?.Name)">@Name</label>
 </dt>
 <dd>
     @if (!string.IsNullOrWhiteSpace(Description))
@@ -22,6 +22,6 @@
     {
         base.BindData();
         DataBind(Skin.Label, x => x.Name);
-        DataBind(Skin.Description, x => x.Description);
+        DataBind(Skin?.Description, x => x.Description);
     }
 }

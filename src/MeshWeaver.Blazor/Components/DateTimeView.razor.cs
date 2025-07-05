@@ -15,15 +15,15 @@ public partial class DateTimeView
     private DateTime? DoubleClickToDate { get; set; }
     private bool DisabledSelectable { get; set; } = true;
     private bool DisabledCheckAllDaysOfMonthYear { get; set; }
-    private Func<DateTime, bool> DisabledDateFunc { get; set; }
+    private Func<DateTime, bool>? DisabledDateFunc { get; set; }
     private HorizontalPosition? PopupHorizontalPosition { get; set; }
-    private string Name { get; set; }
+    private string? Name { get; set; }
 
     // Properties for Min/Max date handling
     private DateTime? MinDate { get; set; }
     private DateTime? MaxDate { get; set; }
-    private string DisabledDateExpression { get; set; }
-    private string AriaLabel { get; set; }
+    private string? DisabledDateExpression { get; set; }
+    private string? AriaLabel { get; set; }
 
     protected override void BindData()
     {
@@ -52,11 +52,11 @@ public partial class DateTimeView
         }
     }
 
-    private Func<DateTime, bool> CreateDisabledDateFunction()
+    private Func<DateTime, bool>? CreateDisabledDateFunction()
     {
         // If no constraints are set, return null function (no dates disabled)
         if (MinDate == null && MaxDate == null && string.IsNullOrEmpty(DisabledDateExpression))
-            return null;
+            return null!;
 
         return date =>
         {

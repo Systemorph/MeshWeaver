@@ -167,7 +167,7 @@ namespace MeshWeaver.DataSetReader.Csv
                             for (var i = 0; i < dataTable.Columns.Count; i++)
                             {
                                 var sourceValue = i >= record!.Length ? null : record[i];
-                                row[i] = string.IsNullOrEmpty(sourceValue) ? null! : sourceValue;
+                                row[i] = string.IsNullOrEmpty(sourceValue) ? null : sourceValue;
                             }
                             dataTable.Rows.Add(row);
                         }

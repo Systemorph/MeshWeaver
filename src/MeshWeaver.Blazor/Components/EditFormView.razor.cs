@@ -16,7 +16,7 @@ public partial class EditFormView
     protected override void BindData()
     {
         DataBind(
-            new JsonPointerReference(ViewModel.DataContext), 
+            new JsonPointerReference(ViewModel.DataContext ?? "/"), 
             x => x.model,
             (jsonObject,_) => jsonObject == null ? null!: Convert((JsonElement)jsonObject)
             );
@@ -41,8 +41,8 @@ public partial class EditFormView
     private ModelParameter<JsonElement> Convert(JsonElement jsonObject)
     {
         var ret = new ModelParameter<JsonElement>(jsonObject, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
-        ret.ElementChanged += OnModelChanged;
-        return ret;
+        ret.ElementChanged += OnModelChanged!;
+        return ret!;
     }
 
     private void Reset()
@@ -70,7 +70,7 @@ public partial class EditFormView
         return base.DisposeAsync();
     }
 
-    private void OnModelChanged(object sender, JsonElement e)
+    private void OnModelChanged(object? sender, JsonElement e)
     {
         InvokeAsync(StateHasChanged);
     }

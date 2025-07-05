@@ -16,7 +16,7 @@
 }
 else if (Content != null)
 {
-    if (ContentType.StartsWith("image/"))
+    if (ContentType?.StartsWith("image/") == true)
     {
         <img src="data:@ContentType;base64,@Convert.ToBase64String(ReadStream(Content))" />
     }

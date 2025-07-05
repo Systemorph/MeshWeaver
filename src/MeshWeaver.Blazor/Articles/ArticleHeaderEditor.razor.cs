@@ -21,7 +21,7 @@ public partial class ArticleHeaderEditor
         catch(Exception ex)
         {
             ShowError(ex.Message);
-            Model!.Reset();
+            Model?.Reset();
         }
 
     }

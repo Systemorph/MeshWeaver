@@ -4,13 +4,13 @@
 @if (Name == "div")
 {
     <div class="math" @ref="MathBlockElement" @attributes="AdditionalAttributes">
-        @((MarkupString)Html)
+        @((MarkupString)(Html ?? ""))
     </div>
 }
 @if (Name == "span")
 {
     <span class="math" @ref="MathBlockElement" @attributes="AdditionalAttributes">
-        @((MarkupString)Html)
+        @((MarkupString)(Html ?? ""))
     </span>
 }
 

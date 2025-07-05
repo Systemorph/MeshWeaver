@@ -21,7 +21,7 @@
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin.AreaRestricted, x => x.AreaRestricted);
+        DataBind(Skin?.AreaRestricted, x => x.AreaRestricted);
         DataBind(Skin.Height, x => x.Height);
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.MinimalStyle, x => x.MinimalStyle);

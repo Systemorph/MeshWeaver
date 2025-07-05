@@ -8,7 +8,7 @@
         <div class="header-content">
             <div class="meta-info">
                 <div class="author-info">
-                    @foreach (var author in Authors)
+                    @foreach (var author in Authors ?? [])
                     {
                         <div class="author">
                             <FluentPersona Name="@author.FormatName()"

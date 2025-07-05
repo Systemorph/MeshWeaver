@@ -25,7 +25,7 @@
         base.BindData();
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Height, x => x.Height);
-        DataBind(Skin.Orientation, x => x.Orientation);
+        DataBind(Skin?.Orientation, x => x.Orientation);
     }
 
 }

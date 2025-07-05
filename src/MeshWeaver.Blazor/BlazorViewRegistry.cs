@@ -52,7 +52,7 @@ public static class BlazorViewRegistry
         return control switch
         {
             LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, null, area),
+                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
@@ -60,10 +60,10 @@ public static class BlazorViewRegistry
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())), stream, area),
+            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())!), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
             TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
-            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())), stream, area),
+            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())!), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),

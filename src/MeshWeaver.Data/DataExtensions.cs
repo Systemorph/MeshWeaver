@@ -176,7 +176,9 @@ public static class DataExtensions
 
     private static IMessageDelivery HandleGetSchemaRequest(IMessageHub hub, IMessageDelivery<GetSchemaRequest> request)
     {
-        var schema = GenerateJsonSchema(hub, request.Message.Type);
+        var schema = string.IsNullOrWhiteSpace(request.Message.Type)
+            ? "{}"
+            : GenerateJsonSchema(hub, request.Message.Type);
         hub.Post(new SchemaResponse(request.Message.Type, schema), o => o.ResponseFor(request));
         return request.Processed();
     }

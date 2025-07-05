@@ -13,7 +13,7 @@ public partial class ContentPage : IDisposable
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
-        var collection = ArticleService.GetCollection(Collection);
+        var collection = ArticleService.GetCollection(Collection!);
         if (collection is null || string.IsNullOrEmpty(Path))
             return;
 

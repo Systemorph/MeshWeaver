@@ -7,7 +7,7 @@
 </HeadContent>
 
 <div @ref="CodeBlockElement" class="code-content">
-    @((MarkupString)Html)
+    @((MarkupString)(Html ?? ""))
     <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
 </div>
 
