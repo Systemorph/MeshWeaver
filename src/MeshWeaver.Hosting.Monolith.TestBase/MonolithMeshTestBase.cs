@@ -32,9 +32,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
 
-    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null)
+    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
-        return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient)!;
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
