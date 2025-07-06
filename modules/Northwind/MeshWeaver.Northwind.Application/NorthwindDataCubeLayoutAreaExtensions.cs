@@ -26,15 +26,15 @@ public static class NorthwindDataCubeLayoutAreaExtensions
                     .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
                     .DistinctUntilChanged()
                     .Select(x =>
-                        x.Value.GetData<Order>()
+                        x.Value!.GetData<Order>()
                             .Join(
-                                x.Value.GetData<OrderDetails>(),
+                                x.Value!.GetData<OrderDetails>(),
                                 o => o.OrderId,
                                 d => d.OrderId,
                                 (order, detail) => (order, detail)
                             )
                             .Join(
-                                x.Value.GetData<Product>(),
+                                x.Value!.GetData<Product>(),
                                 od => od.detail.ProductId,
                                 p => p.ProductId,
                                 (od, product) => (od.order, od.detail, product)
