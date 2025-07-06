@@ -126,10 +126,10 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
         await openReadStream.CopyToAsync(fileStream);
     }
 
-    public override Task CreateFolderAsync(string path)
+    public override Task CreateFolderAsync(string folderPath)
     {
-        if(!Directory.Exists(path))
-            Directory.CreateDirectory(Path.Combine(BasePath, path));
+        if(!Directory.Exists(folderPath))
+            Directory.CreateDirectory(Path.Combine(BasePath, folderPath));
         return Task.CompletedTask;
     }
 

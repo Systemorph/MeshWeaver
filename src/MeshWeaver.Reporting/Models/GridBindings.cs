@@ -5,7 +5,7 @@ namespace MeshWeaver.Reporting.Models
 {
     public static class GridBindings
     {
-        private static string Getter(string propertyName)
+        private static string? Getter(string propertyName)
         {
             return propertyName.ToCamelCase();
         }

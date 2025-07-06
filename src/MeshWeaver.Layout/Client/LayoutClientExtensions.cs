@@ -15,7 +15,7 @@ namespace MeshWeaver.Layout.Client;
 public static class LayoutClientExtensions
 {
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
-        object value,
+        object? value,
         string dataContext,
         JsonPointerReference? reference, ModelParameter<JsonElement>? model = null)
     {
