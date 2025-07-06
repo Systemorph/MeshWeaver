@@ -21,7 +21,7 @@
                                 <FluentBreadcrumbItem Href="@accumulatedPath">@Root</FluentBreadcrumbItem>
                             }
 
-                        @foreach (var folder in CurrentPath.Split('/').Where(p => !string.IsNullOrEmpty(p)))
+                        @foreach (var folder in CurrentPath!.Split('/').Where(p => !string.IsNullOrEmpty(p)))
                         {
                             accumulatedPath += '/' + folder;
                             if (accumulatedPath.TrimStart('/').Length > (TopLevelPath.TrimStart('/').Length))

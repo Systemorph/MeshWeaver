@@ -77,7 +77,7 @@ namespace MeshWeaver.Reporting.Models
             var ret = dataBinding;
             foreach (var coordinate in item.Coordinates)
             {
-                dataBinding = $"{dataBinding}{coordinate.ToString().Accessor()}";
+                dataBinding = $"{dataBinding}{coordinate?.ToString()?.Accessor()}";
                 ret += " && " + dataBinding;
             }
             return ret;

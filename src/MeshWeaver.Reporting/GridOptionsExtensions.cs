@@ -172,7 +172,7 @@ namespace MeshWeaver.Reporting
                 x =>
                     Regex
                         .Match(
-                            x is ColGroupDef g ? g.GroupId.ToString()! : x.ColId.ToString()!,
+                            x is ColGroupDef g ? g.GroupId?.ToString() ?? "" : x.ColId?.ToString() ?? "",
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )

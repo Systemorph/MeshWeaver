@@ -15,9 +15,9 @@
 
 @code
 {
-    [Parameter] public string Collection { get; set; }
+    [Parameter] public required string Collection { get; set; }
 
-    private void HandleCollectionChanged(string collection)
+    private void HandleCollectionChanged(string? collection)
     {
         NavigationManager.NavigateTo($"/articles/{collection}");
         InvokeAsync(StateHasChanged);

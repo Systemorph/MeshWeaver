@@ -9,11 +9,10 @@ public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; } = null!;
     [Inject] private IContentService ContentService { get; set; } = null!;
-    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private IToastService ToastService { get; set; } = null!;
     [Parameter] public string? CollectionName { get; set; } = "";
     [Parameter] public string? CurrentPath { get; set; } = "/";
-    [Parameter] public string? TopLevelPath { get; set; } = "";
+    [Parameter] public string TopLevelPath { get; set; } = "";
     [Parameter] public bool Embed { get; set; }
     [Parameter]public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
@@ -24,7 +23,7 @@ public partial class FileBrowser
     {
         await base.OnParametersSetAsync();
         Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
-        if (CreatePath && Collection is not null)
+        if (CreatePath && Collection is not null && CurrentPath is not null)
             await Collection.CreateFolderAsync(CurrentPath);
         await RefreshContentAsync();
     }
@@ -42,14 +41,6 @@ public partial class FileBrowser
         SelectedItems = [];
     }
 
-    private void NavigateToFolder(string folderName)
-    {
-        var newPath = CurrentPath!.EndsWith("/")
-            ? $"{CurrentPath!}{folderName}"
-            : $"{CurrentPath!}/{folderName}";
-
-        NavigationManager.NavigateTo($"/collections/{CollectionName!}{newPath}");
-    }
 
 
 
@@ -82,7 +73,7 @@ public partial class FileBrowser
             Modal = true,
             PreventScroll = true,
         };
-        var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection, CurrentPath, CollectionItems), parameters);
+        var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection!, CurrentPath!, CollectionItems), parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
            await RefreshContentAsync();
@@ -105,7 +96,7 @@ public partial class FileBrowser
             Modal = true,
             PreventScroll = true,
         };
-        var dialog = await DialogService.ShowDialogAsync<DeleteDialog, DeleteModel>(new DeleteModel(Collection, SelectedItems), parameters);
+        var dialog = await DialogService.ShowDialogAsync<DeleteDialog, DeleteModel>(new DeleteModel(Collection!, SelectedItems), parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
             await RefreshContentAsync();
@@ -129,7 +120,6 @@ public partial class FileBrowser
         return $"/content/{CollectionName}{item.Path}";
     }
 
-    FluentInputFile myFileByStream = default!;
     int progressPercent;
     string progressTitle = "";
 
@@ -142,7 +132,7 @@ public partial class FileBrowser
         {
             if (Collection != null)
             {
-                await Collection.SaveFileAsync(CurrentPath, file.Name, file.Stream);
+                await Collection.SaveFileAsync(CurrentPath!, file.Name, file.Stream!);
                 progressPercent = 100;
                 ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
             }

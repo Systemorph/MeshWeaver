@@ -12,7 +12,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     where TViewModel : UiControl, IFormControl
     where TView : FormComponentBase<TViewModel, TView, TValue>
 {
-    private TValue data = default!;
+    private TValue? data;
 
     public const string Edit = nameof(Edit);
     protected string? Label { get; set; }
@@ -31,7 +31,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
     private Subject<TValue>? valueUpdateSubject;
 
-    protected TValue Value
+    protected TValue? Value
     {
         get => data;
         set
@@ -44,7 +44,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         }
     }
 
-    protected void SetValue(TValue v)
+    protected void SetValue(TValue? v)
         => this.data = v;
 
     protected override void BindData()
@@ -73,11 +73,11 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    protected virtual TValue ConversionToValue(object v, TValue defaultValue)
+    protected virtual TValue? ConversionToValue(object v, TValue defaultValue)
     {
         if (v is JsonElement je)
         {
-            return default(JsonElement).Equals(v)
+            return je.ValueKind == JsonValueKind.Undefined
                 ? default
                 : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
         }

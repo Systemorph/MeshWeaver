@@ -12,7 +12,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     where TView : ListBase<TViewModel, TView>
 {
 
-    protected IReadOnlyCollection<Option> Options { get; set; } = [];
+    protected IReadOnlyCollection<Option>? Options { get; set; } = [];
 
 
     protected override void BindData()
@@ -26,7 +26,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
     }
 
     private object? lastParsedOptions;
-    private IReadOnlyCollection<Option> ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
+    private IReadOnlyCollection<Option>? ConvertOptions(object options, IReadOnlyCollection<Option> defaultValue)
     {
         if (options is JsonElement je)
             options = je.Deserialize<IReadOnlyCollection<object>>(Hub.JsonSerializerOptions) ?? [];
@@ -82,7 +82,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
         }
 
 
-    protected override void UpdatePointer(object value, JsonPointerReference reference)
+    protected override void UpdatePointer(object? value, JsonPointerReference reference)
     {
         if (value is Option o)
             value = o.Item;

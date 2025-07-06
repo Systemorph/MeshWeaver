@@ -10,9 +10,9 @@ public abstract class ModelParameter
 }
 public class ModelParameter<TModel> : ModelParameter
 {
-    private readonly Func<ModelParameter<TModel>,JsonPointerReference, object>? getReference;
-    public event EventHandler<TModel>? ElementChanged = null!; 
-    public ModelParameter(TModel model, Func<ModelParameter<TModel>, JsonPointerReference, object>? getReference)
+    private readonly Func<ModelParameter<TModel>,JsonPointerReference, object?> getReference;
+    public event EventHandler<TModel>? ElementChanged; 
+    public ModelParameter(TModel model, Func<ModelParameter<TModel>, JsonPointerReference, object?> getReference)
     {
         this.getReference = getReference;
         Element = model;
@@ -52,7 +52,7 @@ public class ModelParameter<TModel> : ModelParameter
     }
 
     public override object? GetValueFromModel(JsonPointerReference reference)
-        => getReference?.Invoke(this, reference);
+        => getReference.Invoke(this, reference);
 
     public void Reset()
     {

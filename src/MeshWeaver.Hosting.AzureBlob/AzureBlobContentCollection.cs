@@ -228,13 +228,13 @@ public class AzureBlobContentCollection : ContentCollection
         }
     }
 
-    public override async Task CreateFolderAsync(string path)
+    public override async Task CreateFolderAsync(string folderPath)
     {
         // In Azure Blob Storage, folders don't technically exist as discrete entities.
         // They are inferred from blob names.
         // To "create" a folder, you'd typically upload a placeholder file
 
-        var fullPath = path.TrimStart('/');
+        var fullPath = folderPath.TrimStart('/');
         if (!fullPath.EndsWith('/'))
             fullPath += '/';
 

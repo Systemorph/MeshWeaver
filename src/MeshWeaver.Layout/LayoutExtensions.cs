@@ -100,7 +100,7 @@ public static class LayoutExtensions
                 typeof(ContextProperty) // this is not a control
             );
 
-    public static IObservable<UiControl> GetControlStream(
+    public static IObservable<UiControl?> GetControlStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) =>
@@ -115,12 +115,11 @@ public static class LayoutExtensions
         var first = true;
         var collection = referencePointer.First();
         var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream!.Hub.JsonSerializerOptions);
+        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
 
         return stream
             .Where(i =>
                 first
-                || i.Updates is null
                 || i.Updates.Any(
                     p => p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
                 )
@@ -135,16 +134,19 @@ public static class LayoutExtensions
             );
     }
 
-    public static IObservable<object> GetControlStream(
+    public static IObservable<object?> GetControlStream(
         this ISynchronizationStream<EntityStore>? synchronizationItems,
         string area
     ) =>
         synchronizationItems!.Select(i =>
-            i.Value?.Collections.GetValueOrDefault(LayoutAreaReference.Areas)
-                ?.Instances.GetValueOrDefault(area)!
+            i.Value?
+                .Collections
+                .GetValueOrDefault(LayoutAreaReference.Areas)
+                ?.Instances
+                .GetValueOrDefault(area)
         ).Where(x => x is not null);
 
-    public static IObservable<object> GetControlStream(
+    public static IObservable<object?> GetControlStream(
         this IMessageHub hub,
         Address address,
         string area,
@@ -154,17 +156,17 @@ public static class LayoutExtensions
         .GetControlStream(area)
 ;
 
-    public static async Task<object> GetLayoutAreaAsync(
+    public static async Task<object?> GetLayoutAreaAsync(
         this ISynchronizationStream<JsonElement> synchronizationItems,
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static async Task<object> GetLayoutAreaAsync(
+    public static async Task<object?> GetLayoutAreaAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string area
     ) => await synchronizationItems.GetControlStream(area).FirstAsync(x => x != null);
 
-    public static async Task<object> GetDataAsync(
+    public static async Task<object?> GetDataAsync(
         this ISynchronizationStream<EntityStore> synchronizationItems,
         string id
     ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
@@ -173,16 +175,16 @@ public static class LayoutExtensions
         string id
     ) => await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
 
-    public static IObservable<object> GetDataStream(
+    public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         JsonPointerReference reference
     ) =>
         stream
             .Reduce(reference)!
             .Where(x => x.Value.ValueKind != JsonValueKind.Null && x.Value.ValueKind != JsonValueKind.Undefined)
-            .Select(x => x.Value!.Deserialize<object>(stream.Hub.JsonSerializerOptions)!);
+            .Select(x => x.Value.Deserialize<object?>(stream.Hub.JsonSerializerOptions));
 
-    public static IObservable<object> GetDataStream(
+    public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
@@ -277,8 +279,9 @@ public static class LayoutExtensions
 
     public static MessageHubConfiguration AddViews(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration) =>
-        config.Set(config.GetConfigurationFunctions().Add(configuration ?? (x => x)));
+        Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration) =>
+        config.Set(config.GetConfigurationFunctions().Add(configuration ?? 
+                                                          (x => x)));
 
     internal static ImmutableList<
         Func<LayoutClientConfiguration, LayoutClientConfiguration>
@@ -316,7 +319,7 @@ public static class LayoutExtensions
                     layout.Hub.GetDocumentationService().Context
                         .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name!)
                         ?.DocumentPaths
-                        ?.Aggregate
+                        .Aggregate
                         (
                             mm,
                             (m, i) =>

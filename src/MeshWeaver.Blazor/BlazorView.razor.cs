@@ -82,7 +82,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         Func<object?,T?, T?>? conversion = null,
         T defaultValue = default!)
     {
-        var expr = propertySelector?.Body as MemberExpression;
+        var expr = propertySelector.Body as MemberExpression;
         Action<object?> setter = expr?.Member is PropertyInfo pi 
             ? o => pi.SetValue(this,o) 
             : expr?.Member is FieldInfo fi 
@@ -134,7 +134,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-    protected virtual void UpdatePointer(object value, JsonPointerReference reference)
+    protected virtual void UpdatePointer(object? value, JsonPointerReference reference)
     {
         Stream.UpdatePointer(value, DataContext ?? "/", reference, Model);
     }
@@ -142,12 +142,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void BindData()
     {
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Id, x => x.Id);
-            DataBind(ViewModel.Class, x => x.Class);
-            DataBind(ViewModel.Style, x => x.Style);
-        }
+        DataBind(ViewModel.Id, x => x.Id);
+        DataBind(ViewModel.Class, x => x.Class);
+        DataBind(ViewModel.Style, x => x.Style);
     }
     private readonly List<IDisposable> bindings = new();
 

@@ -148,7 +148,7 @@ public abstract class ContentCollection : IDisposable
 
     protected abstract Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct);
 
-    public abstract Task CreateFolderAsync(string returnValue);
+    public abstract Task CreateFolderAsync(string folderPath);
 
     public abstract Task DeleteFolderAsync(string folderPath);
 

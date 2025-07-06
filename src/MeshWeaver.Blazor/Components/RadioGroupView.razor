@@ -4,12 +4,9 @@
 
 @typeparam TValue
 <FluentRadioGroup Name="@Name" @bind-Value="@Value" Label="@Label" >
-    @if (Options is not null)
+    @foreach (var option in Options)
     {
-        @foreach (var option in Options)
-        {
-            <FluentRadio Value="@option.Item">@option.Text</FluentRadio>
-        }
+        <FluentRadio Value="@option.Item">@option.Text</FluentRadio>
     }
 </FluentRadioGroup>
 
@@ -18,7 +15,7 @@
    protected IReadOnlyCollection<Option> Options { get; set; } = [];
 
 
-    private string? Name { get; set; }
+   private string? Name;
     protected override void BindData()
     {
         base.BindData();
@@ -31,7 +28,7 @@
         );
     }
 
-    private Option[]? ParseOptions(object o)
+    private Option[] ParseOptions(object? o)
     {
         if (o is JsonElement je)
             return je.Deserialize<Option[]>(Hub.JsonSerializerOptions) ?? [];
