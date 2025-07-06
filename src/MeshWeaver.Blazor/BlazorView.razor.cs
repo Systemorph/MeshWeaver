@@ -23,9 +23,9 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     [Inject] protected PortalApplication PortalApplication { get; set; } = null!;
     [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
     protected IMessageHub Hub => PortalApplication.Hub;
-    [Parameter] public TViewModel ViewModel { get; set; } = default(TViewModel)!;
+    [Parameter] public required TViewModel ViewModel { get; set; } 
 
-    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; } = null!;
+    [Parameter] public required ISynchronizationStream<JsonElement> Stream { get; set; } = null!;
     [Parameter] public string Area { get; set; } = null!;
 
     [CascadingParameter(Name = "Context")] public object? Context { get; set; }

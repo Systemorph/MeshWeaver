@@ -57,7 +57,7 @@ public static class LayoutClientExtensions
         var existing = pointer.Evaluate(current);
         if (value == null)
             return existing == null
-                ? null!
+                ? null
                 : new JsonPatch(PatchOperation.Remove(pointer));
 
         var valueSerialized = JsonSerializer.SerializeToNode(value, stream.Hub.JsonSerializerOptions);
@@ -71,11 +71,14 @@ public static class LayoutClientExtensions
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, 
         string? dataContext = null, 
-        Func<object,T, T>? conversion = null,
+        Func<object?,T?, T?>? conversion = null,
         T? defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
-            .Select(x => conversion is not null ? conversion.Invoke(x!, defaultValue!) : stream.Hub.ConvertSingle(x, null, defaultValue!))
-            .Where(x => x is T)
+            .Select(x => 
+                conversion is not null 
+                    ? conversion.Invoke(x, defaultValue) 
+                    : stream.Hub.ConvertSingle(x, null, defaultValue!))
+            .Where(x => x is not null)
             .Select(x => (T)x!)
             .DistinctUntilChanged();
 
@@ -86,7 +89,7 @@ public static class LayoutClientExtensions
         return pointer.Evaluate(model.Element);
     }
 
-    public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value, string dataContext)
+    public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object? value, string? dataContext)
     {
         if (value is JsonPointerReference reference)
             return reference.Pointer.StartsWith('/')
@@ -97,7 +100,7 @@ public static class LayoutClientExtensions
             return (T)Enum.Parse(typeof(T), stringValue);
 
         // Use Convert.ChangeType for flexible conversion
-        return (T)Convert.ChangeType(value, typeof(T));
+        return (T?)Convert.ChangeType(value, typeof(T));
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
@@ -122,7 +125,7 @@ public static class LayoutClientExtensions
             return ret is null ? default : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
         })
         .Where(x => x is not null)
-        .Select(x => x!)!;
+        .Select(x => x!);
     }
 
     private static string GetPointer(string pointer, string dataContext)

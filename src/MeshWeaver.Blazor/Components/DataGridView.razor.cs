@@ -29,7 +29,7 @@ public partial class DataGridView
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            (o, _) => ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>()?.AsQueryable() ?? Enumerable.Empty<JsonObject>().AsQueryable()
+            (o, _) => o is null ? null : ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>()?.AsQueryable() ?? Enumerable.Empty<JsonObject>().AsQueryable()
         );
     }
 
@@ -64,7 +64,7 @@ public partial class DataGridView
 
     }
 
-    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyColumnControl<T> propertyColumn)
+    private Expression<Func<JsonObject, T?>> GetPropertyExpression<T>(PropertyColumnControl<T> propertyColumn)
     {
         return e => e.ContainsKey(propertyColumn.Property ?? "") ? e[propertyColumn.Property!].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default!;
     }

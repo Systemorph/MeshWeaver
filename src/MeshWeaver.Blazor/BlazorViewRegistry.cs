@@ -60,10 +60,10 @@ public static class BlazorViewRegistry
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
+            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
             TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
-            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString()) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
+            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
@@ -123,7 +123,7 @@ public static class BlazorViewRegistry
         string area
     )
     {
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault() ?? "text/html";
+        var mimeType = Formatter.GetPreferredMimeTypesFor(instance.GetType()).FirstOrDefault() ?? "text/html";
         var output = Controls.Html(instance.ToDisplayString(mimeType));
         return new ViewDescriptor(
             typeof(HtmlView),

@@ -77,7 +77,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     {
         if (v is JsonElement je)
         {
-            return default(JsonElement).Equals(je)
+            return default(JsonElement).Equals(v)
                 ? default
                 : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
         }
@@ -131,9 +131,6 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
         try
         {
-            if (v is IConvertible && typeof(TValue).IsAssignableFrom(v.GetType()))
-                return (TValue)Convert.ChangeType(v, typeof(TValue));
-
             return (TValue)Convert.ChangeType(v, typeof(TValue));
         }
         catch

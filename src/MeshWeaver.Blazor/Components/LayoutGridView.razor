@@ -13,12 +13,12 @@
 @code{
 
     private JustifyContent JustifyContent { get; set; } = JustifyContent.FlexStart;
-    private bool AdaptiveRendering { get; set; }
-    private int Spacing { get; set; }
+    private bool AdaptiveRendering;
+    private int Spacing;
     protected override void BindData()
     {
         base.BindData();
-        DataBind(Skin?.Justify, x => x.JustifyContent);
+        DataBind(Skin.Justify, x => x.JustifyContent);
         DataBind(Skin.AdaptiveRendering, x => x.AdaptiveRendering);
         DataBind(Skin.Spacing ?? 3, x => x.Spacing);
 
