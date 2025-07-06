@@ -2,7 +2,7 @@
 {
     public record PivotGrouping<TGroup, TObject>
     {
-        public PivotGrouping(TGroup identity, TObject obj, object key)
+        public PivotGrouping(TGroup identity, TObject obj, object? key)
         {
             IdentityWithOrderKey = new IdentityWithOrderKey<TGroup>(identity, key);
             Object = obj;
@@ -14,22 +14,12 @@
 
         public TGroup Identity => IdentityWithOrderKey.Identity;
 
-        public object OrderKey => IdentityWithOrderKey.OrderKey;
+        public object? OrderKey => IdentityWithOrderKey.OrderKey;
     }
 
     // rename to sorting key
-    public record IdentityWithOrderKey<TGroup>
+    public record IdentityWithOrderKey<TGroup>(TGroup Identity, object? OrderKey)
     {
-        public IdentityWithOrderKey(TGroup identity, object key)
-        {
-            Identity = identity;
-            OrderKey = key;
-        }
-
-        public TGroup Identity { get; }
-
-        public object OrderKey { get; }
-
         public virtual bool Equals(IdentityWithOrderKey<TGroup>? other)
         {
             if (ReferenceEquals(null, other))

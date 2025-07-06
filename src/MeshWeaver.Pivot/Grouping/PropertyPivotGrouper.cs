@@ -21,7 +21,7 @@ namespace MeshWeaver.Pivot.Grouping
             );
         }
 
-        public override IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
+        public override IEnumerable<TGroup?> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
         {
             return grouped
                 .OrderBy(x =>

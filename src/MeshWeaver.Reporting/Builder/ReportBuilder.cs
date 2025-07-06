@@ -18,15 +18,15 @@ namespace MeshWeaver.Reporting.Builder
 
         private ImmutableList<Func<GridOptions, GridOptions>> PostProcessors { get; init; } =
             ImmutableList<Func<GridOptions, GridOptions>>.Empty;
-        private PivotBuilder<T, TIntermediate, TAggregate> PivotBuilder { get; init; }
+        private PivotBuilder<T?, TIntermediate?, TAggregate?> PivotBuilder { get; init; }
 
-        public ReportBuilder(PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder)
+        public ReportBuilder(PivotBuilder<T?, TIntermediate?, TAggregate?> pivotBuilder)
         {
             PivotBuilder = pivotBuilder;
         }
 
         private ReportBuilder(IWorkspace workspace,  IEnumerable<T> objects)
-        : this(new PivotBuilder<T, TIntermediate, TAggregate>(workspace, objects)){}
+        : this(new PivotBuilder<T?, TIntermediate?, TAggregate?>(workspace, objects)){}
 
         public ReportBuilder<T, TNewIntermediate, TNewAggregate> WithAggregation<
             TNewIntermediate,
@@ -38,7 +38,7 @@ namespace MeshWeaver.Reporting.Builder
             > aggregationsFunc
         )
         {
-            var builder = new ReportBuilder<T, TNewIntermediate, TNewAggregate>(
+            var builder = new ReportBuilder<T?, TNewIntermediate, TNewAggregate>(
                 PivotBuilder.Workspace,
                 PivotBuilder.Objects
             );
@@ -60,7 +60,7 @@ namespace MeshWeaver.Reporting.Builder
             > aggregationsFunc
         )
         {
-            var builder = new ReportBuilder<T, TNewAggregate, TNewAggregate>(PivotBuilder.Workspace, PivotBuilder.Objects);
+            var builder = new ReportBuilder<T?, TNewAggregate, TNewAggregate>(PivotBuilder.Workspace, PivotBuilder.Objects);
             return builder with
             {
                 PivotBuilder = builder.PivotBuilder with
@@ -72,11 +72,8 @@ namespace MeshWeaver.Reporting.Builder
             };
         }
 
-        public ReportBuilder<T, TIntermediate, TAggregate> WithAggregation(
-            Func<
-                Aggregations<T, TIntermediate, TAggregate>,
-                Aggregations<T, TIntermediate, TAggregate>
-            > aggregationsFunc
+        public ReportBuilder<T?, TIntermediate?, TAggregate?> WithAggregation(
+            Func<Aggregations<T, TIntermediate, TAggregate>, Aggregations<T, TIntermediate, TAggregate>> aggregationsFunc
         )
         {
             return this with { PivotBuilder = PivotBuilder.WithAggregation(aggregationsFunc) };
@@ -105,21 +102,21 @@ namespace MeshWeaver.Reporting.Builder
             };
         }
 
-        public ReportBuilder<T, TIntermediate, TAggregate> GroupRowsBy<TSelected>(
+        public ReportBuilder<T?, TIntermediate?, TAggregate?> GroupRowsBy<TSelected>(
             Expression<Func<T, TSelected>> selector
         )
         {
             return this with { PivotBuilder = PivotBuilder.GroupRowsBy(selector) };
         }
 
-        public ReportBuilder<T, TIntermediate, TAggregate> GroupColumnsBy<TSelected>(
-            Expression<Func<T, TSelected>> selector
+        public ReportBuilder<T?, TIntermediate, TAggregate> GroupColumnsBy<TSelected>(
+            Expression<Func<T?, TSelected?>> selector
         )
         {
             return this with { PivotBuilder = PivotBuilder.GroupColumnsBy(selector) };
         }
 
-        public ReportBuilder<T, TIntermediate, TAggregate> Transpose<TValue>()
+        public ReportBuilder<T?, TIntermediate?, TAggregate?> Transpose<TValue>()
         {
             return this with { PivotBuilder = PivotBuilder.Transpose<TValue>() };
         }

@@ -33,7 +33,7 @@ public abstract class PivotProcessorBase<
     public virtual IObservable<PivotModel> Execute()
     {
         // transform objects
-        var transformed = PivotBuilder.Transformation(PivotBuilder.Objects).ToArray();
+        TTransformed?[] transformed = PivotBuilder.Transformation(PivotBuilder.Objects).ToArray();
         var stream = GetStream(transformed);
 
         return stream.Select(dimensionCache =>
@@ -46,12 +46,12 @@ public abstract class PivotProcessorBase<
     }
 
 
-    protected abstract IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed> objects);
+    protected abstract IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed?> objects);
 
     protected virtual PivotModel EvaluateModel(
-        PivotGroupManager<TTransformed, TIntermediate, TAggregate, RowGroup> rowGroupManager,
-        TTransformed[] transformed,
-        PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup> columnGroupManager)
+        PivotGroupManager<TTransformed?, TIntermediate, TAggregate, RowGroup?> rowGroupManager,
+        TTransformed?[] transformed,
+        PivotGroupManager<TTransformed?, TIntermediate, TAggregate, ColumnGroup?> columnGroupManager)
     {
         // render rows
         var rowGroupings = rowGroupManager
@@ -81,16 +81,11 @@ public abstract class PivotProcessorBase<
     }
 
     private IReadOnlyCollection<Row> GetRowsFromRowGrouping(
-        PivotGrouping<RowGroup, IReadOnlyCollection<TTransformed>> rowGrouping,
-        PivotGroupManager<
-            TTransformed,
-            TIntermediate,
-            TAggregate,
-            ColumnGroup
-        > columnGroupManager
+        PivotGrouping<RowGroup?, IReadOnlyCollection<TTransformed>> rowGrouping,
+        PivotGroupManager<TTransformed?, TIntermediate, TAggregate, ColumnGroup?> columnGroupManager
     )
     {
-        var objects = rowGrouping.Object.ToArray();
+        TTransformed?[] objects = rowGrouping.Object.ToArray();
         var rowGroup = rowGrouping.Identity;
         var aggregates = columnGroupManager.GetAggregates(objects, new List<string>());
 
@@ -103,8 +98,8 @@ public abstract class PivotProcessorBase<
     }
 
     private IEnumerable<Row> TransformRowGroupToRowObjects(
-        RowGroup rowGroup,
-        HierarchicalRowGroupAggregator<TIntermediate, TAggregate, ColumnGroup> aggregates
+        RowGroup? rowGroup,
+        HierarchicalRowGroupAggregator<TIntermediate, TAggregate, ColumnGroup?> aggregates
     )
     {
         var getAccessors = RowConfig.GetAccessors().ToArray();
@@ -114,7 +109,7 @@ public abstract class PivotProcessorBase<
             PivotBuilder.Aggregations.ResultTransformation
         );
 
-        var rowDefinitions = getAccessors.Select(a => a.group).ToArray();
+        RowGroup?[] rowDefinitions = getAccessors.Select(a => a.group).ToArray();
         var rows = transformedObjects
             .Select((o, i) => new Row(MergeRows(rowGroup, rowDefinitions[i]), o))
             .ToArray();
@@ -134,8 +129,8 @@ public abstract class PivotProcessorBase<
     }
 
     private IEnumerable<Row> TransformRowGroupToColumnObject(
-        RowGroup rowGroup,
-        HierarchicalRowGroupAggregator<TIntermediate, TAggregate, ColumnGroup> aggregates
+        RowGroup? rowGroup,
+        HierarchicalRowGroupAggregator<TIntermediate, TAggregate, ColumnGroup?> aggregates
     )
     {
         var getAccessors = ColumnConfig.GetAccessors().ToArray();
@@ -165,7 +160,7 @@ public abstract class PivotProcessorBase<
         return accessors;
     }
 
-    private RowGroup MergeRows(RowGroup rowGroup, RowGroup row)
+    private RowGroup? MergeRows(RowGroup? rowGroup, RowGroup? row)
     {
         if (rowGroup.Id == IPivotGrouper<T, RowGroup>.TopGroup.Id)
             return row;
@@ -176,11 +171,10 @@ public abstract class PivotProcessorBase<
         };
     }
 
-    protected abstract PivotGroupManager<TTransformed, TIntermediate, TAggregate, RowGroup> GetRowGroupManager(
-        DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
+    protected abstract PivotGroupManager<TTransformed?, TIntermediate, TAggregate, RowGroup?> GetRowGroupManager(
+        DimensionCache dimensionCache, IReadOnlyCollection<TTransformed?> transformed);
 
-    protected abstract PivotGroupManager<TTransformed, TIntermediate, TAggregate, ColumnGroup>
-        GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<TTransformed> transformed);
+    protected abstract PivotGroupManager<TTransformed?, TIntermediate, TAggregate, ColumnGroup?> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<TTransformed?> transformed);
 
 
     protected IObservable<DimensionCache> GetStream(IReadOnlyCollection<TTransformed> objects, (Type Dimension, Func<TTransformed, object> IdAccessor)[] dimensionProperties)

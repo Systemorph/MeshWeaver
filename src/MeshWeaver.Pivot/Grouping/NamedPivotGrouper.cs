@@ -7,7 +7,7 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : class, IGroup, new()
         where T : INamed
     {
-        public NamedPivotGrouper(string name, Func<object, object> keySelector)
+        public NamedPivotGrouper(string name, Func<object?, object?> keySelector)
             : base(
                 x =>
                     x.GroupBy(o =>

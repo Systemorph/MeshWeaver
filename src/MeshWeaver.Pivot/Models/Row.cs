@@ -2,13 +2,13 @@
 {
     public record Row
     {
-        public Row(RowGroup rowGroup, object row)
+        public Row(RowGroup? rowGroup, object row)
         {
             RowGroup = rowGroup;
             Data = row;
         }
 
-        public RowGroup RowGroup { get; set; }
+        public RowGroup? RowGroup { get; set; }
 
         public object Data { get; }
     }

@@ -20,7 +20,7 @@ namespace MeshWeaver.Pivot.Builder
             TAggregate
         >(
             DimensionCache dimensionCache,
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
             )
         {
@@ -36,7 +36,7 @@ namespace MeshWeaver.Pivot.Builder
                 );
                 return groupManager;
             }
-            return new(grouper, subGroup!, aggregationFunctions);
+            return new(grouper, subGroup, aggregationFunctions);
         }
     }
 }

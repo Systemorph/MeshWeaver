@@ -12,8 +12,8 @@ namespace MeshWeaver.Connection.Orleans;
 public static class OrleansClientExtensions
 {
     public static MeshHostApplicationBuilder UseOrleansMeshClient(this IHostApplicationBuilder hostBuilder,
-        Address address = null,
-        Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
+        Address? address = null,
+        Func<IClientBuilder, IClientBuilder>? orleansConfiguration = null)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
         meshBuilder.Host
@@ -25,7 +25,7 @@ public static class OrleansClientExtensions
     }
 
     public static MeshHostBuilder UseOrleansMeshClient(this IHostBuilder hostBuilder,
-        Func<IClientBuilder, IClientBuilder> orleansConfiguration = null)
+        Func<IClientBuilder, IClientBuilder>? orleansConfiguration = null)
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder();
         meshBuilder.Host
@@ -36,7 +36,7 @@ public static class OrleansClientExtensions
         return meshBuilder;
     }
 
-    private static void ClientConfiguration(this IClientBuilder client, Func<IClientBuilder, IClientBuilder> orleansConfiguration)
+    private static void ClientConfiguration(this IClientBuilder client, Func<IClientBuilder, IClientBuilder>? orleansConfiguration)
     {
         client.AddMemoryStreams(StreamProviders.Memory);
 
