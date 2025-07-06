@@ -27,24 +27,14 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             .ToArray();
     }
 
-    public PivotGroupManager<
-        DataSlice<TElement>,
-        TIntermediate,
-        TAggregate,
-        TGroup
-    > GetGroupManager<TIntermediate, TAggregate>(
+    public PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup> GetGroupManager<TIntermediate, TAggregate>(
         DimensionCache dimensionCache,
         Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregationFunctions
     )
     {
         if (Dimensions.Length == 0)
             // TODO V10: should we return here also when we have only __P dimension? (2021/12/15, Ekaterina Mishina)
-            return new PivotGroupManager<
-                DataSlice<TElement>,
-                TIntermediate,
-                TAggregate,
-                TGroup
-            >(
+            return new PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>(
                 new DirectPivotGrouper<DataSlice<TElement>, TGroup>(
                     slices => slices.GroupBy(_ => IPivotGrouper<TElement, TGroup>.TopGroup),
                     IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName
@@ -53,12 +43,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
                 aggregationFunctions
             );
 
-        PivotGroupManager<
-            DataSlice<TElement>,
-            TIntermediate,
-            TAggregate,
-            TGroup
-        >? subGroupManager = null;
+        PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>? subGroupManager = null;
         foreach (var tuple in Dimensions.Reverse())
         {
             subGroupManager = CreateSubGroupManager(
@@ -75,12 +60,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
     }
 
 
-    protected PivotGroupManager<
-        DataSlice<TElement>,
-        TIntermediate,
-        TAggregate,
-        TGroup
-    > CreateSubGroupManager<TIntermediate, TAggregate>(
+    protected PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup> CreateSubGroupManager<TIntermediate, TAggregate>(
         PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>? subGroup,
         Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregationFunctions,
         IPivotGrouper<DataSlice<TElement>, TGroup> grouper

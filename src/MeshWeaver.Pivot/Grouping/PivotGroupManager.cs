@@ -15,7 +15,7 @@ namespace MeshWeaver.Pivot.Grouping
     )
         where TGroup : IGroup, IItemWithCoordinates, new()
     {
-        protected readonly PivotGroupManager<T, TIntermediate, TAggregate, TGroup> SubGroup =
+        protected readonly PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? SubGroup =
             subGroup;
         internal readonly IPivotGrouper<T, TGroup> Grouper = grouper;
         private readonly Aggregations<T, TIntermediate, TAggregate> aggregationFunctions =
@@ -27,7 +27,7 @@ namespace MeshWeaver.Pivot.Grouping
             if (groups.Count == 0)
                 return [];
 
-            if (!groups.TryGetValue(IPivotGrouper<T, TGroup>.TopGroup.Id, out var topGroups))
+            if (!groups.TryGetValue(IPivotGrouper<T, TGroup>.TopGroup.Id!, out var topGroups))
                 throw new Exception("Only for top column group manager");
 
 
@@ -57,12 +57,9 @@ namespace MeshWeaver.Pivot.Grouping
                 {
                     var groupCoordinates = group.Coordinates;
 
-                    if (
-                        subGroupsByParent != null
-                        && subGroupsByParent.TryGetValue(group.Id, out var children)
-                    )
+                    if (subGroupsByParent is not null && subGroupsByParent.TryGetValue(group.Id, out var children))
                     {
-                        var orderedChildren = SubGroup.Grouper.Order(children);
+                        var orderedChildren = SubGroup!.Grouper.Order(children);
                         var childrenWithChildren = SubGroup.AddChildren(
                             orderedChildren.Select(x => new ColumnGroup(x)),
                             valueColumns
@@ -70,7 +67,7 @@ namespace MeshWeaver.Pivot.Grouping
                         if (childrenWithChildren.Count > 1)
                         {
                             var totalGroupCoordinates = groupCoordinates
-                                .Append(IPivotGrouper<T, TGroup>.TotalGroup.Id)
+                                .Append(IPivotGrouper<T, TGroup>.TotalGroup.Id!)
                                 .ToList();
                             var totalGroup = new ColumnGroup
                             {
@@ -114,7 +111,7 @@ namespace MeshWeaver.Pivot.Grouping
             IReadOnlyCollection<object> parentCoordinates)
         {
             if (objects.Count == 0)
-                return Array.Empty<PivotGrouping<TGroup, IReadOnlyCollection<T>>>();
+                return [];
             var myGrouping = GetMyGroups(objects);
 
             if (SubGroup != null)
@@ -138,7 +135,7 @@ namespace MeshWeaver.Pivot.Grouping
             if (original.Id == IPivotGrouper<T, TGroup>.TopGroup.Id)
                 return original;
 
-            var fullCoordinates = fullCoordinatesById[original.Id];
+            var fullCoordinates = fullCoordinatesById[original.Id!];
 
             if (original is RowGroup rg)
                 return (TGroup)
@@ -167,16 +164,13 @@ namespace MeshWeaver.Pivot.Grouping
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
             IReadOnlyCollection<object> parentCoordinates)
         {
-            Dictionary<
-                object,
-                IEnumerable<PivotGrouping<TGroup, IReadOnlyCollection<T>>>
-            > subGroupsByParent = new();
+            Dictionary<object, IEnumerable<PivotGrouping<TGroup, IReadOnlyCollection<T>>>> subGroupsByParent = new();
             foreach (var g in groupings)
             {
                 var fullGroupCoordinates = !parentCoordinates.Any()
                     ? g.Identity.Coordinates
                     : parentCoordinates.Concat(g.Identity.Coordinates).ToImmutableList();
-                var subGroups = SubGroup
+                var subGroups = SubGroup!
                     .CreateRowGroupings(g.Object, fullGroupCoordinates)
                     .ToArray();
                 if (subGroups.Length == 0)
@@ -184,7 +178,7 @@ namespace MeshWeaver.Pivot.Grouping
                 subGroupsByParent[
                     fullGroupCoordinates.Any()
                         ? Join(".", fullGroupCoordinates)
-                        : IPivotGrouper<T, TGroup>.TopGroup.Id
+                        : IPivotGrouper<T, TGroup>.TopGroup.Id!
                 ] = subGroups;
             }
 
@@ -198,9 +192,7 @@ namespace MeshWeaver.Pivot.Grouping
             }
         }
 
-        private IReadOnlyCollection<
-            PivotGrouping<TGroup, IReadOnlyCollection<T>>
-        > GetFinalizedReportGroupings(
+        private IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> GetFinalizedReportGroupings(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
             IReadOnlyCollection<object> parentCoordinates
         )
@@ -212,7 +204,8 @@ namespace MeshWeaver.Pivot.Grouping
                 );
 
             var ret = groupings
-                .Select(g => new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
+                .Select(g => 
+                    new PivotGrouping<TGroup, IReadOnlyCollection<T>>(
                     GetModifiedGroup(g.Identity, fullCoordinatesBySystemName),
                     g.Object,
                     g.OrderKey
@@ -222,7 +215,7 @@ namespace MeshWeaver.Pivot.Grouping
             {
                 var key = parentCoordinates.Any()
                     ? Join(".", parentCoordinates)
-                    : IPivotGrouper<T, TGroup>.TopGroup.Id;
+                    : IPivotGrouper<T, TGroup>.TopGroup.Id!;
                 if (!groups.TryGetValue(key, out var list))
                 {
                     list = new HashSet<IdentityWithOrderKey<TGroup>>();
@@ -237,19 +230,19 @@ namespace MeshWeaver.Pivot.Grouping
 
         private IDictionary<object, object[]> GetFullGroupingsCoordinates(
             IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> groupings,
-            IReadOnlyCollection<object> parentCoordinates
+            IReadOnlyCollection<object>? parentCoordinates
         )
         {
             if (parentCoordinates == null)
                 return groupings
-                    .Select(x => x.Identity?.Id)
+                    .Select(x => x.Identity.Id)
                     .Where(x => x != null)
-                    .ToDictionary(x => x, x => new[] { x });
+                    .ToDictionary(x => x!, x => new[] { x! });
 
             return groupings
-                .Select(x => x.Identity?.Id)
+                .Select(x => x.Identity.Id)
                 .Where(x => x != null)
-                .ToDictionary(x => x, x => parentCoordinates.Concat(x.RepeatOnce()).ToArray());
+                .ToDictionary(x => x!, x => parentCoordinates.Concat(x!.RepeatOnce()).ToArray());
         }
 
         private readonly TGroup nullGroup =
@@ -276,11 +269,11 @@ namespace MeshWeaver.Pivot.Grouping
                     GetFinalizedReportGroupings(GetMyGroups(objects), parentCoordinates)
                         .Select(g => new PivotGrouping<TGroup, TIntermediate>(
                             g.Identity,
-                            aggregationFunctions.Aggregation(g.Object),
+                            aggregationFunctions.Aggregation!(g.Object),
                             g.OrderKey
                         ))
                         .ToArray(),
-                    default
+                    null
                 );
 
             // otherwise aggregate recursively upper levels
@@ -297,11 +290,11 @@ namespace MeshWeaver.Pivot.Grouping
                     {
                         g.Identity,
                         SubAggregates = sa,
-                        Totals = sa?.AggregatedGroupings.Count > 0
-                            ? aggregationFunctions.AggregationOfAggregates(
+                        Totals = sa.AggregatedGroupings.Count > 0
+                            ? aggregationFunctions.AggregationOfAggregates!(
                                 sa.AggregatedGroupings.Select(y => y.Object)
                             )
-                            : aggregationFunctions.Aggregation(g.Object) // lowest level for this grouping
+                            : aggregationFunctions.Aggregation!(g.Object) // lowest level for this grouping
                     };
                 })
                 .ToArray();
@@ -313,8 +306,8 @@ namespace MeshWeaver.Pivot.Grouping
             var totals = finalizedReportGroupings
                 .Join(
                     subAggregates,
-                    x => x.Identity?.Coordinates.Last(),
-                    x => x.Identity?.Id,
+                    x => x.Identity.Coordinates.Last(),
+                    x => x.Identity.Id,
                     (m, sa) =>
                         new PivotGrouping<TGroup, TIntermediate>(m.Identity, sa.Totals, m.OrderKey)
                 )
@@ -323,7 +316,7 @@ namespace MeshWeaver.Pivot.Grouping
             return new HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>(
                 totals,
                 subAggregates
-                    .Where(x => x.SubAggregates?.AggregatedGroupings.Count > 0)
+                    .Where(x => x.SubAggregates.AggregatedGroupings.Count > 0)
                     .ToDictionary(x => x.Identity, x => x.SubAggregates)
             );
         }

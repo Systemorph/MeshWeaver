@@ -7,11 +7,11 @@ namespace MeshWeaver.Reporting;
 
 public static class PivotReportingExtensions
 {
-    public static ReportBuilder<T, TIntermediate, TAggregate> ToTable<T, TIntermediate, TAggregate>(
+    public static ReportBuilder<T?, TIntermediate?, TAggregate?> ToTable<T, TIntermediate, TAggregate>(
         this PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder
     )
     {
-        return new ReportBuilder<T, TIntermediate, TAggregate>(pivotBuilder);
+        return new ReportBuilder<T?, TIntermediate?, TAggregate?>(pivotBuilder);
     }
 
     public static DataCubeReportBuilder<

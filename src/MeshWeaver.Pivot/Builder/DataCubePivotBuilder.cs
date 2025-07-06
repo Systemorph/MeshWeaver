@@ -30,8 +30,8 @@ namespace MeshWeaver.Pivot.Builder
             >
         where TCube : IDataCube<TElement>
     {
-        public SlicePivotGroupingConfigItem<TElement, RowGroup> SliceRows { get; init; }
-        public SlicePivotGroupingConfigItem<TElement, ColumnGroup> SliceColumns { get; init; }
+        public SlicePivotGroupingConfigItem<TElement, RowGroup>? SliceRows { get; init; }
+        public SlicePivotGroupingConfigItem<TElement, ColumnGroup>? SliceColumns { get; init; }
 
         protected IImmutableList<string> PropertiesToHide { get; init; } =
             ImmutableList<string>.Empty;
@@ -98,8 +98,8 @@ namespace MeshWeaver.Pivot.Builder
             builder = builder with
             {
                 SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                    SliceColumns
-                        ?.Dimensions.Select(d => d.Dim)
+                    SliceColumns?
+                        .Dimensions.Select(d => d.Dim)
                         .Union(dimensionDescriptors)
                         .ToArray() ?? dimensionDescriptors,
                     HierarchicalDimensionOptions
@@ -310,7 +310,7 @@ namespace MeshWeaver.Pivot.Builder
                     SliceColumns =
                     SliceColumns
                     ?? new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                        Array.Empty<DimensionDescriptor>(),
+                        [],
                         HierarchicalDimensionOptions
                     )
                 },

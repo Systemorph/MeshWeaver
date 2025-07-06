@@ -51,14 +51,13 @@ namespace MeshWeaver.Pivot.Processors
 
 
 
-        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup>
-            GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup?> GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
             var ret = PivotBuilder.SliceRows.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;
         }
 
-        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup?> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
             var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;

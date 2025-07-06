@@ -15,7 +15,7 @@ namespace MeshWeaver.Pivot.Aggregations
         {
             return new Aggregations<TTransformed, TNewIntermediate, TAggregate>
             {
-                Aggregation = newAggregation
+                Aggregation = newAggregation,
             };
         }
 

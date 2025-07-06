@@ -16,10 +16,7 @@ namespace MeshWeaver.Pivot.Processors
 
         public HierarchicalRowGroupAggregator(
             ICollection<PivotGrouping<TGroup, TIntermediate>> aggregatedGroupings,
-            IDictionary<
-                TGroup,
-                HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
-            >? subAggregates
+            IDictionary<TGroup, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>? subAggregates
         )
         {
             this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id, x => x.Value) ?? new Dictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>();
@@ -42,7 +39,7 @@ namespace MeshWeaver.Pivot.Processors
 
         public IList<object> Transform<TValue>(
             ICollection<Func<TAggregate, TValue>> valueSelectors,
-            Func<TIntermediate, TAggregate> resultTransformation
+            Func<TIntermediate, TAggregate>? resultTransformation
         )
         {
             if (AggregatedGroupings.Count == 0)

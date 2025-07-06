@@ -4,7 +4,7 @@ namespace MeshWeaver.Pivot.Models.Interfaces;
 
 public interface IItemWithCoordinates
 {
-    object Id { get; init; }
+    object? Id { get; init; }
     string DisplayName { get; init; }
     ImmutableList<object> Coordinates { get; init; }
     string GrouperName { get; init; }

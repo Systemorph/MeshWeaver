@@ -8,7 +8,7 @@ using MeshWeaver.Pivot.Models.Interfaces;
 namespace MeshWeaver.Pivot.Grouping;
 
 public class DimensionPivotGrouper<T, TDimension, TGroup>
-    (string id, Func<T, int, object> selector, DimensionCache dimensionCache) :
+    (string id, Func<T?, int, object?> selector, DimensionCache dimensionCache) :
     SelectorPivotGrouper<T, object, TGroup>(id, selector)
     where TGroup : class, IGroup, new()
     where TDimension : class, INamed
@@ -16,7 +16,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     protected DimensionCache DimensionCache { get; } = dimensionCache;
     public DimensionPivotGrouper(
         DimensionDescriptor dimensionDescriptor,
-        Func<T, object> selector,
+        Func<T?, object?> selector,
         DimensionCache dimensionCache
     )
         : this(dimensionDescriptor.SystemName, (x, _) => selector(x), dimensionCache)
@@ -26,8 +26,8 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
 
     public DimensionDescriptor DimensionDescriptor { get; } = null!;
 
-    protected override IOrderedEnumerable<IGrouping<object, T>> Order(
-        IEnumerable<IGrouping<object, T>> groups
+    protected override IOrderedEnumerable<IGrouping<object?, T?>> Order(
+        IEnumerable<IGrouping<object?, T?>> groups
     )
     {
         if (!typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
@@ -37,7 +37,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     }
 
 
-    public override IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> groups)
+    public override IEnumerable<TGroup?> Order(IEnumerable<IdentityWithOrderKey<TGroup>> groups)
     {
         if (typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
             return groups
@@ -59,12 +59,12 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
         return new TGroup
         {
             Id = value,
-            DisplayName = displayName?.ToString() ?? value.ToString() ?? "",
+            DisplayName = displayName.ToString() ?? value.ToString() ?? "",
             GrouperName = Id,
             Coordinates = ImmutableList<object>.Empty.Add(value)
         };
     }
-    private int GetOrder(object dim)
+    private int GetOrder(object? dim)
     {
         if (dim == null)
             return int.MaxValue;
@@ -72,10 +72,10 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
         return ordered?.Order ?? int.MaxValue;
     }
 
-    private object GetDisplayName(object id)
+    private object GetDisplayName(object? id)
     {
         if (id == null)
             return IPivotGrouper<T, TGroup>.NullGroup.DisplayName;
-        return DimensionCache?.Get<TDimension>(id)?.DisplayName ?? id;
+        return DimensionCache.Get<TDimension>(id)?.DisplayName ?? id;
     }
 }

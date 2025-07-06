@@ -18,7 +18,7 @@ namespace MeshWeaver.Pivot.Grouping
         public static IPivotGrouper<TTransformed, TGroup> GetPivotGrouper<TTransformed, TSelected>(
             DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Expression<Func<TTransformed, TSelected>> selector
+            Expression<Func<TTransformed?, TSelected?>> selector
         )
         {
             var compiledSelector = selector.Compile();
@@ -28,7 +28,7 @@ namespace MeshWeaver.Pivot.Grouping
             {
                 var grouperName = GetGrouperName(selector);
                 return new DirectPivotGrouper<TTransformed, TGroup>(
-                    x => x.GroupBy(y => (TGroup)(object)compiledSelector(y)!).Where(g => g.Key is not null).Cast<IGrouping<TGroup, TTransformed>>(),
+                    x => x.GroupBy(y => (TGroup?)(object?)compiledSelector(y)).Where(g => g.Key is not null).Cast<IGrouping<TGroup, TTransformed>>(),
                     grouperName ?? "UnknownGrouper"
                 );
             }
@@ -114,7 +114,7 @@ namespace MeshWeaver.Pivot.Grouping
                             descriptor,
                             convertedLambda
                         }
-                    );
+                    )!;
         }
 
         private static readonly MethodInfo GetValueMethod = ReflectionHelper.GetStaticMethodGeneric(
@@ -138,7 +138,7 @@ namespace MeshWeaver.Pivot.Grouping
             DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
             DimensionDescriptor descriptor,
-            Func<TTransformed, TSelected> selector
+            Func<TTransformed?, TSelected?> selector
         )
         {
             if (typeof(PropertyInfo) == descriptor.Type)
@@ -172,7 +172,7 @@ namespace MeshWeaver.Pivot.Grouping
         >(
             DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<TTransformed, object> selector,
+            Func<TTransformed?, object?> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, INamed
@@ -214,7 +214,7 @@ namespace MeshWeaver.Pivot.Grouping
         > CreateHierarchicalDimensionPivotGrouper<TTransformed, TDimension>(
             DimensionCache dimensionCache,
             IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-            Func<TTransformed, object> selector,
+            Func<TTransformed?, object?> selector,
             DimensionDescriptor descriptor
         )
             where TDimension : class, IHierarchicalDimension
