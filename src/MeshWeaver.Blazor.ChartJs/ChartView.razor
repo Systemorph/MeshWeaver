@@ -8,10 +8,10 @@
 @code
 {
     ElementReference Element;
-    private object Options;
+    private object? Options;
 
-    [Inject] private IJSRuntime JsRuntime { get; set; }
-    private IJSObjectReference JsModule;
+    [Inject] private IJSRuntime JsRuntime { get; set; } = null!;
+    private IJSObjectReference? JsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

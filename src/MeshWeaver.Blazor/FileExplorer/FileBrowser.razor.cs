@@ -18,7 +18,7 @@ public partial class FileBrowser
     [Parameter] public bool ShowNewArticle { get; set; }
     [Parameter] public bool ShowCollectionSelection { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
-    
+    FluentInputFile myFileByStream = default!;
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
