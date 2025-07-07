@@ -8,13 +8,13 @@ public record MarkdownElement
 {
     public required string Name { get; init; }
     public required string Collection { get; init; }
-    public required string PrerenderedHtml { get; init; }
+    public string? PrerenderedHtml { get; init; }
     public DateTime LastUpdated { get; set; }
     public required string Content { get; init; }
     [property: Key] public required string Url { get; init; }
 
     public required string Path { get; init; }
-    public required IReadOnlyList<SubmitCodeRequest> CodeSubmissions { get; set; }
+    public IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
 }
 public record Article : MarkdownElement
 {
@@ -24,7 +24,7 @@ public record Article : MarkdownElement
     public string VideoDescription { get; set; } = string.Empty;
     public string VideoTagLine { get; set; } = string.Empty;
     public string VideoTranscript { get; set; } = string.Empty;
-    public required string Title { get; set; }
+    public string? Title { get; set; }
     public bool Pinned { get; init; }
     public string Abstract { get; init; } = string.Empty;
     public string Thumbnail { get; init; } = string.Empty;
@@ -43,7 +43,7 @@ public record Article : MarkdownElement
 
 
     public Icon Icon { get; init; } = new("", "");
-    public required string Source { get; init; }
+    public string? Source { get; init; }
 
     public List<string> Authors { get; set; } = [];
     public IReadOnlyCollection<Author> AuthorDetails { get; set; } = [];

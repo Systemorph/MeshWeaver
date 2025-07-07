@@ -17,7 +17,7 @@ namespace MeshWeaver.Pivot.Grouping
 
         public virtual IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T>>> CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
-            
+
             var selectedObjects = objects
                 .Select((x, i) => new { Key = Selector(x, i), Object = x })
                 .ToList();
@@ -47,14 +47,14 @@ namespace MeshWeaver.Pivot.Grouping
             IEnumerable<IGrouping<TSelected?, T>> groups
         )
         {
-            return groups.OrderBy(x => x.Key == null).ThenBy(x => x.Key);
+            return groups.OrderBy(x => x.Key == null).ThenBy(x => x.Key?.ToString());
         }
 
         public virtual IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
         {
             return grouped
                 .OrderBy(x => x.OrderKey == null)
-                .ThenBy(x => (TSelected?)x.OrderKey)
+                .ThenBy(x => x.OrderKey?.ToString())
                 .Select(x => x.Identity);
         }
 

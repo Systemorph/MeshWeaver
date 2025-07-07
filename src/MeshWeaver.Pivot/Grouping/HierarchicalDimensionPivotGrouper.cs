@@ -66,7 +66,7 @@ namespace MeshWeaver.Pivot.Grouping
             };
 
             var result = new List<PivotGrouping<TGroup?, IReadOnlyCollection<T>>>();
-            
+
             // Add non-null groups
             result.AddRange(orderedNonNull
                 .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
@@ -74,7 +74,7 @@ namespace MeshWeaver.Pivot.Grouping
                     x.ToArray(),
                     x.Key
                 )));
-            
+
             // Add null groups as NullGroup entries
             foreach (var nullGrouping in nullGroups)
             {

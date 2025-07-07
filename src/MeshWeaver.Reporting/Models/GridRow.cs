@@ -7,8 +7,8 @@ namespace MeshWeaver.Reporting.Models
     {
         public RowGroup? RowGroup { get; set; } = null!;
 
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public object? Data { get; } = null!;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public object? Data { get; init; }
 
         public object Style { get; set; } = null!;
 
