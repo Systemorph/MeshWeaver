@@ -31,7 +31,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
     )
     {
         if (!typeof(IOrdered).IsAssignableFrom(typeof(TDimension)))
-            return groups.OrderBy(g => g.Key == null).ThenBy(g => GetDisplayName(g.Key));
+            return groups.OrderBy(g => g.Key == null).ThenBy(g => GetDisplayName(g.Key)?.ToString());
 
         return groups.OrderBy(g => g.Key == null).ThenBy(g => GetOrder(g.Key));
     }
@@ -46,7 +46,7 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
                 .Select(x => x.Identity);
         return groups
             .OrderBy(x => x.OrderKey == null)
-            .ThenBy(g => GetDisplayName(g.OrderKey))
+            .ThenBy(g => GetDisplayName(g.OrderKey)?.ToString())
             .Select(x => x.Identity);
     }
 
