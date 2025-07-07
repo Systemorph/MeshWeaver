@@ -59,7 +59,8 @@ public static class SerializationExtensions
         options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
 
         return options;
-    }    private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)
+    }
+    private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)
     {
         return new SerializationConfiguration(hub).WithOptions(o =>
         {
