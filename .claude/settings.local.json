@@ -8,7 +8,8 @@
       "Bash(ls:*)",
       "Bash(rg:*)",
       "Bash(find:*)",
-      "Bash(dotnet restore:*)"
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet test:*)"
     ],
     "deny": []
   }
