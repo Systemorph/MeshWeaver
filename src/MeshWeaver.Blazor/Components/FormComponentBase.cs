@@ -79,7 +79,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         {
             return je.ValueKind == JsonValueKind.Undefined
                 ? default
-                : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
+                : je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
         }
 
         // Handle specific conversions

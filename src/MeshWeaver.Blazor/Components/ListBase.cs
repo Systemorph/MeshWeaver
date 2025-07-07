@@ -39,7 +39,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
 
         if (Model is not null && ret?.FirstOrDefault() is { } o && ViewModel.Data is JsonPointerReference reference)
         {
-            var el = JsonPointer.Parse($"{DataContext}/{reference.Pointer}").Evaluate(Stream.Current!.Value);
+            var el = JsonPointer.Parse($"{DataContext}/{reference.Pointer}").Evaluate(Stream!.Current!.Value);
             if (el.HasValue && el.Value.ValueKind != JsonValueKind.Null)
             {
                 var val = el.Value.Deserialize<object>();
@@ -58,7 +58,7 @@ public abstract class ListBase<TViewModel, TView> : FormComponentBase<TViewModel
             {
                 var pointer = JsonPointer.Parse($"{DataContext}/{p.Pointer}");
                 Options = ret ?? [];
-                SetValue(ConversionToValue(pointer.Evaluate(Stream.Current!.Value), ret?.FirstOrDefault()!));
+                SetValue(ConversionToValue(pointer.Evaluate(Stream!.Current!.Value), ret?.FirstOrDefault()!));
 
             }
 

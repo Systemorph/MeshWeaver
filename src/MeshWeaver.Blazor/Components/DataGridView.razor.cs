@@ -45,6 +45,8 @@ public partial class DataGridView
             typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
         builder.AddComponentParameter(1, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before rendering the DataGridView.");
         builder.AddAttribute(2, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext ?? "/"));
         if (column.Format is not null)
             builder.AddAttribute(3, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
@@ -66,7 +68,7 @@ public partial class DataGridView
 
     private Expression<Func<JsonObject, T?>> GetPropertyExpression<T>(PropertyColumnControl<T> propertyColumn)
     {
-        return e => e.ContainsKey(propertyColumn.Property ?? "") ? e[propertyColumn.Property!].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default!;
+        return e => e.ContainsKey(propertyColumn.Property ?? "") ? e[propertyColumn.Property!].Deserialize<T>(Stream!.Hub.JsonSerializerOptions) : default!;
     }
 
 

@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
@@ -10,7 +9,7 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class EditFormView
 {
-    private ModelParameter<JsonElement> model = null!;
+    private ModelParameter<JsonElement>? model;
     private ActivityLog? Log { get; set; }
 
     protected override void BindData()
@@ -24,6 +23,8 @@ public partial class EditFormView
 
     private async void Submit(EditContext context)
     {
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before submitting the form.");
         var log = await Stream.SubmitModel(model!);
         if(log.Status == ActivityStatus.Succeeded)
         {
@@ -41,7 +42,7 @@ public partial class EditFormView
     private ModelParameter<JsonElement> Convert(JsonElement jsonObject)
     {
         var ret = new ModelParameter<JsonElement>(jsonObject, (m, r) => LayoutClientExtensions.GetValueFromModel(m,r));
-        ret.ElementChanged += OnModelChanged!;
+        ret.ElementChanged += OnModelChanged;
         return ret;
     }
 

@@ -36,7 +36,7 @@ public static class BlazorViewRegistry
     private static ViewDescriptor? DefaultFormatting(
         IMessageHub hub,
         object instance,
-        ISynchronizationStream<JsonElement> stream,
+        ISynchronizationStream<JsonElement>? stream,
         string area
     )
     {
@@ -87,7 +87,7 @@ public static class BlazorViewRegistry
     }
 
 
-    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement> stream, string area, object skin)
+    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement>? stream, string area, object skin)
     {
         return skin switch
         {
@@ -119,7 +119,7 @@ public static class BlazorViewRegistry
 
     private static ViewDescriptor DelegateToDotnetInteractive(
         object instance,
-        ISynchronizationStream<JsonElement> stream,
+        ISynchronizationStream<JsonElement>? stream,
         string area
     )
     {
@@ -127,7 +127,7 @@ public static class BlazorViewRegistry
         var output = Controls.Html(instance.ToDisplayString(mimeType));
         return new ViewDescriptor(
             typeof(HtmlView),
-            ImmutableDictionary<string, object>
+            ImmutableDictionary<string, object?>
                 .Empty.Add(ViewModel, output)
                 .Add(nameof(Stream), stream)
                 .Add(nameof(Area), area)

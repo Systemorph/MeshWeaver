@@ -5,7 +5,7 @@ namespace MeshWeaver.Markdown;
 public static  class MarkdownExtensions
 {
     public static MarkdownPipeline CreateMarkdownPipeline(
-        object collection
+        object? collection
         ) =>
         new MarkdownPipelineBuilder()
             .UseMathematics()
@@ -18,7 +18,7 @@ public static  class MarkdownExtensions
             .Use(new ExecutableCodeBlockExtension())
             .Build();
 
-    public static string ToStaticHref(string path, object collection)
+    public static string ToStaticHref(string path, object? collection)
         => $"static/{collection}/{path}";
 
 }

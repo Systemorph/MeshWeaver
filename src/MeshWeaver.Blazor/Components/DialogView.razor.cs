@@ -1,24 +1,23 @@
 ﻿using MeshWeaver.Layout;
-using MeshWeaver.Messaging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Components;
 
 public partial class DialogView : BlazorView<DialogControl, DialogView>
 {
-    private bool isHidden = false;
-    private object? Title { get; set; }
-    private bool? IsClosable { get; set; }
-    private object? Size { get; set; }
+    private bool isHidden;
+    private object? Title;
+    private bool? IsClosable;
+    private object? Size;
 
     protected override void BindData()
     {
         base.BindData();
-        if (ViewModel?.Title != null)
+        if (ViewModel.Title != null)
             DataBind(ViewModel.Title, x => x.Title);
-        if (ViewModel?.IsClosable != null)
+        if (ViewModel.IsClosable != null)
             DataBind(ViewModel.IsClosable, x => x.IsClosable);
-        if (ViewModel?.Size != null)
+        if (ViewModel.Size != null)
             DataBind(ViewModel.Size, x => x.Size);
     }
 
@@ -63,7 +62,7 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
     {
         isHidden = true;
         // Send CloseDialogEvent with OK state
-        Stream.Hub.Post(new CloseDialogEvent(Area, Stream.StreamId, DialogCloseState.OK),
+        Stream!.Hub.Post(new CloseDialogEvent(Area, Stream.StreamId, DialogCloseState.OK),
             o => o.WithTarget(Stream.Owner));
     }
 
@@ -77,7 +76,7 @@ public partial class DialogView : BlazorView<DialogControl, DialogView>
             var closeState = result.Cancelled ? DialogCloseState.Cancel : DialogCloseState.OK;
 
             // Send CloseDialogEvent
-            Stream.Hub.Post(new CloseDialogEvent(Area, Stream.StreamId, closeState),
+            Stream!.Hub.Post(new CloseDialogEvent(Area, Stream.StreamId, closeState),
                 o => o.WithTarget(Stream.Owner));
         }
     }

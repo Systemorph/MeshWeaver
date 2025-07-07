@@ -25,7 +25,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected IMessageHub Hub => PortalApplication.Hub;
     [Parameter] public required TViewModel ViewModel { get; set; } 
 
-    [Parameter] public required ISynchronizationStream<JsonElement> Stream { get; set; } = null!;
+    [Parameter] public ISynchronizationStream<JsonElement>? Stream { get; set; } 
     [Parameter] public string Area { get; set; } = null!;
 
     [CascadingParameter(Name = "Context")] public object? Context { get; set; }
@@ -96,7 +96,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         {
             if (Model is not null && !reference.Pointer.StartsWith('/'))
                 setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue));
-            else
+            else if(Stream is not null)
                 bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
                     .Subscribe(v =>
                         {
@@ -109,7 +109,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                         }
                     )
                 );
-
+            
         }
         else if (value is ContextProperty contextProperty)
         {
@@ -136,6 +136,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void UpdatePointer(object? value, JsonPointerReference reference)
     {
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before updating pointers.");
         Stream.UpdatePointer(value, DataContext ?? "/", reference, Model);
     }
 
@@ -157,6 +159,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void OnClick()
     {
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before sending click events.");
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
 

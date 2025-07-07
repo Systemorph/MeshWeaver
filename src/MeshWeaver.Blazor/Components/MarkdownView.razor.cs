@@ -21,7 +21,7 @@ public partial class MarkdownView
         DataBind(ViewModel.Html, x => x.Html);
         if (Html == null)
         {
-            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream.Owner);
+            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner);
             var document = Markdig.Markdown.Parse(Markdown ?? "", pipeline);
             Html = document.ToHtml(pipeline);
         }
