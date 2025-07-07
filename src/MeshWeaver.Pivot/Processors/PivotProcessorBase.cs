@@ -109,7 +109,7 @@ public abstract class PivotProcessorBase<
             PivotBuilder.Aggregations.ResultTransformation!
         );
 
-       var rowDefinitions = getAccessors.Select(a => a.group).ToArray();
+        var rowDefinitions = getAccessors.Select(a => a.group).ToArray();
         var rows = transformedObjects
             .Select((o, i) => new Row(MergeRows(rowGroup, rowDefinitions[i]), o))
             .ToArray();
