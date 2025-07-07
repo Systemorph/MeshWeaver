@@ -48,8 +48,10 @@ namespace MeshWeaver.Pivot.Grouping
 
             var grouped = selectedObjects.GroupBy(x => x.Key, x => x.Object);
 
-            var orderedNonNull = grouped.Where(g => g.Key != null).Cast<IGrouping<object, T>>();
-            var ordered = Order(orderedNonNull).ToArray();
+            // Include both null and non-null groups, but handle them separately
+            var nullGroups = grouped.Where(g => g.Key == null);
+            var nonNullGroups = grouped.Where(g => g.Key != null).Cast<IGrouping<object, T>>();
+            var orderedNonNull = Order(nonNullGroups).ToArray();
 
             // stop parsing if there are no more data on the lower levels
             //if (ordered.Length == 1 && ordered.First().Key == null)
@@ -63,13 +65,27 @@ namespace MeshWeaver.Pivot.Grouping
                 GrouperName = Id
             };
 
-            return ordered
+            var result = new List<PivotGrouping<TGroup?, IReadOnlyCollection<T>>>();
+            
+            // Add non-null groups
+            result.AddRange(orderedNonNull
                 .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
-                    x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
+                    CreateGroupDefinition(x.Key!),
                     x.ToArray(),
-                    x.Key ?? nullGroupPrivate
-                ))
-                .ToArray();
+                    x.Key
+                )));
+            
+            // Add null groups as NullGroup entries
+            foreach (var nullGrouping in nullGroups)
+            {
+                result.Add(new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
+                    nullGroupPrivate,
+                    nullGrouping.ToArray(),
+                    nullGroupPrivate
+                ));
+            }
+
+            return result.ToArray();
         }
     }
 

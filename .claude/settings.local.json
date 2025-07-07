@@ -10,7 +10,9 @@
       "Bash(find:*)",
       "Bash(dotnet restore:*)",
       "Bash(dotnet test:*)",
-      "Bash(dotnet clean:*)"
+      "Bash(dotnet clean:*)",
+      "Bash(dotnet nuget locals:*)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }
