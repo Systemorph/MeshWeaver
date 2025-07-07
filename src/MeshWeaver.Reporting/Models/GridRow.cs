@@ -1,17 +1,21 @@
 ﻿using MeshWeaver.Pivot.Models;
+using System.Text.Json.Serialization;
 
 namespace MeshWeaver.Reporting.Models
 {
     public record GridRow
     {
         public RowGroup? RowGroup { get; set; } = null!;
-        public object Data { get; } = null!;
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public object? Data { get; } = null!;
+
         public object Style { get; set; } = null!;
 
         public GridRow(RowGroup? rowGroup, object? row)
         {
             RowGroup = rowGroup;
-            Data = row ?? new object();
+            Data = row;
         }
     }
 }

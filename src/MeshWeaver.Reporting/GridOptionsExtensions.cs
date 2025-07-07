@@ -12,14 +12,17 @@ namespace MeshWeaver.Reporting
 
         public void Level(params int[] levels)
         {
-            orConditions.Add(row => levels.Contains(row.RowGroup!.Coordinates.Count - 1));
+            orConditions.Add(row => row.RowGroup != null && levels.Contains(row.RowGroup.Coordinates.Count - 1));
         }
 
         public bool TrueFor(GridRow gridRow)
         {
+            if (gridRow.RowGroup?.GrouperName == null)
+                return false;
+                
             var ret = Regex
                 .Match(
-                    gridRow.RowGroup!.GrouperName!,
+                    gridRow.RowGroup.GrouperName,
                     $"{dimension}[0-9]{{0,}}$",
                     RegexOptions.IgnoreCase
                 )
@@ -30,7 +33,7 @@ namespace MeshWeaver.Reporting
 
         public void SystemNames(string[] systemNames)
         {
-            orConditions.Add(row => systemNames.Contains(row.RowGroup!.Coordinates.Last()));
+            orConditions.Add(row => row.RowGroup != null && systemNames.Contains(row.RowGroup.Coordinates.Last()));
         }
     }
 
@@ -295,7 +298,9 @@ namespace MeshWeaver.Reporting
 
         public static GridRow WithDisplayName(this GridRow row, string name)
         {
-            return row with { RowGroup = row.RowGroup! with { DisplayName = name } };
+            if (row.RowGroup == null)
+                throw new ArgumentException("GridRow.RowGroup cannot be null when setting DisplayName", nameof(row));
+            return row with { RowGroup = row.RowGroup with { DisplayName = name } };
         }
 
         public static GridRow AsSubTotal(this GridRow def)
