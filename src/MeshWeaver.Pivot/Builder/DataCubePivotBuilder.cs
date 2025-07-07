@@ -30,8 +30,8 @@ namespace MeshWeaver.Pivot.Builder
             >
         where TCube : IDataCube<TElement>
     {
-        public SlicePivotGroupingConfigItem<TElement, RowGroup>? SliceRows { get; init; }
-        public SlicePivotGroupingConfigItem<TElement, ColumnGroup>? SliceColumns { get; init; }
+        public SlicePivotGroupingConfigItem<TElement, RowGroup> SliceRows { get; init; }
+        public SlicePivotGroupingConfigItem<TElement, ColumnGroup> SliceColumns { get; init; }
 
         protected IImmutableList<string> PropertiesToHide { get; init; } =
             ImmutableList<string>.Empty;

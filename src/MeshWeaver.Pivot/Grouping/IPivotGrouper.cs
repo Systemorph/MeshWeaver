@@ -6,10 +6,10 @@ namespace MeshWeaver.Pivot.Grouping
     public interface IPivotGrouper<T, TGroup>
         where TGroup : IGroup, new()
     {
-        IReadOnlyCollection<PivotGrouping<TGroup, IReadOnlyCollection<T>>> CreateGroupings(
+        IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T>>> CreateGroupings(
             IReadOnlyCollection<T> objects,
             TGroup nullGroup);
-        IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped);
+        IEnumerable<TGroup?> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped);
         static readonly TGroup NullGroup =
             new()
             {

@@ -11,7 +11,7 @@ namespace MeshWeaver.Pivot.Models
 
         public ColumnGroup(IGroup group)
         {
-            Id = group.Id;
+            Id = group.Id!;
             DisplayName = group.DisplayName;
             GrouperName = group.GrouperName;
             Coordinates = group.Coordinates;

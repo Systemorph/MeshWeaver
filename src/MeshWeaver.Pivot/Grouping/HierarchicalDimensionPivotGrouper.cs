@@ -14,7 +14,7 @@ namespace MeshWeaver.Pivot.Grouping
             TIntermediate,
             TAggregate
         >(
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         );
 
@@ -23,7 +23,7 @@ namespace MeshWeaver.Pivot.Grouping
         string name,
         int level,
         DimensionCache dimensionCache,
-        Func<T?, int, object?> selector
+        Func<T, int, object?> selector
     ) : DimensionPivotGrouper<T, TDimension, TGroup>(name + level, selector, dimensionCache)
         where TGroup : class, IGroup, new()
         where TDimension : class, IHierarchicalDimension
@@ -31,8 +31,8 @@ namespace MeshWeaver.Pivot.Grouping
         private readonly DimensionCache dimensionCache = dimensionCache;
 
         // TODO V10: fix order of groups in the group manager (2022/04/21, Ekaterina Mishina)
-        public override IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T?>>> CreateGroupings(
-            IReadOnlyCollection<T?> objects, TGroup nullGroup)
+        public override IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T>>> CreateGroupings(
+            IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
             var selectedObjects = objects.Select(
                 (x, i) =>
@@ -64,7 +64,7 @@ namespace MeshWeaver.Pivot.Grouping
             };
 
             return ordered
-                .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T?>>(
+                .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
                     x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
                     x.ToArray(),
                     x.Key ?? nullGroupPrivate
@@ -76,7 +76,7 @@ namespace MeshWeaver.Pivot.Grouping
     public class HierarchicalDimensionPivotGrouper<T, TDimension, TGroup>(
         DimensionCache dimensionCache,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions,
-        Func<T?, object?> selector,
+        Func<T, object?> selector,
         DimensionDescriptor dimensionDescriptor)
         : DimensionPivotGrouper<T, TDimension, TGroup>(dimensionDescriptor, selector, dimensionCache),
             IHierarchicalGrouper<TGroup, T>
@@ -85,15 +85,14 @@ namespace MeshWeaver.Pivot.Grouping
     {
         private IHierarchicalDimensionOptions DimensionOptions { get; } = hierarchicalDimensionOptions;
 
-        private bool Flat => DimensionCache == null
-                             || !DimensionCache.Has(typeof(TDimension))
+        private bool Flat => !DimensionCache.Has(typeof(TDimension))
                              || DimensionOptions.IsFlat<TDimension>();
 
         public PivotGroupManager<T, TIntermediate, TAggregate, TGroup> GetPivotGroupManager<
             TIntermediate,
             TAggregate
         >(
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         )
         {
@@ -107,7 +106,7 @@ namespace MeshWeaver.Pivot.Grouping
             {
                 groupManager = AddChildren(i, groupManager, aggregationFunctions);
             }
-            return groupManager;
+            return groupManager!;
         }
 
 
@@ -116,7 +115,7 @@ namespace MeshWeaver.Pivot.Grouping
             TAggregate
         >(
             int level,
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
         )
         {
