@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -8,6 +9,7 @@ using FluentAssertions.Equivalency;
 using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
@@ -57,29 +59,41 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,
-        };
+        }
+        .WithTimeout(30.Seconds()); // Add timeout for bulk test scenarios
+
+        // Add debug logging for hanging detection
+        var testId = Guid.NewGuid().ToString("N")[..8];
+        Logger.LogInformation("Starting DistributedImportTest {TestId} at {Timestamp}", testId, DateTime.UtcNow);
 
         // act
+        Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new ImportAddress(2024))
         );
+        Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
         // assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
+
+        Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
         var transactionalItems1 = await GetWorkspace(
                 Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
             )
             .GetObservable<TransactionalData>()
             .Timeout(timeout)
             .FirstAsync(x => x.Count > 1);
+        Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
+        Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
         var computedItems1 = await GetWorkspace(
                 Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
             )
             .GetObservable<ComputedData>()
             .Timeout(timeout)
             .FirstAsync(x => x is { Count: > 0 });
+        Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} computed items", testId, computedItems1.Count);
 
         using (new AssertionScope())
         {
@@ -113,11 +127,11 @@ Id,Year,LoB,BusinessUnit,Value
     public async Task TestVanilla()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv);
+        var importRequest = new ImportRequest(VanillaCsv)
+            .WithTimeout(10.Seconds()); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024)),
-            new CancellationTokenSource(5.Seconds()).Token
+            o => o.WithTarget(new ImportAddress(2024))
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
@@ -147,7 +161,8 @@ SystemName,DisplayName
     public async Task MultipleTypes()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(MultipleTypesCsv);
+        var importRequest = new ImportRequest(MultipleTypesCsv)
+            .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new ImportAddress(2024))

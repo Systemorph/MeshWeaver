@@ -31,9 +31,11 @@ public record Activity(string Category, IMessageHub Hub) : ActivityBase<Activity
 
     private readonly List<Action<ActivityLog>> completedActions = new();
     private readonly object completionLock = new();
-    private TaskCompletionSource? taskCompletionSource;
-    public async Task Complete(Action<ActivityLog>? completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
+    private TaskCompletionSource? taskCompletionSource; public async Task Complete(Action<ActivityLog>? completedAction = null, ActivityStatus? status = null, CancellationToken cancellationToken = default)
     {
+        var activityId = Id ?? Guid.NewGuid().ToString("N")[..8];
+        Logger.LogInformation("Activity {ActivityId} Complete() called with status {Status}, SubActivities: {SubActivityCount}", activityId, status, Log.SubActivities.Count);
+
         if (completedAction != null)
             completedActions.Add(completedAction);
 
@@ -42,41 +44,53 @@ public record Activity(string Category, IMessageHub Hub) : ActivityBase<Activity
         {
             if (taskCompletionSource != null)
             {
+                Logger.LogInformation("Activity {ActivityId} using existing TaskCompletionSource", activityId);
                 completionTask = taskCompletionSource.Task;
             }
             else
             {
+                Logger.LogInformation("Activity {ActivityId} creating new TaskCompletionSource and subscription", activityId);
                 taskCompletionSource = new(cancellationToken);
 
-                Stream.Where(x => x.Log.SubActivities.Count == 0 || x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running))
-                    .Subscribe(a =>
-                    {
-                        if (a.Log.Status == ActivityStatus.Running)
-                            CompleteMyself(status);
-                    });
+                // Check if we should complete immediately (no sub-activities)
+                if (Log.SubActivities.Count == 0 && Log.Status == ActivityStatus.Running)
+                {
+                    Logger.LogInformation("Activity {ActivityId} has no sub-activities, completing immediately", activityId);
+                    CompleteMyself(status);
+                }
+                else
+                {
+                    // Subscribe to stream for auto-completion when all sub-activities finish
+                    Stream.Where(x => ReferenceEquals(x, this) &&
+                                     (x.Log.SubActivities.Count == 0 ||
+                                      x.Log.SubActivities.Values.All(y => y.Status != ActivityStatus.Running)))
+                        .Subscribe(a =>
+                        {
+                            Logger.LogInformation("Activity {ActivityId} auto-completion stream triggered, Status: {Status}, SubActivities: {SubCount}",
+                                activityId, a.Log.Status, a.Log.SubActivities.Count);
+                            if (a.Log.Status == ActivityStatus.Running)
+                                CompleteMyself(status);
+                        });
+                }
                 completionTask = taskCompletionSource.Task;
             }
         }
 
-        // Add timeout to prevent hanging - default 10 seconds unless cancellation token has shorter timeout
-        var timeout = TimeSpan.FromSeconds(100);
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (!cancellationToken.CanBeCanceled || cancellationToken == CancellationToken.None)
-        {
-            timeoutCts.CancelAfter(timeout);
-        }
-
         try
         {
-            await completionTask.WaitAsync(timeoutCts.Token);
+            Logger.LogInformation("Activity {ActivityId} waiting for completion task", activityId);
+            await completionTask.WaitAsync(cancellationToken);
+            Logger.LogInformation("Activity {ActivityId} completion task finished successfully", activityId);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            Logger.LogWarning("Activity {ActivityId} completion timed out after {Timeout} seconds", Id, timeout.TotalSeconds);
+            Logger.LogWarning("Activity {ActivityId} completion cancelled via cancellation token", activityId);
             // Force completion with failed status
             CompleteMyself(ActivityStatus.Failed);
-            throw new TimeoutException($"Activity {Id} completion timed out after {timeout.TotalSeconds} seconds");
+            throw;
         }
+
+        Logger.LogInformation("Activity {ActivityId} Complete() finished", activityId);
     }
 
 }

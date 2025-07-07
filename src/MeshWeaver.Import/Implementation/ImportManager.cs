@@ -15,7 +15,7 @@ public class ImportManager
     private record ImportAddress() : Address("import", Guid.NewGuid().AsString()!);
     public ImportConfiguration Configuration { get; }
 
-    private readonly IMessageHub importHub = null!; 
+    private readonly IMessageHub importHub = null!;
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
@@ -23,13 +23,24 @@ public class ImportManager
     {
         Workspace = workspace;
         Hub = hub;
-        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
+        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c, l) => l.Invoke(c));
         importHub = hub.GetHostedHub(new ImportAddress())!;
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
     {
-        importHub.InvokeAsync(ct => DoImport(request, ct), ex => FailImport(ex, request));
+        // Create cancellation token with timeout if specified in the import request
+        var cancellationTokenSource = request.Message.Timeout.HasValue
+            ? new CancellationTokenSource(request.Message.Timeout.Value)
+            : new CancellationTokenSource();
+
+        importHub.InvokeAsync(ct =>
+        {
+            // Combine the provided cancellation token with our timeout token
+            using var combined = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationTokenSource.Token);
+            return DoImport(request, combined.Token);
+        }, ex => FailImport(ex, request));
+
         return request.Processed();
     }
 
@@ -53,21 +64,27 @@ public class ImportManager
     {
 
         var activity = new Activity(ActivityCategory.Import, Hub);
-
+        var importId = Guid.NewGuid().ToString("N")[..8];
+        activity.LogInformation("Starting import {ImportId} for request {RequestType}", importId, request.Message.GetType().Name);
 
         try
         {
             await ImportImpl(request, activity, cancellationToken);
+            activity.LogInformation("Import {ImportId} implementation completed, starting Activity.Complete", importId);
+
             await activity.Complete(log =>
             {
+                activity.LogInformation("Import {ImportId} Activity.Complete callback executing", importId);
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                activity.LogInformation("Import {ImportId} response posted", importId);
             }, cancellationToken: cancellationToken);
 
-
+            activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
         }
         catch (Exception e)
         {
-            await FinishWithException(request,  e, activity);
+            activity.LogError("Import {ImportId} failed with exception: {Exception}", importId, e.Message);
+            await FinishWithException(request, e, activity);
         }
 
         return request.Processed();
@@ -99,10 +116,10 @@ public class ImportManager
 
             Configuration.Workspace.RequestChange(
                 DataChangeRequest.Update(
-                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), 
-                    null, 
+                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
+                    null,
                     request.Message.UpdateOptions),
-                activity, 
+                activity,
                 request
                 );
         }
@@ -120,7 +137,7 @@ public class ImportManager
     }
 
     public async Task<EntityStore> ImportInstancesAsync(
-        ImportRequest importRequest, 
+        ImportRequest importRequest,
         Activity activity,
         CancellationToken cancellationToken)
     {

@@ -26,9 +26,17 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
     public UpdateOptions UpdateOptions { get; init; } = UpdateOptions.Default;
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
 
+    /// <summary>
+    /// Timeout for the import operation. If not specified, no timeout is applied.
+    /// This is useful for testing scenarios where imports might hang.
+    /// </summary>
+    public TimeSpan? Timeout { get; init; }
+
     internal Type EntityType { get; init; } = null!;
 
     public ImportRequest WithEntityType(Type entityType) => this with { EntityType = entityType };
+
+    public ImportRequest WithTimeout(TimeSpan timeout) => this with { Timeout = timeout };
 
     public bool SaveLog { get; init; }
 }
