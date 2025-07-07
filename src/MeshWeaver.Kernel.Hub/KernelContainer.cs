@@ -41,8 +41,8 @@ public class KernelContainer : IDisposable
             new SynchronizationStream<ImmutableDictionary<string, object>>(
                 new(Guid.NewGuid().AsString(), Hub.Address),
                 Hub,
-                default,
-                default,
+                new AggregateWorkspaceReference(),
+                new ReduceManager<ImmutableDictionary<string, object>>(hub),
                 null
             );
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
@@ -73,7 +73,7 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => uiControlService.Convert(a.Value.GetValueOrDefault(ctx.Area) ?? new object()))
+                        .Select(a => uiControlService.Convert(a.Value!.GetValueOrDefault(ctx.Area) ?? new object()))
                 )
             )
             .AddMeshTypes()
@@ -220,7 +220,7 @@ public class KernelContainer : IDisposable
                 {
                     Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
                 }
-        , default);
+        , _ => Task.CompletedTask);
     }
 
     private void HandleNotebookEvent(KernelEvent @event)
@@ -232,7 +232,7 @@ public class KernelContainer : IDisposable
         {
             UpdateView(viewId, retProduced.Value);
             if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
-                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId) ?? string.Empty)]);
+                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
         }
         var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
         var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
@@ -293,7 +293,7 @@ public class KernelContainer : IDisposable
 
         return Task.CompletedTask;
     }
-    private string? FormatControl(UiControl? control, string iframeUrl, string viewId)
+    private string FormatControl(UiControl? control, string iframeUrl, string viewId)
     {
 
         var style = control?.Style?.ToString() ?? string.Empty;
@@ -308,14 +308,6 @@ public class KernelContainer : IDisposable
 
         var view = $@"<iframe id='{viewId}' src='{iframeUrl}/{Hub.Address}/{viewId}' style='{style}'></iframe>";
         return view;
-    }
-
-    private static string ReplaceLastSegmentWithArea(string url)
-    {
-        var uri = new Uri(url);
-        var segments = uri.Segments;
-        segments[^1] = "area/";
-        return new Uri(uri, string.Join("", segments)).ToString();
     }
 
 
@@ -338,7 +330,7 @@ public class KernelContainer : IDisposable
             if(!string.IsNullOrEmpty(request.Message.IFrameUrl))
                 submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
         }
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), default); 
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), _ => Task.CompletedTask); 
         return request.Processed();
     }
     public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
@@ -350,7 +342,7 @@ public class KernelContainer : IDisposable
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), default);
+        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), _ => Task.CompletedTask);
         return request.Processed();
     }
 

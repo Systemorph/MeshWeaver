@@ -5,27 +5,27 @@ namespace MeshWeaver.ContentCollections;
 
 public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub hub) : ContentCollection(config, hub)
 {
-    public string BasePath { get; } = config.BasePath;
+    public string BasePath { get; } = config.BasePath!;
     private FileSystemWatcher? watcher;
 
-    public override Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
+    public override Task<Stream?> GetContentAsync(string? path, CancellationToken ct = default)
     {
         if (path is null)
-            return Task.FromResult<Stream>(Stream.Null);
+            return Task.FromResult<Stream?>(null);
         var fullPath = Path.Combine(BasePath, path.TrimStart('/'));
         if (!File.Exists(fullPath))
-            return Task.FromResult<Stream>(Stream.Null);
-        return Task.FromResult<Stream>(File.OpenRead(fullPath));
+            return Task.FromResult<Stream?>(null);
+        return Task.FromResult<Stream?>(File.OpenRead(fullPath));
     }
     
-    protected override Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
+    protected override Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string? path, CancellationToken ct)
     {
         if (path is null)
-            return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>(default);
+            return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(default);
         var fullPath = Path.Combine(BasePath, path);
         if (!File.Exists(fullPath))
-            return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>(default);
-        return Task.FromResult<(Stream Stream, string Path, DateTime LastModified)>((File.OpenRead(fullPath), path, File.GetLastAccessTime(path)));
+            return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(default);
+        return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>((File.OpenRead(fullPath), path, File.GetLastAccessTime(path)));
     }
 
     protected override void AttachMonitor()
@@ -53,7 +53,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
             UpdateArticle(Path.GetRelativePath(BasePath, e.FullPath));
     }
 
-    protected override IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct)
+    protected override IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool>? filter, CancellationToken ct)
     {
         var files = filter == MarkdownFilter
             ? Directory.GetFiles(BasePath, "*.md", SearchOption.AllDirectories)
@@ -62,7 +62,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
         var items = files
             .Where(File.Exists)
             .Select(file =>
-                (Stream: (Stream)File.OpenRead(file), Path: Path.GetRelativePath(BasePath, file), LastModified: File.GetLastWriteTime(file)));
+                (Stream: (Stream?)File.OpenRead(file), Path: Path.GetRelativePath(BasePath, file), LastModified: File.GetLastWriteTime(file)));
 
         // Convert the synchronous IEnumerable to an IAsyncEnumerable
         return items.ToAsyncEnumerable();

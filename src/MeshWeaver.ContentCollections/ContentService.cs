@@ -31,7 +31,7 @@ public class ContentService : IContentService
     public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
-    public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
+    public Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = GetCollection(collection);
         if (coll == null)

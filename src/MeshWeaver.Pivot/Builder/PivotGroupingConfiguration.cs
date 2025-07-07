@@ -42,7 +42,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
 
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
-        Expression<Func<T, TSelected?>> selector,
+        Expression<Func<T, TSelected>> selector,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
@@ -54,7 +54,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
     }
 
     private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(
-        Expression<Func<T, TSelected?>> selector,
+        Expression<Func<T, TSelected>> selector,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {

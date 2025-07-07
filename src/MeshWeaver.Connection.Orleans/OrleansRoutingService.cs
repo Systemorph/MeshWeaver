@@ -23,7 +23,7 @@ public class OrleansRoutingService(
         switch (streamInfo?.Type)
         {
             case StreamType.Channel:
-                var grain = grainFactory.GetGrain<IMessageHubGrain>(target.ToString());
+                var grain = grainFactory.GetGrain<IMessageHubGrain>(target!.ToString());
                 await grain.DeliverMessage(delivery);
                 return delivery.Forwarded();
             case StreamType.Stream:

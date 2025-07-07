@@ -77,7 +77,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
-        var ret = Hub.DeliverMessage(delivery);
+        var ret = Hub!.DeliverMessage(delivery);
         return Task.FromResult(ret);
     }
 
@@ -88,7 +88,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (Hub != null)
         {
             Hub.Dispose();
-            await Hub.Disposal;
+            await Hub.Disposal!;
         }
         Hub = null;
         if (loadContext != null)

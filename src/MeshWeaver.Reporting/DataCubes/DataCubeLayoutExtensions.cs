@@ -10,7 +10,7 @@ using static MeshWeaver.Layout.Controls;
 
 namespace MeshWeaver.Reporting.DataCubes;
 
-public record FilterItem(object Id, string Label, bool Selected);
+public record FilterItem(object? Id, string? Label, bool Selected);
 
 public record DataCubeFilter(IReadOnlyCollection<Dimension> AvailableDimensions)
 {
@@ -67,7 +67,7 @@ public static class DataCubeLayoutExtensions
      *
      */
 
-    public static UiControl Render(this LayoutAreaHost host, DataCubeFilter filter, string filterId)
+    public static UiControl Render(DataCubeFilter filter, string filterId)
     {
         
 

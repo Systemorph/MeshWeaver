@@ -23,7 +23,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     public PivotGroupingConfiguration<T, RowGroup> RowGroupConfig { get; init; }
 
     public PivotBuilder<T, TIntermediate, TAggregate> GroupRowsBy<TSelected>(
-        Expression<Func<T, TSelected?>> selector
+        Expression<Func<T, TSelected>> selector
     )
     {
         return this with
@@ -36,7 +36,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
     }
 
     public PivotBuilder<T, TIntermediate, TAggregate> GroupColumnsBy<TSelected>(
-        Expression<Func<T, TSelected?>> selector
+        Expression<Func<T, TSelected>> selector
     )
     {
         var ret = this;
