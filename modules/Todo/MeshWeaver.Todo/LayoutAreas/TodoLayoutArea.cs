@@ -25,8 +25,8 @@ public static class TodoLayoutArea
         _ = context; // Unused parameter but required by interface
         // Subscribe to the stream of TodoItem entities from the data source
         return host.Workspace
-            .GetStream<TodoItem>()
-            .Select(todoItems => CreateInteractiveTodoListStack(todoItems, host))
+            .GetStream<TodoItem>()!
+            .Select(todoItems => CreateInteractiveTodoListStack(todoItems!, host))
             .StartWith(Controls.Markdown("# Todo List\n\n*Loading todo items...*"));
     }
 
@@ -40,8 +40,8 @@ public static class TodoLayoutArea
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
-            .GetStream<TodoItem>()
-            .Select(CreateTodosByCategoryMarkdown)
+            .GetStream<TodoItem>()!
+            .Select(todoItems => CreateTodosByCategoryMarkdown(todoItems!))
             .StartWith(Controls.Markdown("# Todos by Category\n\n*Loading todo items...*"));
     }
 
@@ -55,8 +55,8 @@ public static class TodoLayoutArea
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
-            .GetStream<TodoItem>()
-            .Select(CreateTodoSummaryMarkdown)
+            .GetStream<TodoItem>()!
+            .Select(todoItems => CreateTodoSummaryMarkdown(todoItems!))
             .StartWith(Controls.Markdown("# Todo Summary\n\n*Loading todo statistics...*"));
     }
 
@@ -415,7 +415,7 @@ public static class TodoLayoutArea
                     {
                         // Changes are saved immediately ==> just
                         // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
+                        host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("❌ Cancel")
@@ -425,7 +425,7 @@ public static class TodoLayoutArea
                         host.Hub.Post(new DataChangeRequest() { Deletions = [newTodo] }, o => o.WithTarget(TodoApplicationAttribute.Address));
 
                         // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
+                        host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)
@@ -656,7 +656,7 @@ public static class TodoLayoutArea
                     {
                         // is updated on the fly, so we just need to close the dialog
                         // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
+                        host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
                     }))
                 .WithView(Controls.Button("❌ Cancel")
@@ -669,7 +669,7 @@ public static class TodoLayoutArea
                         host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
 
                         // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null);
+                        host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
                     }))
                 .WithOrientation(Orientation.Horizontal)

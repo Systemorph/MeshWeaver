@@ -16,7 +16,7 @@ public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelS
                 SlidingExpiration = TimeSpan.FromMinutes(15),
                 PostEvictionCallbacks =
                 {
-                    new PostEvictionCallbackRegistration { EvictionCallback = (k, v, r, s) => DisposeKernel(k, v!, r, s!) }
+                    new PostEvictionCallbackRegistration { EvictionCallback = DisposeKernel }
                 }
             });
         return client!;
@@ -24,6 +24,8 @@ public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelS
 
     private void DisposeKernel(object key, object? value, EvictionReason reason, object? state)
     {
+        if (value is null)
+            return;
         ((KernelClient)value).Dispose();
     }
 

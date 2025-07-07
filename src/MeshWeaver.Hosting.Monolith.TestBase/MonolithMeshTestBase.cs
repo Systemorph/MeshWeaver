@@ -48,7 +48,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             Mesh.Dispose();
-            await Mesh.Disposal.WaitAsync(cts.Token);
+            await Mesh.Disposal!.WaitAsync(cts.Token);
         }
         catch (OperationCanceledException)
         {

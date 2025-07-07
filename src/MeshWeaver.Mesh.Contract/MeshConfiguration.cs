@@ -17,9 +17,9 @@ public class MeshConfiguration
     }
 
 
-    internal List<Func<Address, MeshNode>> MeshNodeFactories { get;  } = [];
+    internal List<Func<Address, MeshNode?>> MeshNodeFactories { get;  } = [];
 
-    public MeshConfiguration AddMeshNodeFactory(Func<Address, MeshNode> meshNodeFactory)
+    public MeshConfiguration AddMeshNodeFactory(Func<Address, MeshNode?> meshNodeFactory)
     {
         MeshNodeFactories.Add(meshNodeFactory);
         return this;

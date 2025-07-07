@@ -5,7 +5,7 @@ using MeshWeaver.Pivot.Models;
 
 namespace MeshWeaver.Charting.Pivot
 {
-    public record PivotChartModelBuilder()
+    public record PivotChartModelBuilder
     {
         private readonly IList<Func<PivotChartModel, PivotChartModel>> postProcessors = new List<
             Func<PivotChartModel, PivotChartModel>
@@ -13,7 +13,7 @@ namespace MeshWeaver.Charting.Pivot
         {
             x => x
         };
-        private bool WithTotals { get; set; } = false;
+        private bool WithTotals { get; set; }
         private PivotModel PivotModel { get; set; } = null!;
 
         // TODO V10: do not instantiate this model, only inside build method and return from build (2022/10/06, Ekaterina Mishina)
@@ -105,11 +105,11 @@ namespace MeshWeaver.Charting.Pivot
                         continue; // we do not want to export aggregated values
                     var item = new Tuple<object, string, object>(
                         colGroup.Coordinates.Last(),
-                        colGroup.DisplayName,
-                        colGroup.GrouperName
+                        colGroup.DisplayName!,
+                        colGroup.GrouperName!
                     );
                     displayNameToDimensions.Add(item);
-                    PivotChartModel.ColumnGroupings.Add(colGroup.GrouperName);
+                    PivotChartModel.ColumnGroupings.Add(colGroup.GrouperName!);
                     displayNameToDimensions = BuildColumnCoordinateMap(
                         colGroup.Children,
                         headerDimensions,
@@ -132,11 +132,11 @@ namespace MeshWeaver.Charting.Pivot
                     var valueDisplayName = pivotColumns.ElementAt(i).DisplayName;
                     var item = new Tuple<object, string, object>(
                         pivotColumns.ElementAt(i).Coordinates.Last(),
-                        pivotColumns.ElementAt(i).DisplayName,
+                        pivotColumns.ElementAt(i).DisplayName!,
                         PivotChartConst.Column
                     );
                     displayNameToDimensions.Add(item);
-                    valueDimensions.Add(coordinate, valueDisplayName);
+                    valueDimensions.Add(coordinate, valueDisplayName!);
                     headerDimensions.Add(coordinate, displayNameToDimensions);
                     if (
                         displayNameToDimensions.Any()
@@ -153,13 +153,13 @@ namespace MeshWeaver.Charting.Pivot
         {
             foreach (var pivotRow in PivotModel.Rows)
             {
-                var rowGroup = pivotRow.RowGroup;
+                var rowGroup = pivotRow.RowGroup!;
                 var row = new PivotChartRow
                 {
                     DataSetType = defaultChartType,
                     Descriptor = new PivotElementDescriptor
                     {
-                        Id = rowGroup.Id,
+                        Id = rowGroup.Id!,
                         Coordinates = rowGroup
                             .Coordinates.Select(
                                 (_, j) =>
@@ -171,7 +171,7 @@ namespace MeshWeaver.Charting.Pivot
                                     );
                                     return cRow != null
                                         ? cRow.Descriptor.Coordinates.Last()
-                                        : (rowGroup.Id, rowGroup.DisplayName, rowGroup.GrouperName);
+                                        : (rowGroup.Id!, rowGroup.DisplayName!, rowGroup.GrouperName!);
                                 }
                             )
                             .ToList()
@@ -188,7 +188,7 @@ namespace MeshWeaver.Charting.Pivot
                     }
                 };
                 PivotChartModel.Rows.Add(row);
-                AddDataToRow((IReadOnlyDictionary<object, object>)pivotRow.Data, row);
+                AddDataToRow((IReadOnlyDictionary<object, object>)pivotRow.Data!, row);
             }
         }
 
@@ -207,7 +207,7 @@ namespace MeshWeaver.Charting.Pivot
             IReadOnlyCollection<(object Id, string DisplayName, object GrouperName)> coordinates
         )
         {
-            if (!coordinates.Any() || data is null)
+            if (!coordinates.Any() || data.Any())
                 return null;
 
             if (data.TryGetValue(coordinates.First().Id, out var subData))
@@ -215,7 +215,7 @@ namespace MeshWeaver.Charting.Pivot
                 if (subData is IReadOnlyDictionary<object, object> subDataDict)
                     return GetValue(subDataDict, coordinates.Skip(1).ToList());
                 if (subData is int intSubData)
-                    return (double?)intSubData;
+                    return intSubData;
                 return (double?)subData;
             }
 

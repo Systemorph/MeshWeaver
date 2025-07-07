@@ -52,7 +52,7 @@ public static class ProductOverviewToolbarArea
                         .Distinct()
                     ),
                 (changeItem, values) => (changeItem, values))
-            .Select(tp => tp.changeItem.Value.GetData<Category>()
+            .Select(tp => tp.changeItem.Value!.GetData<Category>()
                 .Where(c => tp.values.Contains(c.CategoryId))
                 .OrderBy(c => c.CategoryName)
             );

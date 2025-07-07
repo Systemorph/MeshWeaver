@@ -42,7 +42,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         var workspace = GetClient().GetWorkspace();
 
         var todoData = (await workspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)
+            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync())
             ?.ToArray();
@@ -82,7 +82,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("✅ Step 3 PASSED: Created subscription on todo data stream");
 
         // Step 4: Wait for data to be available (simulating layout area rendering)
-        var initialTodos = (await dataStream
+        var initialTodos = (await dataStream!
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync())
             ?.ToArray();
@@ -120,7 +120,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         {
             // Create a fresh subscription to get updated data
             var updatedDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
-            var updatedTodos = (await updatedDataStream
+            var updatedTodos = (await updatedDataStream!
                 .Timeout(5.Seconds())
                 .FirstOrDefaultAsync())?.ToArray();
 
@@ -158,7 +158,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Verify mesh has the data
         var meshWorkspace = client.GetWorkspace();
         var meshData = (await meshWorkspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)
+            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
             .FirstOrDefaultAsync())
             ?.ToArray();
         meshData.Should().NotBeNull("Mesh should have todo data");
@@ -167,7 +167,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Verify client can access the data
         var clientWorkspace = client.GetWorkspace();
         var clientData = (await clientWorkspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)
+            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
             .Timeout(5.Seconds())
             .FirstOrDefaultAsync())?.ToList();
         clientData.Should().NotBeNull("Client should be able to access todo data");
@@ -191,7 +191,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Get initial data
         Output.WriteLine("🔍 DIAGNOSTIC: Getting initial data...");
         var initialData = (await workspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)
+            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
             .Timeout(5.Seconds())
             .FirstOrDefaultAsync())?.ToArray();
 
@@ -226,7 +226,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Check if data changed by getting fresh data
         Output.WriteLine("🔍 DIAGNOSTIC: Getting fresh data to see if change was processed...");
         var freshData = (await workspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)
+            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
             .Timeout(5.Seconds())
             .FirstOrDefaultAsync())?.ToArray();
 
