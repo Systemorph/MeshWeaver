@@ -103,14 +103,14 @@ namespace MeshWeaver.Reporting.Builder
         }
 
         public ReportBuilder<T?, TIntermediate?, TAggregate?> GroupRowsBy<TSelected>(
-            Expression<Func<T, TSelected>> selector
+            Expression<Func<T, TSelected?>> selector
         )
         {
             return this with { PivotBuilder = PivotBuilder.GroupRowsBy(selector) };
         }
 
         public ReportBuilder<T?, TIntermediate, TAggregate> GroupColumnsBy<TSelected>(
-            Expression<Func<T?, TSelected?>> selector
+            Expression<Func<T, TSelected?>> selector
         )
         {
             return this with { PivotBuilder = PivotBuilder.GroupColumnsBy(selector) };

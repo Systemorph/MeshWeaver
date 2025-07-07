@@ -6,9 +6,9 @@ namespace MeshWeaver.Pivot.Models
     public record RowGroup : IGroup
     {
         public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
-        public object Id { get; init; } = null!;
-        public string DisplayName { get; init; } = null!;
-        public string GrouperName { get; init; } = null!;
+        public object? Id { get; init; }
+        public string? DisplayName { get; init; }
+        public string? GrouperName { get; init; }
 
         public RowGroup(object id, string displayName, string grouperName)
         {

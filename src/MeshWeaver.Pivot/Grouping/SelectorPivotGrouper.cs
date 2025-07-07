@@ -5,18 +5,19 @@ namespace MeshWeaver.Pivot.Grouping
 {
     public class SelectorPivotGrouper<T, TSelected, TGroup>(
         string id,
-        Func<T?, int, TSelected?> selector)
+        Func<T, int, TSelected?> selector)
         : IPivotGrouper<T, TGroup>
         where TGroup : class, IGroup, new()
     {
-        protected Func<T?, int, TSelected?> Selector { get; } = selector;
+        protected Func<T, int, TSelected?> Selector { get; } = selector;
 
         protected string Id { get; } = id;
-        public SelectorPivotGrouper(string id, Func<T?, TSelected?> selector)
+        public SelectorPivotGrouper(string id, Func<T, TSelected?> selector)
             : this(id, (x, _) => selector.Invoke(x)) { }
 
-        public virtual IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T?>>> CreateGroupings(IReadOnlyCollection<T?> objects, TGroup nullGroup)
+        public virtual IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T>>> CreateGroupings(IReadOnlyCollection<T> objects, TGroup nullGroup)
         {
+            
             var selectedObjects = objects
                 .Select((x, i) => new { Key = Selector(x, i), Object = x })
                 .ToList();
@@ -34,26 +35,26 @@ namespace MeshWeaver.Pivot.Grouping
             };
 
             return ordered
-                .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T?>>(
+                .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
                     x.Key == null ? nullGroupPrivate : CreateGroupDefinition(x.Key),
                     x.ToArray(),
-                    x.Key == null ? nullGroupPrivate.Id : x.Key
+                    x.Key == null ? nullGroupPrivate.Id! : x.Key
                 ))
                 .ToArray();
         }
 
-        protected virtual IOrderedEnumerable<IGrouping<TSelected?, T?>> Order(
-            IEnumerable<IGrouping<TSelected?, T?>> groups
+        protected virtual IOrderedEnumerable<IGrouping<TSelected?, T>> Order(
+            IEnumerable<IGrouping<TSelected?, T>> groups
         )
         {
             return groups.OrderBy(x => x.Key == null).ThenBy(x => x.Key);
         }
 
-        public virtual IEnumerable<TGroup?> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
+        public virtual IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
         {
             return grouped
                 .OrderBy(x => x.OrderKey == null)
-                .ThenBy(x => (TSelected)x.OrderKey)
+                .ThenBy(x => (TSelected?)x.OrderKey)
                 .Select(x => x.Identity);
         }
 

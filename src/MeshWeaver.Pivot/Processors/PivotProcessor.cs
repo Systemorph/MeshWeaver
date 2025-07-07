@@ -31,10 +31,10 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
     }
 
 
-    protected override PivotGroupManager<T?, TIntermediate, TAggregate, ColumnGroup?> GetColumnGroupManager(
+    protected override PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(
         DimensionCache dimensionCache, IReadOnlyCollection<T?> transformed)
     {
-        PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup?> columnGroupManager = null;
+        PivotGroupManager<T, TIntermediate, TAggregate, ColumnGroup>? columnGroupManager = null;
 
         foreach (var groupConfig in PivotBuilder.ColumnGroupConfig)
         {
@@ -46,7 +46,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
         return columnGroupManager!;
     }
 
-    protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<T?> objects)
+    protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<T> objects)
     {
         var types = objects.Select(o => o?.GetType()).Distinct().ToArray();
         var dimensionProperties = types
@@ -58,7 +58,7 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
             .Select(x =>
             {
                 var reflector = x.Property.GetReflector();
-                return (x.Dimension!, IdAccessor: (Func<T, object>)(e => reflector.GetValue(e) ?? new object()));
+                return (x.Dimension!, IdAccessor: (Func<T, object?>)(e => reflector.GetValue(e) ?? new object()));
             })
             .ToArray();
 
@@ -66,9 +66,9 @@ public class PivotProcessor<T, TIntermediate, TAggregate>
     }
 
 
-    protected override PivotGroupManager<T?, TIntermediate, TAggregate, RowGroup?> GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<T?> transformed)
+    protected override PivotGroupManager<T, TIntermediate, TAggregate, RowGroup> GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<T?> transformed)
     {
-        PivotGroupManager<T, TIntermediate, TAggregate, RowGroup?> rowGroupManager = null;
+        PivotGroupManager<T, TIntermediate, TAggregate, RowGroup>? rowGroupManager = null;
         foreach (var groupConfig in PivotBuilder.RowGroupConfig)
         {
             rowGroupManager = groupConfig.GetGroupManager(dimensionCache, rowGroupManager,

@@ -3,7 +3,7 @@
 namespace MeshWeaver.Pivot.Grouping;
 
 public class DirectPivotGrouper<T, TGroup>(
-    Func<IEnumerable<T?>, IEnumerable<IGrouping<TGroup, T?>>> grouping,
+    Func<IEnumerable<T>, IEnumerable<IGrouping<TGroup?, T>>> grouping,
     string name)
     : IPivotGrouper<T, TGroup>
     where TGroup : IGroup, new()
@@ -11,8 +11,8 @@ public class DirectPivotGrouper<T, TGroup>(
     protected readonly string Name = name
                                      ?? throw new ArgumentNullException(nameof(name), "Undefined/invalid GrouperName");
 
-    public IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T?>>> CreateGroupings(
-        IReadOnlyCollection<T?> objects,
+    public IReadOnlyCollection<PivotGrouping<TGroup?, IReadOnlyCollection<T>>> CreateGroupings(
+        IReadOnlyCollection<T> objects,
         TGroup nullGroup)
     {
         var grouped = grouping(objects);
@@ -26,7 +26,7 @@ public class DirectPivotGrouper<T, TGroup>(
             GrouperName = Name
         };
         return ordered
-            .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T?>>(
+            .Select(x => new PivotGrouping<TGroup?, IReadOnlyCollection<T>>(
                 x.Key ?? nullGroupPrivate,
                 x.ToArray(),
                 x.Key ?? nullGroupPrivate
@@ -34,14 +34,14 @@ public class DirectPivotGrouper<T, TGroup>(
             .ToArray();
     }
 
-    private IOrderedEnumerable<IGrouping<TGroup?, T?>> Order(
-        IEnumerable<IGrouping<TGroup?, T?>> grouped
+    private IOrderedEnumerable<IGrouping<TGroup?, T>> Order(
+        IEnumerable<IGrouping<TGroup?, T>> grouped
     )
     {
         return grouped.OrderBy(x => x.Key == null).ThenBy(x => x.Key?.DisplayName);
     }
 
-    public IEnumerable<TGroup?> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
+    public IEnumerable<TGroup> Order(IEnumerable<IdentityWithOrderKey<TGroup>> grouped)
     {
         return grouped
             .OrderBy(x => x.OrderKey == null)

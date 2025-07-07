@@ -42,7 +42,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
 
 
     public PivotGroupingConfiguration<T, TGroup> GroupBy<TSelected>(
-        Expression<Func<T?, TSelected?>> selector,
+        Expression<Func<T, TSelected?>> selector,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
@@ -54,7 +54,7 @@ public abstract record PivotGroupingConfiguration<T, TGroup>(IWorkspace Workspac
     }
 
     private PivotGroupingConfigItem<T, TGroup> CreateReportGroupConfig<TSelected>(
-        Expression<Func<T?, TSelected?>> selector,
+        Expression<Func<T, TSelected?>> selector,
         IHierarchicalDimensionOptions hierarchicalDimensionOptions
     )
     {
@@ -96,7 +96,7 @@ public record PivotRowsGroupingConfiguration<T> : PivotGroupingConfiguration<T, 
         new(new(_ =>
                 new DirectPivotGrouper<T, RowGroup>(
                     x => x.GroupBy(_ => IPivotGrouper<T, RowGroup>.TopGroup),
-                    IPivotGrouper<T, RowGroup>.TopGroup.GrouperName
+                    IPivotGrouper<T, RowGroup>.TopGroup.GrouperName!
                 )
             )
         );
@@ -118,7 +118,7 @@ public record PivotColumnsGroupingConfiguration<T> : PivotGroupingConfiguration<
         new(new(_ =>
                 new DirectPivotGrouper<T, ColumnGroup>(
                     x => x.GroupBy(_ => IPivotGrouper<T, ColumnGroup>.TopGroup),
-                    IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName
+                    IPivotGrouper<T, ColumnGroup>.TopGroup.GrouperName!
                 )
             )
         );

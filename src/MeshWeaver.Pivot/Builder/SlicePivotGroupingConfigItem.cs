@@ -37,7 +37,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             return new PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>(
                 new DirectPivotGrouper<DataSlice<TElement>, TGroup>(
                     slices => slices.GroupBy(_ => IPivotGrouper<TElement, TGroup>.TopGroup),
-                    IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName
+                    IPivotGrouper<TElement, TGroup>.TopGroup.GrouperName!
                 ),
                 null!,
                 aggregationFunctions

@@ -1,5 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using AspectCore.Extensions.Reflection;
+﻿using AspectCore.Extensions.Reflection;
 using MeshWeaver.Domain;
 using MeshWeaver.Pivot.Models;
 using MeshWeaver.Pivot.Processors;
@@ -13,7 +12,7 @@ namespace MeshWeaver.Pivot.Grouping
         public IReadOnlyCollection<Column> Columns { get; init; }
         private Type ValueType { get; }
 
-        public PivotColumnsConfiguration([NotNull] Type valueType, params string[] propertiesToHide)
+        public PivotColumnsConfiguration(Type valueType, params string[] propertiesToHide)
         {
             ValueType = valueType;
             Columns = CreateColumns(propertiesToHide).ToArray();
@@ -55,7 +54,7 @@ namespace MeshWeaver.Pivot.Grouping
                 var prop = ValueType.GetProperty(column.Id?.ToString() ?? "");
                 if (prop != null)
                     yield return (
-                        new ColumnGroup(column.Id ?? "", column.DisplayName, prop.Name),
+                        new ColumnGroup(column.Id ?? "", column.DisplayName!, prop.Name),
                         x =>
                         {
                             if (x == null)
@@ -68,7 +67,7 @@ namespace MeshWeaver.Pivot.Grouping
                     yield return (
                         new ColumnGroup(
                             column.Id ?? "",
-                            column.DisplayName,
+                            column.DisplayName!,
                             PivotConst.PropertyPivotGrouperName
                         ),
                         x => x == null ? "" : x
