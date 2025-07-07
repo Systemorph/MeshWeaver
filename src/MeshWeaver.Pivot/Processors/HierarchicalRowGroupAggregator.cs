@@ -6,7 +6,7 @@ namespace MeshWeaver.Pivot.Processors
     public class HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
         where TGroup : IGroup, new()
     {
-        private readonly IDictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>? subAggregates ;
+        private readonly IDictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>? subAggregates;
         public ICollection<PivotGrouping<TGroup, TIntermediate>> AggregatedGroupings { get; }
 
         // TODO V10: add aggregated grouping here as a property Agg of agg (2022/06/14, Ekaterina Mishina)

@@ -1,9 +1,5 @@
-﻿using System;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using System.Linq;
-using System.Collections.Generic;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -40,7 +36,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Wait for the final layout control (skip loading states)
         Output.WriteLine("⏳ Waiting for layout area to render with data...");
         var control = await stream
-            .GetControlStream(reference.Area!)!
+            .GetControlStream(reference.Area)!
             .OfType<LayoutGridControl>() // Wait specifically for LayoutGridControl
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -60,7 +56,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     public async Task TodoList_ClickStartButton_ShouldMoveItemToInProgressAndUpdateActions()
     {
         // Arrange
-        var (client, stream, reference) = await SetupTodoLayoutTest();
+        var (_, stream, reference) = await SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
@@ -77,11 +73,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one clickable button");
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
-        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton!.Data}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the button and verify response
         var finalLayoutGridTask = GetUpdatedLayoutGrid(stream, reference);
-        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
         // Step 5: Validate that pending count is now 0 after clicking "Start All"
         var finalLayoutGrid = await finalLayoutGridTask;
@@ -108,7 +104,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     public async Task TodoList_ClickIndividualStartButton_ShouldMoveSpecificItemToInProgress()
     {
         // Arrange
-        var (client, stream, reference) = await SetupTodoLayoutTest();
+        var (_, stream, reference) = await SetupTodoLayoutTest();
 
         // Step 1: Wait for initial layout to render with data
         Output.WriteLine("⏳ Step 1: Waiting for initial layout area to render...");
@@ -125,11 +121,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one individual start button");
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
-        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton!.Data}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the individual button and verify response
         var updatedGridTask = GetUpdatedLayoutGrid(stream, reference);
-        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
         // Step 5: Validate that pending count decreased by 1
         var finalLayoutGrid = await updatedGridTask;
@@ -176,7 +172,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("⏳ Waiting for initial layout area to render...");
         var initialControl = await stream
-            .GetControlStream(reference.Area!)!
+            .GetControlStream(reference.Area)!
             .OfType<LayoutGridControl>()
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -192,7 +188,8 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("⏳ Getting updated layout grid after action...");
         var finalLayoutGrid = await stream
-            .GetControlStream(reference.Area!)!
+            .GetControlStream(reference.Area)!
+            .Select(x => x)!
             .OfType<LayoutGridControl>()
             .Skip(1)
             .Timeout(5.Seconds())
@@ -254,7 +251,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds a button by searching for specific text in the button content
     /// </summary>
-    private async Task<(ButtonControl? button, string? areaName)> FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
+    private async Task<(MenuItemControl? button, string? areaName)> FindButtonByText(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid, string searchText)
     {
         Output.WriteLine($"🔍 Looking for button containing '{searchText}'...");
 
@@ -270,9 +267,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
-                if (areaControls is ButtonControl button)
+                if (areaControls is MenuItemControl button)
                 {
-                    var text = button.Data?.ToString() ?? "";
+                    var text = button.Title?.ToString() ?? "";
                     Output.WriteLine($"   Found button in area {areaName}: '{text}'");
 
                     if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -290,7 +287,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                     {
                         foreach (var namedArea in stack.Areas)
                         {
-                            var stackAreaName = namedArea.Area?.ToString();
+                            var stackAreaName = namedArea.Area.ToString();
                             if (!string.IsNullOrEmpty(stackAreaName))
                             {
                                 try
@@ -300,9 +297,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                                         .Timeout(2.Seconds())
                                         .FirstOrDefaultAsync();
 
-                                    if (stackAreaControl is ButtonControl stackButton)
+                                    if (stackAreaControl is MenuItemControl stackButton)
                                     {
-                                        var text = stackButton.Data?.ToString() ?? "";
+                                        var text = stackButton.Title?.ToString() ?? "";
                                         Output.WriteLine($"   Found button in stack area {stackAreaName}: '{text}'");
 
                                         if (text.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -337,7 +334,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Finds an individual start button (not "Start All")
     /// </summary>
-    private async Task<(ButtonControl? button, string? areaName)> FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
+    private async Task<(MenuItemControl? button, string? areaName)> FindIndividualStartButton(ISynchronizationStream<JsonElement> stream, LayoutGridControl layoutGrid)
     {
         Output.WriteLine("🔍 Looking for individual start button (not 'Start All')...");
 
@@ -347,7 +344,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Recursively searches through areas and container controls to find individual start buttons
     /// </summary>
-    private async Task<(ButtonControl? button, string? areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
+    private async Task<(MenuItemControl? button, string? areaName)> RecursivelyFindIndividualStartButton(ISynchronizationStream<JsonElement> stream, IEnumerable<NamedAreaControl> areas)
     {
         foreach (var area in areas)
         {
@@ -360,9 +357,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
-                if (areaControl is ButtonControl button)
+                if (areaControl is MenuItemControl button)
                 {
-                    var text = button.Data?.ToString() ?? "";
+                    var text = button.Title?.ToString() ?? "";
                     Output.WriteLine($"   Found button in area {areaName}: '{text}'");
 
                     // Look for individual start buttons, excluding global actions
@@ -442,7 +439,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     /// <summary>
     /// Clicks a button and verifies the layout system responds properly
     /// </summary>
-    private void ClickButtonAndVerifyResponse(ISynchronizationStream<JsonElement> stream, string buttonAreaName, ButtonControl startButton)
+    private void ClickButtonAndVerifyResponse(ISynchronizationStream<JsonElement> stream, string buttonAreaName, MenuItemControl startButton)
     {
         Output.WriteLine("🖱️ Clicking the button control...");
 
@@ -451,81 +448,10 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Use the hub from the stream to post the event
         stream.Hub.Post(clickEvent, o => o.WithTarget(TodoApplicationAttribute.Address));
-        Output.WriteLine($"✅ Click event sent for button '{startButton.Data}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Click event sent for button '{startButton.Title}' in area {buttonAreaName}");
 
     }
 
     #endregion
 
-    /// <summary>
-    /// Helper method to find a pending todo area that has a Start button
-    /// </summary>
-    private static string? FindPendingTodoWithStartButton(LayoutGridControl layoutGrid)
-    {
-        // In TodoLayoutArea, pending todos are typically in areas with "Start" actions
-        // We need to examine the layout structure to find the right area
-        foreach (var area in layoutGrid.Areas)
-        {
-            var areaName = area.Area?.ToString();
-            if (!string.IsNullOrEmpty(areaName) &&
-                (areaName.Contains("Pending") || areaName.Contains("Start") || areaName.Contains("Todo")))
-            {
-                return areaName;
-            }
-        }
-
-        // Fallback: return first area (this is a simplified approach)
-        return layoutGrid.Areas.FirstOrDefault()?.Area?.ToString();
-    }
-
-    /// <summary>
-    /// Helper method to extract todo ID from area name (simplified)
-    /// </summary>
-    private static string ExtractTodoIdFromArea(string areaName)
-    {
-        // This is a simplified implementation
-        // In practice, you'd parse the area name or access the underlying data
-        _ = areaName; // Suppress unused parameter warning
-        return "extracted-todo-id"; // Placeholder
-    }
-
-    /// <summary>
-    /// Helper method to find a todo in InProgress section by ID
-    /// </summary>
-    private static string? FindInProgressTodoById(LayoutGridControl layoutGrid, string todoId)
-    {
-        // Look for areas that suggest InProgress todos
-        _ = todoId; // Suppress unused parameter warning
-        foreach (var area in layoutGrid.Areas)
-        {
-            var areaName = area.Area?.ToString();
-            if (!string.IsNullOrEmpty(areaName) &&
-                (areaName.Contains("InProgress") || areaName.Contains("Progress") || areaName.Contains("Complete")))
-            {
-                return areaName;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Helper method to check if an area has a Complete button
-    /// </summary>
-    private static bool HasCompleteButton(LayoutGridControl layoutGrid, string areaName)
-    {
-        // Simplified check - in practice you'd examine the controls in the area
-        _ = layoutGrid; // Suppress unused parameter warning
-        return areaName?.Contains("Complete") == true || areaName?.Contains("Finish") == true;
-    }
-
-    /// <summary>
-    /// Helper method to check if an area has a Start button
-    /// </summary>
-    private static bool HasStartButton(LayoutGridControl layoutGrid, string areaName)
-    {
-        // Simplified check - in practice you'd examine the controls in the area
-        _ = layoutGrid; // Suppress unused parameter warning
-        return areaName?.Contains("Start") == true || areaName?.Contains("Begin") == true;
-    }
 }
