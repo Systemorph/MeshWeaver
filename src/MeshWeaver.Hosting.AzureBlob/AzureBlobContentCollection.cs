@@ -104,16 +104,25 @@ public class AzureBlobContentCollection : ContentCollection
 
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
-        var authorsClient = containerClient.GetBlobClient("authors.json");
-
-        if (await authorsClient.ExistsAsync(ct))
+        try
         {
-            await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
-            using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync(ct);
-            return ParseAuthors(content);
+            var authorsClient = containerClient.GetBlobClient("authors.json");
+
+            if (await authorsClient.ExistsAsync(ct))
+            {
+                await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
+                using var reader = new StreamReader(stream);
+                var content = await reader.ReadToEndAsync(ct);
+                return ParseAuthors(content);
+            }
+
+            return ImmutableDictionary<string, Author>.Empty;
+
         }
-        return ImmutableDictionary<string, Author>.Empty;
+        catch
+        {
+            return ImmutableDictionary<string, Author>.Empty;
+        }
     }
 
     private async IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool>? filter = null, string? prefix = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)

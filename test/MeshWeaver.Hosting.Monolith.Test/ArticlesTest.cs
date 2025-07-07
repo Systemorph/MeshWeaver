@@ -82,7 +82,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var articleStream = client.RenderArticle("Test","NotFound");
 
         var control = await articleStream
-            .Timeout(40.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>();
