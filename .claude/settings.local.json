@@ -9,7 +9,8 @@
       "Bash(rg:*)",
       "Bash(find:*)",
       "Bash(dotnet restore:*)",
-      "Bash(dotnet test:*)"
+      "Bash(dotnet test:*)",
+      "Bash(dotnet clean:*)"
     ],
     "deny": []
   }

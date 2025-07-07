@@ -207,7 +207,7 @@ namespace MeshWeaver.Charting.Pivot
             IReadOnlyCollection<(object Id, string DisplayName, object GrouperName)> coordinates
         )
         {
-            if (!coordinates.Any() || data.Any())
+            if (!coordinates.Any() || !data.Any())
                 return null;
 
             if (data.TryGetValue(coordinates.First().Id, out var subData))
