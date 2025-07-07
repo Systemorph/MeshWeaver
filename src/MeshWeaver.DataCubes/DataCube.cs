@@ -17,6 +17,8 @@ public class DataCube<T> : DataCubeBase<T>
     public override IDataCube<T> Filter(params (string filter, object value)[] tuple)
     {
         var parsedFilter = TuplesUtils<T>.GetFilter(tuple);
+        if (parsedFilter == null)
+            return this;
         return Filter(parsedFilter);
     }
 
