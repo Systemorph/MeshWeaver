@@ -36,10 +36,9 @@ public abstract class ContentCollection : IDisposable
     public string Collection => config.Name!;
     public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
 
-    public IObservable<object> GetMarkdown(string path)
+    public IObservable<object?>? GetMarkdown(string path)
         => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent())!
-            .Where(x => x.Value != null)
-            .Select(x => x.Value!);
+            .Select(x => x.Value);
 
 
     public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)

@@ -80,7 +80,7 @@ namespace MeshWeaver.Connection.Notebook
                 connection.Reconnected -= ConnectAsync;
                 connection.StopAsync().Wait();
             });
-            var language = connectCommand.Language == null
+            var language = string.IsNullOrEmpty(connectCommand.Language)
                 ? LanguageDescriptors.Values.First()
                 : LanguageDescriptors.GetValueOrDefault(connectCommand.Language) ??
                   throw new ArgumentException($"Unknown language: {connectCommand.Language}");

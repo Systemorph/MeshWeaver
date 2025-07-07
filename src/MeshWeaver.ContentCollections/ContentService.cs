@@ -76,7 +76,7 @@ public class ContentService : IContentService
         };
     }
 
-    public IObservable<object>? GetArticle(string collection, string article)
+    public IObservable<object?>? GetArticle(string collection, string article)
     {
         return GetCollection(collection)?.GetMarkdown(article);
     }
