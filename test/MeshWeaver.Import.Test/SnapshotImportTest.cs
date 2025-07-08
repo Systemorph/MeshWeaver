@@ -1,5 +1,6 @@
 ﻿using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -59,13 +60,16 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
-        );
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+                new CancellationTokenSource(3.Seconds()).Token)
+        ;
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        var ret = await workspace.GetObservable<MyRecord>().FirstAsync(x => x.Any());
+        var ret = await workspace.GetObservable<MyRecord>()
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(4);
 
@@ -80,7 +84,8 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            new CancellationTokenSource(3.Seconds()).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -137,7 +142,7 @@ SystemName,DisplayName
 ";
 
         //snapshot
-        importRequest = new ImportRequest(content2) { UpdateOptions = new(){Snapshot = true} };
+        importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress())

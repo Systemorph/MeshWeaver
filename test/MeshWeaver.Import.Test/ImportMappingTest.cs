@@ -55,10 +55,9 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                                 )
                         )
             );
-            ;
     }
 
-    private ImportFormat.ImportFunctionAsync customImportFunctionAsync = null;
+    private ImportFormat.ImportFunctionAsync customImportFunctionAsync;
 
     private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
@@ -182,7 +181,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws,store) =>
+        customImportFunctionAsync = (_, set, ws, store) =>
         {
             var instances = set.Tables[nameof(MyRecord)]
                 .Rows.Select(dsRow => new MyRecord()

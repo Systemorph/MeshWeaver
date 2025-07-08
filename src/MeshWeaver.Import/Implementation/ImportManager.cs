@@ -6,6 +6,7 @@ using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
@@ -15,16 +16,35 @@ public class ImportManager
     private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
-    private readonly IMessageHub importHub;
+    private IMessageHub? _importHub;
+    private IMessageHub ImportHub
+    {
+        get
+        {
+            if (_importHub == null)
+            {
+                var logger = Hub.ServiceProvider.GetService<ILogger<ImportManager>>();
+                logger?.LogDebug("ImportManager lazy-initializing import hub for address {ImportAddress}", new ImportAddress());
+                _importHub = Hub.GetHostedHub(new ImportAddress());
+                logger?.LogDebug("ImportManager import hub initialized: {ImportHub}", _importHub?.Address);
+            }
+            return _importHub!;
+        }
+    }
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
     public ImportManager(IWorkspace workspace, IMessageHub hub)
     {
+        var logger = hub.ServiceProvider.GetService<ILogger<ImportManager>>();
+        logger?.LogDebug("ImportManager constructor starting for hub {HubAddress}", hub.Address);
+
         Workspace = workspace;
         Hub = hub;
         Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c, l) => l.Invoke(c));
-        importHub = hub.GetHostedHub(new ImportAddress())!;
+
+        // Don't initialize the import hub in constructor - do it lazily to avoid timing issues
+        logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
@@ -34,7 +54,7 @@ public class ImportManager
             ? new CancellationTokenSource(request.Message.Timeout.Value)
             : new CancellationTokenSource();
 
-        importHub.InvokeAsync(ct =>
+        ImportHub.InvokeAsync(ct =>
         {
             // Combine the provided cancellation token with our timeout token
             using var combined = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationTokenSource.Token);

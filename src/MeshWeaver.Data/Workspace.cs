@@ -12,9 +12,12 @@ namespace MeshWeaver.Data;
 
 public class Workspace : IWorkspace
 {
+    private readonly ILogger<Workspace> _logger;
+    
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
+        _logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
@@ -144,18 +147,55 @@ public class Workspace : IWorkspace
 
     public async ValueTask DisposeAsync()
     {
+        _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}", 
+            Id, Thread.CurrentThread.ManagedThreadId);
+        
         if (isDisposing)
+        {
+            _logger.LogDebug("Workspace {WorkspaceId} already disposing, returning", Id);
             return;
+        }
         isDisposing = true;
+        
+        _logger.LogDebug("Workspace {WorkspaceId} disposing {AsyncCount} async disposables", Id, asyncDisposables.Count);
         while (asyncDisposables.TryTake(out var d))
-            await d.DisposeAsync();
+        {
+            try
+            {
+                await d.DisposeAsync();
+                _logger.LogTrace("Workspace {WorkspaceId} disposed async disposable {DisposableType}", Id, d.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workspace {WorkspaceId} error disposing async disposable {DisposableType}", Id, d.GetType().Name);
+            }
+        }
 
+        _logger.LogDebug("Workspace {WorkspaceId} disposing {SyncCount} sync disposables", Id, disposables.Count);
         while (disposables.TryTake(out var d))
-            d.Dispose();
+        {
+            try
+            {
+                d.Dispose();
+                _logger.LogTrace("Workspace {WorkspaceId} disposed sync disposable {DisposableType}", Id, d.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workspace {WorkspaceId} error disposing sync disposable {DisposableType}", Id, d.GetType().Name);
+            }
+        }
 
-
-
-        DataContext.Dispose();
+        _logger.LogDebug("Workspace {WorkspaceId} disposing DataContext", Id);
+        try
+        {
+            DataContext.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Workspace {WorkspaceId} error disposing DataContext", Id);
+        }
+        
+        _logger.LogInformation("Workspace {WorkspaceId} DisposeAsync completed", Id);
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
     private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();

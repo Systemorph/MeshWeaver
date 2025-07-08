@@ -56,12 +56,45 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         return Task.CompletedTask;
     }, exceptionCallback);
 
-    IMessageHub? GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default)
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
+    /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
+    /// </summary>
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, HostedHubCreation create)
+        where TAddress : Address
+        => GetHostedHub(address, x => x, create);
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// </summary>
+    /// <typeparam name="TAddress"></typeparam>
+    /// <param name="address"></param>
+    /// <returns></returns>
+    IMessageHub GetHostedHub<TAddress>(TAddress address)
+        where TAddress : Address
+        => GetHostedHub(address, x => x);
+
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address and configuration.
+    /// </summary>
+    /// <typeparam name="TAddress"></typeparam>
+    /// <param name="address"></param>
+    /// <param name="config"></param>
+    /// <returns></returns>
+    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        where TAddress : Address
+        => GetHostedHub(address, config, HostedHubCreation.Always)!;
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
+    /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
+    /// </summary>
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address;
 
-    IMessageHub? GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
-        where TAddress : Address
-        => GetHostedHub(address, null!, create);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
     IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_, _) => disposable.DisposeAsync().AsTask());
