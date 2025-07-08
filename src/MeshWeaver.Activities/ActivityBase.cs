@@ -34,7 +34,9 @@ namespace MeshWeaver.Activities
             return Task.CompletedTask;
         }
 
-        private TActivity current; public void Update(Func<TActivity, TActivity> update, Func<Exception, Task> exceptionCallback)
+        private TActivity current;
+
+        public void Update(Func<TActivity, TActivity> update, Func<Exception, Task> exceptionCallback)
         {
             if (SyncHub == null)
             {

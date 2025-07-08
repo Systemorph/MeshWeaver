@@ -91,7 +91,7 @@ public static class WorkspaceOperations
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             var activityPart = activity.StartSubActivity(ActivityCategory.DataUpdate);
-            stream!.Update(async (store,_) =>
+            stream!.Update(store =>
             {
                 activityPart.LogInformation("Updating Data Stream {identity}", stream.StreamIdentity);
                 try
@@ -139,14 +139,14 @@ public static class WorkspaceOperations
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                             });
                     activityPart.LogInformation("Update of Data Stream {identity} succeeded.", stream.StreamIdentity);
-                    await activityPart.Complete();
+                    activityPart.Complete();
                     return stream.ApplyChanges(updates);
                 }
                 catch (Exception ex)
                 {
                     activityPart.LogError("Error updating Stream {identity}: {exception}", stream.StreamIdentity,
                         ex.Message);
-                    await activityPart.Complete();
+                    activityPart.Complete();
                     return null;
                 }
 
