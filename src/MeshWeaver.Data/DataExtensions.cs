@@ -190,16 +190,15 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
-        IMessageDelivery<DataChangeRequest> request, CancellationToken cancellationToken)
+    private static IMessageDelivery HandleDataChangeRequest(IMessageHub hub,
+        IMessageDelivery<DataChangeRequest> request)
     {
         var activity = new Activity(ActivityCategory.DataUpdate, hub);
         hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
             request);
-        await activity.Complete(log =>
+        activity.Complete(log =>
                 hub.Post(new DataChangeResponse(hub.Version, log),
-                    o => o.ResponseFor(request)),
-            cancellationToken: cancellationToken);
+                    o => o.ResponseFor(request)));
         return request.Processed();
     }
 

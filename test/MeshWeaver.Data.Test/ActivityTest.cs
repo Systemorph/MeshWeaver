@@ -26,18 +26,22 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activity.LogInformation(nameof(activity));
         subActivity.LogInformation(nameof(subActivity));
 
-        var closeTask = activity.Complete(log =>
+        var closeTask = activity.Completion;
+        
+        subActivity.Complete(l =>
+        {
+            l.Status.Should().Be(ActivityStatus.Succeeded);
+        });
+        await subActivity.Completion;
+
+        activity.Complete(log =>
         {
             log.Should().NotBeNull();
             log.Status.Should().Be(ActivityStatus.Succeeded);
             log.SubActivities.Should().HaveCount(1);
             log.SubActivities.First().Value.Status.Should().Be(ActivityStatus.Succeeded);
         });
-        //subActivity.Complete();
-        await subActivity.Complete(l =>
-        {
-            l.Status.Should().Be(ActivityStatus.Succeeded);
-        });
+        
         await closeTask;
     }
 
@@ -49,20 +53,24 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var activity = new Activity("MyActivity", GetClient());
         var subActivity = activity.StartSubActivity("gugus");
-        var taskComplete = activity.Complete();
+        var taskComplete = activity.Completion;
         ActivityLog activityLog = null;
-        var taskComplete2 = activity.Complete(log => activityLog = log);
+        var taskComplete2 = activity.Completion; // Both should refer to the same completion
         activityLog.Should().BeNull();
-        await subActivity.Complete();
+        
+        subActivity.Complete();
+        await subActivity.Completion;
 
-        await activity.Complete(log =>
+        activity.Complete(log =>
         {
             log.Status.Should().Be(ActivityStatus.Succeeded);
             log.SubActivities.Should().HaveCount(1);
-            activityLog.Should().Be(log);
+            activityLog = log;
         });
+        
         await DisposeAsync();
         taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
         taskComplete2.Status.Should().Be(TaskStatus.RanToCompletion);
+        activityLog.Should().NotBeNull();
     }
 }

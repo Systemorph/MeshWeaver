@@ -12,10 +12,10 @@ namespace MeshWeaver.Import.Implementation;
 
 public class ImportManager
 {
-    private record ImportAddress() : Address("import", Guid.NewGuid().AsString()!);
+    private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
-    private readonly IMessageHub importHub = null!;
+    private readonly IMessageHub importHub;
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
@@ -39,12 +39,16 @@ public class ImportManager
             // Combine the provided cancellation token with our timeout token
             using var combined = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationTokenSource.Token);
             return DoImport(request, combined.Token);
-        }, ex => FailImport(ex, request));
+        }, ex =>
+        {
+            FailImport(ex, request);
+            return Task.CompletedTask;
+        });
 
         return request.Processed();
     }
 
-    private Task FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
+    private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
     {
         var message = new StringBuilder(exception.Message);
         while (exception.InnerException != null)
@@ -54,7 +58,7 @@ public class ImportManager
         }
         var activity = new Activity(ActivityCategory.Import, Hub);
         activity.LogError(message.ToString());
-        return activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
     private async Task<IMessageDelivery> DoImport(
@@ -72,25 +76,25 @@ public class ImportManager
             await ImportImpl(request, activity, cancellationToken);
             activity.LogInformation("Import {ImportId} implementation completed, starting Activity.Complete", importId);
 
-            await activity.Complete(log =>
+            activity.Complete(log =>
             {
                 activity.LogInformation("Import {ImportId} Activity.Complete callback executing", importId);
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                 activity.LogInformation("Import {ImportId} response posted", importId);
-            }, cancellationToken: cancellationToken);
+            });
 
             activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
         }
         catch (Exception e)
         {
             activity.LogError("Import {ImportId} failed with exception: {Exception}", importId, e.Message);
-            await FinishWithException(request, e, activity);
+            FinishWithException(request, e, activity);
         }
 
         return request.Processed();
     }
 
-    private async Task FinishWithException(IMessageDelivery request, Exception e,
+    private void FinishWithException(IMessageDelivery request, Exception e,
         Activity activity)
     {
         var message = new StringBuilder(e.Message);
@@ -101,7 +105,7 @@ public class ImportManager
         }
 
         activity.LogError(message.ToString());
-        await activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
 
@@ -182,7 +186,7 @@ public class ImportManager
         if (importFormat == null)
             throw new ImportException($"Unknown format: {format}");
 
-        return (dataSet, importFormat!);
+        return (dataSet, importFormat);
     }
 
     public static string ImportFailed = "Import Failed. See Activity Log for Errors";
