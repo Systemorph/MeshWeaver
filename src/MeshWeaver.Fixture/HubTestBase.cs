@@ -33,9 +33,7 @@ public class HubTestBase : TestBase
         });
 
         Services.AddSingleton(
-            (Func<IServiceProvider, IMessageHub>)(
-                sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
-            )
+            sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
         );
     }
     private static readonly Dictionary<string, Type> AddressTypes = new()
@@ -62,14 +60,14 @@ public class HubTestBase : TestBase
         MessageHubConfiguration configuration
     ) => configuration.WithTypes(AddressTypes);
 
-    protected virtual IMessageHub? GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
+    protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
+        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
     }
 
-    protected virtual IMessageHub? GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
+    protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
+        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
     }
     public override async Task DisposeAsync()
     {

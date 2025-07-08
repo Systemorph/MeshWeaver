@@ -56,6 +56,8 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         var taskComplete = activity.Completion;
         ActivityLog activityLog = null;
         var taskComplete2 = activity.Completion; // Both should refer to the same completion
+        
+        // Initially activityLog should be null
         activityLog.Should().BeNull();
         
         subActivity.Complete();
@@ -67,6 +69,9 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
             log.SubActivities.Should().HaveCount(1);
             activityLog = log;
         });
+        
+        // Wait for the main activity to complete before disposal
+        await taskComplete;
         
         await DisposeAsync();
         taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
