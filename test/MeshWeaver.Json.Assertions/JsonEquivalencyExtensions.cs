@@ -5,7 +5,7 @@ namespace MeshWeaver.Json.Assertions;
 
 public static class JsonEquivalencyExtensions
 {
-    public static EquivalencyOptions<T> UsingJson<T>(this EquivalencyOptions<T> options, Func<JsonEquivalencyOptions, JsonEquivalencyOptions> jsonOptionsConfig = null)
+    public static EquivalencyOptions<T> UsingJson<T>(this EquivalencyOptions<T> options, Func<JsonEquivalencyOptions, JsonEquivalencyOptions>? jsonOptionsConfig = null)
     {
         var jsonOptions = new JsonEquivalencyOptions();
 

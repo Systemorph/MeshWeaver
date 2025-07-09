@@ -10,11 +10,11 @@ public record TwoDimValue
 {
     [NotVisible]
     [Dimension(typeof(Dim1))]
-    public string Dim1 { get; init; }
+    public string? Dim1 { get; init; }
 
     [NotVisible]
     [Dimension(typeof(Dim2))]
-    public string Dim2 { get; init; }
+    public string Dim2 { get; init; } = null!;
 
     public double Value { get; init; }
 

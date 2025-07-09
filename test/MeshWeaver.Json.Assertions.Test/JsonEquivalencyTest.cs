@@ -147,13 +147,13 @@ public class JsonEquivalencyTest
 
 public class Container
 {
-    public object Value { get; set; }
+    public object Value { get; set; } = null!;
 }
 
 public class BaseType
 {
     public int Prop1 { get; set; }
-    public string Prop2 { get; set; }
+    public string Prop2 { get; set; } = null!;
 }
 
 public class InheritedType : BaseType

@@ -6,7 +6,7 @@ namespace MeshWeaver.DataSetReader.Test;
 
 public abstract class DataSetReaderTestBase(ITestOutputHelper toh) : TestBase(toh)
 {
-    protected ITestFileStorageService FileStorageService;
+    protected ITestFileStorageService FileStorageService = null!;
 
     public override async Task InitializeAsync()
     {

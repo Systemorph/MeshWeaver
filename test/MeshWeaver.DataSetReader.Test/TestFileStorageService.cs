@@ -24,7 +24,7 @@ public class TestFileStorageService : ITestFileStorageService
         return await Task.FromResult((Stream)resource);
     }
 
-    public async Task<Uri> WriteAsync(Stream stream, string filePath, CancellationToken cancellation = default)
+    public async Task<Uri?> WriteAsync(Stream stream, string filePath, CancellationToken cancellation = default)
     {
         await using var ms = new MemoryStream();
         await stream.CopyToAsync(ms, cancellation);

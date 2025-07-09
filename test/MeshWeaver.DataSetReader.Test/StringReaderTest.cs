@@ -19,7 +19,7 @@ namespace MeshWeaver.DataSetReader.Test
 
         private Task<(IDataSet DataSet, string Format)> ReadFromStream(
             Stream stream,
-            DataSetReaderOptions options = null
+            DataSetReaderOptions? options = null
         ) => DataSetCsvSerializer.ReadAsync(stream, options ?? new() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" });
 
         [Fact]

@@ -25,7 +25,7 @@ public class JsonEquivalencyOptions
         {
             list = ExcludedProperties[propertyInfo.DeclaringType] = new List<string>();
         }
-        list.Add(propertyInfo.Name.ToCamelCase());
+        list.Add(propertyInfo.Name?.ToCamelCase() ?? string.Empty);
         return this;
     }
     public JsonEquivalencyOptions ExcludeTypeDiscriminator(bool flag = true)

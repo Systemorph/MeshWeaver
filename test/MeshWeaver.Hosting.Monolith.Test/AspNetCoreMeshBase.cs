@@ -21,8 +21,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
 {
     public abstract class AspNetCoreMeshBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
-        protected IHost Host;
-        protected TestServer Server;
+        protected IHost Host = null!;
+        protected TestServer Server = null!;
         public static string SignalREndPoint = SignalRConnectionHub.EndPoint;
         public static string KernelEndPoint = KernelHub.EndPoint;
         public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";

@@ -7,9 +7,9 @@ namespace MeshWeaver.TestDomain.SimpleData;
 public record TestHierarchicalDimensionA : IHierarchicalDimension
 {
     [Key]
-    public string SystemName { get; init; }
-    public string DisplayName { get; init; }
-    public object Parent { get; init; }
+    public string SystemName { get; init; } = null!;
+    public string DisplayName { get; init; } = null!;
+    public object? Parent { get; init; }
 
     public static TestHierarchicalDimensionA[] Data =
     {
@@ -55,9 +55,9 @@ public record TestHierarchicalDimensionA : IHierarchicalDimension
 public record TestHierarchicalDimensionB : IHierarchicalDimension
 {
     [Key]
-    public string SystemName { get; init; }
-    public string DisplayName { get; init; }
-    public object Parent { get; init; }
+    public string SystemName { get; init; } = null!;
+    public string DisplayName { get; init; } = null!;
+    public object? Parent { get; init; }
 
     public static TestHierarchicalDimensionB[] Data =
     {
@@ -104,7 +104,7 @@ public record ValueWithHierarchicalDimension
 {
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
-    public string DimA { get; init; }
+    public string DimA { get; init; } = null!;
 
     public double Value { get; init; }
 
@@ -122,7 +122,7 @@ public record ValueWithAggregateByHierarchicalDimension
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
     [AggregateBy]
-    public string DimA { get; init; }
+    public string DimA { get; init; } = null!;
 
     public double Value { get; init; }
 
@@ -139,11 +139,11 @@ public record ValueWithTwoHierarchicalDimensions
 {
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
-    public string DimA { get; init; }
+    public string DimA { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionB), nameof(DimB))]
-    public string DimB { get; init; }
+    public string DimB { get; init; } = null!;
 
     public double Value { get; init; }
 
@@ -180,11 +180,11 @@ public record ValueWithMixedDimensions
 {
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
-    public string DimA { get; init; }
+    public string DimA { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(string), nameof(DimD))]
-    public string DimD { get; init; }
+    public string DimD { get; init; } = null!;
 
     public double Value { get; init; }
 
@@ -222,12 +222,12 @@ public record ValueWithTwoAggregateByHierarchicalDimensions
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionA), nameof(DimA))]
     [AggregateBy]
-    public string DimA { get; init; }
+    public string DimA { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(TestHierarchicalDimensionB), nameof(DimB))]
     [AggregateBy]
-    public string DimB { get; init; }
+    public string DimB { get; init; } = null!;
 
     public double Value { get; init; }
 
@@ -264,15 +264,15 @@ public record ValueWithLevelDimensions
 {
     [NotVisible]
     [Dimension(typeof(string), nameof(Level1))]
-    public string Level1 { get; init; }
+    public string Level1 { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(string), nameof(Level2))]
-    public string Level2 { get; init; }
+    public string Level2 { get; init; } = null!;
 
     [NotVisible]
     [Dimension(typeof(string), nameof(Level3))]
-    public string Level3 { get; init; }
+    public string? Level3 { get; init; }
 
     public double Value { get; init; }
 
