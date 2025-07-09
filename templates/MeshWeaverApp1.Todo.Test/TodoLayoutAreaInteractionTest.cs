@@ -40,7 +40,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Wait for the final layout control (skip loading states)
         Output.WriteLine("⏳ Waiting for layout area to render with data...");
         var control = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .OfType<LayoutGridControl>() // Wait specifically for LayoutGridControl
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -174,7 +174,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("⏳ Waiting for initial layout area to render...");
         var initialControl = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .OfType<LayoutGridControl>()
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -190,7 +190,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         Output.WriteLine("⏳ Getting updated layout grid after action...");
         var finalLayoutGrid = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .OfType<LayoutGridControl>()
             .Skip(1)
             .Timeout(5.Seconds())
@@ -216,7 +216,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             try
             {
                 var areaControl = await stream
-                    .GetControlStream(areaName)
+                    .GetControlStream(areaName!)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
@@ -264,7 +264,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             try
             {
                 var areaControls = await stream
-                    .GetControlStream(areaName)
+                    .GetControlStream(areaName!)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
@@ -294,7 +294,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                                 try
                                 {
                                     var stackAreaControl = await stream
-                                        .GetControlStream(stackAreaName)
+                                        .GetControlStream(stackAreaName!)
                                         .Timeout(2.Seconds())
                                         .FirstOrDefaultAsync();
 
@@ -354,7 +354,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             try
             {
                 var areaControl = await stream
-                    .GetControlStream(areaName)
+                    .GetControlStream(areaName!)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
@@ -445,7 +445,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         Output.WriteLine("🖱️ Clicking the button control...");
 
         // Create a click event for the specific button area
-        var clickEvent = new ClickedEvent(buttonAreaName, stream.StreamId);
+        var clickEvent = new ClickedEvent(buttonAreaName!, stream.StreamId);
 
         // Use the hub from the stream to post the event
         stream.Hub.Post(clickEvent, o => o.WithTarget(TodoApplicationAttribute.Address));

@@ -11,7 +11,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
@@ -51,7 +50,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected string GetAssemblyLocation()
     {
         var location = GetType().Assembly.Location;
-        return Path.GetDirectoryName(location);
+        return Path.GetDirectoryName(location)!;
     }
 
 
@@ -83,7 +82,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var control = await articleStream
             .Timeout(20.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync();
 
         control.Should().BeOfType<MarkdownControl>();
     }
@@ -104,7 +103,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         stack.Areas.Should().HaveCount(2);
 
         var articles = await stack.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()).FirstAsync())
+            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()!).FirstAsync())
             .ToArrayAsync();
 
         articles.Should().HaveCount(2);
@@ -129,7 +128,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected static string GetIdFromDataContext(UiControl articleControl)
     {
         var pattern = @"/data/\""(?<id>[^\""]+)\""";
-        var match = Regex.Match(articleControl.DataContext, pattern);
+        var match = Regex.Match(articleControl.DataContext!, pattern);
         var id = match.Groups["id"].Value;
         return id;
     }

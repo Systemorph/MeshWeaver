@@ -118,7 +118,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await stream.GetControlStream(stack.Areas.First().Area.ToString())
+        control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var editor = control.Should().BeOfType<EditorControl>().Which;
@@ -127,7 +127,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         stream.UpdatePointer(3, editor.DataContext, new("summand1"));
-        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString())
+        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(3.Seconds())
             .FirstAsync(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
 

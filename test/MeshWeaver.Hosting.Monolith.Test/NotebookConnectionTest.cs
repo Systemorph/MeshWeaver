@@ -86,7 +86,7 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
             .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
         var control = await stream
-            .GetControlStream(area)
+            .GetControlStream(area.ToString()!)
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null);
 

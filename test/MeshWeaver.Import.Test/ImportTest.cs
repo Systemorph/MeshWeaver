@@ -135,7 +135,7 @@ Id,Year,LoB,BusinessUnit,Value
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(new ReferenceDataAddress(), null)
+            Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var items = await workspace
             .GetObservable<LineOfBusiness>()
@@ -170,7 +170,7 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         await Task.Delay(100);
         var workspace = GetWorkspace(
-            Router.GetHostedHub(new ReferenceDataAddress(), null)
+            Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));
         var actualBUs = await workspace.GetObservable<BusinessUnit>().FirstAsync(x => x.Count > 2);

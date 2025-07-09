@@ -89,7 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -137,10 +137,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controls = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(10.Seconds())
-            .ToArray()!
+            .ToArray();
         controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
     }
 
@@ -203,7 +203,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        }, null);
+        }, null!);
 
         var updatedControls = await stream
             .GetControlStream(reportArea)
@@ -256,7 +256,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Subject;
         pointer.Pointer.Should().Be("displayName");
         var parsedPointer = JsonPointer.Parse($"/{pointer.Pointer}");
-        data.Select(d => parsedPointer.Evaluate(d).Value.ToString())
+        data.Select(d => parsedPointer.Evaluate(d)!.Value.ToString())
             .Should()
             .BeEquivalentTo("Hello", "World");
     }
@@ -329,7 +329,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
@@ -435,11 +435,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        }, null);
+        }, null!);
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x => !((bool)((CheckBoxControl)x).Data))
+            .Where(x => !((bool)((CheckBoxControl)x!).Data))
             .Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
@@ -464,7 +464,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return area
             .Hub.GetWorkspace()
-            .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+            .GetStream(typeof(DataRecord)).Select(x => x.Value!.GetData<DataRecord>())
             .DistinctUntilChanged()
             .Select(data =>
                 Template.Bind(data, x => area.ToDataGrid(x), nameof(CatalogView)));
@@ -482,7 +482,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
@@ -536,7 +536,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 

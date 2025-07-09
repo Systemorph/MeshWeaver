@@ -44,20 +44,20 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                             import
                                 .WithFormat(
                                     "Test",
-                                    format => format.WithImportFunction(customImportFunctionAsync)
+                                    format => format.WithImportFunction(customImportFunctionAsync!)
                                 )
                                 .WithFormat(
                                     "Test2",
                                     format =>
                                         format
-                                            .WithImportFunction(customImportFunctionAsync)
+                                            .WithImportFunction(customImportFunctionAsync!)
                                             .WithAutoMappings()
                                 )
                         )
             );
     }
 
-    private ImportFormat.ImportFunctionAsync customImportFunctionAsync;
+    private ImportFormat.ImportFunctionAsync? customImportFunctionAsync;
 
     private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
@@ -143,12 +143,12 @@ Record3SystemName,Record3DisplayName";
     {
         customImportFunctionAsync = (_, set, ws, store) =>
         {
-            var instances = set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
                 {
-                    SystemName = dsRow[nameof(MyRecord.SystemName)]
-                        .ToString()
-                        ?.Replace("Old", "New"),
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]!
+                        .ToString()!
+                        .Replace("Old", "New"),
                     DisplayName = "test"
                 }).ToArray();
             return Task.FromResult(ws.AddInstances(store, instances));
@@ -183,12 +183,12 @@ Record3SystemName,Record3DisplayName";
     {
         customImportFunctionAsync = (_, set, ws, store) =>
         {
-            var instances = set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
                 {
-                    SystemName = dsRow[nameof(MyRecord.SystemName)]
-                        .ToString()
-                        ?.Replace("Old", "New"),
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]!
+                        .ToString()!
+                        .Replace("Old", "New"),
                     DisplayName = "test"
                 }).ToArray();
             return Task.FromResult(ws.AddInstances(store, instances));
