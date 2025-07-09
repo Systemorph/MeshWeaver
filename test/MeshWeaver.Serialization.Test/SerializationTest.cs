@@ -261,6 +261,6 @@ public record MyEvent(string Text);
 
 public record LayoutControlMessage
 {
-    public object Control { get; init; }
-    public string Description { get; init; }
+    public object Control { get; init; } = null!;
+    public string Description { get; init; } = null!;
 }

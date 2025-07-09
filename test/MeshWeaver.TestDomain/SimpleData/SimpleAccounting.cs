@@ -16,10 +16,10 @@ public record SimpleAccounting
     public double EoP => BoP + Delta;
 
     [NotVisible]
-    public string SystemName { get; init; }
+    public string SystemName { get; init; } = null!;
 
     [NotVisible]
-    public string DisplayName { get; init; }
+    public string DisplayName { get; init; } = null!;
 }
 
 public record SimpleAccountingNamed : SimpleAccounting, INamed;

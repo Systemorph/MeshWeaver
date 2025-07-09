@@ -9,6 +9,7 @@
     <IsPackable>false</IsPackable>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
 </Project>

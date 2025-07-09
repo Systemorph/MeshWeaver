@@ -195,11 +195,11 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     private record ListForms
     {
         [Dimension<MyDimension>()]
-        public string Dimension { get; init; }
+        public string Dimension { get; init; } = null!;
         [Dimension<MyDimension>(Options = "stream")]
-        public string DimensionWithStream { get; init; }
+        public string DimensionWithStream { get; init; } = null!;
         [UiControl<RadioGroupControl>(Options = new[] { "chart", "table" })]
-        public string Display { get; init; }
+        public string Display { get; init; } = null!;
     }
 
     private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);

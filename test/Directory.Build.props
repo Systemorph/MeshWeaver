@@ -5,6 +5,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <!-- Suppress FluentAssertions license warning for open source projects -->
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
