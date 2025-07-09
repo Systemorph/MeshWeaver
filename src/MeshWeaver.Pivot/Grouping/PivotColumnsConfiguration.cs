@@ -47,30 +47,30 @@ namespace MeshWeaver.Pivot.Grouping
             }
         }
 
-        public IEnumerable<(ColumnGroup group, Func<TAggregate, object> accessor)> GetAccessors()
+        public IEnumerable<(ColumnGroup group, Func<TAggregate, object?> accessor)> GetAccessors()
         {
             foreach (var column in Columns)
             {
-                var prop = ValueType.GetProperty(column.Id?.ToString() ?? "");
+                var prop = ValueType.GetProperty(column.Id!.ToString()!);
                 if (prop != null)
                     yield return (
-                        new ColumnGroup(column.Id ?? "", column.DisplayName!, prop.Name),
+                        new ColumnGroup(column.Id, column.DisplayName!, prop.Name),
                         x =>
                         {
                             if (x == null)
-                                return "";
+                                return null;
                             var reflector = prop.GetReflector();
-                            return reflector.GetValue(x) ?? "";
+                            return reflector.GetValue(x);
                         }
                     );
                 else
                     yield return (
                         new ColumnGroup(
-                            column.Id ?? "",
+                            column.Id,
                             column.DisplayName!,
                             PivotConst.PropertyPivotGrouperName
                         ),
-                        x => x == null ? "" : x
+                        x => x
                     );
             }
         }

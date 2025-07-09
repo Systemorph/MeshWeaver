@@ -59,9 +59,9 @@ public class DimensionPivotGrouper<T, TDimension, TGroup>
         return new TGroup
         {
             Id = value,
-            DisplayName = displayName.ToString() ?? value.ToString() ?? "",
+            DisplayName = displayName.ToString() ?? value.ToString(),
             GrouperName = Id,
-            Coordinates = ImmutableList<object>.Empty.Add(value)
+            Coordinates = [value]
         };
     }
     private int GetOrder(object? dim)
