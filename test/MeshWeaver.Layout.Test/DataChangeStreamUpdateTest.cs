@@ -87,7 +87,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         return host.Workspace
             .GetStream<TestTaskItem>()
-            .Select(taskItems => CreateTaskListMarkdown(taskItems))
+            .Select(taskItems => CreateTaskListMarkdown(taskItems!))
             .StartWith(Controls.Markdown("# Task List\n\n*Loading tasks...*"));
     }
 
@@ -100,7 +100,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         return host.Workspace
             .GetStream<TestTaskItem>()
-            .Select(taskItems => CreateTaskCountMarkdown(taskItems))
+            .Select(taskItems => CreateTaskCountMarkdown(taskItems!))
             .StartWith(Controls.Markdown("# Task Count\n\n*Loading task statistics...*"));
     }
 
@@ -204,7 +204,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Step 3: Get the task we want to update
         var tasksData = await workspace
             .GetRemoteStream<TestTaskItem>(new HostAddress())
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync();
 
         var taskToUpdate = tasksData.First(t => t.Id == "task-1");
@@ -281,13 +281,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data
         await stream
             .GetControlStream(TaskCountArea)
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks"));
 
         // Get initial tasks
         var tasksData = await workspace
             .GetRemoteStream<TestTaskItem>(new HostAddress())
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync();
 
         // Update multiple tasks simultaneously
@@ -335,7 +335,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data (should show 3 tasks)
         await stream
             .GetControlStream(TaskCountArea)
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks:** 3"));
 
         // Create a new task
@@ -383,13 +383,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data
         await stream
             .GetControlStream(TaskListArea)
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
 
         // Get task to delete
         var tasksData = await workspace
             .GetRemoteStream<TestTaskItem>(new HostAddress())
-            .Timeout(5.Seconds())
+            .Timeout(5.Seconds())!
             .FirstAsync();
 
         var taskToDelete = tasksData.First(t => t.Id == "task-1");
