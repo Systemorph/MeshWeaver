@@ -17,7 +17,7 @@ namespace MeshWeaver.DataSetReader.Test
         public StringReaderTest(ITestOutputHelper output)
             : base(output) { }
 
-        private Task<(IDataSet DataSet, string Format)> ReadFromStream(
+        private Task<(IDataSet DataSet, string? Format)> ReadFromStream(
             Stream stream,
             DataSetReaderOptions? options = null
         ) => DataSetCsvSerializer.ReadAsync(stream, options ?? new() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" });

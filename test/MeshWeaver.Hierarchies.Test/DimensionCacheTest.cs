@@ -39,7 +39,7 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         var ci = await stream.FirstAsync();
-        return new(workspace, ci.Value);
+        return new(workspace, ci.Value!);
     }
 
     [Fact]
@@ -62,21 +62,21 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
-            hierarchies.Parent<TestHierarchicalDimensionA>("A111").SystemName.Should().Be("A11");
+            hierarchies.Parent<TestHierarchicalDimensionA>("A111")!.SystemName.Should().Be("A11");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 0)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 0)!
                 .SystemName.Should()
                 .Be("A1");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 1)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 1)!
                 .SystemName.Should()
                 .Be("A11");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A112", 1)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A112", 1)!
                 .SystemName.Should()
                 .Be("A11");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 2)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A111", 2)!
                 .SystemName.Should()
                 .Be("A111");
             hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A111", 3).Should().BeNull();
@@ -89,13 +89,13 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
-            hierarchies.Parent<TestHierarchicalDimensionA>("A11").SystemName.Should().Be("A1");
+            hierarchies.Parent<TestHierarchicalDimensionA>("A11")!.SystemName.Should().Be("A1");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 0)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 0)!
                 .SystemName.Should()
                 .Be("A1");
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 1)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A11", 1)!
                 .SystemName.Should()
                 .Be("A11");
             hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A11", 2).Should().BeNull();
@@ -110,7 +110,7 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         {
             hierarchies.Parent<TestHierarchicalDimensionA>("A1").Should().BeNull();
             hierarchies
-                .AncestorAtLevel<TestHierarchicalDimensionA>("A1", 0)
+                .AncestorAtLevel<TestHierarchicalDimensionA>("A1", 0)!
                 .SystemName.Should()
                 .Be("A1");
             hierarchies.AncestorAtLevel<TestHierarchicalDimensionA>("A1", 2).Should().BeNull();
@@ -123,11 +123,11 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A111").Level.Should().Be(2);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A112").Level.Should().Be(2);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A1")!.Level.Should().Be(0);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11")!.Level.Should().Be(1);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11")!.Level.Should().Be(1);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A111")!.Level.Should().Be(2);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A112")!.Level.Should().Be(2);
         }
     }
 
@@ -137,12 +137,12 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
         var hierarchies = await GetDimensionCacheAsync();
         using (new AssertionScope())
         {
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A1").Level.Should().Be(0);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11").Level.Should().Be(1);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A111").Level.Should().Be(2);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B1").Level.Should().Be(0);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B11").Level.Should().Be(1);
-            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B111").Level.Should().Be(2);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A1")!.Level.Should().Be(0);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A11")!.Level.Should().Be(1);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionA>("A111")!.Level.Should().Be(2);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B1")!.Level.Should().Be(0);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B11")!.Level.Should().Be(1);
+            hierarchies.GetHierarchy<TestHierarchicalDimensionB>("B111")!.Level.Should().Be(2);
         }
     }
 
@@ -151,6 +151,6 @@ public class DimensionCacheTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var hierarchies = await GetDimensionCacheAsync();
         var hierarchyA = hierarchies.GetHierarchy<TestHierarchicalDimensionA>();
-        hierarchyA.Get("A11").Parent.Should().Be(hierarchyA.Get("A12").Parent);
+        hierarchyA.Get("A11")!.Parent.Should().Be(hierarchyA.Get("A12")!.Parent);
     }
 }
