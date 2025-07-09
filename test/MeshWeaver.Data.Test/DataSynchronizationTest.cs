@@ -76,7 +76,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Timeout(3.Seconds())
-            .FirstAsync(x => x.DisplayName != oldName);
+            .FirstAsync(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
         // data sync is happening async in order not to block the client ==> we need to give it
@@ -98,7 +98,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
     {
         var host = GetHost();
         var workspace = host.GetWorkspace();
-        var businessUnits = await workspace.GetStream<BusinessUnit>().Timeout(3.Seconds()).FirstAsync();
+        var businessUnits = await workspace.GetStream<BusinessUnit>()!.Timeout(3.Seconds()).FirstAsync();
         businessUnits.Should().HaveCountGreaterThan(1);
 
         var businessUnit = businessUnits.First();
@@ -110,10 +110,10 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         var loadedInstance = await workspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Timeout(3.Seconds())
-            .FirstAsync(x => x.DisplayName != oldName);
+            .FirstAsync(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
 
-        var linesOfBusiness = await workspace.GetStream<LineOfBusiness>().Timeout(3.Seconds()).FirstAsync();
+        var linesOfBusiness = await workspace.GetStream<LineOfBusiness>()!.Timeout(3.Seconds()).FirstAsync();
         linesOfBusiness.Should().NotBeNullOrEmpty();
     }
 }

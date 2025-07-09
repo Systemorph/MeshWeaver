@@ -144,7 +144,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var activeItems = await workspace
             .GetObservable<WorkspaceTestData>()
-            .Select(collection => collection.Where(x => x.IsActive))
+            .Select(collection => collection.Where(x => x.IsActive).ToArray())
             .Timeout(10.Seconds())
             .FirstAsync();
 
@@ -225,7 +225,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updatedData = await workspace
             .GetObservable<WorkspaceTestData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Count == 2);
+            .FirstOrDefaultAsync(x => x.Count == 2);
 
         updatedData.Should().HaveCount(2);
         updatedData.Should().NotContain(x => x.Id == "3");
@@ -264,9 +264,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var collectionRef = new CollectionReference(nameof(WorkspaceTestData));
 
         // act
-        var stream = workspace.GetStream(collectionRef, null);
+        var stream = workspace.GetStream(collectionRef);
         var collection = await stream
-            .Select(c => c.Value.Instances.Values.Cast<WorkspaceTestData>())
+            .Select(c => c.Value!.Instances.Values.Cast<WorkspaceTestData>().ToArray())
             .Timeout(10.Seconds())
             .FirstAsync();
 
@@ -286,7 +286,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var entityRef = new EntityReference(nameof(WorkspaceTestData), "2");
 
         // act
-        var stream = workspace.GetStream(entityRef, null);
+        var stream = workspace.GetStream(entityRef);
         var item = await stream
             .Select(c => c.Value as WorkspaceTestData)
             .Timeout(10.Seconds())
@@ -319,7 +319,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             .GetWorkspace()
             .GetObservable<WorkspaceTestData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Any(item => item.Name == "Multi-Client Update") == true);
+            .FirstOrDefaultAsync(x => x.Any(item => item.Name == "Multi-Client Update") == true);
 
         client2Data.Should().Contain(x => x.Id == "1" && x.Name == "Multi-Client Update");
     }

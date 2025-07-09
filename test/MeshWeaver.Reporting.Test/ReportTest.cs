@@ -99,7 +99,7 @@ namespace MeshWeaver.Reporting.Test
                                 )
                                 .WithRows(rows =>
                                     rows.Modify(
-                                        r => r.RowGroup.DisplayName == "Premium",
+                                        r => r.RowGroup?.DisplayName == "Premium",
                                         r => r.WithDisplayName("Total Premium").AsTotal()
                                     )
                                 )
@@ -130,7 +130,7 @@ namespace MeshWeaver.Reporting.Test
                         .WithOptions(rm =>
                             rm.WithRows(rows =>
                                 rows.Modify(
-                                    r => r.RowGroup.DisplayName == "Premium",
+                                    r => r.RowGroup?.DisplayName == "Premium",
                                     r => r.WithDisplayName("Total Premium").AsTotal()
                                 )
                             )
@@ -152,7 +152,7 @@ namespace MeshWeaver.Reporting.Test
                                 )
                                 .WithRows(rows =>
                                     rows.Modify(
-                                        r => r.RowGroup.DisplayName == "Premium",
+                                        r => r.RowGroup?.DisplayName == "Premium",
                                         r => r.WithDisplayName("Total Premium").AsTotal()
                                     )
                                 )

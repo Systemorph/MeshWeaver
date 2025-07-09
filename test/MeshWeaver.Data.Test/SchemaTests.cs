@@ -227,13 +227,13 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         if (typeProperty.ValueKind == JsonValueKind.String)
         {
-            return typeProperty.GetString();
+            return typeProperty.GetString() ?? "unknown";
         }
         else if (typeProperty.ValueKind == JsonValueKind.Array)
         {
             // For nullable types, return the non-null type
             var types = typeProperty.EnumerateArray().Select(t => t.GetString()).ToArray();
-            return types.FirstOrDefault(t => t != "null") ?? types.First();
+            return types.FirstOrDefault(t => t != "null") ?? types.First() ?? "unknown";
         }
 
         return "unknown";
@@ -333,7 +333,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
+            new GetSchemaRequest(typeName!),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert

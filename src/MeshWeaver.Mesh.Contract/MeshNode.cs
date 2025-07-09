@@ -23,12 +23,12 @@ public record MessageLog(
     DateTimeOffset Timestamp,
     string Address,
     string MessageId,
-    IReadOnlyDictionary<string, object>? Message,
+    IReadOnlyDictionary<string, object?>? Message,
     string? Sender,
     string? Target,
     string? State,
-    IReadOnlyDictionary<string, object>? AccessContext,
-    IReadOnlyDictionary<string, object>? Properties)
+    IReadOnlyDictionary<string, object?>? AccessContext,
+    IReadOnlyDictionary<string, object?>? Properties)
 {
     public long Id { get; init; }
 }

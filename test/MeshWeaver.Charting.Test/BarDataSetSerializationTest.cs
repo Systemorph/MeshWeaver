@@ -200,6 +200,6 @@ public class BarDataSetSerializationTest(ITestOutputHelper toh) : HubTestBase(to
         Assert.Contains("\"x\":", json);
 
         // Verify that the scale has some type discriminator (polymorphic serialization is working)
-        Assert.Contains(typeof(CartesianScale).FullName, json);
+        Assert.Contains(typeof(CartesianScale).FullName!, json);
     }
 }
