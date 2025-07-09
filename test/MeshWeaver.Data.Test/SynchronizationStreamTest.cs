@@ -48,7 +48,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
         stream.Should().NotBeNull();
         stream.Reduce(new EntityReference(collectionName, Instance))
-            .Select(i => i.Value)
+            .Select(i => i.Value!)
             .Cast<MyData>()
             .Where(i => i != null)
             .Subscribe(tracker.Add);
@@ -68,7 +68,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                         [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
                         stream.StreamId)
                 );
-            }, null);
+            }, null!);
             return true;
         }).ToArray();
         await Task.Delay(10);

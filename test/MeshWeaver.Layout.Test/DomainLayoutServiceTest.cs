@@ -59,9 +59,9 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null)!
+            .FirstAsync(x => x != null);
         var stack = content
             .Should()
             .BeOfType<StackControl>()
@@ -98,7 +98,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         value = await stream
-            .DataBind<string>(namePointer, dataContext!, (x, _) => (string)x)
+            .DataBind<string>(namePointer, dataContext!, (x, _) => (string)x!)
             .Where(x => x != "Hello")
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null)!;
@@ -136,9 +136,9 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null)!
+            .FirstAsync(x => x != null);
         var stack = content
             .Should()
             .BeOfType<StackControl>()

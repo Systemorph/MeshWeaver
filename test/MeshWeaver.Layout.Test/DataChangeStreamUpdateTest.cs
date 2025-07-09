@@ -10,7 +10,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
-using Xunit;
 using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
@@ -41,7 +40,7 @@ public record TestTaskItem(
 /// Test to emulate the todo list update situation where DataChangeRequest should trigger layout area updates
 /// This test follows the exact pattern described:
 /// 1. ConfigureHost with some entity type (TestTaskItem) with initial data
-/// 2. Create layout area that subscribes to host.Workspace.GetStream<TestTaskItem>() and shows a property
+/// 2. Create layout area that subscribes to <code>host.Workspace.GetStream<TestTaskItem>()</code> and shows a property
 /// 3. From client emit DataChangeRequest to change a property
 /// 4. Verify that view updates to reflect the change
 /// </summary>
@@ -86,7 +85,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         _ = context; // Unused parameter but required by interface
 
         return host.Workspace
-            .GetStream<TestTaskItem>()
+            .GetStream<TestTaskItem>()!
             .Select(taskItems => CreateTaskListMarkdown(taskItems!))
             .StartWith(Controls.Markdown("# Task List\n\n*Loading tasks...*"));
     }
@@ -99,7 +98,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         _ = context; // Unused parameter but required by interface
 
         return host.Workspace
-            .GetStream<TestTaskItem>()
+            .GetStream<TestTaskItem>()!
             .Select(taskItems => CreateTaskCountMarkdown(taskItems!))
             .StartWith(Controls.Markdown("# Task Count\n\n*Loading task statistics...*"));
     }
@@ -203,8 +202,8 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         // Step 3: Get the task we want to update
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())
-            .Timeout(5.Seconds())!
+            .GetRemoteStream<TestTaskItem>(new HostAddress())!
+            .Timeout(5.Seconds())
             .FirstAsync();
 
         var taskToUpdate = tasksData.First(t => t.Id == "task-1");
@@ -281,13 +280,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data
         await stream
             .GetControlStream(TaskCountArea)
-            .Timeout(5.Seconds())!
+            .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks"));
 
         // Get initial tasks
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())
-            .Timeout(5.Seconds())!
+            .GetRemoteStream<TestTaskItem>(new HostAddress())!
+            .Timeout(5.Seconds())
             .FirstAsync();
 
         // Update multiple tasks simultaneously
@@ -295,7 +294,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         { 
             Status = "Completed", 
             UpdatedAt = DateTime.UtcNow 
-        }).ToArray();
+        }).Cast<object>().ToArray();
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTasks);
         
@@ -335,7 +334,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data (should show 3 tasks)
         await stream
             .GetControlStream(TaskCountArea)
-            .Timeout(5.Seconds())!
+            .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks:** 3"));
 
         // Create a new task
@@ -383,12 +382,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Wait for initial data
         await stream
             .GetControlStream(TaskListArea)
-            .Timeout(5.Seconds())!
+            .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
 
         // Get task to delete
         var tasksData = await workspace
-            .GetRemoteStream<TestTaskItem>(new HostAddress())
+            .GetRemoteStream<TestTaskItem>(new HostAddress())!
             .Timeout(5.Seconds())!
             .FirstAsync();
 

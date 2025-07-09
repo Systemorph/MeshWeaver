@@ -170,7 +170,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted, null),
+            DataChangeRequest.Delete(toBeDeleted, null!),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
@@ -222,7 +222,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client), null);
+        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client), null!);
 
         var hostWorkspace = GetHost().GetWorkspace();
 
@@ -265,11 +265,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var updateItems = new object[] { new MyData("5", null) };
+        var updateItems = new object[] { new MyData("5", null!) };
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems, null),
+            DataChangeRequest.Update(updateItems, null!),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -413,7 +413,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var invalidItems = new object[]
         {
-            new MyData("1", null), // Required field is null
+            new MyData("1", null!), // Required field is null
             new MyData("", "Valid text") // Empty ID
         };
 
@@ -526,7 +526,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act & assert for null
         var responseNull = await client.AwaitResponse(
-            new GetSchemaRequest(null),
+            new GetSchemaRequest(null!),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );

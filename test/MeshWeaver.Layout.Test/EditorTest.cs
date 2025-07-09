@@ -67,7 +67,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var control = await area
             .GetControlStream(nameof(EditorWithoutResult))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+            .FirstAsync(x => x is not null);
 
         var editor = control.Should().BeOfType<EditorControl>().Subject;
         editor.Areas.Should()
@@ -80,7 +80,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => 
-                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync()!)
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
             .ToArrayAsync();
 
         editorAreas.Should().HaveCount(2);
@@ -102,7 +102,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var control = await area
             .GetControlStream(nameof(EditorWithResult))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+            .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         control = await area
@@ -240,7 +240,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Waiting for options from stream...");
                 try
                 {
-                    options = await stream.Reduce(pointer)
+                    options = await stream.Reduce(pointer)!
                         .Select(p =>
                         {
                             Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Got stream value: {p.Value}");
@@ -314,7 +314,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 .SelectAwait(async a =>
                 {
                     Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
-                    var areaControl = await stream.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null);
+                    var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
+                        .FirstAsync(x => x is not null);
                     Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
                     return areaControl;
                 })
@@ -332,7 +333,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 
                 try
                 {
-                    await ValidateListBenchmark(stream, (dynamic)c, (dynamic)b);
+                    await ValidateListBenchmark(stream, (dynamic)c!, (dynamic)b);
                     Output.WriteLine($"🔧 DEBUG: Validation {i} completed");
                 }
                 catch (Exception ex)

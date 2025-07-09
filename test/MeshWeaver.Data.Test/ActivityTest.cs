@@ -54,7 +54,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         var activity = new Activity("MyActivity", GetClient());
         var subActivity = activity.StartSubActivity("gugus");
         var taskComplete = activity.Completion;
-        ActivityLog activityLog = null;
+        ActivityLog? activityLog = null;
         var taskComplete2 = activity.Completion; // Both should refer to the same completion
         
         // Initially activityLog should be null

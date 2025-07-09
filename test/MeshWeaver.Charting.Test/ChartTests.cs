@@ -134,8 +134,8 @@ public class ChartTests
     [Fact]
     public async Task Bar_Chart_Floating_Stacked()
     {
-        var first = new List<int[]> { new[] { -2, 96 }, new[] { 30, 96 }, null, null };
-        var second = new List<int[]> { null, new[] { -5, 20 }, new[] { 6, 12 }, new[] { 3, 6 } };
+        var first = new List<int[]?> { new[] { -2, 96 }, new[] { 30, 96 }, null, null };
+        var second = new List<int[]?> { null, new[] { -5, 20 }, new[] { 6, 12 }, new[] { 3, 6 } };
 
         string[] labels = { "Jan", "Feb", "Mar", "Apr" };
 
@@ -315,8 +315,8 @@ public class ChartTests
     [Fact]
     public async Task Bar_Chart_Horizontal_Floating()
     {
-        var first = new List<int[]> { new[] { -2, 96 }, new[] { 30, 96 }, null, null };
-        var second = new List<int[]> { null, new[] { -5, 20 }, new[] { 6, 12 }, new[] { 3, 6 } };
+        var first = new List<int[]?> { new[] { -2, 96 }, new[] { 30, 96 }, null, null };
+        var second = new List<int[]?> { null, new[] { -5, 20 }, new[] { 6, 12 }, new[] { 3, 6 } };
 
         string[] labels = { "Jan", "Feb", "Mar", "Apr" };
 

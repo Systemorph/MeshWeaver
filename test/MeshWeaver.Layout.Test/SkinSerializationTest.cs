@@ -29,7 +29,7 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
         // Test with various skin scenarios
         var skinsWithNull = ImmutableList<Skin>.Empty
             .Add(validSkin)
-            .Add(null); // This might cause issues
+            .Add(null!); // This might cause issues
 
         var stackWithNullSkin = stackControl with { Skins = skinsWithNull };
 

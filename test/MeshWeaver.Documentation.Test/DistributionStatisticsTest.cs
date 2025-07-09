@@ -29,7 +29,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         var client = GetClient();
         var area = nameof(DistributionStatisticsArea.DistributionStatistics);
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(Address, new LayoutAreaReference(area));
-        var control = await stream.GetControlStream(area)
+        var control = await stream.GetControlStream(area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -38,7 +38,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         stack.Areas.Should().HaveCount(4);
 
         // let's find the selection control in the first area.
-         control = await stream.GetControlStream(stack.Areas.First().Area.ToString())
+         control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
          
@@ -47,7 +47,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
          basicInputEditor.Areas.Should().HaveCount(2);
 
-         control = await stream.GetControlStream(basicInputEditor.Areas.Last().Area.ToString())
+         control = await stream.GetControlStream(basicInputEditor.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var select = control.Should().BeOfType<SelectControl>().Which;
@@ -73,7 +73,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         selection.ToString().Should().Be("Pareto");
 
         // let's find the distribution control in the second area.
-        control = await stream.GetControlStream(stack.Areas[1].Area.ToString())
+        control = await stream.GetControlStream(stack.Areas[1].Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -101,17 +101,19 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         // let's find the button and click
         var buttonArea = stack.Areas[2].Area;
-        control = await stream.GetControlStream(buttonArea.ToString())
+        control = await stream.GetControlStream(buttonArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<ButtonControl>();
-        client.Post(new ClickedEvent(buttonArea.ToString(), stream.StreamId), o => o.WithTarget(stream.Owner));
+        client.Post(new ClickedEvent(buttonArea.ToString()!, stream.StreamId), o => o.WithTarget(stream.Owner));
 
         control = await stream.GetControlStream(resultArea)
+            .Where(x => x != null)
+            .Cast<object>()
             .Timeout(10.Seconds())
             .OfType<MarkdownControl>()
-            .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"));
+            .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"))!;
 
         results = control.Should().BeOfType<MarkdownControl>().Which;
         var paretoResults = results.Markdown;
@@ -126,12 +128,14 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
             .FirstAsync(x => !x.GetProperty("$type").ToString().Contains("Pareto")));
 
         distribution.GetProperty("$type").ToString().Should().Contain("LogNormal");
-        client.Post(new ClickedEvent(buttonArea.ToString(), stream.StreamId), o => o.WithTarget(stream.Owner));
+        client.Post(new ClickedEvent(buttonArea.ToString()!, stream.StreamId), o => o.WithTarget(stream.Owner));
 
         control = await stream.GetControlStream(resultArea)
+            .Where(x => x != null)
+            .Cast<object>()
             .Timeout(10.Seconds())
             .OfType<MarkdownControl>()
-            .FirstAsync(md => md.Markdown != paretoResults);
+            .FirstAsync(md => md.Markdown != paretoResults)!;
         results = control.Should().BeOfType<MarkdownControl>().Which;
         results.Markdown.ToString().Should().Contain("Mean");
     }

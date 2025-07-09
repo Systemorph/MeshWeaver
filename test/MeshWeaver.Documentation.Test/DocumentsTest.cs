@@ -49,9 +49,9 @@ public class DocumentsTest(ITestOutputHelper output) : HubTestBase(output)
         var documentationService = GetHost().GetDocumentationService();
         documentationService.Should().NotBeNull();
         var type = GetType();
-        var sourceByType = (PdbDocumentationSource)documentationService.GetSource(PdbDocumentationSource.Pdb, type.Assembly.GetName().Name);
+        var sourceByType = (PdbDocumentationSource)documentationService.GetSource(PdbDocumentationSource.Pdb, type.Assembly.GetName().Name!);
         sourceByType.Should().NotBeNull();
-        var fileName = sourceByType.FilesByType.GetValueOrDefault(typeof(DocumentsTest).FullName);
+        var fileName = sourceByType.FilesByType.GetValueOrDefault(typeof(DocumentsTest).FullName!);
         fileName.Should().Be($"{nameof(DocumentsTest)}.cs");
         await using var stream = sourceByType.GetStream(fileName);
         stream.Should().NotBeNull();

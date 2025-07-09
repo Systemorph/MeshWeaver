@@ -63,7 +63,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await calcStream.GetControlStream(stack.Areas.Last().Area.ToString())
+        control = await calcStream.GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 

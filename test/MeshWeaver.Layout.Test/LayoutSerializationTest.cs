@@ -219,7 +219,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         // Test with various skin scenarios that might cause issues
         var skinsWithNull = ImmutableList<Skin>.Empty
             .Add(validSkin)
-            .Add(null); // This should be filtered out during serialization
+            .Add(null!); // This should be filtered out during serialization
 
         var stackWithNullSkin = stackControl with { Skins = skinsWithNull };
 

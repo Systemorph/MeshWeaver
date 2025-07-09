@@ -39,7 +39,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             .GetControlStream(reference.Area)!
             .OfType<LayoutGridControl>() // Wait specifically for LayoutGridControl
             .Timeout(10.Seconds())
-            .FirstAsync()!;
+            .FirstAsync();
 
         // Assert
         Output.WriteLine($"✅ SUCCESS: LayoutGrid rendered with {control.Areas.Count} areas");
@@ -77,7 +77,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Step 4: Click the button and wait for the pending count to change to 0
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
-        
+
         // Step 5: Wait for all pending todos to be moved to InProgress (pending count should be 0)
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to 0...");
         var finalPendingCount = await WaitForPendingCountChange(stream, reference, 0);
@@ -124,11 +124,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 
         // Step 4: Click the individual button and wait for the pending count to change
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
-        
+
         // Step 5: Wait for the pending count to decrease by monitoring the area updates
         var expectedFinalCount = initialPendingCount - 1;
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to {expectedFinalCount}...");
-        
+
         var finalPendingCount = await WaitForPendingCountChange(stream, reference, expectedFinalCount);
 
         // Validate the final state
@@ -174,7 +174,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             .GetControlStream(reference.Area)!
             .OfType<LayoutGridControl>()
             .Timeout(10.Seconds())
-            .FirstAsync()!;
+            .FirstAsync();
 
         Output.WriteLine($"✅ Initial LayoutGrid rendered with {initialControl.Areas.Count} areas");
         return initialControl;
@@ -187,10 +187,10 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     private async Task<int> WaitForPendingCountChange(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference, int expectedCount)
     {
         Output.WriteLine($"⏳ Monitoring areas for pending count change to {expectedCount}...");
-        
+
         var startTime = DateTime.UtcNow;
         var timeout = TimeSpan.FromSeconds(15); // Increased timeout for Start All operations
-        
+
         while (DateTime.UtcNow - startTime < timeout)
         {
             try
@@ -200,19 +200,19 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                     .GetControlStream(reference.Area)!
                     .OfType<LayoutGridControl>()
                     .Timeout(2.Seconds())
-                    .FirstAsync()!;
+                    .FirstAsync();
 
                 // Check the current pending count
                 var currentCount = await GetPendingCount(stream, layoutGrid);
-                
+
                 Output.WriteLine($"   Current pending count: {currentCount}, Expected: {expectedCount}");
-                
+
                 if (currentCount == expectedCount)
                 {
                     Output.WriteLine($"✅ Pending count successfully changed to {expectedCount}");
                     return currentCount;
                 }
-                
+
                 // Wait a bit before checking again
                 await Task.Delay(200); // Slightly longer delay for complex operations
             }
@@ -222,15 +222,15 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                 await Task.Delay(200);
             }
         }
-        
+
         // If we get here, we timed out
         var finalLayoutGrid = await stream
             .GetControlStream(reference.Area)!
             .OfType<LayoutGridControl>()
             .Timeout(2.Seconds())
-            .FirstAsync()!;
+            .FirstAsync();
         var finalCount = await GetPendingCount(stream, finalLayoutGrid);
-        
+
         Output.WriteLine($"⚠️ Timeout waiting for pending count change. Final count: {finalCount}, Expected: {expectedCount}");
         return finalCount;
     }
@@ -245,12 +245,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         foreach (var area in layoutGrid.Areas)
         {
             var areaName = area.Area.ToString();
+            if (areaName == null) continue;
+
             try
             {
                 var areaControl = await stream
-                    .GetControlStream(areaName!)
+                    .GetControlStream(areaName)
                     .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync()!
+                    .FirstOrDefaultAsync();
 
                 if (areaControl is LabelControl labelControl)
                 {
@@ -291,12 +293,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         foreach (var area in layoutGrid.Areas)
         {
             var areaName = area.Area.ToString();
+            if (areaName == null) continue;
+
             Output.WriteLine($"   Area: {areaName}");
 
             try
             {
                 var areaControls = await stream
-                    .GetControlStream(areaName!)
+                    .GetControlStream(areaName)
                     .Timeout(2.Seconds())
                     .FirstOrDefaultAsync();
 
@@ -328,7 +332,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
                                     var stackAreaControl = await stream
                                         .GetControlStream(stackAreaName)
                                         .Timeout(2.Seconds())
-                                        .FirstOrDefaultAsync()!
+                                        .FirstOrDefaultAsync();
 
                                     if (stackAreaControl is MenuItemControl stackButton)
                                     {
@@ -382,13 +386,14 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         foreach (var area in areas)
         {
             var areaName = area.Area.ToString();
+            if (areaName == null) continue;
 
             try
             {
                 var areaControl = await stream
-                    .GetControlStream(areaName!)
+                    .GetControlStream(areaName)
                     .Timeout(2.Seconds())
-                    .FirstOrDefaultAsync()!
+                    .FirstOrDefaultAsync();
 
                 if (areaControl is MenuItemControl button)
                 {

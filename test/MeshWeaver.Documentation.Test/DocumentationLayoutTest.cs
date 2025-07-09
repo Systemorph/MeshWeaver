@@ -70,7 +70,7 @@ public class DocumentationLayoutTest(ITestOutputHelper output) : HubTestBase(out
             .HaveCount(2);
 
         control = await stream
-            .GetControlStream(tabs.Areas.First().Area.ToString())
+            .GetControlStream(tabs.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         
@@ -80,7 +80,7 @@ public class DocumentationLayoutTest(ITestOutputHelper output) : HubTestBase(out
         named.Area.Should().Be(DocumentationHubConfiguration.HtmlView);
 
         control = await stream
-            .GetControlStream(named.Area.ToString())
+            .GetControlStream(named.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
