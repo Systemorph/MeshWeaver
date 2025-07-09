@@ -268,7 +268,7 @@ public record ValueWithLevelDimensions
 
     [NotVisible]
     [Dimension(typeof(string), nameof(Level2))]
-    public string Level2 { get; init; } = null!;
+    public string? Level2 { get; init; }
 
     [NotVisible]
     [Dimension(typeof(string), nameof(Level3))]

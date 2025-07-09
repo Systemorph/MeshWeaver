@@ -2,5 +2,5 @@
 
 public interface IWithParent
 {
-    object Parent { get; init; }
+    object? Parent { get; init; }
 }
