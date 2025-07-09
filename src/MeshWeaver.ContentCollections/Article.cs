@@ -14,7 +14,7 @@ public record MarkdownElement
     [property: Key] public required string Url { get; init; }
 
     public required string Path { get; init; }
-    public IReadOnlyList<SubmitCodeRequest>? CodeSubmissions { get; set; }
+    public IReadOnlyList<SubmitCodeRequest> CodeSubmissions { get; set; } = [];
 }
 public record Article : MarkdownElement
 {

@@ -89,7 +89,7 @@ namespace MeshWeaver.Documentation.Test
         protected static string GetIdFromDataContext(UiControl articleControl)
         {
             var pattern = @"/data/\""(?<id>[^\""]+)\""";
-            var match = Regex.Match(articleControl.DataContext, pattern);
+            var match = Regex.Match(articleControl.DataContext!, pattern);
             var id = match.Groups["id"].Value;
             return id;
         }

@@ -51,7 +51,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         foreach (var s in article.CodeSubmissions)
             client.Post(s, o => o.WithTarget(kernelAddress));
 
-        var html = article.PrerenderedHtml.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
+        var html = article.PrerenderedHtml!.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
 
         var (addressString, area) = HtmlParser
             .ExtractDataAddressAttributes(html)

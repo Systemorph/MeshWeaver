@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(output)
 {
-    protected TestCluster Cluster { get; private set; }
+    protected TestCluster Cluster { get; private set; } = null!;
 
     public override async Task InitializeAsync()
     {
@@ -35,7 +35,7 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 
 
 
-    protected async Task<IMessageHub> GetClientAsync(Func<MessageHubConfiguration, MessageHubConfiguration> config = null)
+    protected async Task<IMessageHub> GetClientAsync(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
@@ -51,11 +51,11 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 
     public override async Task DisposeAsync()
     {
-        if(Cluster is not null)
+        if (Cluster is not null)
             await Cluster.DisposeAsync();
         await base.DisposeAsync();
     }
-    protected record ClientAddress(string Id = null) : Address("client", Id ?? "1");
+    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
 
 
 }
