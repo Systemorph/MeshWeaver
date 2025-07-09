@@ -15,12 +15,12 @@
         /// <summary>
         /// Color of the grid lines.
         /// </summary>
-        public IEnumerable<ChartColor> Color { get; init; } = [];
+        public IEnumerable<ChartColor>? Color { get; init; }
 
         /// <summary>
         /// Length and spacing of dashes.
         /// </summary>
-        public IEnumerable<int> BorderDash { get; init; } = [];
+        public IEnumerable<int>? BorderDash { get; init; }
 
         /// <summary>
         /// Offset for line dashes.
@@ -30,7 +30,7 @@
         /// <summary>
         /// Stroke width of grid lines.
         /// </summary>
-        public IEnumerable<int> LineWidth { get; init; } = [];
+        public IEnumerable<int>? LineWidth { get; init; }
 
         /// <summary>
         /// If true draw border on the edge of the chart.
@@ -65,7 +65,7 @@
         /// <summary>
         /// Length and spacing of dashes of the grid line for the first index (index 0).
         /// </summary>
-        public IEnumerable<int> ZeroLineBorderDash { get; init; } = [];
+        public IEnumerable<int>? ZeroLineBorderDash { get; init; }
 
         /// <summary>
         /// Offset for line dashes of the grid line for the first index (index 0).
