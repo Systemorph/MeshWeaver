@@ -29,7 +29,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         var client = GetClient();
         var area = nameof(DistributionStatisticsArea.DistributionStatistics);
         var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(Address, new LayoutAreaReference(area));
-        var control = await stream.GetControlStream(area.ToString()!)
+        var control = await stream.GetControlStream(area)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -54,9 +54,9 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         // let's get the options to be displayed in the combobox.
         var pointer = select.Options.Should().BeOfType<JsonPointerReference>().Which;
-        var options = (await stream.Reduce(pointer)
+        var options = (await stream.Reduce(pointer)!
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null))
+            .FirstAsync())
             .Value;
         options.ValueKind.Should().Be(JsonValueKind.Array);
         var jsonArray = options.EnumerateArray().ToArray();
@@ -65,9 +65,9 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         var selectionPointer = select.Data.Should().BeOfType<JsonPointerReference>().Which;
         var absoluteSelectionPointer =
             selectionPointer with { Pointer = $"{basicInputEditor.DataContext}/{selectionPointer.Pointer}" };
-        var selection = (await stream.Reduce(absoluteSelectionPointer)
+        var selection = (await stream.Reduce(absoluteSelectionPointer)!
                 .Timeout(10.Seconds())
-                .FirstAsync(x => x is not null))
+                .FirstAsync())
             .Value;
 
         selection.ToString().Should().Be("Pareto");
@@ -83,15 +83,15 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
 
         // let's find the distribution.
-        var distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
+        var distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))!
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)).Value;
+            .FirstAsync()).Value;
 
         distribution.GetProperty("$type").ToString().Should().Contain("Pareto");
 
         // let's check we get the placeholder for the results section
 
-        var resultArea = stack.Areas[3].Area.ToString();
+        var resultArea = stack.Areas[3].Area.ToString()!;
         control = await stream.GetControlStream(resultArea)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
@@ -110,10 +110,9 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         control = await stream.GetControlStream(resultArea)
             .Where(x => x != null)
-            .Cast<object>()
-            .Timeout(10.Seconds())
+            .Timeout(10.Seconds())!
             .OfType<MarkdownControl>()
-            .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"))!;
+            .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"));
 
         results = control.Should().BeOfType<MarkdownControl>().Which;
         var paretoResults = results.Markdown;
@@ -122,7 +121,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         stream.UpdatePointer(JsonSerializer.SerializeToNode("LogNormal"), basicInputEditor.DataContext, selectionPointer);
         
         // which should change the distribution
-        distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
+        distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))!
             .Timeout(10.Seconds())
             .Select(x => x.Value)
             .FirstAsync(x => !x.GetProperty("$type").ToString().Contains("Pareto")));
@@ -132,10 +131,9 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         control = await stream.GetControlStream(resultArea)
             .Where(x => x != null)
-            .Cast<object>()
-            .Timeout(10.Seconds())
+            .Timeout(10.Seconds())!
             .OfType<MarkdownControl>()
-            .FirstAsync(md => md.Markdown != paretoResults)!;
+            .FirstAsync(md => md.Markdown != paretoResults);
         results = control.Should().BeOfType<MarkdownControl>().Which;
         results.Markdown.ToString().Should().Contain("Mean");
     }
