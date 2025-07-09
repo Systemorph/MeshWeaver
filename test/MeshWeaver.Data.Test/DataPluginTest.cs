@@ -102,13 +102,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItems = new object[] { new MyData("1", "AAA"), new MyData("3", "CCC"), };
 
         var clientWorkspace = client.GetWorkspace();
-        var data = (
-            await clientWorkspace
+        var data = (await clientWorkspace
                 .GetObservable<MyData>()
                 .Timeout(10.Seconds())
-                .FirstOrDefaultAsync()
-
-        )
+                .FirstOrDefaultAsync())!
             .OrderBy(a => a.Id)
             .ToArray();
 
@@ -129,8 +126,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             await clientWorkspace
                 .GetObservable<MyData>()
                 .Timeout(10.Seconds())
-                .FirstOrDefaultAsync(x => x?.Count == 3)
-        )
+                .FirstOrDefaultAsync(x => x.Count == 3)
+        )!
             .OrderBy(a => a.Id)
             .ToArray();
 
@@ -140,8 +137,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                 .GetWorkspace()
                 .GetObservable<MyData>()
                 .Timeout(10.Seconds())
-                .FirstOrDefaultAsync(x => x?.Count == 3)
-        )
+                .FirstOrDefaultAsync(x => x.Count == 3)
+        )!
             .OrderBy(a => a.Id)
             .ToArray();
 
@@ -215,7 +212,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .GetObservable<MyData>("1")
             .Timeout(10.Seconds())
             .FirstAsync();
-        myInstance.Text.Should().NotBe(TextChange);
+        myInstance!.Text.Should().NotBe(TextChange);
 
         // act
         myInstance = myInstance with
@@ -233,7 +230,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             ;
         instance.Should().NotBeNull();
         await Task.Delay(100);
-        storage.Values.Should().Contain(i => (i as MyData).Text == TextChange);
+        storage.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
     }
 
     /// <summary>
@@ -269,7 +266,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var updateResponse = await client.AwaitResponse(
-            DataChangeRequest.Update(updateItems, null!),
+            DataChangeRequest.Update(updateItems),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
@@ -279,7 +276,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         response.Status.Should().Be(DataChangeStatus.Failed);
         var log = response.Log;
         log.Status.Should().Be(ActivityStatus.Failed);
-        var members = log.Messages.Should().ContainSingle().Which.Scopes.FirstOrDefault(s => s.Key == "members");
+        var members = log.Messages.Should().ContainSingle().Which.Scopes!.FirstOrDefault(s => s.Key == "members");
         members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }
 
@@ -290,8 +287,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)), null)
-            .Select(c => c.Value.Instances.Values)
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))
+            .Select(c => c.Value!.Instances.Values)
             .FirstAsync();
 
         collection.Should().BeEquivalentTo(MyData.InitialData);
@@ -305,7 +302,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var typeName = typeof(MyData).FullName;
+        var typeName = typeof(MyData).FullName!;
 
         // act
         var response = await client.AwaitResponse(
@@ -399,8 +396,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var types = typesResponse.Types.ToArray();
 
         // Verify types are sorted by display name
-        var sortedTypes = types.OrderBy(t => t.DisplayName ?? t.Name).ToArray();
-        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName ?? t1.Name).Equals(t2.DisplayName ?? t2.Name));
+        var sortedTypes = types.OrderBy(t => t.DisplayName).ToArray();
+        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName).Equals(t2.DisplayName ?? t2.Name));
     }
 
     /// <summary>
@@ -462,7 +459,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .GetWorkspace()
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Any(item => item.Id == "999") == true);
+            .FirstOrDefaultAsync(x => x.Any(item => item.Id == "999"));
         updatedData.Should().Contain(x => x.Id == "999" && x.Text == "New Item");
     }
 
@@ -508,7 +505,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .GetWorkspace()
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Count >= 5); // Initial 2 + 3 new items
+            .FirstOrDefaultAsync(x => x.Count >= 5); // Initial 2 + 3 new items
 
         finalData.Should().Contain(x => x.Id == "10" && x.Text == "Update 1");
         finalData.Should().Contain(x => x.Id == "11" && x.Text == "Update 2");
@@ -583,13 +580,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .GetWorkspace()
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Any(item => item.Text == "Updated Text") == true);
+            .FirstOrDefaultAsync(x => x.Any(item => item.Text == "Updated Text"));
 
         var updatedHostData = await host
             .GetWorkspace()
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(x => x?.Any(item => item.Text == "Updated Text") == true);
+            .FirstOrDefaultAsync(x => x.Any(item => item.Text == "Updated Text"));
 
         updatedClientData.Should().BeEquivalentTo(updatedHostData);
         updatedClientData.Should().Contain(x => x.Id == "1" && x.Text == "Updated Text");
@@ -606,14 +603,15 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var collectionRef = new CollectionReference(nameof(MyData));
 
         // act
-        var stream = host.GetWorkspace().GetStream(collectionRef, null);
+        var stream = host.GetWorkspace().GetStream(collectionRef);
         var collection = await stream
-            .Select(c => c.Value.Instances.Values.Cast<MyData>())
+            .Select(c => c.Value!.Instances.Values.Cast<MyData>())
             .Timeout(10.Seconds())
             .FirstAsync();
 
         // assert
-        collection.Should().BeEquivalentTo(MyData.InitialData); collection.Should().AllBeOfType<MyData>();
+        collection.Should().BeEquivalentTo(MyData.InitialData); 
+        collection.Should().AllBeOfType<MyData>();
     }
 
     /// <summary>
@@ -632,13 +630,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                 // Handle array of types like ["string", "null"]
                 foreach (var type in typeElement.EnumerateArray())
                 {
-                    types.Add(type.GetString());
+                    types.Add(type.GetString()!);
                 }
             }
             else
             {
                 // Handle single type like "string"
-                types.Add(typeElement.GetString());
+                types.Add(typeElement.GetString()!);
             }
         }
 
