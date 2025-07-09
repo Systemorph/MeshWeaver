@@ -1,7 +1,5 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using MeshWeaver.AI;
-using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
@@ -78,7 +76,7 @@ public static class SharedPortalConfiguration
                 var roleMappings = builder.Configuration
                     .GetSection("EntraId:RoleMappings")
                     .GetChildren()
-                    .ToDictionary(x => x.Value, x => x.Key);
+                    .ToDictionary(x => x.Value!, x => x.Key);
 
                 options.Events.OnTokenValidated = async context =>
                 {

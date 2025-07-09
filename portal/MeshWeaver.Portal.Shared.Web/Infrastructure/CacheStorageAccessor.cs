@@ -5,7 +5,7 @@ namespace MeshWeaver.Portal.Shared.Web.Infrastructure
 {
     public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/MeshWeaver.Portal.Shared.Web.Infrastructure/js/CacheStorageAccessor.js")
     {
-        private string currentCacheVersion;
+        private string? currentCacheVersion;
 
         public async ValueTask PutAsync(HttpRequestMessage requestMessage, HttpResponseMessage responseMessage)
         {

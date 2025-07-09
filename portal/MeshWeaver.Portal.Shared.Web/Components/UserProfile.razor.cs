@@ -25,9 +25,9 @@ public partial class UserProfile : ComponentBase
     [Parameter]
     public string ImageSize { get; set; } = "52px";
 
-    private string name;
-    private string username;
-    private string initials;
+    private string? name;
+    private string? username;
+    private string? initials;
     private string NameClaimType { get; } = "name";
     public string UsernameClaimType { get; } = "preferred_username";
 
@@ -39,16 +39,10 @@ public partial class UserProfile : ComponentBase
 
         if (claimsIdentity?.IsAuthenticated == true)
         {
-            name = claimsIdentity.FindFirst(NameClaimType)?.Value;
+            name = claimsIdentity.FindFirst(NameClaimType)?.Value!;
 
             username = claimsIdentity.FindFirst(UsernameClaimType)?.Value;
             initials = GetInitials(name);
-        }
-        else
-        {                // If we don't have an authenticated user, don't show the user profile menu. This shouldn't happen.
-            name = "";
-            username = "";
-            initials = "";
         }
 
     }
