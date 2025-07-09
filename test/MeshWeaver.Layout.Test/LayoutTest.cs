@@ -54,7 +54,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         nameof(ItemTemplate),
                             layout
                                 .Hub.GetWorkspace()
-                                .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+                                .GetStream(typeof(DataRecord)).Select(x => x.Value!.GetData<DataRecord>())
                                 .DistinctUntilChanged()
                                 .BindMany(nameof(ItemTemplate), y => 
                                     Controls.Text(y.DisplayName).WithId(y.SystemName))
@@ -102,9 +102,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var areaControls = await areas
             .ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await stream.GetControlStream(a.Area.ToString())
+                await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
-                .FirstAsync(x => x != null))
+                .FirstAsync(x => x != null)!)
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
@@ -140,7 +140,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .GetControlStream(reference.Area)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(10.Seconds())
-            .ToArray();
+            .ToArray()!
         controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
     }
 
@@ -172,7 +172,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
             // .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
@@ -180,17 +180,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("year");
         var pointer = JsonPointer.Parse($"/{dataPointer.Pointer}");
         var year = await stream
-            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
+            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext!))
             .Select(s => pointer.Evaluate(s))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
         year!.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
@@ -541,7 +541,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()).FirstAsync();
+        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()!).FirstAsync();
 
         stopwatch.Stop();
 

@@ -67,7 +67,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var control = await area
             .GetControlStream(nameof(EditorWithoutResult))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
 
         var editor = control.Should().BeOfType<EditorControl>().Subject;
         editor.Areas.Should()
@@ -80,7 +80,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => 
-                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync())
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync()!)
             .ToArrayAsync();
 
         editorAreas.Should().HaveCount(2);
@@ -102,11 +102,11 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var control = await area
             .GetControlStream(nameof(EditorWithResult))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         control = await area
-            .GetControlStream(stack.Areas.First().Area.ToString())
+            .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -121,7 +121,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null))
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
             .ToArrayAsync();
 
         editorAreas.Should().HaveCount(2);
@@ -130,16 +130,16 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             ;
 
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("0");
 
         // update once ==> will issue "add", as 0 was not there
-        area.UpdatePointer(1, editor.DataContext, new("x"));
+        area.UpdatePointer(1, editor.DataContext!, new("x"));
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not MarkdownControl { Markdown: "0" });
 
@@ -148,7 +148,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         // update once ==> will issue "replace"
         area.UpdatePointer(2, editor.DataContext, new("x"));
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
 
@@ -170,7 +170,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         control = await area
-            .GetControlStream(stack.Areas.First().Area.ToString())
+            .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -178,14 +178,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         
         var controlStream = area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .TakeUntil(x => x is MarkdownControl { Markdown: var data } && data.ToString()!.StartsWith("5"));
 
 
         // update once ==> will issue "replace"
         for (var i = 1; i <= 5; i++)
         {
-            area.UpdatePointer(i, editor.DataContext, new("x"));
+            area.UpdatePointer(i, editor.DataContext!, new("x"));
         }
 
         var controls = await controlStream.Where(x => x is not null).ToArray();
@@ -202,7 +202,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         public string Display { get; init; } = null!;
     }
 
-    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
+    private record ListPropertyBenchmark<T>(string Data, Option[]? Options, string? OptionPointer = null);
 
     private static MyDimension[] Dimensions { get; } = [new(1, "One"), new(2, "Two")];
 
