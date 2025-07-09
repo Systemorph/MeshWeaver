@@ -32,7 +32,7 @@ public record ChartData
     private bool? AutoLabels { get; init; }
 
 
-    protected IReadOnlyCollection<string> GetUpdatedLabels()
+    protected IReadOnlyCollection<string>? GetUpdatedLabels()
     {
         if (AutoLabels == true || (AutoLabels is null && DataSets.Count > 1))
         {
@@ -40,7 +40,7 @@ public record ChartData
 
             return DataSets.Take(maxLen).Select((x, i) => x.Label ?? (i + 1).ToString()).ToArray();
         }
-        return Labels ?? [];
+        return Labels;
     }
 
     internal ChartData WithAutoUpdatedLabels() => this with { Labels = GetUpdatedLabels(), };
