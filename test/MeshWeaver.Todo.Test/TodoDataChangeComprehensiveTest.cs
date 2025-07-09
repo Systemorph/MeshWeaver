@@ -1,11 +1,6 @@
-﻿using System;
-using System.Linq;
-using System.Reactive.Linq;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
@@ -125,7 +120,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
                 .FirstOrDefaultAsync())?.ToArray();
 
             updatedTodos.Should().NotBeNull();
-            var changedTodo = updatedTodos!.FirstOrDefault(t => t.Id == pendingTodo.Id);
+            var changedTodo = updatedTodos.FirstOrDefault(t => t.Id == pendingTodo.Id);
             
             if (changedTodo?.Status == TodoStatus.InProgress)
             {
@@ -162,7 +157,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
             .FirstOrDefaultAsync())
             ?.ToArray();
         meshData.Should().NotBeNull("Mesh should have todo data");
-        Output.WriteLine($"✅ Mesh has {meshData!.Length} todo items");
+        Output.WriteLine($"✅ Mesh has {meshData.Length} todo items");
 
         // Verify client can access the data
         var clientWorkspace = client.GetWorkspace();
@@ -171,7 +166,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
             .Timeout(5.Seconds())
             .FirstOrDefaultAsync())?.ToList();
         clientData.Should().NotBeNull("Client should be able to access todo data");
-        Output.WriteLine($"✅ Client can access {clientData!.Count} todo items");
+        Output.WriteLine($"✅ Client can access {clientData.Count} todo items");
 
         // Verify the Todo application address is configured
         Output.WriteLine($"✅ Todo application address: {TodoApplicationAttribute.Address}");
@@ -179,81 +174,4 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("✅ DIAGNOSTIC: Todo application is properly configured for testing");
     }
 
-    /// <summary>
-    /// Diagnostic test to understand why DataChangeRequest is not working
-    /// </summary>
-    [Fact]
-    public async Task DiagnosticDataChangeProcessing()
-    {
-        var client = GetClient();
-        var workspace = client.GetWorkspace();
-
-        // Get initial data
-        Output.WriteLine("🔍 DIAGNOSTIC: Getting initial data...");
-        var initialData = (await workspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Timeout(5.Seconds())
-            .FirstOrDefaultAsync())?.ToArray();
-
-        initialData.Should().NotBeNull();
-        Output.WriteLine($"📋 Initial data: {initialData!.Length} items");
-
-        var pendingTodo = initialData.FirstOrDefault(t => t.Status == TodoStatus.Pending);
-        pendingTodo.Should().NotBeNull();
-        Output.WriteLine($"🎯 Target todo: '{pendingTodo!.Title}' (ID: {pendingTodo.Id}, Status: {pendingTodo.Status})");
-
-        // Create and send DataChangeRequest
-        var updatedTodo = pendingTodo with { Status = TodoStatus.InProgress, UpdatedAt = DateTime.UtcNow };
-        var changeRequest = new DataChangeRequest().WithUpdates(updatedTodo);
-
-        Output.WriteLine("📤 DIAGNOSTIC: Sending DataChangeRequest...");
-        Output.WriteLine($"   Target Address: {TodoApplicationAttribute.Address}");
-        Output.WriteLine($"   Todo ID: {updatedTodo.Id}");
-        Output.WriteLine($"   Status Change: {pendingTodo.Status} → {updatedTodo.Status}");
-
-        // Send the request
-        var response = await client.AwaitResponse(
-            changeRequest, 
-            o => o.WithTarget(TodoApplicationAttribute.Address)
-            //, new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
-            );
-        response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded, "DataChangeRequest should succeed");
-        Output.WriteLine("✅ DataChangeRequest sent");
-
-        // Wait a moment for processing
-        await Task.Delay(2000);
-
-        // Check if data changed by getting fresh data
-        Output.WriteLine("🔍 DIAGNOSTIC: Getting fresh data to see if change was processed...");
-        var freshData = (await workspace
-            .GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address)!
-            .Timeout(5.Seconds())
-            .FirstOrDefaultAsync())?.ToArray();
-
-        freshData.Should().NotBeNull();
-        var updatedItem = freshData!.FirstOrDefault(t => t.Id == pendingTodo.Id);
-        
-        if (updatedItem != null)
-        {
-            Output.WriteLine($"📋 Fresh data: Found todo ID {updatedItem.Id}");
-            Output.WriteLine($"   Title: {updatedItem.Title}");
-            Output.WriteLine($"   Status: {updatedItem.Status} (was {pendingTodo.Status})");
-            Output.WriteLine($"   UpdatedAt: {updatedItem.UpdatedAt} (was {pendingTodo.UpdatedAt})");
-
-            if (updatedItem.Status == TodoStatus.InProgress)
-            {
-                Output.WriteLine("✅ SUCCESS: DataChangeRequest was processed - status changed!");
-                Output.WriteLine("🔍 ISSUE: The problem is that data streams don't auto-update, need new subscription");
-            }
-            else
-            {
-                Output.WriteLine("❌ FAILURE: DataChangeRequest was NOT processed - status unchanged");
-                Output.WriteLine("🔍 ISSUE: DataChangeRequest is not reaching the data source or not being applied");
-            }
-        }
-        else
-        {
-            Output.WriteLine("❌ CRITICAL: Todo item disappeared from data!");
-        }
-    }
 }
