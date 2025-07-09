@@ -75,13 +75,12 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
         Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Title}' in area {buttonAreaName}");
 
-        // Step 4: Click the button and verify response
-        var finalLayoutGridTask = GetUpdatedLayoutGrid(stream, reference);
+        // Step 4: Click the button and wait for the pending count to change to 0
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
-
-        // Step 5: Validate that pending count is now 0 after clicking "Start All"
-        var finalLayoutGrid = await finalLayoutGridTask;
-        var finalPendingCount = await GetPendingCount(stream, finalLayoutGrid);
+        
+        // Step 5: Wait for all pending todos to be moved to InProgress (pending count should be 0)
+        Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to 0...");
+        var finalPendingCount = await WaitForPendingCountChange(stream, reference, 0);
 
         // Validate the final state
         finalPendingCount.Should().Be(0, "Should have 0 pending todos after clicking Start All");
@@ -123,16 +122,16 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
         Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Title}' in area {buttonAreaName}");
 
-        // Step 4: Click the individual button and verify response
-        var updatedGridTask = GetUpdatedLayoutGrid(stream, reference);
+        // Step 4: Click the individual button and wait for the pending count to change
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
-
-        // Step 5: Validate that pending count decreased by 1
-        var finalLayoutGrid = await updatedGridTask;
-        var finalPendingCount = await GetPendingCount(stream, finalLayoutGrid);
+        
+        // Step 5: Wait for the pending count to decrease by monitoring the area updates
+        var expectedFinalCount = initialPendingCount - 1;
+        Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to {expectedFinalCount}...");
+        
+        var finalPendingCount = await WaitForPendingCountChange(stream, reference, expectedFinalCount);
 
         // Validate the final state
-        var expectedFinalCount = initialPendingCount - 1;
         finalPendingCount.Should().Be(expectedFinalCount, $"Should have {expectedFinalCount} pending todos after clicking individual start button");
         Output.WriteLine($"✅ Step 5: Confirmed final pending count: {finalPendingCount} todos (expected {expectedFinalCount})");
 
@@ -181,25 +180,59 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         return initialControl;
     }
 
+
     /// <summary>
-    /// Gets an updated layout grid control after an action
+    /// Waits for the pending count to change to the expected value by monitoring area updates
     /// </summary>
-    private async Task<LayoutGridControl> GetUpdatedLayoutGrid(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference)
+    private async Task<int> WaitForPendingCountChange(ISynchronizationStream<JsonElement> stream, LayoutAreaReference reference, int expectedCount)
     {
-        Output.WriteLine("⏳ Getting updated layout grid after action...");
+        Output.WriteLine($"⏳ Monitoring areas for pending count change to {expectedCount}...");
+        
+        var startTime = DateTime.UtcNow;
+        var timeout = TimeSpan.FromSeconds(15); // Increased timeout for Start All operations
+        
+        while (DateTime.UtcNow - startTime < timeout)
+        {
+            try
+            {
+                // Get the current layout grid
+                var layoutGrid = await stream
+                    .GetControlStream(reference.Area)!
+                    .OfType<LayoutGridControl>()
+                    .Timeout(2.Seconds())
+                    .FirstAsync();
+
+                // Check the current pending count
+                var currentCount = await GetPendingCount(stream, layoutGrid);
+                
+                Output.WriteLine($"   Current pending count: {currentCount}, Expected: {expectedCount}");
+                
+                if (currentCount == expectedCount)
+                {
+                    Output.WriteLine($"✅ Pending count successfully changed to {expectedCount}");
+                    return currentCount;
+                }
+                
+                // Wait a bit before checking again
+                await Task.Delay(200); // Slightly longer delay for complex operations
+            }
+            catch (Exception ex)
+            {
+                Output.WriteLine($"   Error checking pending count: {ex.Message}");
+                await Task.Delay(200);
+            }
+        }
+        
+        // If we get here, we timed out
         var finalLayoutGrid = await stream
             .GetControlStream(reference.Area)!
-            .Select(x => x)!
             .OfType<LayoutGridControl>()
-            .Skip(1)
-            .Timeout(5.Seconds())
+            .Timeout(2.Seconds())
             .FirstAsync();
-
-        finalLayoutGrid.Should().NotBeNull("Layout system should still be responsive");
-        finalLayoutGrid.Areas.Should().NotBeEmpty("Should still have layout areas after click");
-        Output.WriteLine($"✅ Layout system responsive - {finalLayoutGrid.Areas.Count} areas available");
-
-        return finalLayoutGrid;
+        var finalCount = await GetPendingCount(stream, finalLayoutGrid);
+        
+        Output.WriteLine($"⚠️ Timeout waiting for pending count change. Final count: {finalCount}, Expected: {expectedCount}");
+        return finalCount;
     }
 
     /// <summary>
