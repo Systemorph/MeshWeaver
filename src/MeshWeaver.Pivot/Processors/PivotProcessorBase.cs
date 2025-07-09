@@ -121,8 +121,8 @@ public abstract class PivotProcessorBase<
             yield return row;
     }
 
-    private static Func<TAggregate, object>[] GetRowRenderingAccessors(
-        (RowGroup group, Func<TAggregate, object> accessor)[] getAccessors
+    private static Func<TAggregate, object?>[] GetRowRenderingAccessors(
+        (RowGroup group, Func<TAggregate, object?> accessor)[] getAccessors
     )
     {
         return getAccessors.Select(x => x.accessor).ToArray();
@@ -148,12 +148,12 @@ public abstract class PivotProcessorBase<
         yield return new Row(rowGroup, rowValue);
     }
 
-    private Func<TAggregate, object>[] GetColumnRenderingAccessors(
-        (ColumnGroup group, Func<TAggregate, object> accessor)[] getAccessors
+    private Func<TAggregate, object?>[] GetColumnRenderingAccessors(
+        (ColumnGroup group, Func<TAggregate, object?> accessor)[] getAccessors
     )
     {
         var columnRendering =
-            (Func<TAggregate, object>)(
+            (Func<TAggregate, object?>)(
                 obj => getAccessors.ToDictionary(x => x.group.Id!, x => x.accessor(obj))
             );
         var accessors = new[] { columnRendering };

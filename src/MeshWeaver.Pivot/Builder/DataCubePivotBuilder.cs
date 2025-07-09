@@ -301,18 +301,8 @@ namespace MeshWeaver.Pivot.Builder
                     : null,
                 this with
                 {
-                    SliceRows =
-                    SliceRows
-                    ?? new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                        GetAggregateBySliceRowsDimensionDescriptors(this),
-                        HierarchicalDimensionOptions
-                    ),
-                    SliceColumns =
-                    SliceColumns
-                    ?? new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                        [],
-                        HierarchicalDimensionOptions
-                    )
+                    SliceRows = SliceRows,
+                    SliceColumns = SliceColumns
                 },
                 Workspace
             );

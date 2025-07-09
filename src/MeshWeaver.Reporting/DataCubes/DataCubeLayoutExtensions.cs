@@ -79,13 +79,13 @@ public static class DataCubeLayoutExtensions
                         .WithClass("dimension-filter")
                         .WithOrientation(Orientation.Horizontal)
                         .WithHorizontalGap(16)
-                        .WithView(Listbox(f.SelectedDimension ?? "", f.AvailableDimensions
+                        .WithView(Listbox(f.SelectedDimension! , f.AvailableDimensions
                                 .Select(d => (Option)new Option<string>(d.SystemName, d.DisplayName))
                                 .ToArray()))
                         .WithView(Stack
                             .WithClass("dimension-values")
                             .WithView(
-                                Text(f.Search ?? "")
+                                Text(f.Search! )
                                     .WithPlaceholder("Search...")
                                 // TODO V10: this throws an "access violation" exception, figure out why (08.07.2024, Alexander Kravets)
                                 // .WithImmediate(true)
@@ -108,7 +108,7 @@ public static class DataCubeLayoutExtensions
                     .SelectMany(s => s.Tuple.Select(
                         // todo get dimension pairs of type and ids from dataSlices
                         // go to the workspace and take observable of this type
-                        x => new FilterItem(x.Value, x.Value?.ToString() ?? "", true))
+                        x => new FilterItem(x.Value, x.Value?.ToString(), true))
                     )
                     .DistinctBy(x =>
                         x.Id) // TODO V10: this is to be reviewed to find better place to reduce duplication of codes (2024/07/16, Dmitry Kalabin)
@@ -128,7 +128,7 @@ public static class DataCubeLayoutExtensions
             .DistinctUntilChanged()
         .Select(selectedDimension => 
                 BindEnumerable<FilterItem, CheckBoxControl>(
-                    new(LayoutAreaReference.GetDataPointer(filterId, "filterItems", selectedDimension ?? "")),
+                    new(LayoutAreaReference.GetDataPointer(filterId, "filterItems", selectedDimension! )),
                 f => CheckBox(f.Selected)
             ));
     }

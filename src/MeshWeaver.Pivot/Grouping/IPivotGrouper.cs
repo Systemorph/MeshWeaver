@@ -16,7 +16,7 @@ namespace MeshWeaver.Pivot.Grouping
                 Id = "NullGroup",
                 DisplayName = " ",
                 GrouperName = "Null",
-                Coordinates = ImmutableList<object>.Empty.Add("NullGroup")
+                Coordinates = ["NullGroup"]
             };
         static readonly TGroup TopGroup =
             new()
@@ -24,7 +24,7 @@ namespace MeshWeaver.Pivot.Grouping
                 Id = "TopGroup",
                 DisplayName = "Total",
                 GrouperName = "Total",
-                Coordinates = ImmutableList<object>.Empty.Add("TopGroup")
+                Coordinates = ["TopGroup"]
             };
         static readonly TGroup TotalGroup =
             new()
@@ -32,7 +32,7 @@ namespace MeshWeaver.Pivot.Grouping
                 Id = "TotalGroup",
                 DisplayName = " ",
                 GrouperName = "Aggregate",
-                Coordinates = ImmutableList<object>.Empty.Add("TotalGroup")
+                Coordinates = ["TotalGroup"]
             };
     }
 }
