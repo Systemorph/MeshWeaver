@@ -3,6 +3,7 @@ using MeshWeaverApp1.Portal.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
+using MeshWeaver.Blazor.Chat;
 
 namespace MeshWeaverApp1.Portal.Layout;
 
@@ -13,6 +14,7 @@ public partial class MainLayout
     private const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
+    private AgentChatView? chatComponent;
     protected override void OnParametersSet()
     {
         if (ViewportInformation.IsDesktop && isNavMenuOpen)
