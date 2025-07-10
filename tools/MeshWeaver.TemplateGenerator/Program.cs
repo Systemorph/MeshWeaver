@@ -71,26 +71,20 @@ public class TemplateGenerator
 
     private void CopyTemplateProjects()
     {
-        Console.WriteLine("Copying template projects from actual portal...");
-        CopyDirectory("portal/MeshWeaver.Portal", Path.Combine(_outputPath, "MeshWeaverApp1.Portal"), ["bin", "obj", ".gitignore"]);
-
-        Console.WriteLine("Copying Portal.Shared.Web...");
-        CopyDirectory("portal/MeshWeaver.Portal.Shared.Web", Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Web"), ["bin", "obj"]);
-
-        Console.WriteLine("Copying Portal.Shared.Mesh...");
-        CopyDirectory("portal/MeshWeaver.Portal.Shared.Mesh", Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Mesh"), ["bin", "obj"]);
+        Console.WriteLine("Copying template projects...");
+        CopyDirectory("templates/MeshWeaverApp1.Portal", Path.Combine(_outputPath, "MeshWeaverApp1.Portal"));
     }
 
     private void CopyModules()
     {
         Console.WriteLine("Copying Todo module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "MeshWeaverApp1.Todo"), ["bin", "obj"]);
+        CopyDirectory("modules/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
 
         Console.WriteLine("Copying Todo.AI module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI"), ["bin", "obj"]);
+        CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
 
         Console.WriteLine("Copying Todo test project...");
-        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults"]);
+        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults", ".gitignore"]);
     }
 
     private void UpdateNamespaces()
@@ -115,20 +109,7 @@ public class TemplateGenerator
 
     private void RenameProjectFiles()
     {
-        // Rename Portal project file
-        File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "MeshWeaver.Portal.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal.csproj"));
-
-        // Rename Portal Shared Mesh project file
-        File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Mesh", "MeshWeaver.Portal.Shared.Mesh.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Mesh", "MeshWeaverApp1.Portal.Shared.Mesh.csproj"));
-
-        // Rename Portal Shared Web project file
-        File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Web", "MeshWeaver.Portal.Shared.Web.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Web", "MeshWeaverApp1.Portal.Shared.Web.csproj"));
+        // Note: Portal project file is already named correctly in the template
 
         File.Move(
             Path.Combine(_outputPath, "MeshWeaverApp1.Todo", "MeshWeaver.Todo.csproj"),
@@ -148,41 +129,13 @@ public class TemplateGenerator
         var programCsPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "Program.cs");
         var content = File.ReadAllText(programCsPath);
 
-        // Update the current portal structure to include Todo references
-        content = content.Replace("using MeshWeaver.Portal.Shared.Mesh;", "using MeshWeaver.Portal.Shared.Mesh;\nusing MeshWeaverApp1.Todo;\nusing MeshWeaverApp1.Todo.AI;");
+        // Update the template portal structure to include Todo references
+        content = content.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;\nusing MeshWeaverApp1.Todo.AI;");
 
         // Add Todo configuration to the mesh configuration
         content = content.Replace(".ConfigurePortalMesh()", ".ConfigurePortalMesh()\n        .InstallAssemblies(typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute).Assembly.Location)\n        .InstallAssemblies(typeof(MeshWeaverApp1.Todo.AI.TodoAgent).Assembly.Location)");
 
         File.WriteAllText(programCsPath, content);
-
-        // Update namespace references in Portal.Shared.Mesh
-        UpdatePortalSharedNamespaces();
-
-        // Update namespace references in Portal.Shared.Web  
-        UpdatePortalWebNamespaces();
-    }
-
-    private void UpdatePortalSharedNamespaces()
-    {
-        var sharedMeshPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Mesh");
-        if (Directory.Exists(sharedMeshPath))
-        {
-            UpdateNamespacesInDirectory(sharedMeshPath,
-                ["namespace MeshWeaver.Portal.Shared.Mesh", "using MeshWeaver.Portal.Shared.Mesh"],
-                ["namespace MeshWeaverApp1.Portal.Shared.Mesh", "using MeshWeaverApp1.Portal.Shared.Mesh"]);
-        }
-    }
-
-    private void UpdatePortalWebNamespaces()
-    {
-        var sharedWebPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Web");
-        if (Directory.Exists(sharedWebPath))
-        {
-            UpdateNamespacesInDirectory(sharedWebPath,
-                ["namespace MeshWeaver.Portal.Shared.Web", "using MeshWeaver.Portal.Shared.Web"],
-                ["namespace MeshWeaverApp1.Portal.Shared.Web", "using MeshWeaverApp1.Portal.Shared.Web"]);
-        }
     }
 
     private void UpdateProjectFiles()
@@ -200,57 +153,20 @@ public class TemplateGenerator
               <ItemGroup>
                 <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
                 <ProjectReference Include="..\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
-                <ProjectReference Include="..\MeshWeaverApp1.Portal.Shared.Mesh\MeshWeaverApp1.Portal.Shared.Mesh.csproj" />
-                <ProjectReference Include="..\MeshWeaverApp1.Portal.Shared.Web\MeshWeaverApp1.Portal.Shared.Web.csproj" />
               </ItemGroup>
 
               <ItemGroup>
                 <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Blazor.Chat" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="{_version}" />
-                <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
+                <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
               </ItemGroup>
 
             </Project>
             """;
         File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal.csproj"), portalCsproj);
-
-        Console.WriteLine("Updating Portal.Shared.Mesh project with package references...");
-        var sharedMeshCsproj = $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-
-              <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
-                <Nullable>enable</Nullable>
-                <ImplicitUsings>enable</ImplicitUsings>
-              </PropertyGroup>
-
-              <ItemGroup>
-                <PackageReference Include="MeshWeaver.Mesh.Contract" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Messaging.Hub" Version="{_version}" />
-              </ItemGroup>
-
-            </Project>
-            """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Mesh", "MeshWeaverApp1.Portal.Shared.Mesh.csproj"), sharedMeshCsproj);
-
-        Console.WriteLine("Updating Portal.Shared.Web project with package references...");
-        var sharedWebCsproj = $"""
-            <Project Sdk="Microsoft.NET.Sdk.Razor">
-
-              <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
-                <Nullable>enable</Nullable>
-                <ImplicitUsings>enable</ImplicitUsings>
-              </PropertyGroup>
-
-              <ItemGroup>
-                <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="{_version}" />
-              </ItemGroup>
-
-            </Project>
-            """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Portal.Shared.Web", "MeshWeaverApp1.Portal.Shared.Web.csproj"), sharedWebCsproj);
 
         Console.WriteLine("Updating Todo project with package references...");
         var todoCsproj = $"""
@@ -496,10 +412,6 @@ public class TemplateGenerator
             MinimumVisualStudioVersion = 10.0.40219.1
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal\MeshWeaverApp1.Portal.csproj", "{11111111-1111-1111-1111-111111111111}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Portal.Shared.Mesh", "MeshWeaverApp1.Portal.Shared.Mesh\MeshWeaverApp1.Portal.Shared.Mesh.csproj", "{55555555-5555-5555-5555-555555555555}"
-            EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Portal.Shared.Web", "MeshWeaverApp1.Portal.Shared.Web\MeshWeaverApp1.Portal.Shared.Web.csproj", "{66666666-6666-6666-6666-666666666666}"
-            EndProject
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj", "{22222222-2222-2222-2222-222222222222}"
             EndProject
             Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj", "{44444444-4444-4444-4444-444444444444}"
@@ -516,14 +428,6 @@ public class TemplateGenerator
             		{11111111-1111-1111-1111-111111111111}.Debug|Any CPU.Build.0 = Debug|Any CPU
             		{11111111-1111-1111-1111-111111111111}.Release|Any CPU.ActiveCfg = Release|Any CPU
             		{11111111-1111-1111-1111-111111111111}.Release|Any CPU.Build.0 = Release|Any CPU
-            		{55555555-5555-5555-5555-555555555555}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-            		{55555555-5555-5555-5555-555555555555}.Debug|Any CPU.Build.0 = Debug|Any CPU
-            		{55555555-5555-5555-5555-555555555555}.Release|Any CPU.ActiveCfg = Release|Any CPU
-            		{55555555-5555-5555-5555-555555555555}.Release|Any CPU.Build.0 = Release|Any CPU
-            		{66666666-6666-6666-6666-666666666666}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-            		{66666666-6666-6666-6666-666666666666}.Debug|Any CPU.Build.0 = Debug|Any CPU
-            		{66666666-6666-6666-6666-666666666666}.Release|Any CPU.ActiveCfg = Release|Any CPU
-            		{66666666-6666-6666-6666-666666666666}.Release|Any CPU.Build.0 = Release|Any CPU
             		{22222222-2222-2222-2222-222222222222}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
             		{22222222-2222-2222-2222-222222222222}.Debug|Any CPU.Build.0 = Debug|Any CPU
             		{22222222-2222-2222-2222-222222222222}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -616,25 +520,29 @@ public class TemplateGenerator
         File.WriteAllText(Path.Combine(configDir, "template.json"), json);
     }
 
-    private void CopyDirectory(string sourceDir, string targetDir, string[]? excludeDirectories = null)
+    private void CopyDirectory(string sourceDir, string targetDir, string[]? excludeItems = null)
     {
         Directory.CreateDirectory(targetDir);
 
-        excludeDirectories ??= [];
+        excludeItems ??= [];
 
         foreach (var file in Directory.GetFiles(sourceDir))
         {
             var fileName = Path.GetFileName(file);
-            var destFile = Path.Combine(targetDir, fileName);
-            File.Copy(file, destFile, true);
+            // Skip files that match exclusion patterns
+            if (!excludeItems.Contains(fileName, StringComparer.OrdinalIgnoreCase))
+            {
+                var destFile = Path.Combine(targetDir, fileName);
+                File.Copy(file, destFile, true);
+            }
         }
 
         foreach (var subDir in Directory.GetDirectories(sourceDir))
         {
             var dirName = Path.GetFileName(subDir);
-            if (!excludeDirectories.Contains(dirName, StringComparer.OrdinalIgnoreCase))
+            if (!excludeItems.Contains(dirName, StringComparer.OrdinalIgnoreCase))
             {
-                CopyDirectory(subDir, Path.Combine(targetDir, dirName), excludeDirectories);
+                CopyDirectory(subDir, Path.Combine(targetDir, dirName), excludeItems);
             }
         }
     }
