@@ -121,6 +121,7 @@ public class AzureBlobContentCollection : ContentCollection
         }
         catch
         {
+            logger.LogWarning("No authors.json file in content collection.");
             return ImmutableDictionary<string, Author>.Empty;
         }
     }

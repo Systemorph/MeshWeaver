@@ -276,14 +276,15 @@ public static class WorkspaceOperations
                 store.ComputeChanges(u.Key, u.Value)), changedBy);
     }
 
-    private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(
 #pragma warning disable IDE0060
+    private static (bool IsValid, List<ValidationResult> Results) ValidateDeletion(
         this IWorkspace workspace,
         IReadOnlyCollection<object> instances)
     {
         // TODO V10: Implement proper validation logic. (14.10.2024, Roland Bürgi)
         return (true, new());
     }
+#pragma warning enable IDE0060
 
 }
 
