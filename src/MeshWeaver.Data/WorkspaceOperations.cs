@@ -284,7 +284,7 @@ public static class WorkspaceOperations
         // TODO V10: Implement proper validation logic. (14.10.2024, Roland Bürgi)
         return (true, new());
     }
-#pragma warning enable IDE0060
+#pragma warning restore IDE0060
 
 }
 
