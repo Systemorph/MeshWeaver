@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -7,6 +9,7 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
 {
     public string BasePath { get; } = config.BasePath!;
     private FileSystemWatcher? watcher;
+    private readonly ILogger<FileSystemContentCollection> logger = hub.ServiceProvider.GetRequiredService<ILogger<FileSystemContentCollection>>();
 
     public override Task<Stream?> GetContentAsync(string? path, CancellationToken ct = default)
     {
@@ -70,10 +73,18 @@ public class FileSystemContentCollection(ContentSourceConfig config, IMessageHub
 
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
-        var authorsFile = Path.Combine(BasePath, "authors.json");
-        if (File.Exists(authorsFile))
-            return ParseAuthors(await File.ReadAllTextAsync(authorsFile, ct));
-        return ImmutableDictionary<string, Author>.Empty;
+        try
+        {
+            var authorsFile = Path.Combine(BasePath, "authors.json");
+            if (File.Exists(authorsFile))
+                return ParseAuthors(await File.ReadAllTextAsync(authorsFile, ct));
+            return ImmutableDictionary<string, Author>.Empty;
+        }
+        catch (Exception)
+        {
+            logger.LogWarning("No authors.json file in content collection.");
+            return ImmutableDictionary<string, Author>.Empty;
+        }
     }
 
 
