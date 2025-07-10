@@ -6,4 +6,4 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaverApp1.Portal.Layout;
 
-internal record MobileNavMenuEntry(string Text, Func<Task> OnClick, Icon Icon = null, Regex LinkMatchRegex = null);
+internal record MobileNavMenuEntry(string Text, Func<Task> OnClick, Icon? Icon = null, Regex? LinkMatchRegex = null);

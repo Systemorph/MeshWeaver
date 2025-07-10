@@ -89,7 +89,7 @@ public class TemplateGenerator
 
     private void UpdateNamespaces()
     {
-        Console.WriteLine("Updating namespaces in Todo projects...");
+        Console.WriteLine("Updating namespaces in all projects...");
 
         // Update Todo project namespaces
         UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo"),
@@ -105,11 +105,16 @@ public class TemplateGenerator
         UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"),
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo", "typeof(TodoApplicationAttribute)"],
             ["namespace MeshWeaverApp1.Todo", "using MeshWeaverApp1.Todo", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)"]);
+
+        // Update Portal project namespaces
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Portal"),
+            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"],
+            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"]);
     }
 
     private void RenameProjectFiles()
     {
-        // Note: Portal project file is already named correctly in the template
+        // Note: Portal project file should already be correctly named
 
         File.Move(
             Path.Combine(_outputPath, "MeshWeaverApp1.Todo", "MeshWeaver.Todo.csproj"),
@@ -132,9 +137,6 @@ public class TemplateGenerator
         // Update the template portal structure to include Todo references
         content = content.Replace("using MeshWeaver.Todo;", "using MeshWeaverApp1.Todo;\nusing MeshWeaverApp1.Todo.AI;");
 
-        // Add Todo configuration to the mesh configuration
-        content = content.Replace(".ConfigurePortalMesh()", ".ConfigurePortalMesh()\n        .InstallAssemblies(typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute).Assembly.Location)\n        .InstallAssemblies(typeof(MeshWeaverApp1.Todo.AI.TodoAgent).Assembly.Location)");
-
         File.WriteAllText(programCsPath, content);
     }
 
@@ -156,6 +158,7 @@ public class TemplateGenerator
               </ItemGroup>
 
               <ItemGroup>
+                <PackageReference Include="MeshWeaver.AI.Application" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Blazor.Chat" Version="{_version}" />
