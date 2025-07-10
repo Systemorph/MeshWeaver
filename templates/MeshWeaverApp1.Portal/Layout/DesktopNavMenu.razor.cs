@@ -11,6 +11,10 @@ namespace MeshWeaverApp1.Portal.Layout;
 
 public partial class DesktopNavMenu : ComponentBase
 {
+    public static Icon BlogIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Book()
+            : new Size24.Book();
     public static Icon ArticlesIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.Book()

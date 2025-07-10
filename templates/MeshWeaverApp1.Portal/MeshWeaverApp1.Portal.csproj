@@ -12,7 +12,16 @@
     <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Markdown\**\*.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Markdown\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Markdown\**\*.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Markdown\**\*.jpeg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
