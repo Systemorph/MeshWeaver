@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <Content Include="Markdown\**\*.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Markdown\**\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.jpg" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.jpeg" CopyToOutputDirectory="PreserveNewest" />
