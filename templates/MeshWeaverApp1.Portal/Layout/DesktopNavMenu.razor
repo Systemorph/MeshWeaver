@@ -5,6 +5,8 @@
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
     <FluentAppBarItem Href="/app/Todo/TodoList" Match="NavLinkMatch.All" IconRest="TodoIcon()"
         IconActive="TodoIcon(true)" Text="Todos" />
+    <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="BlogIcon()" IconActive="BlogIcon(true)"
+        Text="Articles" />
     <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
         IconActive="AgentsIcon(true)" Text="Agents" />
     <AuthorizeView Roles="@Roles.PortalAdmin">

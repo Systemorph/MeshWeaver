@@ -75,6 +75,43 @@ public class TemplateGenerator
         CopyDirectory("templates/MeshWeaverApp1.Portal", Path.Combine(_outputPath, "MeshWeaverApp1.Portal"));
     }
 
+    private void CopyMarkdownDocumentation()
+    {
+        Console.WriteLine("Copying markdown documentation to template...");
+
+        var markdownTargetDir = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "Markdown");
+        Directory.CreateDirectory(markdownTargetDir);
+
+        // Copy specific markdown files from root directory
+        var rootMarkdownFiles = new[] { "Readme.md", "AREA_NESTING_BUG_FIX.md" };
+        foreach (var file in rootMarkdownFiles)
+        {
+            var sourceFile = file;
+            if (File.Exists(sourceFile))
+            {
+                var targetFile = Path.Combine(markdownTargetDir, file);
+                File.Copy(sourceFile, targetFile, true);
+                Console.WriteLine($"  Copied {file} to template");
+            }
+        }
+
+        // Look for other documentation files that might be relevant
+        var docDirectories = new[] { "modules/Documentation", "test/MeshWeaver.Documentation.Test/Markdown" };
+        foreach (var docDir in docDirectories)
+        {
+            if (Directory.Exists(docDir))
+            {
+                foreach (var mdFile in Directory.GetFiles(docDir, "*.md"))
+                {
+                    var fileName = Path.GetFileName(mdFile);
+                    var targetFile = Path.Combine(markdownTargetDir, fileName);
+                    File.Copy(mdFile, targetFile, true);
+                    Console.WriteLine($"  Copied {fileName} from {docDir}");
+                }
+            }
+        }
+    }
+
     private void CopyModules()
     {
         Console.WriteLine("Copying Todo module from modules...");
@@ -162,9 +199,18 @@ public class TemplateGenerator
                 <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Blazor.Chat" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.ContentCollections" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="{_version}" />
                 <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Kernel.Hub" Version="{_version}" />
                 <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+              </ItemGroup>
+
+              <ItemGroup>
+                <Content Include="Markdown\**\*.md" CopyToOutputDirectory="PreserveNewest" />
+                <Content Include="Markdown\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+                <Content Include="Markdown\**\*.jpg" CopyToOutputDirectory="PreserveNewest" />
+                <Content Include="Markdown\**\*.jpeg" CopyToOutputDirectory="PreserveNewest" />
               </ItemGroup>
 
             </Project>
