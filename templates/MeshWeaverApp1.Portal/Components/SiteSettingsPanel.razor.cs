@@ -1,5 +1,6 @@
 ﻿using MeshWeaverApp1.Portal.Infrastructure;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Extensions;
 
@@ -7,10 +8,10 @@ namespace MeshWeaverApp1.Portal.Components;
 
 public partial class SiteSettingsPanel
 {
-    private string status;
+    private string? status;
     private bool popVisible;
     private bool ltr = true;
-    private FluentDesignTheme theme;
+    private FluentDesignTheme? theme;
 
     [Inject] public required ILogger<SiteSettingsPanel> Logger { get; set; }
 
@@ -26,13 +27,6 @@ public partial class SiteSettingsPanel
 
     private static IEnumerable<DesignThemeModes> AllModes => Enum.GetValues<DesignThemeModes>();
 
-    private static IEnumerable<OfficeColor> AllOfficeColors
-    {
-        get
-        {
-            return Enum.GetValues<OfficeColor>();
-        }
-    }
 
     protected override void OnAfterRender(bool firstRender)
     {
@@ -64,11 +58,11 @@ public partial class SiteSettingsPanel
         Mode = DesignThemeModes.System;
     }
 
-    private static string GetCustomColor(OfficeColor? color)
+    private static string? GetCustomColor(OfficeColor? color)
     {
         return color switch
         {
-            null => OfficeColorUtilities.GetRandom(true).ToAttributeValue(),
+            null => OfficeColorUtilities.GetRandom().ToAttributeValue(),
             Microsoft.FluentUI.AspNetCore.Components.OfficeColor.Default => "#036ac4",
             _ => color.ToAttributeValue(),
         };

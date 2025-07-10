@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Blazor.Chat;
-using MeshWeaverApp1.Portal.Components;
+﻿using MeshWeaverApp1.Portal.Components;
 using MeshWeaverApp1.Portal.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -9,8 +8,7 @@ namespace MeshWeaverApp1.Portal.Layout;
 
 public partial class MainLayout
 {
-    [Inject]
-    private IJSRuntime JSRuntime { get; set; }
+    [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
 
     private const string MessageBarSection = "MessagesTop";
 
@@ -30,7 +28,7 @@ public partial class MainLayout
         isNavMenuOpen = false;
         StateHasChanged();
     }
-    private IDialogReference dialog;
+    private IDialogReference? dialog;
 
     private async Task OpenSiteSettingsAsync()
     {
@@ -47,7 +45,6 @@ public partial class MainLayout
         await dialog.Result;
     }
     public bool IsAIChatVisible { get; private set; }
-    private AgentChatView chatComponent;
 
     public void ToggleAIChatVisibility()
     {
@@ -60,12 +57,5 @@ public partial class MainLayout
         await JSRuntime.InvokeVoidAsync("chatResizer.startResize");
     }
 
-    private async Task HandleNewChatAsync()
-    {
-        if (chatComponent != null)
-        {
-            await chatComponent.ResetConversationAsync();
-        }
-    }
 
 }

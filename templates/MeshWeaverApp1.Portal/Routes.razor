@@ -1,5 +1,4 @@
 ﻿@using MeshWeaver.Blazor.Pages
-@using MeshWeaverApp1.Portal.Layout
 @using MeshWeaverApp1.Portal.Resize
 @using Microsoft.AspNetCore.Components.Authorization
 <BrowserDimensionWatcher @bind-ViewportInformation="@ViewportInformation" />
@@ -27,5 +26,5 @@
 </CascadingValue>
 </CascadingAuthenticationState>
 @code {
-    private ViewportInformation ViewportInformation;
+    private ViewportInformation? ViewportInformation;
 }

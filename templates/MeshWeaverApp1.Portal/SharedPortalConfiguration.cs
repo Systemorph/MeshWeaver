@@ -135,7 +135,6 @@ public static class SharedPortalConfiguration
         }
         app.UseRouting();
         app.UseAntiforgery();
-        app.UseCookiePolicy();
 
         if (app.Configuration.GetSection("EntraId").GetChildren().Any())
         {
