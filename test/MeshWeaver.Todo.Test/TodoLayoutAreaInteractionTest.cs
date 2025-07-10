@@ -73,10 +73,10 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one clickable button");
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
-        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Title}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 3: Found clickable button '{startButton!.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the button and wait for the pending count to change to 0
-        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
 
         // Step 5: Wait for all pending todos to be moved to InProgress (pending count should be 0)
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to 0...");
@@ -120,10 +120,10 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var buttonAreaName = buttonResult.areaName;
         startButton.Should().NotBeNull("Should find at least one individual start button");
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
-        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton.Title}' in area {buttonAreaName}");
+        Output.WriteLine($"✅ Step 3: Found individual start button '{startButton!.Title}' in area {buttonAreaName}");
 
         // Step 4: Click the individual button and wait for the pending count to change
-        ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
+        ClickButtonAndVerifyResponse(stream, buttonAreaName!, startButton!);
 
         // Step 5: Wait for the pending count to decrease by monitoring the area updates
         var expectedFinalCount = initialPendingCount - 1;

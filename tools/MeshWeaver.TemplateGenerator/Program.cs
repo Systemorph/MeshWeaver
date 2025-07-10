@@ -108,7 +108,7 @@ public class TemplateGenerator
 
         // Update Portal project namespaces
         UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Portal"),
-            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"],
+            ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaver.Todo", "MeshWeaver.Todo.AI", "typeof(TodoApplicationAttribute)", "typeof(AgentsApplicationAttribute)"],
             ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"]);
     }
 

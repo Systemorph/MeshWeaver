@@ -45,7 +45,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         todoData.Should().NotBeNull();
         todoData.Should().NotBeEmpty();
 
-        Output.WriteLine($"✅ Step 1 PASSED: Data context initialized with {todoData.Length} todo items");
+        Output.WriteLine($"✅ Step 1 PASSED: Data context initialized with {todoData!.Length} todo items");
 
         // Verify sample data is properly loaded
         var sampleTodos = TodoSampleData.GetSampleTodos().ToList();
@@ -86,13 +86,13 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("✅ Step 4 PASSED: Initial data available (simulating layout area rendered)");
 
         // Find a pending todo to update (simulating finding a button to click)
-        var pendingTodo = initialTodos.FirstOrDefault(t => t.Status == TodoStatus.Pending);
+        var pendingTodo = initialTodos!.FirstOrDefault(t => t.Status == TodoStatus.Pending);
         pendingTodo.Should().NotBeNull("Need a pending todo for testing button click");
 
-        Output.WriteLine($"Found todo to update: '{pendingTodo.Title}' (Status: {pendingTodo.Status})");
+        Output.WriteLine($"Found todo to update: '{pendingTodo!.Title}' (Status: {pendingTodo.Status})");
 
         // Step 5: Simulate button click by creating and sending DataChangeRequest
-        var updatedTodo = pendingTodo with
+        var updatedTodo = pendingTodo! with
         {
             Status = TodoStatus.InProgress,
             UpdatedAt = DateTime.UtcNow
@@ -107,10 +107,10 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         // Step 6: Wait for data stream to update (this should happen if the issue is fixed)
         // NOTE: We need to create a NEW subscription to get fresh data after DataChangeRequest
         Output.WriteLine("🔍 Step 6: Creating new subscription to check for data changes...");
-        
+
         // Wait a moment for the DataChangeRequest to be processed
         await Task.Delay(1000);
-        
+
         try
         {
             // Create a fresh subscription to get updated data
@@ -120,8 +120,8 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
                 .FirstOrDefaultAsync())?.ToArray();
 
             updatedTodos.Should().NotBeNull();
-            var changedTodo = updatedTodos.FirstOrDefault(t => t.Id == pendingTodo.Id);
-            
+            var changedTodo = updatedTodos!.FirstOrDefault(t => t.Id == pendingTodo.Id);
+
             if (changedTodo?.Status == TodoStatus.InProgress)
             {
                 Output.WriteLine("✅ Step 6 PASSED: Data stream shows updated data!");
@@ -157,7 +157,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
             .FirstOrDefaultAsync())
             ?.ToArray();
         meshData.Should().NotBeNull("Mesh should have todo data");
-        Output.WriteLine($"✅ Mesh has {meshData.Length} todo items");
+        Output.WriteLine($"✅ Mesh has {meshData!.Length} todo items");
 
         // Verify client can access the data
         var clientWorkspace = client.GetWorkspace();
@@ -166,7 +166,7 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
             .Timeout(5.Seconds())
             .FirstOrDefaultAsync())?.ToList();
         clientData.Should().NotBeNull("Client should be able to access todo data");
-        Output.WriteLine($"✅ Client can access {clientData.Count} todo items");
+        Output.WriteLine($"✅ Client can access {clientData!.Count} todo items");
 
         // Verify the Todo application address is configured
         Output.WriteLine($"✅ Todo application address: {TodoApplicationAttribute.Address}");

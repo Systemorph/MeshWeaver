@@ -21,10 +21,12 @@
   </PropertyGroup>
 
   <!-- Generate templates before build -->
-  <Target Name="GenerateTemplates" BeforeTargets="Build">
+  <Target Name="GenerateTemplates" BeforeTargets="Build;Pack">
+    <Message Text="Starting template generation..." Importance="high" />
     <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\..\..\tools\MeshWeaver.TemplateGenerator\MeshWeaver.TemplateGenerator.csproj&quot; &quot;$(Version)&quot; &quot;$(MSBuildProjectDirectory)\..\dist\templates&quot;" 
           WorkingDirectory="$(MSBuildProjectDirectory)\..\..\" 
           ContinueOnError="false" />
+    <Message Text="Template generation completed." Importance="high" />
   </Target>
 
   <ItemGroup>
