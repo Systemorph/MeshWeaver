@@ -14,7 +14,7 @@ public partial class CollectionPicker
     {
         await base.OnInitializedAsync();
         SelectedCollection = Collection;
-        var definedCollections = await ContentService.GetCollectionsAsync();
+        var definedCollections = ContentService.GetCollections();
 
         var options = definedCollections
             .Select(a => new Option<string>() { Text = a.DisplayName, Value = a.Collection });
