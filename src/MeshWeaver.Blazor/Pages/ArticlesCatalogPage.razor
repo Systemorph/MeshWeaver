@@ -11,7 +11,7 @@
     @if (ShowPicker)
     {
         <FluentToolbar Class="toolbar">
-            <CollectionPicker Collection="@Collection" CollectionChanged="HandleCollectionChanged" NullLabel="(all)"/>
+            <CollectionPicker Collection="@Collection" CollectionChanged="HandleCollectionChanged" NullLabel="(all)" Context="Articles"/>
         </FluentToolbar>
         <div class="toolbar-spacer"></div>
     }
@@ -32,6 +32,6 @@
     protected override void OnInitialized()
     {
         base.OnInitialized();
-        ShowPicker = ContentCollectionService.GetCollections().Count > 1;
+        ShowPicker = ContentCollectionService.GetCollections("Articles").Count > 1;
     }
 }

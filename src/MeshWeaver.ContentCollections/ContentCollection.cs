@@ -35,6 +35,8 @@ public abstract class ContentCollection : IDisposable
     protected IMessageHub Hub { get; }
     public string Collection => config.Name!;
     public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
+    public bool IsHidden => config.HiddenFrom.Length > 0;
+    public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
 
     public IObservable<object?>? GetMarkdown(string path)
         => markdownStream.Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path.TrimStart('/')), c => c.ReturnNullWhenNotPresent())!

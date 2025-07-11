@@ -4,17 +4,24 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.FileExplorer;
 
-public partial class CollectionPicker
+public partial class CollectionPicker : ComponentBase
 {
     private IReadOnlyCollection<Option<string>>? collections;
     [Inject] private IContentService ContentService { get; set; } = null!;
     [Parameter] public string? NullLabel { get; set; }
+    [Parameter] public string? Collection { get; set; }
+    [Parameter] public EventCallback<string?> CollectionChanged { get; set; }
+    [Parameter] public bool ShowHidden { get; set; } = false;
+    [Parameter] public string? Context { get; set; }
     private string? SelectedCollection { get; set; }
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
         SelectedCollection = Collection;
-        var definedCollections = ContentService.GetCollections();
+
+        var definedCollections = !string.IsNullOrEmpty(Context)
+            ? ContentService.GetCollections(Context)
+            : ContentService.GetCollections(ShowHidden);
 
         var options = definedCollections
             .Select(a => new Option<string>() { Text = a.DisplayName, Value = a.Collection });
@@ -33,7 +40,7 @@ public partial class CollectionPicker
     {
         if (SelectedCollection == collection)
             return;
-        if(collection == NullLabel)
+        if (collection == NullLabel)
             collection = null;
         SelectedCollection = collection;
         await CollectionChanged.InvokeAsync(collection);
