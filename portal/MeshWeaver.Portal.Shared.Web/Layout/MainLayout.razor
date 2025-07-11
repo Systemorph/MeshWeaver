@@ -81,8 +81,8 @@
     @if (IsAIChatVisible)
     {
         <div class="ai-chat-overlay">
+            <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
             <div class="ai-chat-container">
-                <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
                 <div class="ai-chat-content">
                     <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
                 </div>
