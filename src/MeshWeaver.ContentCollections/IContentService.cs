@@ -6,6 +6,6 @@ public interface IContentService
     Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions options, CancellationToken ct = default);
     IObservable<object?>? GetArticle(string collection, string article);
 
-    Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default);
+    IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default);
     ContentCollection? GetCollection(string collectionName);
 }

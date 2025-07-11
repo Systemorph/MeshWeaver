@@ -81,8 +81,8 @@ public class ContentService : IContentService
         return GetCollection(collection)?.GetMarkdown(article);
     }
 
-    public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)
+    public IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default)
     {
-        return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
+        return collections.Values.ToArray();
     }
 }
