@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Portal.Shared.Web.Components;
+﻿using MeshWeaver.Blazor.Chat;
+using MeshWeaver.Portal.Shared.Web.Components;
 using MeshWeaver.Portal.Shared.Web.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -45,6 +46,7 @@ public partial class MainLayout
         await dialog.Result;
     }
     public bool IsAIChatVisible { get; private set; }
+    private AgentChatView? chatComponent;
 
     public void ToggleAIChatVisibility()
     {
@@ -55,6 +57,14 @@ public partial class MainLayout
     {
         // Call the JavaScript function to handle the resize operation
         await JSRuntime.InvokeVoidAsync("chatResizer.startResize");
+    }
+
+    private async Task HandleNewChatAsync()
+    {
+        if (chatComponent != null)
+        {
+            await chatComponent.ResetConversationAsync();
+        }
     }
 
 
