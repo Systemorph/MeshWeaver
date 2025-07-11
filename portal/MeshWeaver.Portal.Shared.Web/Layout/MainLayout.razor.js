@@ -18,6 +18,9 @@ window.chatResizer = {
 
         // Set up the mouse events for resizing
         const mouseMoveHandler = (e) => {
+            // Prevent default to avoid text selection
+            e.preventDefault();
+
             // Calculate the new width based on mouse position (from right edge)
             const width = window.innerWidth - e.clientX;
 
@@ -26,8 +29,8 @@ window.chatResizer = {
             const maxWidth = window.innerWidth * 0.8;
             const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
 
-            // Update the grid template columns to adjust the chat area width
-            layout.style.gridTemplateColumns = `auto 1fr ${newWidth}px`;
+            // Update the CSS custom property to adjust the chat area width
+            layout.style.setProperty('--chat-width', `${newWidth}px`);
         };
 
         const mouseUpHandler = () => {

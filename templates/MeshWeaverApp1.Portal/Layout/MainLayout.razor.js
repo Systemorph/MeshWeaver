@@ -1,5 +1,5 @@
-﻿window.isDarkMode = function(){
-    let matched = window.matchMedia("(prefers-color-scheme: dark)").matches ;
+﻿window.isDarkMode = function () {
+    let matched = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
     if (matched)
         return true;
@@ -9,12 +9,18 @@
 
 window.chatResizer = {
     startResize: function () {
-        // Get the container element
-        const container = document.querySelector('.ai-chat-container');
-        if (!container) return;
+        // Only allow resizing on desktop (screen width >= 768px)
+        if (window.innerWidth < 768) return;
+
+        // Get the layout element
+        const layout = document.querySelector('.layout.chat-visible');
+        if (!layout) return;
 
         // Set up the mouse events for resizing
         const mouseMoveHandler = (e) => {
+            // Prevent default to avoid text selection
+            e.preventDefault();
+
             // Calculate the new width based on mouse position (from right edge)
             const width = window.innerWidth - e.clientX;
 
@@ -23,8 +29,8 @@ window.chatResizer = {
             const maxWidth = window.innerWidth * 0.8;
             const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
 
-            // Apply the width to the container
-            container.style.width = newWidth + 'px';
+            // Update the CSS custom property to adjust the chat area width
+            layout.style.setProperty('--chat-width', `${newWidth}px`);
         };
 
         const mouseUpHandler = () => {

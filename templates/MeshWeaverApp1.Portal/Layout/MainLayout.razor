@@ -1,14 +1,12 @@
-﻿@using MeshWeaver.Blazor.Components
+﻿@using MeshWeaverApp1.Portal.Infrastructure
+@using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Chat
-@using MeshWeaverApp1.Portal.Components
-@using MeshWeaverApp1.Portal.Infrastructure
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
-<div class="layout" style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
+<div class="layout @(IsAIChatVisible ? "chat-visible" : "")"
+    style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
-        <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo"
-                      title="MeshWeaver"
-                      aria-label="MeshWeaver">
+        <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
             <MeshWeaverLogo></MeshWeaverLogo>
         </FluentAnchor>
     </div>
@@ -19,21 +17,20 @@
             <FluentAnchor Appearance="Appearance.Stealth" Href="https://www.meshweaver.cloud" Class="logo">
                 MESHWEAVER
             </FluentAnchor>
-            <FluentSpacer/>
+            <FluentSpacer />
             <div class="links">
-                <FluentAnchor Appearance="Appearance.Hypertext"
-                              Href="http://github.com/Systemorph/MeshWeaver" Target="_blank" Rel="noreferrer noopener"
-                              title="MeshWeaver on GitHub" aria-label="MeshWeaver source on GitHub">
-                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse"/>
+                <FluentAnchor Appearance="Appearance.Hypertext" Href="http://github.com/Systemorph/MeshWeaver"
+                    Target="_blank" Rel="noreferrer noopener" title="MeshWeaver on GitHub"
+                    aria-label="MeshWeaver source on GitHub">
+                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
                 </FluentAnchor>
-                <FluentAnchor Appearance="Appearance.Hypertext"
-                              Href="https://discord.gg/wMTug8qtvc" Target="_blank" Rel="noreferrer noopener"
-                              title="MeshWeaver on Discord" aria-label="MeshWeaver Discord">
+                <FluentAnchor Appearance="Appearance.Hypertext" Href="https://discord.gg/wMTug8qtvc" Target="_blank"
+                    Rel="noreferrer noopener" title="MeshWeaver on Discord" aria-label="MeshWeaver Discord">
                     <FluentIcon Value="@(new PortalIcons.Size20.Discord())" Color="Color.FillInverse" />
                 </FluentAnchor>
             </div>
             <div class="notifications">
-                <NotificationCenter/>
+                <NotificationCenter />
             </div>
             <div class="chat">
                 <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
@@ -42,53 +39,50 @@
             </div>
             <div class="settings">
                 <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral" Title="Site settings"/>
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral"
+                        Title="Site settings" />
                 </FluentButton>
             </div>
-            <UserProfile/>
+            <UserProfile />
         </FluentHeader>
 
-        <DesktopNavMenu/>
+        <DesktopNavMenu />
     }
     else
     {
         <FluentHeader>
-            <FluentSpacer/>
+            <FluentSpacer />
 
-            <UserProfile/>
+            <UserProfile />
             <FluentButton
                 IconEnd="@(isNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
-                Title="Menu"
-                Appearance="Appearance.Stealth"
-                BackgroundColor="transparent"
-                OnClick="@(() => isNavMenuOpen = !isNavMenuOpen)"
-                Class="navigation-button"/>
+                Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                OnClick="@(() => isNavMenuOpen = !isNavMenuOpen)" Class="navigation-button" />
         </FluentHeader>
 
-        <MobileNavMenu
-            IsNavMenuOpen="isNavMenuOpen"
-            CloseNavMenu="@CloseMobileNavMenu"
+        <MobileNavMenu IsNavMenuOpen="isNavMenuOpen" CloseNavMenu="@CloseMobileNavMenu"
             LaunchSettingsAsync="@OpenSiteSettingsAsync" />
     }
 
     <div class="messagebar-container">
-        <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar"/>
+        <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
     </div>
     <FluentBodyContent Class="custom-body-content body-content">
         <FluentToastProvider MaxToastCount="3" Timeout="5000" />
         @Body
     </FluentBodyContent>
 
-    <FluentDialogProvider/>
+    <FluentDialogProvider />
     <FluentTooltipProvider />
-    <FluentMenuProvider />                
-    <FluentToastProvider MaxToastCount="10"/>
-    <FluentKeyCodeProvider/>    
+    <FluentMenuProvider />
+    <FluentToastProvider MaxToastCount="10" />
+    <FluentKeyCodeProvider />
+
     @if (IsAIChatVisible)
     {
         <div class="ai-chat-overlay">
+            <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
             <div class="ai-chat-container">
-                <div class="ai-chat-resizer" @onmousedown="@(e => StartResize())"></div>
                 <div class="ai-chat-content">
                     <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
                 </div>

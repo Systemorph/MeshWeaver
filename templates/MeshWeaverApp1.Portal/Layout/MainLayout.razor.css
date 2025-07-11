@@ -12,20 +12,20 @@
         color: var(--error-ui-foreground-color);
     }
 
-        #blazor-error-ui a {
-            color: var(--error-ui-accent-foreground-color);
-        }
+    #blazor-error-ui a {
+        color: var(--error-ui-accent-foreground-color);
+    }
 
-        #blazor-error-ui .dismiss {
-            cursor: pointer;
-            position: absolute;
-            right: 0.75rem;
-            top: 0.5rem;
-        }
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
 
-        #blazor-error-ui .reload {
-            color: var(--error-ui-accent-foreground-color);
-        }
+    #blazor-error-ui .reload {
+        color: var(--error-ui-accent-foreground-color);
+    }
 
     ::deep.layout {
         height: 100vh;
@@ -39,58 +39,69 @@
             "nav main";
         background-color: var(--fill-color);
         color: var(--neutral-foreground-rest);
+        transition: grid-template-columns 0.3s ease;
     }
 
-        ::deep.layout > .meshweaver-icon {
-            grid-area: icon;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: var(--neutral-layer-4);
-        }
+    ::deep.layout.chat-visible {
+        --chat-width: 400px;
+        grid-template-columns: auto 1fr var(--chat-width);
+        grid-template-areas:
+            "icon head head"
+            "nav messagebar chat"
+            "nav main chat";
+    }
 
-        ::deep.layout > header {
-            grid-area: head;
-        }
+    ::deep.layout>.meshweaver-icon {
+        grid-area: icon;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--neutral-layer-4);
+    }
 
-        ::deep.layout > .fluent-appbar {
-            grid-area: nav;
-            overflow-y: auto;
-            background: var(--neutral-layer-4);
-        }
+    ::deep.layout>header {
+        grid-area: head;
+    }
 
-        ::deep.layout > .body-content {
-            grid-area: main;
-            overflow-x: auto; /* allow horizontal scrolling */
-            overflow: auto;
-            border-left: 1px solid var(--neutral-stroke-rest);
-        }
+    ::deep.layout>.fluent-appbar {
+        grid-area: nav;
+        overflow-y: auto;
+        background: var(--neutral-layer-4);
+    }
 
-        ::deep.layout > .messagebar-container {
-            grid-area: messagebar;
-            border-top: 1px solid var(--neutral-stroke-rest);
-            border-left: 1px solid var(--neutral-stroke-rest);
-        }
+    ::deep.layout>.body-content {
+        grid-area: main;
+        overflow-x: auto;
+        /* allow horizontal scrolling */
+        overflow: auto;
+        border-left: 1px solid var(--neutral-stroke-rest);
+    }
+
+    ::deep.layout>.messagebar-container {
+        grid-area: messagebar;
+        border-top: 1px solid var(--neutral-stroke-rest);
+        border-left: 1px solid var(--neutral-stroke-rest);
+    }
 
     ::deep .header-right {
         margin-left: auto;
     }
 
-    ::deep.layout > header > .header-gutters > fluent-button[appearance=stealth]:not(:hover)::part(control),
-    ::deep.layout > header > .header-gutters > fluent-anchor[appearance=stealth]:not(:hover)::part(control),
-    ::deep.layout > header > .header-gutters > fluent-anchor[appearance=stealth].logo::part(control),
-    ::deep.layout > .meshweaver-icon fluent-anchor[appearance=stealth].logo::part(control) {
+    ::deep.layout>header>.header-gutters>fluent-button[appearance=stealth]:not(:hover)::part(control),
+    ::deep.layout>header>.header-gutters>fluent-anchor[appearance=stealth]:not(:hover)::part(control),
+    ::deep.layout>header>.header-gutters>fluent-anchor[appearance=stealth].logo::part(control),
+    ::deep.layout>.meshweaver-icon fluent-anchor[appearance=stealth].logo::part(control) {
         background-color: var(--neutral-layer-4);
     }
 
-    ::deep.layout > header {
+    ::deep.layout>header {
         background-color: var(--neutral-layer-4);
         margin-bottom: 0;
     }
 
-        ::deep.layout > header > .header-gutters > fluent-anchor {
-            font-size: var(--type-ramp-plus-2-font-size);
-        }
+    ::deep.layout>header>.header-gutters>fluent-anchor {
+        font-size: var(--type-ramp-plus-2-font-size);
+    }
 
     ::deep .meshweaver-icon fluent-anchor.logo::part(control) {
         padding: 0;
@@ -104,7 +115,7 @@
         width: 36px;
     }
 
-    ::deep.layout > header > .header-gutters {
+    ::deep.layout>header>.header-gutters {
         margin-left: 0;
     }
 }
@@ -123,20 +134,20 @@
         color: var(--error-ui-foreground-color);
     }
 
-        #blazor-error-ui a {
-            color: var(--error-ui-accent-foreground-color);
-        }
+    #blazor-error-ui a {
+        color: var(--error-ui-accent-foreground-color);
+    }
 
-        #blazor-error-ui .dismiss {
-            cursor: pointer;
-            position: absolute;
-            right: 0.75rem;
-            top: 0.5rem;
-        }
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
 
-        #blazor-error-ui .reload {
-            color: var(--error-ui-accent-foreground-color);
-        }
+    #blazor-error-ui .reload {
+        color: var(--error-ui-accent-foreground-color);
+    }
 
     ::deep.layout {
         height: 100vh;
@@ -153,69 +164,70 @@
         color: var(--neutral-foreground-rest);
     }
 
-        ::deep.layout > .meshweaver-icon {
-            grid-area: icon;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: var(--neutral-layer-4);
-        }
+    ::deep.layout>.meshweaver-icon {
+        grid-area: icon;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--neutral-layer-4);
+    }
 
-        ::deep.layout > header {
-            grid-area: head;
-        }
+    ::deep.layout>header {
+        grid-area: head;
+    }
 
-        ::deep.layout > .fluent-appbar {
-            grid-area: nav;
-            overflow-y: auto;
-            background: var(--neutral-layer-4);
-        }
+    ::deep.layout>.fluent-appbar {
+        grid-area: nav;
+        overflow-y: auto;
+        background: var(--neutral-layer-4);
+    }
 
-        ::deep.layout > .body-content {
-            grid-area: main;
-            overflow-x: auto; /* allow horizontal scrolling */
-            overflow: auto;
-            border-left: 1px solid var(--neutral-stroke-rest);
-        }
+    ::deep.layout>.body-content {
+        grid-area: main;
+        overflow-x: auto;
+        /* allow horizontal scrolling */
+        overflow: auto;
+        border-left: 1px solid var(--neutral-stroke-rest);
+    }
 
-        ::deep.layout > .messagebar-container {
-            grid-area: messagebar;
-            border-top: 1px solid var(--neutral-stroke-rest);
-            border-left: 1px solid var(--neutral-stroke-rest);
-        }
+    ::deep.layout>.messagebar-container {
+        grid-area: messagebar;
+        border-top: 1px solid var(--neutral-stroke-rest);
+        border-left: 1px solid var(--neutral-stroke-rest);
+    }
 
     ::deep .header-right {
         margin-left: auto;
     }
 
-    ::deep.layout > header > .header-gutters > fluent-button[appearance=stealth]:not(:hover)::part(control),
-    ::deep.layout > header > .header-gutters > fluent-anchor[appearance=stealth]:not(:hover)::part(control),
-    ::deep.layout > header > .header-gutters > fluent-anchor[appearance=stealth].logo::part(control),
-    ::deep.layout > .meshweaver-icon fluent-anchor[appearance=stealth].logo::part(control) {
+    ::deep.layout>header>.header-gutters>fluent-button[appearance=stealth]:not(:hover)::part(control),
+    ::deep.layout>header>.header-gutters>fluent-anchor[appearance=stealth]:not(:hover)::part(control),
+    ::deep.layout>header>.header-gutters>fluent-anchor[appearance=stealth].logo::part(control),
+    ::deep.layout>.meshweaver-icon fluent-anchor[appearance=stealth].logo::part(control) {
         background-color: var(--neutral-layer-4);
     }
 
-    ::deep.layout > .meshweaver-icon {
+    ::deep.layout>.meshweaver-icon {
         padding-left: 15px;
         background-color: var(--neutral-layer-4);
     }
 
-        ::deep.layout > .meshweaver-icon fluent-anchor {
-            margin-left: 5px;
-        }
+    ::deep.layout>.meshweaver-icon fluent-anchor {
+        margin-left: 5px;
+    }
 
-        ::deep.layout > .meshweaver-icon .navigation-button {
-            border: 1px solid #a8aeb3;
-        }
+    ::deep.layout>.meshweaver-icon .navigation-button {
+        border: 1px solid #a8aeb3;
+    }
 
-    ::deep.layout > header {
+    ::deep.layout>header {
         background-color: var(--neutral-layer-4);
         margin-bottom: 0;
     }
 
-        ::deep.layout > header > .header-gutters > fluent-anchor {
-            font-size: var(--type-ramp-plus-2-font-size);
-        }
+    ::deep.layout>header>.header-gutters>fluent-anchor {
+        font-size: var(--type-ramp-plus-2-font-size);
+    }
 
     ::deep .meshweaver-icon fluent-anchor.logo::part(control) {
         padding: 0;
@@ -229,66 +241,84 @@
         width: 36px;
     }
 
-    ::deep.layout > header > .header-gutters {
+    ::deep.layout>header>.header-gutters {
         margin-left: 0;
     }
 }
 
-::deep .desktop-nav-menu > .fluent-appbar-item > .fluentui-counterbadge-container > a > .stack-vertical {
+::deep .desktop-nav-menu>.fluent-appbar-item>.fluentui-counterbadge-container>a>.stack-vertical {
     /* FluentAppBarItems have a default width. However, we have a wide range of widths
        in content depending on the language (ie, from traces to seguimientos).
        Remove the default horizontal padding to allow for more text  */
     padding-left: 0;
     padding-right: 0;
 }
-.ai-chat-overlay {
-    position: fixed;
-    top: auto;
-    /* Changed from 0 to auto */
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 100;
-    background-color: transparent;
-    /* Removed background overlay */
-    pointer-events: none;
-    height: calc(100vh - var(--header-height, 48px));
-    /* Adjust for header height */
+
+/* Desktop layout - Chat as part of grid */
+@media (min-width: 768px) {
+    .ai-chat-overlay {
+        grid-area: chat;
+        position: relative;
+        background-color: transparent;
+        pointer-events: auto;
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: row;
+    }
+
+    .ai-chat-resizer {
+        width: 8px;
+        height: 100%;
+        background-color: var(--neutral-stroke-rest);
+        cursor: col-resize;
+        flex-shrink: 0;
+        z-index: 2;
+    }
+
+    .ai-chat-container {
+        flex: 1;
+        height: 100%;
+        background-color: var(--neutral-layer-1);
+        box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+        display: flex;
+        pointer-events: auto;
+    }
 }
 
-.ai-chat-container {
-    position: absolute;
-    top: 0;
-    right: 0;
-    height: 100%;
-    /* Changed from 100vh to 100% */
-    width: 400px;
-    background-color: var(--neutral-layer-1);
-    box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
-    display: flex;
-    pointer-events: auto;
-}
+/* Mobile layout - Chat as overlay */
+@media (max-width: 767px) {
+    .ai-chat-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        background-color: var(--neutral-layer-1);
+        pointer-events: auto;
+    }
 
-.ai-chat-resizer {
-    width: 8px;
-    height: 100%;
-    background-color: var(--neutral-stroke-rest);
-    cursor: col-resize;
-    position: absolute;
-    left: 0;
-    top: 0;
-    z-index: 2;
-    /* Ensure it's above other elements */
+    .ai-chat-container {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background-color: var(--neutral-layer-1);
+        display: flex;
+        pointer-events: auto;
+    }
+
+    .ai-chat-resizer {
+        display: none;
+    }
 }
 
 .ai-chat-content {
     flex: 1;
-    margin-left: 8px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     height: 100%;
-    /* Ensure it takes full height */
 }
 
 .ai-chat-header {

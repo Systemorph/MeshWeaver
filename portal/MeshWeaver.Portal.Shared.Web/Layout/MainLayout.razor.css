@@ -43,7 +43,8 @@
     }
 
     ::deep.layout.chat-visible {
-        grid-template-columns: auto 1fr 400px;
+        --chat-width: 400px;
+        grid-template-columns: auto 1fr var(--chat-width);
         grid-template-areas:
             "icon head head"
             "nav messagebar chat"
