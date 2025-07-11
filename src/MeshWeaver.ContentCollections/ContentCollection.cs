@@ -37,7 +37,7 @@ public abstract class ContentCollection : IDisposable
     public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
 
     public IObservable<object?>? GetMarkdown(string path)
-        => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent())!
+        => markdownStream.Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path.TrimStart('/')), c => c.ReturnNullWhenNotPresent())!
             .Select(x => x.Value);
 
 
@@ -102,7 +102,7 @@ public abstract class ContentCollection : IDisposable
             await GetStreams(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x!.Path), x => (object)x!, cancellationToken: ct)
+                .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
         );
         AttachMonitor();
         return ret;
@@ -117,9 +117,10 @@ public abstract class ContentCollection : IDisposable
                 if (tuple.Stream is null)
                     return null;
                 var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-                if(article is null)
+                if (article is null)
                     return null;
-                return new ChangeItem<InstanceCollection>(x!.SetItem(article.Name, article), Hub.Version);
+                var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
+                return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), Hub.Version);
             });
         }, _ => Task.CompletedTask);
     }
