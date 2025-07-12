@@ -243,7 +243,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Todo", "modules\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Todo.Test", "test\MeshWeaver.Todo.Test\MeshWeaver.Todo.Test.csproj", "{1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Todo.AI", "modules\todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj", "{738E461B-3B8E-4592-8A5D-63680B4F756A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Todo.AI", "modules\Todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj", "{738E461B-3B8E-4592-8A5D-63680B4F756A}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Templates", "Templates", "{B7F5D6B0-E961-41F5-91D5-C51EA6374D92}"
 EndProject
