@@ -1,5 +1,4 @@
-﻿#nullable enable
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Activities;

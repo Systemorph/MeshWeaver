@@ -28,7 +28,6 @@ namespace MeshWeaver.Activities
         {
             Update(x =>
             {
-                Logger.LogWarning(ex, "An exception occurred in {Activity}", x);
                 return x with { Log = Log.Fail($"An exception occurred: {ex}") };
             }, _ => Task.CompletedTask);
             return Task.CompletedTask;
@@ -40,7 +39,6 @@ namespace MeshWeaver.Activities
         {
             if (SyncHub == null)
             {
-                Logger.LogWarning("SyncHub is null in Update for activity {ActivityId}. Activity may have been created after hub disposal.", Id);
                 exceptionCallback?.Invoke(new InvalidOperationException("SyncHub is null. Activity was likely created after hub disposal."));
                 return;
             }
@@ -48,7 +46,6 @@ namespace MeshWeaver.Activities
             // Check if hub is disposing to avoid hanging
             if (SyncHub.IsDisposing)
             {
-                Logger.LogWarning("SyncHub is disposing, skipping update for activity {ActivityId}", Id);
                 exceptionCallback?.Invoke(new InvalidOperationException("SyncHub is disposing, cannot process update."));
                 return;
             }
@@ -63,7 +60,6 @@ namespace MeshWeaver.Activities
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Error in Update for activity {ActivityId}", Id);
                 exceptionCallback?.Invoke(ex);
             }
         }
@@ -76,8 +72,6 @@ namespace MeshWeaver.Activities
             Func<TState, Exception?, string> formatter
         )
         {
-            Logger.Log(logLevel, eventId, state, exception, formatter);
-
             var item = new LogMessage(state?.ToString() ?? "", logLevel);
             if (state is IReadOnlyCollection<KeyValuePair<string, object>> list)
                 item = item with { Scopes = list };
@@ -88,14 +82,14 @@ namespace MeshWeaver.Activities
         protected TActivity This => (TActivity)this;
         protected void LogMessage(LogMessage item)
         {
+            // Send LogRequest to handle logging
+            Hub.Post(new LogRequest(ActivityAddress, item));
+            
             Update(x => x.WithLog(log => log with
             {
                 Messages = log.Messages.Add(item),
                 Version = log.Version + 1
-            }
-
-                ), FailActivity
-            );
+            }), FailActivity);
         }
 
 
@@ -137,20 +131,14 @@ namespace MeshWeaver.Activities
             this.Hub = hub;
             this.Logger = hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
             Log = new(category);
+            ActivityAddress = new ActivityAddress(Log.Id);
 
             try
             {
-                SyncHub = hub.GetHostedHub(new ActivityAddress(), x => x);
-                if (SyncHub == null)
-                {
-                    Logger.LogWarning(
-                        "GetHostedHub returned null for ActivityAddress in activity {category}. Check if ActivityAddress is registered in address types.",
-                        category);
-                }
+                SyncHub = hub.GetHostedHub(ActivityAddress, x => x);
             }
-            catch (Exception ex)
+            catch
             {
-                Logger.LogError(ex, "Failed to create SyncHub for activity {category}", category);
                 throw;
             }
         }
@@ -158,6 +146,7 @@ namespace MeshWeaver.Activities
         protected readonly IMessageHub? SyncHub;
         public string Id => Log.Id;
         public ActivityLog Log { get; init; }
+        public ActivityAddress ActivityAddress { get; private init; }
         public bool IsEnabled(LogLevel logLevel) => Logger.IsEnabled(logLevel);
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => Logger.BeginScope(state);
@@ -187,9 +176,9 @@ namespace MeshWeaver.Activities
                 {
                     disposable.Dispose();
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Logger.LogWarning(ex, "Error disposing resource in activity {ActivityId}", Id);
+                    // Silently handle disposal errors
                 }
             }
         }

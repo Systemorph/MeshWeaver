@@ -14,7 +14,8 @@
       "Bash(dotnet nuget locals:*)",
       "Bash(rm:*)",
       "Bash(diff:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   }
