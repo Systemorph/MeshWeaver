@@ -71,44 +71,50 @@ public class HubTestBase : TestBase
     }
     public override async Task DisposeAsync()
     {
-        Logger.LogInformation("Starting disposal of router");
-
-        // Log debug file location
-        var tempDir = Environment.GetEnvironmentVariable("TEMP") ?? ".";
-        var debugLogDir = Path.Combine(tempDir, "MeshWeaverDebugLogs");
-        Logger.LogInformation("Debug logs are written to: {DebugLogDir}", debugLogDir);
+        var disposalId = Guid.NewGuid().ToString("N")[..8];
+        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
 
         try
         {
-            // Add aggressive 3 second timeout to prevent hanging
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            // Simple timeout - just enough to detect hangs without aggressive intervention
+            var timeoutSeconds = 10;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
-            // If Router.Disposal is null, don't wait - just dispose synchronously
+            // Log which hubs exist before disposal
+            Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, Router.GetType().GetProperty("HostedHubs")?.GetValue(Router)?.ToString() ?? "unknown");
+            
             if (Router.Disposal != null)
             {
-                try
-                {
-                    await Router.Disposal.WaitAsync(timeout.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    Logger.LogWarning("Router disposal timed out after 3 seconds - forcing synchronous disposal");
-                }
+                Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
+                await Router.Disposal.WaitAsync(timeout.Token);
+                Logger.LogInformation("[{DisposalId}] Router.Disposal completed", disposalId);
             }
-
-            // Force dispose the router synchronously
-            Router.Dispose();
-
-            Logger.LogInformation("Finished disposal of router");
+            else
+            {
+                Logger.LogInformation("[{DisposalId}] No active disposal, calling Router.Dispose()", disposalId);
+                Router.Dispose();
+                Logger.LogInformation("[{DisposalId}] Router.Dispose() completed", disposalId);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
+            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
+            Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, 
+                Router.Disposal?.IsCompleted == true ? "Completed" : 
+                Router.Disposal?.IsFaulted == true ? "Faulted" : 
+                Router.Disposal == null ? "Null" : "Pending");
+            
+            // Don't fight symptoms - let it timeout and provide diagnostic info
+            throw;
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error during router disposal - continuing");
-            // Don't throw, just log and continue to prevent test hanging
+            Logger.LogError(ex, "[{DisposalId}] Exception during router disposal", disposalId);
+            throw;
         }
         finally
         {
-            // Call base disposal to clean up other resources
             await base.DisposeAsync();
         }
     }

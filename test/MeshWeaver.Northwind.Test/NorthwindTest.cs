@@ -211,4 +211,5 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.RowGroup!.DisplayName.Should()
             .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
     }
+
 }

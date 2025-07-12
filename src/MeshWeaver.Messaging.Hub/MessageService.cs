@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
@@ -352,85 +353,111 @@ public class MessageService : IMessageService
     private readonly Lock locker = new();
     private readonly IDisposable startupDeferral; public async ValueTask DisposeAsync()
     {
+        var totalStopwatch = Stopwatch.StartNew();
         lock (locker)
         {
             if (isDisposing)
+            {
+                logger.LogWarning("DisposeAsync called multiple times for message service in {Address}", Address);
                 return;
+            }
             isDisposing = true;
         }
 
-        logger.LogDebug("Starting disposal of message service in {Address}", Address);
+        logger.LogInformation("Starting disposal of message service in {Address}", Address);
 
         // Dispose hang detection timer first
+        var hangDetectionStopwatch = Stopwatch.StartNew();
         try
         {
+            logger.LogDebug("Disposing hang detection timer for message service in {Address}", Address);
             await hangDetectionCts.CancelAsync();
             hangDetectionCts.Dispose();
+            logger.LogDebug("Hang detection timer disposed successfully in {elapsed}ms for {Address}", 
+                hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error disposing hang detection timer in {Address}", Address);
+            logger.LogWarning(ex, "Error disposing hang detection timer in {elapsed}ms for {Address}", 
+                hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
 
         // Complete the buffers to stop accepting new messages
+        var bufferStopwatch = Stopwatch.StartNew();
+        logger.LogDebug("Completing buffers for message service in {Address}", Address);
         buffer.Complete();
         executionBuffer.Complete();
+        logger.LogDebug("Buffers completed in {elapsed}ms for {Address}", bufferStopwatch.ElapsedMilliseconds, Address);
 
+        var deliveryStopwatch = Stopwatch.StartNew();
         try
         {
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
             using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogDebug("Deliveries completed successfully in {Address}", Address);
+            logger.LogInformation("Deliveries completed successfully in {elapsed}ms for {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 5 seconds in {Address}", Address);
+            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during delivery completion in {Address}", Address);
+            logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }        // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
         logger.LogDebug("Skipping execution completion wait during disposal for {Address}", Address);
 
         // Wait for startup processing to complete before disposing deferrals
+        var startupStopwatch = Stopwatch.StartNew();
         try
         {
-            logger.LogDebug("Awaiting startup processing completion in {Address}", Address);
+            logger.LogDebug("Awaiting startup processing completion in {Address}, pending messages: {pendingCount}", 
+                Address, pendingStartupMessages);
             using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
             // If there are no pending startup messages and startup is complete, complete immediately
             if (pendingStartupMessages == 0 && isStarted)
             {
                 startupProcessingCompletionSource.TrySetResult(true);
+                logger.LogDebug("Startup processing marked as complete immediately for {Address}", Address);
             }
 
             await startupProcessingCompletionSource.Task.WaitAsync(startupTimeout.Token);
-            logger.LogDebug("Startup processing completed successfully in {Address}", Address);
+            logger.LogInformation("Startup processing completed successfully in {elapsed}ms for {Address}", 
+                startupStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogWarning("Startup processing completion timed out after 10 seconds in {Address}", Address);
+            logger.LogWarning("Startup processing completion timed out after 10 seconds ({elapsed}ms) in {Address}, pending: {pendingCount}", 
+                Address, startupStopwatch.ElapsedMilliseconds, pendingStartupMessages);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during startup processing completion in {Address}", Address);
+            logger.LogError(ex, "Error during startup processing completion after {elapsed}ms in {Address}", 
+                startupStopwatch.ElapsedMilliseconds, Address);
         }
+        var deferralsStopwatch = Stopwatch.StartNew();
         try
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
             using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             await deferralContainer.DisposeAsync().AsTask().WaitAsync(deferralsTimeout.Token);
-            logger.LogDebug("Deferrals completed successfully in {Address}", Address);
+            logger.LogInformation("Deferrals completed successfully in {elapsed}ms for {Address}", 
+                deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Deferrals disposal timed out after 3 seconds in {Address}", Address);
+            logger.LogError("Deferrals disposal timed out after 3 seconds ({elapsed}ms) in {Address}", 
+                deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during deferrals disposal in {Address}", Address);
+            logger.LogError(ex, "Error during deferrals disposal after {elapsed}ms in {Address}", 
+                deferralsStopwatch.ElapsedMilliseconds, Address);
         }        // Complete the startup task if it's still pending
         try
         {
@@ -448,7 +475,9 @@ public class MessageService : IMessageService
             logger.LogWarning(ex, "Error completing startup tasks during disposal in {Address}", Address);
         }
 
-        logger.LogDebug("Finished disposing message service in {Address}", Address);
+        totalStopwatch.Stop();
+        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms", 
+            Address, totalStopwatch.ElapsedMilliseconds);
     }
     private async Task<IMessageDelivery> WrapDeliveryWithStartupTracking(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
