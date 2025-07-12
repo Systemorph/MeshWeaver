@@ -112,7 +112,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
             
             // Log status of each disposal task
-            for (int i = 0; i < disposalTasks.Length; i++)
+            for (var i = 0; i < disposalTasks.Length; i++)
             {
                 var task = disposalTasks[i];
                 var hubAddress = hubAddresses[i];
@@ -127,7 +127,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             }
         }
     }
-    private async Task DisposeHub(IMessageHub hub)
+    private Task DisposeHub(IMessageHub hub)
     {
         var address = hub.Address;
         var hubStopwatch = Stopwatch.StartNew();
@@ -141,17 +141,6 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             logger.LogDebug("Dispose() call completed for hub {address} in {elapsed}ms", 
                 address, disposeCallStopwatch.ElapsedMilliseconds);
 
-            // Don't wait for hub.Disposal completion to avoid circular dependency deadlocks
-            // The hub.Dispose() call above already initiated disposal
-            if(hub.Disposal is not null)
-            {
-                logger.LogDebug("Hub {address} disposal task exists but not waiting to avoid circular dependency", address);
-            }
-            else
-            {
-                logger.LogDebug("No disposal task exists for hub {address}", address);
-            }
-            
             logger.LogInformation("Hub {address} disposed successfully in {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
@@ -165,6 +154,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             logger.LogError(ex, "Error during disposal of hub {address} after {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
             throw;
         }
+
+        return hub.Disposal ?? Task.CompletedTask;
     }
 
 }
