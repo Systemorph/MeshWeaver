@@ -41,7 +41,7 @@ public class MessageService : IMessageService
             new(x => x.Invoke()); postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
-        startupDeferral = Defer(x => x.Message is not ExecutionRequest);
+        startupDeferral = Defer(_ => true);
     }
     void IMessageService.Start()
     {
@@ -58,7 +58,8 @@ public class MessageService : IMessageService
           {
               // Add a timeout to prevent startup hangs
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); await hub.StartAsync(combinedCts.Token);              // Mark as started and complete the startup task
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); 
+              await hub.StartAsync(combinedCts.Token);              // Mark as started and complete the startup task
               isStarted = true;
               startupCompletionSource.SetResult(true);
 
