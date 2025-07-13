@@ -66,18 +66,37 @@ public class DataPlugin(
      Description(
          $"Updates the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
     public async Task<string> UpdateData(
-        [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json, 
-        [Description("Name of the type to be updated. Must be in list of available types.")]string type
-        )
+        [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json,
+        [Description("Name of the type to be updated. Must be in list of available types.")] string type
+    )
     {
         var address = GetAddress(type);
 
         if (address == null)
             return $"No address defined for type: {type}";
 
-        var response = await hub.AwaitResponse(new DataChangeRequest(){Updates = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
+        var response = await hub.AwaitResponse(new DataChangeRequest() { Updates = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
 
-        if(response.Message.Log.Status == ActivityStatus.Succeeded)
+        if (response.Message.Log.Status == ActivityStatus.Succeeded)
+            return $"Data of type '{type}' updated successfully.";
+        return $"Failed to update data of type '{type}': {response.Message}";
+    }
+    [KernelFunction,
+     Description(
+         $"Deletes the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
+    public async Task<string> DeleteData(
+        [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json,
+        [Description("Name of the type to be deleted. Must be in list of available types.")] string type
+    )
+    {
+        var address = GetAddress(type);
+
+        if (address == null)
+            return $"No address defined for type: {type}";
+
+        var response = await hub.AwaitResponse(new DataChangeRequest() { Deletions = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(address));
+
+        if (response.Message.Log.Status == ActivityStatus.Succeeded)
             return $"Data of type '{type}' updated successfully.";
         return $"Failed to update data of type '{type}': {response.Message}";
     }

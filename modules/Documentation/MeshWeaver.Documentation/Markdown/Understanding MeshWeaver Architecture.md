@@ -4,7 +4,7 @@ Abstract: >
   Deep dive into MeshWeaver's distributed architecture, exploring message hubs, MVVM patterns, and reactive design principles that enable scalable cloud-native applications.
   
 Thumbnail: "images/architecture.jpeg"
-Published: "2025-07-01"
+Published: "2025-07-10"
 Authors:
   - "Roland Bürgi"
 Tags:
@@ -117,9 +117,9 @@ At the core of MeshWeaver's architecture lies a fundamental principle: **every i
 When you click on a todo item, edit a field, or press a button, these actions don't directly manipulate the user interface or data. Instead, they generate specific message events:
 
 - **UI Interactions**: A button click generates a `ClickedEvent` message
-- **Data Changes**: Form submissions create `DataChangeRequest` messages  
-- **Navigation**: Route changes produce `NavigationEvent` messages
-- **Chat Interactions**: User messages become `ChatMessageEvent` instances
+- **Data Change Requests**: Form submissions create `DataChangeRequest` messages. E.g. when clicking "Start", the status of the todo item is changed and propagated.  
+- **Data Changes**: Whenever a hub changes its data, it sends `DataChangedEvent` messages to all subscribers.
+- **Layout Areas**: Layout areas subscribe to the data changes. View Models treated as data elements and are propagated using `DataChangedEvent` messages.
 
 This message-centric approach stems from **reactive design principles**, which are fundamental to modern cloud-based architectures. By treating all interactions as discrete, immutable messages, the system gains several critical advantages:
 
