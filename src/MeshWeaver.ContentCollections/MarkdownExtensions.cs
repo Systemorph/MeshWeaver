@@ -101,6 +101,7 @@ public static class MarkdownExtensions
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         var name = Path.GetFileNameWithoutExtension(path);
+        var pathWithoutExtension = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
 
         if (yamlBlock is null)
             return new MarkdownElement
@@ -108,7 +109,7 @@ public static class MarkdownExtensions
                 Name = name,
                 Path = path,
                 Collection = collection,
-                Url = GetContentUrl(collection, name),
+                Url = GetContentUrl(collection, pathWithoutExtension),
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
@@ -146,7 +147,7 @@ public static class MarkdownExtensions
             Name = name,
             Path = path,
             Collection = collection,
-            Url = GetContentUrl(collection, name),
+            Url = GetContentUrl(collection, pathWithoutExtension),
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
