@@ -45,7 +45,7 @@
         <div class="toolbar-row">
             @if (ShowCollectionSelection)
             {
-                <CollectionPicker CollectionChanged="CollectionChanged" Context="Collections"></CollectionPicker>
+                <CollectionPicker CollectionChanged="CollectionChanged" Context="Collections" UseNavigation="true" Collection="@CollectionName"></CollectionPicker>
             }
             <FluentSpacer></FluentSpacer>
             @if (Collection is not null)

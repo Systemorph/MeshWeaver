@@ -15,6 +15,8 @@
 </AuthorizeView>
 @code {
     [Parameter] public string? FullPath { get; set; } = "";
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] private IContentService ContentService { get; set; } = null!;
     private string? Collection { get; set; } = "";
     private string? Path { get; set; } = "";
 
@@ -26,6 +28,17 @@
             var split = FullPath!.Split('/');
             Collection = split[0];
             Path = string.Join('/', split.Skip(1));
+        }
+        else
+        {
+            // Redirect to first available collection if no collection specified
+            var collections = ContentService.GetCollections(false);
+            var firstCollection = collections.FirstOrDefault();
+            if (firstCollection != null)
+            {
+                NavigationManager.NavigateTo($"/collections/{firstCollection.Collection}");
+                return;
+            }
         }
     }
 

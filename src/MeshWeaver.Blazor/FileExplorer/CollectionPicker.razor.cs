@@ -8,11 +8,13 @@ public partial class CollectionPicker : ComponentBase
 {
     private IReadOnlyCollection<Option<string>>? collections;
     [Inject] private IContentService ContentService { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Parameter] public string? NullLabel { get; set; }
     [Parameter] public string? Collection { get; set; }
     [Parameter] public EventCallback<string?> CollectionChanged { get; set; }
     [Parameter] public bool ShowHidden { get; set; } = false;
     [Parameter] public string? Context { get; set; }
+    [Parameter] public bool UseNavigation { get; set; } = false;
     private string? SelectedCollection { get; set; }
     protected override async Task OnInitializedAsync()
     {
@@ -43,8 +45,16 @@ public partial class CollectionPicker : ComponentBase
         if (collection == NullLabel)
             collection = null;
         SelectedCollection = collection;
-        await CollectionChanged.InvokeAsync(collection);
-        await InvokeAsync(StateHasChanged);
+        
+        if (UseNavigation && !string.IsNullOrEmpty(collection))
+        {
+            NavigationManager.NavigateTo($"/collections/{collection}");
+        }
+        else
+        {
+            await CollectionChanged.InvokeAsync(collection);
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
 }
