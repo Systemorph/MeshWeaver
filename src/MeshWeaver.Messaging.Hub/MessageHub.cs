@@ -247,7 +247,10 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly TaskCompletionSource hasStarted = new();
-    public Task HasStarted => hasStarted.Task; async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
+    public Task HasStarted => hasStarted.Task; 
+    
+    
+    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Message hub {address} initializing", Address);
 
