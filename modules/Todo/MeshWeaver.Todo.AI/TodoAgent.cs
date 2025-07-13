@@ -1,6 +1,4 @@
-﻿using System.ComponentModel;
-using System.Text.Json;
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
 using Microsoft.SemanticKernel;
@@ -30,33 +28,13 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
         To create a new todo item:
         1. Try to find title description and category and due date as best as you can from the user's input.
         2. Use the DataPlugin to get available categories (function: {nameof(DataPlugin.GetData)}, type: 'TodoCategory') and try to match a good category.
-        3. Use the {nameof(CreateTodo)} function to create a new 'TodoItem' with the provided details and matched category.
+        3. When asked to create a new 'TodoItem', use the {nameof(DataPlugin.GetSchema)} method with type 'TodoItem' to get the schema. Fill in the provided details and matched category.
+
         Always use the DataPlugin for data access and category matching.
 
         Furthermore, you can get a list of TodoItem from the {nameof(DataPlugin.GetData)} function with the type 'TodoItem' or retrieve a specific TodoItem by its ID using the same function with the entityId parameter.
         """;
 
-
-    [KernelFunction]
-    [Description("Creates a new todo item with the specified title, description, due date, and category. The category must be an existing category from the DataPlugin.")]
-    public string CreateTodo(string title, string description, 
-                           DateTime dueDate, 
-                           [Description("The category of the todo item. Must be an existing category from the DataPlugin.")] string category)
-    {
-        var json = $$$"""
-                      {
-                        "$type": "TodoItem",
-                        "title": "{{{title}}}",
-                        "description": "{{{description}}}",
-                        "dueDate": "{{{dueDate:yyyy-MM-ddTHH:mm:ssZ}}}",
-                        "category": "{{{category}}}"
-                      }
-                      """; 
-
-        // Use the DataPlugin to create the todo item
-        hub.Post(new DataChangeRequest(){Creations = [JsonDocument.Parse(json).RootElement] }, o => o.WithTarget(TodoApplicationAddress));
-        return "Todo item created successfully.";
-    }
     IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
     {
         var data = new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress);

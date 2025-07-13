@@ -4,7 +4,7 @@ Abstract: >
   Learn how MeshWeaver's message-based architecture enables seamless AI agent integration through remote control patterns, Semantic Kernel, and universal data access plugins.
   
 Thumbnail: "images/ai-integration.jpeg"
-Published: "2025-07-01"
+Published: "2025-07-13"
 Authors:
   - "Roland Bürgi"
 Tags:
