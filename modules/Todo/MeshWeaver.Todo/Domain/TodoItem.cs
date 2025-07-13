@@ -31,7 +31,7 @@ public record TodoItem
     public string? Description { get; init; }
 
     /// <summary>
-    /// Gets the category of the to-do item.
+    /// Gets the category of the to-do item. This must be one of the official categories defined in the system.
     /// </summary>
     [Dimension<TodoCategory>]
     public string Category { get; init; } = "General";

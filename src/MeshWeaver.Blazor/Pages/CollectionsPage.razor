@@ -2,24 +2,11 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.FileExplorer
 @using MeshWeaver.ContentCollections
-@inject IContentService ContentService
 
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
     <Authorized>
-        @if (collectionExists)
-        {
-            <FileBrowser CollectionName="@Collection" ShowCollectionSelection="@true" CurrentPath="@Path"></FileBrowser>
-        }
-        else if (!string.IsNullOrEmpty(Collection))
-        {
-            <div class="collection-not-found">
-                <h3>Collection Not Found</h3>
-                <p>The collection '@Collection' does not exist or is not configured.</p>
-                <p>Please check the collection name in the URL or contact your system administrator.</p>
-                <a href="/collections">Browse available collections</a>
-            </div>
-        }
+        <FileBrowser CollectionName="@Collection" ShowCollectionSelection="@true" CurrentPath="@Path"></FileBrowser>
     </Authorized>
     <NotAuthorized>
         <h3>Access Denied</h3>
@@ -30,7 +17,6 @@
     [Parameter] public string? FullPath { get; set; } = "";
     private string? Collection { get; set; } = "";
     private string? Path { get; set; } = "";
-    private bool collectionExists = false;
 
     protected override void OnParametersSet()
     {
@@ -40,13 +26,7 @@
             var split = FullPath!.Split('/');
             Collection = split[0];
             Path = string.Join('/', split.Skip(1));
-            
-            // Validate that the collection exists
-            collectionExists = ContentService.GetCollection(Collection) != null;
-        }
-        else
-        {
-            collectionExists = false;
         }
     }
+
 }
