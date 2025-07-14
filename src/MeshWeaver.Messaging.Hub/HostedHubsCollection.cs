@@ -19,6 +19,13 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         {
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
+            
+            if (isDisposing)
+            {
+                logger.LogWarning("Rejecting hosted hub creation for address {Address} during disposal - collection is disposing", address);
+                return null;
+            }
+            
             if (create == HostedHubCreation.Always)
             {
                 logger.LogDebug("Creating hosted hub for address {Address}", address);
@@ -38,10 +45,30 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     }
 
     private IMessageHub? CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-    where TAddress : Address =>
-        isDisposing
-            ? null
-            : serviceProvider.CreateMessageHub(address, config);
+    where TAddress : Address
+    {
+        if (isDisposing)
+        {
+            logger.LogWarning("Preventing hub creation for address {Address} - collection is disposing", address);
+            return null;
+        }
+        
+        try
+        {
+            logger.LogInformation("Creating new hosted hub for address {Address}", address);
+            var hub = serviceProvider.CreateMessageHub(address, config);
+            if (hub != null)
+            {
+                logger.LogInformation("Successfully created hosted hub for address {Address}", address);
+            }
+            return hub;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to create hosted hub for address {Address}", address);
+            return null;
+        }
+    }
 
     private bool isDisposing;
     private readonly object locker = new();

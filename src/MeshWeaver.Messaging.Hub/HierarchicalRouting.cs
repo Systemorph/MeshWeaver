@@ -63,6 +63,21 @@ internal class HierarchicalRouting
 
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery)
     {
+        // Check if hub is disposing and reject hosted hub routing to prevent deadlocks
+        if (hub.IsDisposing)
+        {
+            logger.LogWarning("Rejecting message routing for {MessageType} to {Target} - hub {Address} is disposing", 
+                delivery.Message.GetType().Name, delivery.Target, hub.Address);
+            
+            hub.Post(
+                new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.Rejected,
+                    Message = $"Cannot route message to {delivery.Target} - hub {hub.Address} is disposing"
+                }, o => o.ResponseFor(delivery)
+            );
+            return delivery.Failed("Hub disposing");
+        }
 
         if (delivery.Target is HostedAddress hosted)
         {
@@ -73,21 +88,30 @@ internal class HierarchicalRouting
                 var nextLevelAddress = hosted.Address;
                 if (nextLevelAddress is HostedAddress hostedInner)
                     nextLevelAddress = hostedInner.Host;
-                var hostedHub = hub.GetHostedHub(nextLevelAddress);
+                
+                // During disposal, only look for existing hubs, don't create new ones
+                var creation = hub.IsDisposing ? HostedHubCreation.Never : HostedHubCreation.Always;
+                var hostedHub = hub.GetHostedHub(nextLevelAddress, x => x, creation);
+                
                 if (hostedHub is not null)
                 {
                     hostedHub.DeliverMessage(delivery.WithTarget(hosted.Address));
                     return delivery.Forwarded();
                 }
-                logger.LogDebug("No route found for {Address}. Last tried in {Hub}", hosted.Address, hub.Address);
+                
+                var errorMessage = hub.IsDisposing 
+                    ? $"No existing route found for host {hosted.Address} and hub {hub.Address} is disposing"
+                    : $"No route found for host {hosted.Address}. Last tried in {hub.Address}";
+                    
+                logger.LogDebug(errorMessage);
                 hub.Post(
                     new DeliveryFailure(delivery)
                     {
-                        ErrorType = ErrorType.NotFound,
-                        Message = $"No route found for host {hosted.Address}. Last tried in {hub.Address}"
+                        ErrorType = hub.IsDisposing ? ErrorType.Rejected : ErrorType.NotFound,
+                        Message = errorMessage
                     }, o => o.ResponseFor(delivery)
                 );
-                return delivery.NotFound();
+                return hub.IsDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
             }
         }
         else
@@ -102,18 +126,37 @@ internal class HierarchicalRouting
 
         if (parentHub == null)
         {
-            logger.LogDebug("No route found for {Address}. Last tried in {Hub}", delivery.Target, hub.Address);
+            var errorMessage = hub.IsDisposing 
+                ? $"No route found for {delivery.Target} and hub {hub.Address} is disposing"
+                : $"No route found for host {delivery.Target}. Last tried in {hub.Address}";
+                
+            logger.LogDebug(errorMessage);
             hub.Post(
                 new DeliveryFailure(delivery)
                 {
-                    ErrorType = ErrorType.NotFound,
-                    Message = $"No route found for host {delivery.Target}. Last tried in {hub.Address}"
+                    ErrorType = hub.IsDisposing ? ErrorType.Rejected : ErrorType.NotFound,
+                    Message = errorMessage
                 }, o => o.ResponseFor(delivery)
             );
-            return delivery.NotFound();
-
+            return hub.IsDisposing ? delivery.Failed("Hub disposing") : delivery.NotFound();
         }
 
+        // Check if parent hub is also disposing before routing up
+        if (parentHub.IsDisposing)
+        {
+            logger.LogWarning("Cannot route to parent hub {ParentAddress} - parent is also disposing. Message: {MessageType}", 
+                parentHub.Address, delivery.Message.GetType().Name);
+            
+            hub.Post(
+                new DeliveryFailure(delivery)
+                {
+                    ErrorType = ErrorType.Rejected,
+                    Message = $"Cannot route to parent hub {parentHub.Address} - parent hub is also disposing"
+                }, o => o.ResponseFor(delivery)
+            );
+            return delivery.Failed("Parent hub disposing");
+        }
+        
         logger.LogDebug("Routing delivery {id} of type {type} to parent {target}", delivery.Id,
             delivery.Message.GetType().Name, parentHub.Address);
         if (parentHub.Address is not MeshAddress)
