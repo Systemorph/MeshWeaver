@@ -21,6 +21,7 @@ public sealed class MessageHub : IMessageHub
 
     public IServiceProvider ServiceProvider { get; }
     private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
+    private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -430,20 +431,55 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        var tcs = new TaskCompletionSource<IMessageDelivery>(cancellationToken);
+        // Create a combined cancellation token that cancels when either the provided token
+        // or disposal begins
+        var disposalCts = new CancellationTokenSource();
+        var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, 
+            disposalCts.Token);
+        
+        var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
+
+        // Register for disposal cancellation
+        lock (locker)
+        {
+            if (IsDisposing)
+            {
+                // If already disposing, immediately cancel the callback
+                tcs.SetCanceled(combinedCts.Token);
+                disposalCts.Dispose();
+                combinedCts.Dispose();
+                return tcs.Task;
+            }
+            
+            // Store the disposal CTS so we can cancel it during disposal
+            pendingCallbackCancellations.Add(disposalCts);
+        }
 
         async Task<IMessageDelivery> ResolveCallback(IMessageDelivery d, CancellationToken ct)
         {
-
-            if (d.Message is DeliveryFailure failure)
+            try
             {
-                tcs.SetException(new DeliveryFailureException(failure));
-                return d.Failed(failure.Message ?? "Delivery failed");
-            }
+                if (d.Message is DeliveryFailure failure)
+                {
+                    tcs.SetException(new DeliveryFailureException(failure));
+                    return d.Failed(failure.Message ?? "Delivery failed");
+                }
 
-            var ret = await callback(d, ct);
-            tcs.SetResult(ret);
-            return ret;
+                var ret = await callback(d, ct);
+                tcs.SetResult(ret);
+                return ret;
+            }
+            finally
+            {
+                // Clean up disposal cancellation token
+                lock (locker)
+                {
+                    pendingCallbackCancellations.Remove(disposalCts);
+                }
+                disposalCts.Dispose();
+                combinedCts.Dispose();
+            }
         }
 
         callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
@@ -586,6 +622,24 @@ public sealed class MessageHub : IMessageHub
             
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
+            
+            // Cancel all pending callbacks to prevent them from waiting indefinitely
+            var pendingCallbacks = pendingCallbackCancellations.ToArray();
+            logger.LogDebug("Cancelling {callbackCount} pending callbacks during disposal for hub {address}", 
+                pendingCallbacks.Length, Address);
+            
+            foreach (var cts in pendingCallbacks)
+            {
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Ignore - callback already completed and disposed
+                }
+            }
+            pendingCallbackCancellations.Clear();
         }
 
         // Log all hosted hubs that will be disposed
