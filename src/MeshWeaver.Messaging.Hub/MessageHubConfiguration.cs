@@ -157,6 +157,9 @@ public record MessageHubConfiguration
         });
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
+    internal long StartupTimeout { get; init; }
+
+    public MessageHubConfiguration WithStartupTimeout(long timeout) => this with { StartupTimeout = timeout };
 
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
