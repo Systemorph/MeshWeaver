@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using MeshWeaver.Messaging;
+using Xunit.Abstractions;
 
 namespace MeshWeaver.Fixture;
 
@@ -56,6 +58,7 @@ public class DebugFileLogger : ILogger
                 {
                     try
                     {
+                        //var m = prop.Value is ExecutionRequest er ? er with { Action = null! } : prop.Value;
                         var serialized = JsonSerializer.Serialize(prop.Value, new JsonSerializerOptions { WriteIndented = false });
                         logEntry += $"\n  {prop.Key}: {serialized}";
                     }

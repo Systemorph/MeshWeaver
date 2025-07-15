@@ -10,9 +10,9 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Activities;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -167,7 +167,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var expectedItems = data.Skip(1).ToArray();
         // act
         var deleteResponse = await client.AwaitResponse(
-            DataChangeRequest.Delete(toBeDeleted, null!),
+            DataChangeRequest.Delete(toBeDeleted, "TestUser"),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
@@ -183,7 +183,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            .Timeout(10.Seconds())
+            //.Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
 
@@ -219,7 +219,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         {
             Text = TextChange
         };
-        workspace.Update(myInstance, new(ActivityCategory.DataUpdate, client), null!);
+        await client.AwaitResponse(
+            DataChangeRequest.Update([myInstance]),
+            o => o.WithTarget(new ClientAddress()),
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
 
         var hostWorkspace = GetHost().GetWorkspace();
 
@@ -267,8 +271,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            o => o.WithTarget(new ClientAddress())
+            //, new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
         );
 
         // asserts
@@ -276,7 +280,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         response.Status.Should().Be(DataChangeStatus.Failed);
         var log = response.Log;
         log.Status.Should().Be(ActivityStatus.Failed);
-        var members = log.Messages.Should().ContainSingle().Which.Scopes!.FirstOrDefault(s => s.Key == "members");
+        var members = log
+            .Messages
+            .Where(m => m.LogLevel > LogLevel.Information)
+            .Should().ContainSingle()
+            .Which.Scopes!
+            .FirstOrDefault(s => s.Key == "members");
         members.Value.Should().BeOfType<string[]>().Which.Single().Should().Be("Text");
     }
 

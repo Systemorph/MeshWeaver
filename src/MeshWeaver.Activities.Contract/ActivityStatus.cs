@@ -8,6 +8,7 @@ public enum ActivityStatus
 {
     Running,
     Succeeded,
+    Warning,
     Failed,
     Cancelled
 }
