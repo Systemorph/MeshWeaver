@@ -40,6 +40,7 @@ namespace MeshWeaver.Activities
                     End = DateTime.UtcNow,
                     Version = log.Version + 1
                 });
+                Stream.OnNext(current);
 
             }
             while (completedActions.TryTake(out var completedAction))
@@ -129,6 +130,7 @@ namespace MeshWeaver.Activities
         public IMessageDelivery HandleLogRequest(IMessageDelivery<LogRequest> request)
         {
             current = current.WithLogs(request.Message.LogMessages);
+            Stream.OnNext(current);
             return request.Processed();
         }
 
@@ -212,7 +214,6 @@ namespace MeshWeaver.Activities
         {
             // Send LogRequest to handle logging
             Hub.Post(new LogRequest(ActivityAddress, item));
-            current = current.WithLog(log => log with { Messages = log.Messages.Add(item), Version = log.Version + 1 });
         }
 
 
@@ -224,10 +225,13 @@ namespace MeshWeaver.Activities
             var subActivity = new Activity(request.Message.Category, Hub);
             current = current.WithLog(l =>
                 l with { SubActivities = l.SubActivities.SetItem(subActivity.Id, subActivity.Log) });
+            Stream.OnNext(current);
             subActivity.Stream.Skip(1).Subscribe(sa =>
-                Hub.InvokeAsync(() => current = current.WithLog(
-                        log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 })
-                    , FailActivity)
+                Hub.InvokeAsync(() => {
+                    current = current.WithLog(
+                        log => log with { SubActivities = log.SubActivities.SetItem(sa.Id, sa.Log), Version = log.Version + 1 });
+                    Stream.OnNext(current);
+                }, FailActivity)
             );
             return request.Processed();
         }
