@@ -8,7 +8,9 @@ public record LogMessage(string Message, LogLevel LogLevel)
 {
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
     public string? CategoryName { get; init; }
-    public IReadOnlyCollection<KeyValuePair<string, object>>? Scopes { get; init; }
+    public IReadOnlyCollection<KeyValuePair<string, object>>? Scopes { get; init; } = [];
 }
 
-public record LogRequest(ActivityAddress ActivityAddress, LogMessage LogMessage) : IRequest;
+public record LogRequest(ActivityAddress ActivityAddress, params IReadOnlyCollection<LogMessage> LogMessages) : IRequest;
+
+public record StartSubActivityRequest(string Category) : IRequest;

@@ -3,6 +3,7 @@ using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
+using Serilog;
 
 namespace MeshWeaver.Fixture;
 
@@ -19,12 +20,17 @@ public class ServiceSetup
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
-        // Configure logging
+        // Configure Serilog
+        Log.Logger = new LoggerConfiguration()
+            .ReadFrom.Configuration(configuration)
+            .CreateLogger();
+
         var services = new ServiceCollection();
+        services.AddSingleton<TestOutputHelperAccessor>();
         services.AddLogging(logging =>
         {
-            logging.AddConfiguration(configuration.GetSection("Logging"));
-            logging.AddXUnitLogger();
+            logging.ClearProviders();
+            logging.AddSerilog(Log.Logger, dispose: true);
         });
         services.AddOptions();
         return services;

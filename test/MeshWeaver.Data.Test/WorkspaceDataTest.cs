@@ -216,7 +216,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         await client.AwaitResponse(
-            DataChangeRequest.Delete(new object[] { itemToDelete }, null!),
+            DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
