@@ -183,7 +183,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
-            //.Timeout(10.Seconds())
+            .Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
 
