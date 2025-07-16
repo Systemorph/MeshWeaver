@@ -82,7 +82,7 @@ public record InstanceCollection
         
         // Fix: Use the updated collection's instances directly to properly handle deletions
         // This replaces the current instances with the updated ones, ensuring deletions are reflected
-        return this with { Instances = Instances.AddRange(updated.Instances) };
+        return this with { Instances = Instances.SetItems(updated.Instances) };
     }
 
     public InstanceCollection Remove(IEnumerable<object> ids)
