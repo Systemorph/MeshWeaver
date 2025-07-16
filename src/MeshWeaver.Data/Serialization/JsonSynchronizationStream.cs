@@ -245,7 +245,7 @@ public static class JsonSynchronizationStream
                 ).WithHandler<DataChangeRequest>(
                     (hub, delivery) =>
                     {
-                        throw new NotSupportedException();
+                        hub.GetWorkspace().RequestChange(delivery.Message, new Activity(ActivityCategory.DataUpdate, hub), delivery);
                         return delivery.Processed();
                     }
                 ).WithHandler<UnsubscribeRequest>(
