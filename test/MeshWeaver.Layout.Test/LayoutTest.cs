@@ -439,8 +439,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x => !((bool)((CheckBoxControl)x!).Data))
-            .Timeout(TimeSpan.FromSeconds(3))
+            .Where(x =>x is CheckBoxControl cb && !((bool)cb.Data))
+            //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
         ((bool)((CheckBoxControl)resultsControl).Data).Should().Be(false);

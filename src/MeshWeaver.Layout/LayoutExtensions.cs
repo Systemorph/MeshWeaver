@@ -27,36 +27,41 @@ public static class LayoutExtensions
     )
     {
         var lambdas = config.GetListOfLambdas();
-        if (!lambdas.Any())
-            config = config.WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>());
-        return config
-            .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
-            .AddData(data =>
-            {
-                return data.Configure(reduction =>
-                    reduction
-                        .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
-                            reference is not LayoutAreaReference layoutArea
-                                ? null
-                                : new LayoutAreaHost(
-                                        workspace,
-                                        layoutArea,
-                                        workspace.Hub.ServiceProvider
-                                            .GetRequiredService<IUiControlService>(),
-                                        configuration!)
-                                    .RenderLayoutArea()
-                        )
-                );
-            }).AddLayoutTypes().WithSerialization(serialization => serialization.WithOptions(options =>
+        if (lambdas.Count == 1)
+        {
+            var typeRegistry = config.TypeRegistry;
+            config = config
+                .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
+                .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
+                .AddData(data =>
                 {
-                    // Add converters in order of priority
-                    // SkinListConverter to handle ImmutableList<Skin> specifically
-                    options.Converters.Add(new SkinListConverter(config.TypeRegistry));
-                    // Add the dedicated Option converter to ensure $type discriminators are always included
-                    options.Converters.Add(new OptionConverter());
-                })
-            )
-            .Set(lambdas.Add(layoutDefinition));
+                    return data.Configure(reduction =>
+                        reduction
+                            .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
+                                reference is not LayoutAreaReference layoutArea
+                                    ? null
+                                    : new LayoutAreaHost(
+                                            workspace,
+                                            layoutArea,
+                                            workspace.Hub.ServiceProvider
+                                                .GetRequiredService<IUiControlService>(),
+                                            configuration!)
+                                        .RenderLayoutArea()
+                            )
+                    );
+                }).AddLayoutTypes()
+                .WithSerialization(serialization => serialization.WithOptions(options =>
+                    {
+                        // Add converters in order of priority
+                        // SkinListConverter to handle ImmutableList<Skin> specifically
+                        options.Converters.Add(new SkinListConverter(typeRegistry));
+                        // Add the dedicated Option converter to ensure $type discriminators are always included
+                        options.Converters.Add(new OptionConverter());
+                    })
+                );
+        }
+
+        return config.Set(lambdas.Add(layoutDefinition));
     }
 
 

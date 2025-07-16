@@ -46,7 +46,7 @@ public static class StandardReducers
 
     private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        var typeRegistry = stream.Hub.GetWorkspace().Hub.TypeRegistry;
+        var typeRegistry = stream.Hub.TypeRegistry;
         return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
     }
     private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch? patch, string changedBy)
