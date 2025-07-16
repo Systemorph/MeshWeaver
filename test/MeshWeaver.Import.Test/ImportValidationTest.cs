@@ -144,7 +144,7 @@ FR,France";
     {
         const string content =
             @"@@Discount
-DoubleValue,DecimalValue,FloatValue,IntValue
+DoubleValue,Country
 0.4,14,2,0";
 
         var client = GetClient();
