@@ -215,22 +215,22 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        logger.LogDebug("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
         delivery = await node.Value.Invoke(delivery, cancellationToken);
         
-        logger.LogDebug("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
 
         if (node.Next == null)
         {
-            logger.LogDebug("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
         }
 
-        logger.LogDebug("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         return await HandleMessageAsync(delivery, node.Next, cancellationToken);
     }
@@ -241,7 +241,7 @@ public sealed class MessageHub : IMessageHub
     {
         ++Version;
         
-        logger.LogDebug("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}", 
             delivery.Message.GetType().Name, Address, delivery.Id, Version);
 
         // Log only important messages during disposal
@@ -253,18 +253,18 @@ public sealed class MessageHub : IMessageHub
 
         if (Rules.First != null)
         {
-            logger.LogDebug("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}", 
                 delivery.Message.GetType().Name, Address, delivery.Id, Rules.Count);
             delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
         }
         else
         {
-            logger.LogDebug("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                 delivery.Message.GetType().Name, Address, delivery.Id);
         }
 
         var result = FinishDelivery(delivery);
-        logger.LogDebug("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }
@@ -504,7 +504,7 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        logger.LogDebug("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
         if (
@@ -513,24 +513,24 @@ public sealed class MessageHub : IMessageHub
             || !callbacks.TryRemove(requestIdString, out var myCallbacks)
         )
         {
-            logger.LogDebug("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
         }
 
-        logger.LogDebug("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
         
         foreach (var callback in myCallbacks)
         {
-            logger.LogDebug("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                 delivery.Message.GetType().Name, Address, delivery.Id);
             delivery = await callback(delivery, cancellationToken);
-            logger.LogDebug("MESSAGE_FLOW: HUB_CALLBACK_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
                 delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
         }
 
-        logger.LogDebug("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery;
     }
@@ -546,7 +546,7 @@ public sealed class MessageHub : IMessageHub
         if (configure != null)
             options = configure(options);
 
-        logger.LogDebug("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}", 
             typeof(TMessage).Name, Address, options.Target, options.Sender);
 
         // Log only important messages during disposal
@@ -557,20 +557,20 @@ public sealed class MessageHub : IMessageHub
         }
 
         var result = (IMessageDelivery<TMessage>?)messageService.Post(message, options);
-        logger.LogDebug("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
     }
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
-        logger.LogDebug("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
         var result = messageService.RouteMessageAsync(ret, default);
         
-        logger.LogDebug("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }

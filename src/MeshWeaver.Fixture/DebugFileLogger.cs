@@ -11,12 +11,11 @@ namespace MeshWeaver.Fixture;
 /// </summary>
 public class DebugFileLogger : ILogger
 {
-    private static readonly string LogDirectory = Path.Combine(Environment.GetEnvironmentVariable("TEMP") ?? ".", "MeshWeaverDebugLogs");
+    private static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
     private static readonly object FileLock = new();
-    private static int _instanceCounter = 0;
     private static readonly string TestInstanceId = Guid.NewGuid().ToString("N")[..8];
+    private static readonly string SharedLogFileName = Path.Combine(LogDirectory, $"meshweaver-{DateTime.Now:yyyyMMdd_HHmmss}_{Environment.ProcessId}_{TestInstanceId}.log");
     private readonly string _categoryName;
-    private readonly string _logFileName;
 
     static DebugFileLogger()
     {
@@ -26,10 +25,6 @@ public class DebugFileLogger : ILogger
     public DebugFileLogger(string categoryName)
     {
         _categoryName = categoryName;
-        var instanceId = Interlocked.Increment(ref _instanceCounter);
-        var processId = Environment.ProcessId;
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-        _logFileName = Path.Combine(LogDirectory, $"debug_{timestamp}_{processId}_{TestInstanceId}_{instanceId}_{categoryName.Replace(".", "_")}.log");
     }
 
     public IDisposable BeginScope<TState>(TState state)
@@ -77,7 +72,7 @@ public class DebugFileLogger : ILogger
             {
                 lock (FileLock)
                 {
-                    File.AppendAllText(_logFileName, logEntry + Environment.NewLine);
+                    File.AppendAllText(SharedLogFileName, logEntry + Environment.NewLine);
                 }
                 break; // Success, exit retry loop
             }
