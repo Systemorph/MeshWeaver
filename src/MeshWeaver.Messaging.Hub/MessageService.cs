@@ -144,7 +144,7 @@ public class MessageService : IMessageService
     
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
         
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
@@ -153,7 +153,7 @@ public class MessageService : IMessageService
         {
             if (isDisposing)
             {
-                logger.LogWarning("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+                logger.LogTrace("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                     delivery.Message.GetType().Name, Address, delivery.Id);
                 return delivery.Failed("Hub disposing");
             }
@@ -172,17 +172,17 @@ public class MessageService : IMessageService
                 logger.LogError(ex, "Startup failed while scheduling message {Delivery} in {Address}", delivery, Address);
             }
 
-            logger.LogDebug("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+            logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
             buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
         }
-        logger.LogDebug("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
         lock (locker)
@@ -190,21 +190,21 @@ public class MessageService : IMessageService
             // Double-check disposal state to prevent processing during shutdown
             if (isDisposing && delivery.Message is not ShutdownRequest)
             {
-                logger.LogWarning("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     delivery.Message.GetType().Name, Address, delivery.Id);
                 return delivery.Failed("Hub disposing - message rejected");
             }
 
             if (delivery.Target is null || delivery.Target.Equals(hub.Address))
             {
-                logger.LogDebug("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                     delivery.Message.GetType().Name, Address, delivery.Id);
                 return ScheduleExecution(delivery, cancellationToken);
             }
 
             if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
             {
-                logger.LogDebug("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
+                logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
                     delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
                 return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
             }
@@ -238,26 +238,26 @@ public class MessageService : IMessageService
             }
         }
 
-        logger.LogDebug("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
         var result = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-        logger.LogDebug("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
+        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogDebug("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
         delivery = UnpackIfNecessary(delivery);        // Reset hang detection timer on execution activity
 
-        logger.LogDebug("MESSAGE_FLOW: POSTING_TO_EXECUTION_BUFFER | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: POSTING_TO_EXECUTION_BUFFER | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
         executionBuffer.Post(async _ =>
         {
-            logger.LogDebug("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
             
@@ -280,12 +280,12 @@ public class MessageService : IMessageService
                     delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
                 }
 
-                logger.LogDebug("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                     delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
             }
             catch (OperationCanceledException) when (isDisposing)
             {
-                logger.LogWarning("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                     delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
                 
                 // During disposal, timeouts are acceptable to prevent hangs
@@ -297,7 +297,7 @@ public class MessageService : IMessageService
             }
             catch (Exception e)
             {
-                logger.LogError("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
                     delivery.Message.GetType().Name, Address, e.Message, executionStopwatch.ElapsedMilliseconds);
 
                 if (delivery.Message is ExecutionRequest er)
@@ -315,7 +315,7 @@ public class MessageService : IMessageService
                     delivery, Address, executionStopwatch.ElapsedMilliseconds);
 
         });
-        logger.LogDebug("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded(hub.Address);
     }
@@ -329,7 +329,7 @@ public class MessageService : IMessageService
             if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
-            logger.LogDebug("MESSAGE_FLOW: POST_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+            logger.LogTrace("MESSAGE_FLOW: POST_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
                 typeof(TMessage).Name, Address, ret.Id, opt.Target);
             logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
             return ret;
