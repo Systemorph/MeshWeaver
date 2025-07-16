@@ -36,7 +36,7 @@ public record InstanceCollection
         if (request.Updates.Any())
             ret = ret.Update(request.Updates.ToImmutableDictionary(GetKey, x => x));
         if (request.Deletions.Any())
-            ret = ret.Delete(request.Updates.Select(GetKey));
+            ret = ret.Delete(request.Deletions.Select(GetKey));
 
         return ret;
     }

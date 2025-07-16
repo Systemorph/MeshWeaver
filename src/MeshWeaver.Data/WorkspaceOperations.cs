@@ -37,7 +37,7 @@ public static class WorkspaceOperations
 
         if (change.Deletions.Any())
         {
-            var (isValid, results) = workspace.ValidateDeletion(change.Updates);
+            var (isValid, results) = workspace.ValidateDeletion(change.Deletions);
             if (!isValid)
             {
                 foreach (var validationResult in results.Where(r => r != ValidationResult.Success))

@@ -247,14 +247,24 @@ public static class JsonSynchronizationStream
             .Where(predicate)
             .Select(x =>
             {
+                var logger = stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(JsonSynchronizationStream));
+                logger.LogDebug("ToDataChanged processing change item: StreamId={StreamId}, ChangeType={ChangeType}, ChangedBy={ChangedBy}, UpdatesCount={UpdatesCount}", 
+                    stream.ClientId, x.ChangeType, x.ChangedBy, x.Updates.Count);
+                
                 var currentJson = stream.Get<JsonElement?>();
                 if (currentJson is null || x.ChangeType == ChangeType.Full)
                 {
+                    logger.LogDebug("Processing full change for stream {StreamId}, currentJson is null: {IsNull}", stream.ClientId, currentJson is null);
                     var previousJson = currentJson;
                     currentJson = JsonSerializer.SerializeToElement(x.Value, x.Value?.GetType() ?? typeof(object), stream.Hub.JsonSerializerOptions);
                     if (Equals(previousJson, currentJson))
+                    {
+                        logger.LogDebug("Previous JSON equals current JSON for stream {StreamId}, returning null", stream.ClientId);
                         return null;
+                    }
                     stream.Set(currentJson);
+                    logger.LogDebug("Generated full DataChangedEvent for stream {StreamId}", stream.ClientId);
                     return new(
                         stream.ClientId,
                         x.Version,
@@ -265,7 +275,11 @@ public static class JsonSynchronizationStream
                 else
                 {
                     if (x.Updates.Count == 0)
+                    {
+                        logger.LogWarning("No updates in change item for stream {StreamId}, skipping DataChangedEvent generation. ChangeType: {ChangeType}, ChangedBy: {ChangedBy}", 
+                            stream.ClientId, x.ChangeType, x.ChangedBy);
                         return null;
+                    }
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions, stream.Reference as WorkspaceReference);
                     currentJson = patch.Apply(currentJson.Value);
                     stream.Set(currentJson);
