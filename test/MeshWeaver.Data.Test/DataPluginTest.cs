@@ -169,8 +169,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            o => o.WithTarget(new ClientAddress())
+            //, new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
 
