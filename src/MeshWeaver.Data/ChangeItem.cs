@@ -14,6 +14,7 @@ public interface IChangeItem
 public record ChangeItem<TStream>(
     TStream? Value,
     string? ChangedBy,
+    string? StreamId,
     ChangeType ChangeType,
     long Version,
     IReadOnlyCollection<EntityUpdate>? Updates
@@ -26,9 +27,10 @@ public record ChangeItem<TStream>(
 
     public ChangeItem(
         TStream? Value,
+        string? StreamId,
         long Version
     )
-        : this(Value, null, ChangeType.Full, Version, null)
+        : this(Value, null, StreamId, ChangeType.Full, Version, null)
     { }
 
 }

@@ -214,8 +214,13 @@ public class KernelContainer : IDisposable
         AreasStream.Update(x =>
             (
                     AreasStream.Current
-                    ?? new ChangeItem<ImmutableDictionary<string, object>>(ImmutableDictionary<string, object>.Empty,
-                        Hub.Address, ChangeType.Full, 0, []))
+                    ?? new ChangeItem<ImmutableDictionary<string, object>>(
+                        ImmutableDictionary<string, object>.Empty,
+                        Hub.Address, 
+                        AreasStream.StreamId,
+                        ChangeType.Full, 
+                        0, 
+                        []))
                 with
                 {
                     Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -255,6 +256,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     /// <returns>The saved instance collection</returns>
     private InstanceCollection SaveMyData(InstanceCollection instanceCollection)
     {
+        // Simple file logging to verify if this method is called
+        var logPath = "/tmp/savedata.log";
+        var itemsInfo = string.Join(", ", instanceCollection.Instances.Select(kvp => $"{kvp.Key}:{((MyData)kvp.Value).Text}"));
+        File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} SaveMyData called with {instanceCollection.Instances.Count} instances: {itemsInfo}\n");
+        
         storage = instanceCollection.Instances;
         return instanceCollection;
     }
