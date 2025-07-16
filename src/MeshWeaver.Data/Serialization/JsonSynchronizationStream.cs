@@ -44,22 +44,38 @@ public static class JsonSynchronizationStream
                 logger.LogWarning(ex, "An error occurred updating data source {Stream}", reduced.StreamId);
                 return Task.CompletedTask;
             });
-        reduced.RegisterForDisposal(
+
+
+        if(typeof(TReduced) == typeof(JsonElement))
+            reduced.RegisterForDisposal(
                 reduced
-                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.StreamId))
-                .Where(x => x.Creations.Any() ||x.Deletions.Any() || x.Updates.Any())
-                
-        .Subscribe(e =>
-        {
-            logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
-                reduced.StreamId, reduced.Owner);
-            e = e with { ClientId = reduced.StreamId };
-            hub.Post(e, o => o.WithTarget(reduced.Owner));
-        })
-        );
+                    .ToDataChanged < TReduced, PatchDataChangeRequest > (c => reduced.ClientId.Equals(c.ChangedBy))
+                    .Where(x => x is not null)
+                    .Subscribe(e =>
+                    {
+                        logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
+                            reduced.StreamId, reduced.Owner);
+                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                    })
+            );
+
+        else
+            reduced.RegisterForDisposal(
+                reduced
+                    .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
+                    .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
+                    .Subscribe(e =>
+                    {
+                        logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
+                            reduced.StreamId, reduced.Owner);
+                        e = e with { ClientId = reduced.StreamId };
+                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                    })
+            );
 
 
-        var request = hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
+        var request = 
+            hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
         var task = hub.RegisterCallback(request!, c =>
         {
             logger.LogInformation("Retrieved {reference} from {owner}.", reduced.Reference, reduced.Owner);
@@ -109,7 +125,7 @@ public static class JsonSynchronizationStream
 
     internal static ISynchronizationStream CreateSynchronizationStream<TReduced, TReference>(
         this IWorkspace workspace,
-    SubscribeRequest request
+        SubscribeRequest request
 )
     where TReference : WorkspaceReference
     {
@@ -144,20 +160,45 @@ public static class JsonSynchronizationStream
 
         // Incoming data changed register and dispatch to synchronization stream
         reduced.RegisterForDisposal(
-            reduced.Hub.Register<DataChangedEvent>(
-                delivery =>
-                {
-                    reduced.DeliverMessage(delivery);
-                    return delivery.Forwarded();
-                },
-                x => reduced.ClientId.Equals(x.Message.StreamId)
-            )
+            reduced.Hub
+                .Register<DataChangedEvent>(
+                    delivery =>
+                    {
+                        reduced.DeliverMessage(delivery);
+                        return delivery.Forwarded();
+                    },
+                    x => reduced.ClientId.Equals(x.Message.StreamId)
+                )
+        );
+        // Incoming data changed register and dispatch to synchronization stream
+        reduced.RegisterForDisposal(
+            reduced.Hub
+                .Register<PatchDataChangeRequest>(
+                    delivery =>
+                    {
+                        reduced.DeliverMessage(delivery);
+                        return delivery.Forwarded();
+                    },
+                    x => reduced.ClientId.Equals(x.Message.ChangedBy)
+                )
+        );
+        // Incoming data changed register and dispatch to synchronization stream
+        reduced.RegisterForDisposal(
+            reduced.Hub
+                .Register<DataChangeRequest>(
+                    delivery =>
+                    {
+                        reduced.DeliverMessage(delivery);
+                        return delivery.Forwarded();
+                    },
+                    x => reduced.ClientId.Equals(x.Message.ChangedBy)
+                )
         );
 
         // outgoing data changed
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged(c => !reduced.ClientId.Equals(c.ChangedBy))
+                .ToDataChanged<TReduced,DataChangedEvent>(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Subscribe(e =>
@@ -166,6 +207,7 @@ public static class JsonSynchronizationStream
                     hub.Post(e, o => o.WithTarget(request.Subscriber));
                 })
         );
+
         // outgoing data changed
         reduced.RegisterForDisposal(
             reduced
@@ -189,43 +231,61 @@ public static class JsonSynchronizationStream
         stream.ConfigureHub(config =>
             config
                 .WithHandler<DataChangedEvent>(
-                (hub, delivery) =>
-                {
-                    var currentJson = stream.Stream.Get<JsonElement?>();
-                    if (delivery.Message.ChangeType == ChangeType.Full)
+                    (hub, delivery) =>
                     {
-                        currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
-                        stream.Stream.Update(
-                            _ => new ChangeItem<TStream>(
-                                currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions)!,
-                               stream.Stream.StreamId,
-                                stream.Stream.Hub.Version), ex => SyncFailed(delivery, stream.Stream, ex)
-                            );
-
+                        UpdateStream(stream, delivery, hub);
+                        return delivery.Processed();
                     }
-                    else
+                ).WithHandler<PatchDataChangeRequest>(
+                    (hub, delivery) =>
                     {
-                        (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
-                        stream.Stream.Update(
-                            state =>
-                                stream.Stream.ToChangeItem(state!,
-                                    currentJson.Value,
-                                    patch,
-                                    delivery.Message.ChangedBy ?? stream.ClientId),
-                            ex => SyncFailed(delivery, stream.Stream, ex)
-                        );
-
+                        UpdateStream(stream, delivery, hub);
+                        return delivery.Processed();
                     }
-                    stream.Stream.Set(currentJson);
-                    return delivery.Processed();
-                }
-            ).WithHandler<UnsubscribeRequest>(
+                ).WithHandler<DataChangeRequest>(
+                    (hub, delivery) =>
+                    {
+                        throw new NotSupportedException();
+                        return delivery.Processed();
+                    }
+                ).WithHandler<UnsubscribeRequest>(
                 (hub, delivery) =>
                 {
                     hub.Dispose();
                     return delivery.Processed();
                 })
         );
+
+    private static void UpdateStream<TStream, TChange>(this StreamConfiguration<TStream> stream, IMessageDelivery<TChange> delivery, IMessageHub hub)
+    where TChange : JsonChange
+    {
+        var currentJson = stream.Stream.Get<JsonElement?>();
+        if (delivery.Message.ChangeType == ChangeType.Full)
+        {
+            currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
+            stream.Stream.Update(
+                _ => new ChangeItem<TStream>(
+                    currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions)!,
+                    stream.Stream.StreamId,
+                    stream.Stream.Hub.Version), ex => SyncFailed(delivery, stream.Stream, ex)
+            );
+
+        }
+        else
+        {
+            (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
+            stream.Stream.Update(
+                state =>
+                    stream.Stream.ToChangeItem(state!,
+                        currentJson.Value,
+                        patch,
+                        delivery.Message.ChangedBy ?? stream.ClientId),
+                ex => SyncFailed(delivery, stream.Stream, ex)
+            );
+
+        }
+        stream.Stream.Set(currentJson);
+    }
 
     private static Task SyncFailed<TStream>(IMessageDelivery delivery, ISynchronizationStream<TStream> stream, Exception exception)
     {
@@ -234,8 +294,8 @@ public static class JsonSynchronizationStream
     }
 
 
-    private static IObservable<DataChangedEvent?> ToDataChanged<TReduced>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) =>
+    private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
+        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange: JsonChange=>
         stream
             .Where(predicate)
             .Select(x =>
@@ -258,7 +318,8 @@ public static class JsonSynchronizationStream
                     }
                     stream.Set(currentJson);
                     logger.LogDebug("Generated full DataChangedEvent for stream {StreamId}", stream.ClientId);
-                    return new(
+                    return (TChange?)Activator.CreateInstance(
+                        typeof(TChange),
                         stream.ClientId,
                         x.Version,
                         new RawJson(currentJson.ToString() ?? string.Empty),
@@ -276,14 +337,9 @@ public static class JsonSynchronizationStream
                     var patch = x.Updates.ToJsonPatch(stream.Hub.JsonSerializerOptions, stream.Reference as WorkspaceReference);
                     currentJson = patch.Apply(currentJson.Value);
                     stream.Set(currentJson);
-                    return new DataChangedEvent
+                    return (TChange?)Activator.CreateInstance
                     (
-                        stream.ClientId,
-                        x.Version,
-                        new RawJson(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)),
-                        x.ChangeType,
-                        x.ChangedBy ?? string.Empty
-                    );
+                        typeof(TChange), stream.ClientId, x.Version, new RawJson(JsonSerializer.Serialize(patch, stream.Hub.JsonSerializerOptions)), x.ChangeType, x.ChangedBy ?? string.Empty);
                 }
 
 
@@ -333,7 +389,7 @@ public static class JsonSynchronizationStream
             .DistinctBy(x => new { x.Id, x.Collection })
             .ToArray();
 
-    internal static (JsonElement, JsonPatch) UpdateJsonElement(this DataChangedEvent request, JsonElement? currentJson, JsonSerializerOptions options)
+    internal static (JsonElement, JsonPatch) UpdateJsonElement<TChange>(this TChange request, JsonElement? currentJson, JsonSerializerOptions options) where TChange:JsonChange
     {
         if (request.ChangeType == ChangeType.Full)
         {

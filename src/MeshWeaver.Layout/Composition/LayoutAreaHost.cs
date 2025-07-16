@@ -5,6 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
+using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +33,7 @@ public record LayoutAreaHost : IDisposable
         return GetVariable<T>(key) ?? factory();
     }
 
+    private record LayoutAddress() : Address("layout", Guid.NewGuid().AsString());
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(IWorkspace workspace,
@@ -69,6 +71,9 @@ public record LayoutAreaHost : IDisposable
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
+
+
+
 
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {

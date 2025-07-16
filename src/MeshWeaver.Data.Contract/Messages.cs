@@ -59,13 +59,28 @@ public enum ChangeType
     NoUpdate
 }
 
-public record DataChangedEvent(
+
+public abstract record JsonChange(
     string StreamId,
     long Version,
     RawJson Change,
     ChangeType ChangeType,
     string? ChangedBy
 );
+public record DataChangedEvent(
+    string StreamId,
+    long Version,
+    RawJson Change,
+    ChangeType ChangeType,
+    string? ChangedBy
+) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
+public record PatchDataChangeRequest(
+    string StreamId,
+    long Version,
+    RawJson Change,
+    ChangeType ChangeType,
+    string? ChangedBy
+) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
 
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
 {
