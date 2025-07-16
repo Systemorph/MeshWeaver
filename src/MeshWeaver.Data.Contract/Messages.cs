@@ -15,7 +15,7 @@ public record DataChangeRequest
     public ImmutableList<object> Updates { get; init; } = [];
     public ImmutableList<object> Deletions { get; init; } = [];
     public UpdateOptions? Options { get; init; } 
-    public string? StreamId { get; init; } 
+    public string? ClientId { get; init; } 
     public DataChangeRequest WithCreations(params object[] creations)
         => this with { Creations = Creations.AddRange(creations) };
 

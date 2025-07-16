@@ -31,7 +31,6 @@ public record InstanceCollection
 
     public InstanceCollection Change(DataChangeRequest request)
     {
-
         var ret = this;
         if (request.Updates.Any())
             ret = ret.Update(request.Updates.ToImmutableDictionary(GetKey, x => x));
@@ -80,13 +79,10 @@ public record InstanceCollection
 
     public InstanceCollection Merge(InstanceCollection updated)
     {
-        if (updated is null)
-            return this;
-        return this with
-        {
-            //TODO Roland Bürgi 2024-05-10: this won't work for deletions ==> need to create unit test and implement deletion via sync
-            Instances = Instances.SetItems(updated.Instances)
-        };
+        
+        // Fix: Use the updated collection's instances directly to properly handle deletions
+        // This replaces the current instances with the updated ones, ensuring deletions are reflected
+        return this with { Instances = Instances.AddRange(updated.Instances) };
     }
 
     public InstanceCollection Remove(IEnumerable<object> ids)

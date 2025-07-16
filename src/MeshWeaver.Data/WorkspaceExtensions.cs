@@ -40,6 +40,7 @@ public static class WorkspaceExtensions
         EntityStoreAndUpdates storeAndUpdates) =>
         new(storeAndUpdates.Store,
             storeAndUpdates.ChangedBy ?? stream!.StreamId, 
+            stream!.StreamId,
             ChangeType.Patch,
             stream!.Hub.Version,
             storeAndUpdates.Updates.ToArray()

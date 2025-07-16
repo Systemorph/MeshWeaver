@@ -46,14 +46,14 @@ public static class JsonSynchronizationStream
             });
         reduced.RegisterForDisposal(
                 reduced
-                .ToDataChanged(c => reduced.StreamId.Equals(c.ChangedBy))
-                .Where(x => x is not null)
-                .Select(x => x!)
+                .ToDataChangeRequest(c => reduced.StreamId.Equals(c.StreamId))
+                .Where(x => x.Creations.Any() ||x.Deletions.Any() || x.Updates.Any())
+                
         .Subscribe(e =>
         {
             logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                 reduced.StreamId, reduced.Owner);
-            e = e with { StreamId = reduced.StreamId };
+            e = e with { ClientId = reduced.StreamId };
             hub.Post(e, o => o.WithTarget(reduced.Owner));
         })
         );
@@ -175,17 +175,9 @@ public static class JsonSynchronizationStream
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
                     var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
                     reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
-                    reduced.Hub.InvokeAsync(ct =>
+                    activity.Complete(_ =>
                     {
-                        activity.Complete(_ =>
-                        {
-                            /*TODO: Where to save?*/
-                        });
-                        return Task.CompletedTask;
-                    }, ex =>
-                    {
-                        activity.LogError("An error occurred: {exception}", ex);
-                        return Task.CompletedTask;
+                        /*TODO: Where to save?*/
                     });
                 })
         );
@@ -206,6 +198,7 @@ public static class JsonSynchronizationStream
                         stream.Stream.Update(
                             _ => new ChangeItem<TStream>(
                                 currentJson.Value.Deserialize<TStream>(stream.Stream.Hub.JsonSerializerOptions)!,
+                               stream.Stream.StreamId,
                                 stream.Stream.Hub.Version), ex => SyncFailed(delivery, stream.Stream, ex)
                             );
 
@@ -392,15 +385,16 @@ public static class JsonSynchronizationStream
         this ISynchronizationStream<TStream> stream, Func<ChangeItem<TStream>, bool> predicate)
         => stream
             .Where(predicate)
-            .Select(x => x.Updates.ToDataChangeRequest());
+            .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId));
 
 
 
-    internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates)
+    internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates, 
+        string clientId)
     {
         return updates
             .GroupBy(x => new { x.Collection, x.Id })
-            .Aggregate(new DataChangeRequest(), (e, g) =>
+            .Aggregate(new DataChangeRequest(){ChangedBy = clientId}, (e, g) =>
             {
                 var first = g.First().OldValue;
                 var last = g.Last().Value;

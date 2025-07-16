@@ -111,19 +111,17 @@ public abstract class ContentCollection : IDisposable
     }
     protected void UpdateArticle(string path)
     {
-        markdownStream.Update((x, ct) =>
+        markdownStream.Update(async (x, ct) =>
         {
-            return Task.Run(async () =>
-            {
-                var tuple = await GetStreamAsync(path, ct);
-                if (tuple.Stream is null)
-                    return null;
-                var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-                if (article is null)
-                    return null;
-                var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
-                return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), Hub.Version);
-            });
+            var tuple = await GetStreamAsync(path, ct);
+            if (tuple.Stream is null)
+                return null;
+            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+            if (article is null)
+                return null;
+            var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
+            return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
+                
         }, _ => Task.CompletedTask);
     }
 

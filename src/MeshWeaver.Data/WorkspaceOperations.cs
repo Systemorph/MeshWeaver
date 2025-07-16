@@ -114,7 +114,7 @@ public static class WorkspaceOperations
                                     var updated = change.Options?.Snapshot == true
                                         ? instances
                                         : storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName)
-                                            ?.Merge(instances) ?? instances;
+                                            !.Merge(instances) ?? instances;
                                     var updates =
                                         storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
                                             .ToArray();

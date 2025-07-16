@@ -114,12 +114,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
     {
-        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), Hub.Version)), exceptionCallback);
+        InvokeAsync(async ct => SetCurrent(new ChangeItem<TStream>(await init.Invoke(ct), StreamId, Hub.Version)), exceptionCallback);
     }
 
     public void Initialize(TStream startWith)
     {
-        SetCurrent(new ChangeItem<TStream>(startWith, Hub.Version));
+        SetCurrent(new ChangeItem<TStream>(startWith, StreamId, Hub.Version));
     }
 
 
