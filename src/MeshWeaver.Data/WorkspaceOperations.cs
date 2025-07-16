@@ -11,14 +11,25 @@ public static class WorkspaceOperations
 {
     public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery? request)
     {
+        var allValid = true;
+
         if (change.Creations.Any())
         {
             var (isValid, results) = workspace.ValidateCreation(change.Creations);
             if (!isValid)
             {
+                allValid = false;
                 foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                    PostLogRequest(activity, workspace, LogLevel.Error, "{0} invalid: {1}", validationResult.MemberNames.ToArray(),
-                        string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                {
+                    var scopes = new List<KeyValuePair<string, object>>
+                    {
+                        new("members", validationResult.MemberNames.ToArray())
+                    };
+                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                    
+                    // Use ILogger.Log method with scoped state
+                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                }
             }
 
         }
@@ -28,9 +39,18 @@ public static class WorkspaceOperations
             var (isValid, results) = workspace.ValidateUpdate(change.Updates);
             if (!isValid)
             {
+                allValid = false;
                 foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                    PostLogRequest(activity, workspace, LogLevel.Error, "{0} invalid: {1}", validationResult.MemberNames.ToArray(),
-                        string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                {
+                    var scopes = new List<KeyValuePair<string, object>>
+                    {
+                        new("members", validationResult.MemberNames.ToArray())
+                    };
+                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                    
+                    // Use ILogger.Log method with scoped state
+                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                }
             }
 
         }
@@ -40,14 +60,25 @@ public static class WorkspaceOperations
             var (isValid, results) = workspace.ValidateDeletion(change.Deletions);
             if (!isValid)
             {
+                allValid = false;
                 foreach (var validationResult in results.Where(r => r != ValidationResult.Success))
-                    PostLogRequest(activity, workspace, LogLevel.Error, "{0} invalid: {1}", validationResult.MemberNames.ToArray(),
-                        string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                {
+                    var scopes = new List<KeyValuePair<string, object>>
+                    {
+                        new("members", validationResult.MemberNames.ToArray())
+                    };
+                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                    
+                    // Use ILogger.Log method with scoped state
+                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                }
             }
         }
 
-
-        Update(activity, workspace, change, request);
+        if (allValid)
+        {
+            Update(activity, workspace, change, request);
+        }
     }
 
     private static Task UpdateFailed(IMessageDelivery? delivery, Exception? exception)
