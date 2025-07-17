@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
@@ -7,7 +7,7 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Mesh;
-using MeshWeaver.Todo.AI;
+using MeshWeaverApp1.Todo.AI;
 using MeshWeaverApp1.Portal.Infrastructure;
 using MeshWeaverApp1.Portal.Resize;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;

@@ -1,4 +1,4 @@
-﻿namespace MeshWeaverApp1.Portal.Infrastructure
+namespace MeshWeaverApp1.Portal.Infrastructure
 {
     public class StylesConfiguration
     {

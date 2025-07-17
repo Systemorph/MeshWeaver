@@ -1,7 +1,7 @@
-﻿using MeshWeaver.AI.Application;
+using MeshWeaver.AI.Application;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
-using MeshWeaver.Todo;
+using MeshWeaverApp1.Todo;
 
 namespace MeshWeaverApp1.Portal;
 
@@ -11,8 +11,8 @@ public static class SharedMeshConfiguration
     where TBuilder : MeshBuilder
     {
         return (TBuilder)builder.ConfigureMesh(mesh => mesh
-                .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
-                .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
+                .InstallAssemblies(typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute).Assembly.Location)
+                .InstallAssemblies(typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute).Assembly.Location)
             )
             .AddKernel();
     }

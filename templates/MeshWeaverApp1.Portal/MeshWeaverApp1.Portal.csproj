@@ -7,26 +7,27 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
-    <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo.AI\MeshWeaver.Todo.AI.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
+    <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
+    <ProjectReference Include="..\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MeshWeaver.AI.Application" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.Blazor" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.Blazor.Chat" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.ContentCollections" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="2.2.0-rc6" />
+    <PackageReference Include="MeshWeaver.Kernel.Hub" Version="2.2.0-rc6" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="Markdown\**\*.md" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Markdown\**\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.png" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.jpg" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Markdown\**\*.jpeg" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
   </ItemGroup>
 
 </Project>

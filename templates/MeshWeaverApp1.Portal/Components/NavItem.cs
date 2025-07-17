@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Domain;
+using MeshWeaver.Domain;
 
 namespace MeshWeaverApp1.Portal.Components
 {
