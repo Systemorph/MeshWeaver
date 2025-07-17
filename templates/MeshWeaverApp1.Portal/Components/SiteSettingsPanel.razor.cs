@@ -1,4 +1,4 @@
-﻿using MeshWeaverApp1.Portal.Infrastructure;
+using MeshWeaverApp1.Portal.Infrastructure;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;

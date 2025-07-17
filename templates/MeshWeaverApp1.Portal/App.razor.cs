@@ -1,4 +1,4 @@
-﻿namespace MeshWeaverApp1.Portal;
+namespace MeshWeaverApp1.Portal;
 
 public partial class App
 {

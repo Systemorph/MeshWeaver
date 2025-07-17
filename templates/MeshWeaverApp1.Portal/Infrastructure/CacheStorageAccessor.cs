@@ -1,4 +1,4 @@
-﻿using Microsoft.FluentUI.AspNetCore.Components.Utilities;
+using Microsoft.FluentUI.AspNetCore.Components.Utilities;
 using Microsoft.JSInterop;
 
 namespace MeshWeaverApp1.Portal.Infrastructure

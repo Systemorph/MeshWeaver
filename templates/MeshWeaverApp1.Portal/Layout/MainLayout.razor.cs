@@ -1,11 +1,11 @@
 ﻿using MeshWeaver.Blazor.Chat;
-using MeshWeaver.Portal.Components;
-using MeshWeaver.Portal.Resize;
+using MeshWeaverApp1.Portal.Components;
+using MeshWeaverApp1.Portal.Resize;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
-namespace MeshWeaver.Portal.Layout;
+namespace MeshWeaverApp1.Portal.Layout;
 
 public partial class MainLayout
 {
