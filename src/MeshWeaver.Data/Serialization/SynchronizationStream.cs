@@ -2,6 +2,7 @@
 using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -108,6 +109,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private void SetCurrent(ChangeItem<TStream>? value)
     {
+        if (startupDeferrable is not null)
+        {
+            startupDeferrable.Dispose();
+            startupDeferrable = null;
+        }
         if (isDisposed || value == null)
             return;
         if (current is not null && Equals(current.Value, value.Value))
@@ -116,10 +122,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (!isDisposed)
             Store.OnNext(value);
     }
+
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
-        InvokeAsync(() => SetCurrent(update.Invoke(Current is null ? default : Current.Value)), exceptionCallback);
-    public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Func<Exception, Task> exceptionCallback) =>
-        InvokeAsync(async ct => SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct)), exceptionCallback);
+        Hub.Post(new UpdateStreamRequest((stream,_) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
+
+    public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
+        Func<Exception, Task> exceptionCallback) =>
+        Hub.Post(new UpdateStreamRequest(update, exceptionCallback));
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
     {
@@ -176,14 +185,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Hub = Host.GetHostedHub(new SynchronizationAddress($"{StreamId}"),
             ConfigureSynchronizationHub);
             
-            
- 
+        startupDeferrable = Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
+
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
         Hub.RegisterForDisposal(_ => Store.Dispose());
     }
+
+    private IDisposable? startupDeferrable;
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
@@ -208,9 +219,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
+            }).WithHandler<UpdateStreamRequest>(async (_, request, ct) =>
+            {
+                var update = request.Message.UpdateAsync;
+                var exceptionCallback = request.Message.ExceptionCallback;
+                try
+                {
+                    SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct));
+                }
+                catch(Exception e)
+                {
+                    await exceptionCallback.Invoke(e);
+                }
+                return request.Processed();
             });
 
     }
+
+
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
@@ -218,25 +244,35 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (delivery.Message.ChangeType == ChangeType.Full)
         {
             currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
-            Update(
-                _ => new ChangeItem<TStream>(
+            try
+            {
+                SetCurrent(new ChangeItem<TStream>(
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
-                    Host.Version), ex => SyncFailed(delivery,  ex)
-            );
+                    Host.Version));
+
+            }
+            catch (Exception ex)
+            {
+                SyncFailed(delivery, ex);
+            }
 
         }
         else
         {
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
-            Update(
-                state =>
-                    this.ToChangeItem(state!,
-                        currentJson.Value,
-                        patch,
-                        delivery.Message.ChangedBy ?? ClientId),
-                ex => SyncFailed(delivery,  ex)
-            );
+            try
+            {
+                SetCurrent(this.ToChangeItem(Current!.Value!,
+                    currentJson.Value,
+                    patch,
+                    delivery.Message.ChangedBy ?? ClientId));
+
+            }
+            catch (Exception ex)
+            {
+                SyncFailed(delivery, ex);
+            }
 
         }
         Set(currentJson);
@@ -297,7 +333,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 Store.OnError(t.Exception);
         });
     }
+
+    public record UpdateStreamRequest([property:JsonIgnore]Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
+
 }
+
+
 public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Stream)
 {
     internal string ClientId { get; init; } = Guid.NewGuid().AsString();

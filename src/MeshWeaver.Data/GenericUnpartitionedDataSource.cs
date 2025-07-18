@@ -116,7 +116,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public CollectionsReference Reference => GetReference();
 
     protected virtual CollectionsReference GetReference() =>
-        new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
+        new(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
 
     public virtual void Dispose()
     {
