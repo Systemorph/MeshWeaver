@@ -4,26 +4,17 @@ namespace MeshWeaver.Messaging;
 
 public record DeferralItem : IAsyncDisposable, IDisposable
 {
-    private readonly AsyncDelivery asyncDelivery;
+    private readonly SyncDelivery syncDelivery;
     private readonly SyncDelivery failure;
-    private readonly ActionBlock<(
-        IMessageDelivery Delivery,
-        CancellationToken CancellationToken
-    )> executionBuffer;
-    private readonly BufferBlock<(
-        IMessageDelivery Delivery,
-        CancellationToken CancellationToken
-    )> deferral = new();
+    private readonly ActionBlock<IMessageDelivery> executionBuffer;
+    private readonly BufferBlock<IMessageDelivery> deferral = new();
     private bool isReleased;
 
-    public DeferralItem(Predicate<IMessageDelivery> Filter, AsyncDelivery asyncDelivery, SyncDelivery failure)
+    public DeferralItem(Predicate<IMessageDelivery> Filter, SyncDelivery syncDelivery, SyncDelivery failure)
     {
-        this.asyncDelivery = asyncDelivery;
+        this.syncDelivery = syncDelivery;
         this.failure = failure;
-        executionBuffer = new ActionBlock<(
-            IMessageDelivery Delivery,
-            CancellationToken CancellationToken
-        )>(d => asyncDelivery(d.Delivery, d.CancellationToken));
+        executionBuffer = new ActionBlock<IMessageDelivery>(d => syncDelivery(d));
         this.Filter = Filter;
     }
 
@@ -32,24 +23,25 @@ public record DeferralItem : IAsyncDisposable, IDisposable
     )
         => failure.Invoke(delivery);
 
-    public async Task<IMessageDelivery> DeliverMessage(
-        IMessageDelivery delivery,
-        CancellationToken cancellationToken
+    public IMessageDelivery? DeliverMessage(
+        IMessageDelivery delivery
     )
     {
         if (Filter(delivery))
         {
-            deferral.Post((delivery, cancellationToken));
+            deferral.Post(delivery);
             return null!;
         }
 
         try
         {
             // TODO V10: Add logging here. (30.07.2024, Roland Bürgi)
-            var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
-            if (ret?.State == MessageDeliveryState.Failed)
+            var ret = syncDelivery.Invoke(delivery);
+            if(ret is null)
+                return null!;
+            if (ret.State == MessageDeliveryState.Failed)
                 return failure(ret);
-            return ret!;
+            return ret;
         }
         catch (Exception e)
         {

@@ -11,13 +11,15 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
-    private bool isDisposing; private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
+    private bool isDisposing; 
+    private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
-    private readonly AsyncDelivery deliveryPipeline; private readonly DeferralContainer deferralContainer;
+    private readonly AsyncDelivery deliveryPipeline; 
+    private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
     //private volatile int pendingStartupMessages;
@@ -35,11 +37,11 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
+        deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
         deliveryAction =
             new(x => x.Invoke()); postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
+        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d,_) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
         startupDeferral = Defer(_ => true);
     }
     void IMessageService.Start()
@@ -87,8 +89,7 @@ public class MessageService : IMessageService
           catch (Exception ex)
           {
               logger.LogError(ex, "MessageService startup failed for {Address}", Address);
-              startupCompletionSource.
-                  TrySetException(ex);
+              startupCompletionSource.TrySetException(ex);
 
               // If startup failed, dispose the startup deferral to unblock any pending operations
               try
@@ -158,7 +159,7 @@ public class MessageService : IMessageService
 
         logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+        buffer.Post(() => NotifyAsync(delivery, cancellationToken));
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
@@ -180,14 +181,14 @@ public class MessageService : IMessageService
         {
             logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
-            return ScheduleExecution(delivery, cancellationToken);
+            return await deliveryPipeline.Invoke(delivery,cancellationToken);
         }
 
         if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
         {
             logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
                 delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
-            return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
         // Before routing to hierarchical routing (which may route to parent hub), 
         // ensure parent hub initialization is complete to avoid race conditions
@@ -223,7 +224,9 @@ public class MessageService : IMessageService
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }
-    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
+
+    private CancellationTokenSource cancellationTokenSource = new();
+    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
     {
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
@@ -245,17 +248,15 @@ public class MessageService : IMessageService
                 // Add timeout for disposal-related messages to prevent hangs
                 if (isDisposing || delivery.Message is ShutdownRequest)
                 {
-                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
                     
                     logger.LogDebug("Executing {MessageType} with 30-second timeout during disposal for hub {Address}", 
                         delivery.Message.GetType().Name, Address);
                     
-                    delivery = await hub.HandleMessageAsync(delivery, combinedCts.Token);
+                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                 }
                 else
                 {
-                    delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
+                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                 }
 
                 logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
