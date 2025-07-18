@@ -149,33 +149,16 @@ public class MessageService : IMessageService
         
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
-        lock (locker)
+        if (isDisposing)
         {
-            if (isDisposing)
-            {
-                logger.LogTrace("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
-                    delivery.Message.GetType().Name, Address, delivery.Id);
-                return delivery.Failed("Hub disposing");
-            }
-            
-            try
-            {
-                // Wait for startup to complete with a reasonable timeout
-                var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(hub.Configuration.StartupTimeout));
-
-                // Startup completed successfully, now it's safe to process the message
-                logger.LogDebug("Startup completed successfully, processing scheduled message {Delivery} in {Address}", delivery, Address);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Startup failed while scheduling message {Delivery} in {Address}", delivery, Address);
-            }
-
-            logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+            logger.LogTrace("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
-            buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+            return delivery.Failed("Hub disposing");
         }
+
+        logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+            delivery.Message.GetType().Name, Address, delivery.Id);
+        buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
@@ -185,31 +168,26 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
-        lock (locker)
+        // Double-check disposal state to prevent processing during shutdown
+        if (isDisposing && delivery.Message is not ShutdownRequest)
         {
-            // Double-check disposal state to prevent processing during shutdown
-            if (isDisposing && delivery.Message is not ShutdownRequest)
-            {
-                logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                    delivery.Message.GetType().Name, Address, delivery.Id);
-                return delivery.Failed("Hub disposing - message rejected");
-            }
+            logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+            return delivery.Failed("Hub disposing - message rejected");
+        }
 
-            if (delivery.Target is null || delivery.Target.Equals(hub.Address))
-            {
-                logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                    delivery.Message.GetType().Name, Address, delivery.Id);
-                return ScheduleExecution(delivery, cancellationToken);
-            }
+        if (delivery.Target is null || delivery.Target.Equals(hub.Address))
+        {
+            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+            return ScheduleExecution(delivery, cancellationToken);
+        }
 
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
-            {
-                logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
-                    delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
-                return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
-            }
-
-
+        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
+        {
+            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
+                delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
+            return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
         }
         // Before routing to hierarchical routing (which may route to parent hub), 
         // ensure parent hub initialization is complete to avoid race conditions
