@@ -55,7 +55,7 @@ public static class JsonSynchronizationStream
         else
             reduced.RegisterForDisposal(
                 reduced
-                    .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
+                    .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
                     .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Subscribe(e =>
                     {
