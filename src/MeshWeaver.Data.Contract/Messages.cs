@@ -4,8 +4,6 @@ using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
-public record StreamMessage(string StreamId);
-
 public record DataChangeRequest 
     : IRequest<DataChangeResponse>
 {
@@ -59,14 +57,14 @@ public enum ChangeType
     NoUpdate
 }
 
-
+public abstract record StreamMessage(string StreamId);
 public abstract record JsonChange(
     string StreamId,
     long Version,
     RawJson Change,
     ChangeType ChangeType,
     string? ChangedBy
-);
+) : StreamMessage(StreamId);
 public record DataChangedEvent(
     string StreamId,
     long Version,
@@ -90,4 +88,4 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : 
 /// <summary>
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
-public record UnsubscribeRequest(string StreamId);
+public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);

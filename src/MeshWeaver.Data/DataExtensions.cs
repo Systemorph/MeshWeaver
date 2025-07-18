@@ -16,39 +16,6 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Data;
 
-/// <summary>
-/// Gets the JSON schema for a specific type.
-/// </summary>
-/// <param name="Type"></param>
-public record GetSchemaRequest(string Type) : IRequest<SchemaResponse>;
-
-/// <summary>
-/// Returns the JSON schema for a specific type.
-/// </summary>
-/// <param name="Type"></param>
-/// <param name="Schema"></param>
-public record SchemaResponse(string Type, string Schema);
-
-/// <summary>
-/// Gets the list of domain types available in the data context.
-/// </summary>
-public record GetDomainTypesRequest : IRequest<DomainTypesResponse>;
-
-/// <summary>
-/// Returns the list of domain types with their descriptions.
-/// </summary>
-/// <param name="Types">List of type descriptions available in the domain</param>
-public record DomainTypesResponse(IEnumerable<TypeDescription> Types);
-
-/// <summary>
-/// Description of a domain type.
-/// </summary>
-/// <param name="Name">The name of the type</param>
-/// <param name="DisplayName">The display name of the type</param>
-/// <param name="Description">Optional description of the type</param>
-/// <param name="Address">Address on which the data type lives.</param>
-public record TypeDescription(string Name, string DisplayName, string Description, Address Address);
-
 public static class DataExtensions
 {
     public static MessageHubConfiguration AddData(this MessageHubConfiguration config) =>
@@ -68,6 +35,7 @@ public static class DataExtensions
         return ret.AddActivities()
                 .AddDocumentation()
                 .WithInitialization(h => h.GetWorkspace())
+                .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
@@ -121,6 +89,26 @@ public static class DataExtensions
                 .RegisterDataEvents()
             ;
 
+    }
+
+    private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
+    {
+        if (request.Message is not StreamMessage streamMessage)
+            return Task.FromResult(request);
+        if(request.Target is not null && !request.Target.Equals(hub.Address))
+            return Task.FromResult(request);
+
+        request = request.ForwardTo(new SynchronizationAddress(streamMessage.StreamId));
+        var syncHub = hub.GetHostedHub(request.Target!, create:HostedHubCreation.Never);
+        if(syncHub is null)
+            return Task.FromResult(request.Ignored());
+        syncHub.DeliverMessage(request);
+        return Task.FromResult(request.Forwarded());
+    }
+
+    private static MessageHubConfiguration ConfigureSynchronizationStream(MessageHubConfiguration arg)
+    {
+        throw new NotImplementedException();
     }
 
     internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(

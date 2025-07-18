@@ -452,14 +452,8 @@ public class MessageService : IMessageService
         try
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
-            using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await deferralContainer.DisposeAsync().AsTask().WaitAsync(deferralsTimeout.Token);
+            await deferralContainer.DisposeAsync();
             logger.LogInformation("Deferrals completed successfully in {elapsed}ms for {Address}", 
-                deferralsStopwatch.ElapsedMilliseconds, Address);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogError("Deferrals disposal timed out after 3 seconds ({elapsed}ms) in {Address}", 
                 deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
