@@ -25,6 +25,7 @@ public interface ISynchronizationStream : IDisposable
     );
 
     IMessageHub Hub { get; }
+    IMessageHub Host { get; }
     T? Get<T>(string key);
     T? Get<T>();
     void Set<T>(string key, T? value);

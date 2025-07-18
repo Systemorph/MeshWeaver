@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
 using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
@@ -7,6 +6,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
+using Activity = MeshWeaver.Activities.Activity;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -91,7 +91,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         get => current;
     }
 
-    public IMessageHub Hub { get; init; }
+
+    /// <summary>
+    /// The actual synchronization hub
+    /// </summary>
+    public IMessageHub Hub { get;  }
+
+    /// <summary>
+    /// The host of the synchronization stream.
+    /// </summary>
+    public IMessageHub Host { get;  }
 
 
 
@@ -134,11 +143,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Store.OnError(error);
     }
 
-    public void RegisterForDisposal(IDisposable disposable) => synchronizationHub?
+    public void RegisterForDisposal(IDisposable disposable) => Hub
         .RegisterForDisposal(_ => disposable.Dispose());
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
-        synchronizationHub!.DeliverMessage(delivery.ForwardTo(synchronizationHub.Address));
+        Hub.DeliverMessage(delivery.ForwardTo(Hub.Address));
 
 
     public void OnNext(ChangeItem<TStream> value)
@@ -154,33 +163,98 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public SynchronizationStream(
         StreamIdentity StreamIdentity,
-        IMessageHub Hub,
+        IMessageHub Host,
         object Reference,
         ReduceManager<TStream> ReduceManager,
         Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration)
     {
-        this.Hub = Hub;
+        if (Host.IsDisposing)
+            throw new ObjectDisposedException($"Hub {Host.Address} is disposing. Cannot create synchronization stream.");
+        this.Host = Host; 
+        
+        this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
+        this.Hub = Host.GetHostedHub(new SynchronizationAddress($"{StreamId}"),
+            ConfigureSynchronizationHub);
+            
+            
+ 
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
-        this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        synchronizationHub = Hub.GetHostedHub(new SynchronizationStreamAddress($"{Hub.Address}/{StreamId}"), config =>
-            Configuration.HubConfigurations.Aggregate(ConfigureDefaults(config), (c, cc) => cc.Invoke(c)));
 
-        if (synchronizationHub == null)
-            if (Hub.IsDisposing)
-                throw new ObjectDisposedException($"Hub {Hub.Address} is disposing. Cannot create synchronization stream.");
-            else
-                throw new InvalidOperationException("Could not create synchronization hub");
-
-        synchronizationHub.RegisterForDisposal(_ => Store.Dispose());
+        Hub.RegisterForDisposal(_ => Store.Dispose());
     }
+
+    private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
+    {
+        return ConfigureDefaults(config)
+            .WithHandler<DataChangedEvent>((hub, delivery) =>
+                {
+                    UpdateStream(delivery, hub);
+                    return delivery.Processed();
+                }
+            ).WithHandler<PatchDataChangeRequest>((hub, delivery) =>
+                {
+                    UpdateStream(delivery, hub);
+                    return delivery.Processed();
+                }
+            ).WithHandler<DataChangeRequest>((hub, delivery) =>
+                {
+                    hub.GetWorkspace().RequestChange(delivery.Message, new Activity(ActivityCategory.DataUpdate, Host),
+                        delivery);
+                    return delivery.Processed();
+                }
+            ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
+            {
+                hub.Dispose();
+                return delivery.Processed();
+            });
+
+    }
+    private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
+        where TChange : JsonChange
+    {
+        var currentJson = Get<JsonElement?>();
+        if (delivery.Message.ChangeType == ChangeType.Full)
+        {
+            currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
+            Update(
+                _ => new ChangeItem<TStream>(
+                    currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
+                    StreamId,
+                    Host.Version), ex => SyncFailed(delivery,  ex)
+            );
+
+        }
+        else
+        {
+            (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
+            Update(
+                state =>
+                    this.ToChangeItem(state!,
+                        currentJson.Value,
+                        patch,
+                        delivery.Message.ChangedBy ?? ClientId),
+                ex => SyncFailed(delivery,  ex)
+            );
+
+        }
+        Set(currentJson);
+    }
+
+    private Task SyncFailed(IMessageDelivery delivery,  Exception exception)
+    {
+        Host.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
+        return Task.CompletedTask;
+    }
+
+
 
     private static MessageHubConfiguration ConfigureDefaults(MessageHubConfiguration config)
         => config.WithTypes(
                 typeof(EntityStore),
                 typeof(JsonElement),
-                typeof(SynchronizationStreamAddress)
+                typeof(SynchronizationAddress)
             );
 
     public string StreamId { get; } = Guid.NewGuid().AsString();
@@ -189,16 +263,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     internal StreamConfiguration<TStream> Configuration { get; }
 
-    private readonly IMessageHub? synchronizationHub;
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback)
-        => synchronizationHub?.InvokeAsync(action, exceptionCallback);
+        => Hub.InvokeAsync(action, exceptionCallback);
 
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
-        => synchronizationHub?.InvokeAsync(action, exceptionCallback);
-
-
-
-    private record SynchronizationStreamAddress(string Id) : Address("sync", Id);
+        => Hub.InvokeAsync(action, exceptionCallback);
 
 
     public void Dispose()
@@ -209,7 +278,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return;
             isDisposed = true;
         }
-        synchronizationHub?.Dispose();
+        Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
     public T? Get<T>(string key) => (T?)Properties.GetValueOrDefault(key);
@@ -234,11 +303,6 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal string ClientId { get; init; } = Guid.NewGuid().AsString();
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
-
-    internal ImmutableList<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations { get; init; } =
-        [];
-    public StreamConfiguration<TStream> ConfigureHub(Func<MessageHubConfiguration, MessageHubConfiguration> configuration) =>
-        this with { HubConfigurations = HubConfigurations.Add(configuration) };
 
     internal bool NullReturn { get; init; }
 

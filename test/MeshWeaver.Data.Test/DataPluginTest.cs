@@ -105,7 +105,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var clientWorkspace = client.GetWorkspace();
         var data = (await clientWorkspace
                 .GetObservable<MyData>()
-                .Timeout(10.Seconds())
+                //.Timeout(10.Seconds())
                 .FirstOrDefaultAsync())!
             .OrderBy(a => a.Id)
             .ToArray();

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -245,7 +245,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
-        var properties = FindPropertiesInSchema(schemaJson); var statusProperty = properties.GetProperty("status");
+        var properties = FindPropertiesInSchema(schemaJson); 
+        
+        var statusProperty = properties.GetProperty("status");
 
         // Check if the status property has enum values (the key enum feature)
         statusProperty.TryGetProperty("enum", out var enumProperty).Should().BeTrue("Enum properties should have an 'enum' field");

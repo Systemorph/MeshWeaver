@@ -116,7 +116,7 @@ c => c
     {
         var reducedStream = new SynchronizationStream<TReduced>(
             stream.StreamIdentity,
-            stream.Hub,
+            stream.Host,
             reference,
             stream.ReduceManager.ReduceTo<TReduced>(),
             configuration

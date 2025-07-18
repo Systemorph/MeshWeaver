@@ -39,7 +39,11 @@ public abstract class ContentCollection : IDisposable
     public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
 
     public IObservable<object?>? GetMarkdown(string path)
-        => markdownStream.Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path.TrimStart('/')), c => c.ReturnNullWhenNotPresent())!
+        => markdownStream
+            .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) 
+                ? path[..^3] 
+                : path.TrimStart('/')), 
+                c => c.ReturnNullWhenNotPresent())!
             .Select(x => x.Value);
 
 
