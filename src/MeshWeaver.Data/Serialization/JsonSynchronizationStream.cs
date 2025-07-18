@@ -29,7 +29,6 @@ public static class JsonSynchronizationStream
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
-        TaskCompletionSource<TReduced>? tcs2 = null;
         var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
                 hub,
@@ -38,12 +37,6 @@ public static class JsonSynchronizationStream
                 config => config
                     .WithClientId(config.Stream.StreamId)
             );
-        reduced.Initialize(ct => (tcs2 = new(ct)).Task,
-            ex =>
-            {
-                logger.LogWarning(ex, "An error occurred updating data source {Stream}", reduced.StreamId);
-                return Task.CompletedTask;
-            });
 
 
         if(typeof(TReduced) == typeof(JsonElement))
@@ -82,24 +75,6 @@ public static class JsonSynchronizationStream
             return c;
         });
         reduced.BindToTask(task);
-        var first = true;
-        reduced.RegisterForDisposal(
-            reduced.Hub.Register<DataChangedEvent>(delivery =>
-                {
-                    if (first)
-                    {
-                        first = false;
-                        var jsonElement = JsonDocument.Parse(delivery.Message.Change.Content).RootElement;
-                        ((ISynchronizationStream)reduced).Set<JsonElement?>(jsonElement);
-                        tcs2?.SetResult(jsonElement.Deserialize<TReduced>(reduced.Hub.JsonSerializerOptions)!);
-                        return request!.Processed();
-                    }
-                    reduced.DeliverMessage(delivery);
-                    return delivery.Forwarded();
-                },
-                d => reduced.StreamId.Equals(d.Message.StreamId)
-            )
-        );
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
@@ -146,6 +121,22 @@ public static class JsonSynchronizationStream
                 $"No reducer defined for {typeof(TReference).Name} from  {typeof(TReference).Name}"
             );
 
+
+        // Send initial data as response to subscribe request
+        var initialData = reduced.Current;
+        if (initialData != null)
+        {
+            var initialJson = JsonSerializer.SerializeToElement(initialData.Value, initialData.Value?.GetType() ?? typeof(object), hub.JsonSerializerOptions);
+            var initialEvent = new DataChangedEvent(
+                request.StreamId,
+                initialData.Version,
+                new RawJson(initialJson.ToString()),
+                ChangeType.Full,
+                initialData.ChangedBy ?? string.Empty);
+            
+            logger.LogDebug("Owner {owner} sending initial data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+            hub.Post(initialEvent, o => o.WithTarget(request.Subscriber));
+        }
 
         // outgoing data changed
         reduced.RegisterForDisposal(
