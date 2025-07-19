@@ -123,7 +123,7 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             .FirstAsync(x => x is not null);
         var editor = control.Should().BeOfType<EditorControl>().Which;
         editor.DataContext.Should().NotBeNull();
-        var data = await stream.GetDataStream<object>(new(editor.DataContext))
+        var data = await stream.GetDataStream<object?>(new(editor.DataContext))
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         stream.UpdatePointer(3, editor.DataContext, new("summand1"));
