@@ -16,7 +16,7 @@ public interface IMessageDelivery
     string State { get; }
     object Message { get; }
 
-    IMessageDelivery Package(JsonSerializerOptions options);
+    IMessageDelivery Package();
 
     internal IMessageDelivery SetAccessContext(AccessContext accessObject);
     internal IMessageDelivery ChangeState(string state);

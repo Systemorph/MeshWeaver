@@ -111,7 +111,7 @@ public static class SignalRClientExtensions
                 return delivery;
 
             logger.LogDebug("Sending message from address {Address}", delivery.Sender);
-            await hubConnection.Value.InvokeAsync("DeliverMessage", delivery.Package(routes.Hub.JsonSerializerOptions), cancellationToken);
+            await hubConnection.Value.InvokeAsync("DeliverMessage", delivery.Package(), cancellationToken);
             return delivery.Forwarded();
         });
     }

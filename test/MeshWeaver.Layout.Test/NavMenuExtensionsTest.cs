@@ -21,7 +21,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
         {
             return base.ConfigureHost(configuration)
                 .WithRoutes(r =>
-                    r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                    r.RouteAddress<ClientAddress>((_, d) => d.Package())
                 )
                 .AddLayout(layout =>
                     layout

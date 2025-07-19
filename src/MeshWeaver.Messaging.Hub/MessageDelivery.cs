@@ -5,9 +5,18 @@ using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Messaging;
 
-public abstract record MessageDelivery(Address Sender, Address Target) : IMessageDelivery
+public abstract record MessageDelivery : IMessageDelivery
 {
-    public string Id { get; init; } = Guid.NewGuid().AsString() ?? string.Empty;
+    private readonly JsonSerializerOptions options;
+
+    protected MessageDelivery(Address Sender, Address Target, JsonSerializerOptions options)
+    {
+        this.options = options;
+        this.Sender = Sender;
+        this.Target = Target;
+    }
+
+    public string Id { get; init; } = Guid.NewGuid().AsString();
 
     private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
         ImmutableDictionary<string, object>.Empty;
@@ -43,6 +52,8 @@ public abstract record MessageDelivery(Address Sender, Address Target) : IMessag
 
 
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
+    public Address Sender { get; init; }
+    public Address Target { get; init; }
 
     IMessageDelivery IMessageDelivery.Forwarded(IEnumerable<Address> addresses) => this with { ForwardedTo = ForwardedTo.Union(addresses), State = MessageDeliveryState.Forwarded };
 
@@ -78,7 +89,7 @@ public abstract record MessageDelivery(Address Sender, Address Target) : IMessag
         };
     }
 
-    public IMessageDelivery Package(JsonSerializerOptions options)
+    public IMessageDelivery Package()
     {
         try
         {
@@ -95,21 +106,30 @@ public abstract record MessageDelivery(Address Sender, Address Target) : IMessag
 
 }
 
-public record MessageDelivery<TMessage>(Address Sender, Address Target, TMessage Message) : MessageDelivery(Sender, Target), IMessageDelivery<TMessage>
+public record MessageDelivery<TMessage> : MessageDelivery, IMessageDelivery<TMessage>
 {
+
     public MessageDelivery()
-        : this(default!, default!, default!)
+        : this(null!, null!, default!, null!)
     {
     }
 
-    public MessageDelivery(TMessage message, PostOptions options)
-        : this(options.Sender, options.Target, message)
+    public MessageDelivery(TMessage message, PostOptions options, JsonSerializerOptions jsonSerializerOptions)
+        : this(options.Sender, options.Target, message, jsonSerializerOptions)
     {
         Properties = options.Properties;
     }
+
+    public MessageDelivery(Address Sender, Address Target, TMessage Message, JsonSerializerOptions jsonSerializerOptions) : base(Sender, Target, jsonSerializerOptions)
+    {
+        this.Message = Message;
+    }
+
+    public TMessage Message { get; init; }
 
     protected override object GetMessage()
     {
         return Message!;
     }
+
 }
