@@ -21,7 +21,7 @@ public static class KernelExtensions
 
     private static MessageHubConfiguration ConfigureHub(this MessageHubConfiguration config)
     {
-        var kernelContainer = new KernelContainer();
+        var kernelContainer = new KernelContainer(config.ParentHub.ServiceProvider);
         return kernelContainer.ConfigureHub(config);
     }
 }
