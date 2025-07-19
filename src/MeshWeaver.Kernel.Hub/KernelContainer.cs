@@ -43,8 +43,10 @@ public class KernelContainer : IDisposable
                 Hub,
                 new AggregateWorkspaceReference(),
                 new ReduceManager<ImmutableDictionary<string, object>>(hub),
-                null
+                x => x
             );
+            
+        AreasStream.Initialize(_ => Task.FromResult(ImmutableDictionary<string,object>.Empty), _ => Task.CompletedTask);
         executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Hub.RegisterForDisposal(this);
         DisposeOnTimeout();
@@ -73,7 +75,13 @@ public class KernelContainer : IDisposable
             .AddLayout(layout =>
                 layout.WithView(_ => true, 
                     (_,ctx) => AreasStream
-                        .Select(a => uiControlService.Convert(a.Value!.GetValueOrDefault(ctx.Area) ?? new object()))
+                        .Select(a =>
+                        {
+                            var valueOrDefault = a.Value!.GetValueOrDefault(ctx.Area);
+                            if (valueOrDefault is null)
+                                return null;
+                            return uiControlService.Convert(valueOrDefault);
+                        })
                 )
             )
             .AddMeshTypes()

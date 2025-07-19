@@ -20,7 +20,7 @@ public record MessageHubConfiguration
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
 
-
+    public IMessageHub? ParentHub => ParentServiceProvider?.GetService<IMessageHub>();
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
     public IServiceProvider ServiceProvider { get; set; } = null!;

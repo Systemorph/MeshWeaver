@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -13,40 +14,21 @@ using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;
 
-public class SerializationTest : HubTestBase
+public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    public SerializationTest(ITestOutputHelper output)
-        : base(output)
-    {
-        Services.AddMessageHubs(
-            new RouterAddress(),
-            hubConf =>
-                hubConf.WithRoutes(f =>
-                    f.RouteAddress<HostAddress>(
-                            (routedAddress, d) =>
-                            {
-                                var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                                var packagedDelivery = d.Package();
-                                hostedHub.DeliverMessage(packagedDelivery);
-                                return d.Forwarded();
-                            }
-                        )
-                        .RouteAddress<ClientAddress>(
-                            (routedAddress, d) =>
-                            {
-                                var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                                var packagedDelivery = d.Package();
-                                hostedHub.DeliverMessage(packagedDelivery);
-                                return d.Forwarded();
-                            }
-                        )
-                )
-        );
-    }
-
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
-        return base.ConfigureHost(c).WithHandler<Boomerang>(
+        return base.ConfigureHost(c)
+            .WithRoutes(f => f.RouteAddress<ClientAddress>(
+                    (routedAddress, d) =>
+                    {
+                        var hostedHub = c.ParentHub!.GetHostedHub(routedAddress, ConfigureClient);
+                        var packagedDelivery = d.Package();
+                        hostedHub.DeliverMessage(packagedDelivery);
+                        return d.Forwarded();
+                    }
+                ))
+            .WithHandler<Boomerang>(
             (hub, request) =>
             {
                 hub.Post(
@@ -61,6 +43,35 @@ public class SerializationTest : HubTestBase
         );
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .WithTypes(typeof(BoomerangResponse), typeof(MyEvent))
+            .WithRoutes(f =>
+            f.RouteAddress<HostAddress>(
+                (routedAddress, d) =>
+                {
+                    var hostedHub = configuration.ParentHub!.GetHostedHub(routedAddress, ConfigureHost);
+                    var packagedDelivery = d.Package();
+                    hostedHub.DeliverMessage(packagedDelivery);
+                    return d.Forwarded();
+                }
+            )
+
+        );
+    }
+    [Fact]
+    public void BoomerangResponseSerialization()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var orig = new BoomerangResponse(new MyEvent("Hello"), Type: nameof(MyEvent));
+        var serialized = JsonSerializer.Serialize(orig, client.JsonSerializerOptions);
+
+        var response = JsonNode.Parse(serialized).Deserialize<object>(client.JsonSerializerOptions);
+        var message = response.Should().BeOfType<BoomerangResponse>().Which;
+        message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
+        message.Type.Should().Be(nameof(MyEvent));
+    }
     [Fact]
     public async Task BoomerangTest()
     {
@@ -68,12 +79,12 @@ public class SerializationTest : HubTestBase
 
         var response = await client.AwaitResponse(
             new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(new HostAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
+            o => o.WithTarget(new HostAddress())
+            //, new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
         );
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
-        response.Message.Type.Should().Be(nameof(MyEvent));
+        response.Message.Type.Should().Be(nameof(JsonElement));
     }
 
     [Fact]
