@@ -275,7 +275,7 @@ public sealed class MessageHub : IMessageHub
     }
 
     private readonly TaskCompletionSource hasStarted = new();
-    public Task HasStarted => hasStarted.Task; 
+    public Task Started => hasStarted.Task; 
     
     
     async Task IMessageHub.StartAsync(CancellationToken cancellationToken)

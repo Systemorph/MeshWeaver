@@ -179,7 +179,7 @@ public class MessageService : IMessageService
             return delivery.Failed("Hub disposing - message rejected");
         }
         if (ParentHub is MessageHub parentMessageHub)
-            await parentMessageHub.HasStarted;
+            await parentMessageHub.Started;
 
 
         if (delivery.State != MessageDeliveryState.Submitted)

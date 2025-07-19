@@ -21,20 +21,19 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Kernel.Hub;
 
-public class KernelContainer : IDisposable
+public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private IMeshCatalog meshCatalog = null!;
-    private IMessageHub executionHub = null!;
-    private ILogger<KernelContainer> logger = null!;
+    private readonly IMeshCatalog meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
+    private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
     private IUiControlService uiControlService = null!;
+    private IMessageHub executionHub = null!;
     private void Initialize(IMessageHub hub)
     {
-        this.meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<KernelContainer>>();
-        uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
         Hub = hub;
+        uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
+        executionHub = hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Kernel = CreateKernel();
         Kernel.KernelEvents.Subscribe(PublishEventToContext);
         AreasStream =
@@ -42,12 +41,11 @@ public class KernelContainer : IDisposable
                 new(Guid.NewGuid().AsString(), Hub.Address),
                 Hub,
                 new AggregateWorkspaceReference(),
-                new ReduceManager<ImmutableDictionary<string, object>>(hub),
+                new ReduceManager<ImmutableDictionary<string, object>>(Hub),
                 x => x
             );
             
         AreasStream.Initialize(_ => Task.FromResult(ImmutableDictionary<string,object>.Empty), _ => Task.CompletedTask);
-        executionHub = Hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
         Hub.RegisterForDisposal(this);
         DisposeOnTimeout();
     }
@@ -106,6 +104,7 @@ public class KernelContainer : IDisposable
     {
         try
         {
+            await kernelHub.Started;
             if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
                 return request;
 
@@ -260,7 +259,7 @@ public class KernelContainer : IDisposable
         return @event.Command is SubmitCode submit3 && submit3.Parameters.ContainsKey(IframeUrl);
     }
 
-    private IMessageHub Hub { get; set; } = null!;
+    private IMessageHub Hub { get; set; } 
     public CompositeKernel Kernel { get; set; } = null!;
 
     protected CompositeKernel CreateKernel()
