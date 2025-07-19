@@ -37,28 +37,39 @@ public static class SerializationExtensions
         ? type!.ToString()
         : typeRegistry.GetOrAddType(instance.GetType());
 
-    public static JsonSerializerOptions CreateJsonSerializationOptions(this IMessageHub hub)
+    public static JsonSerializerOptions CreateJsonSerializationOptions(this IMessageHub hub, IMessageHub? parent)
     {
+
+        var standardConverters = GetStandardConverters(hub).ToArray();
+
+
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         var configurations =
             hub.Configuration.GetListOfLambdas()
             ?? ImmutableList<Func<SerializationConfiguration, SerializationConfiguration>>.Empty;
         var serializationConfig = configurations
             .Aggregate(CreateSerializationConfiguration(hub), (c, f) => f.Invoke(c)); var options = serializationConfig.Options;        // Add standard converters
-        var addressConverter = new AddressConverter(hub.TypeRegistry);
-        var objectConverter = new ObjectPolymorphicConverter(typeRegistry);
-        var messageDeliveryConverter = new MessageDeliveryConverter(typeRegistry);
-        var readOnlyCollectionConverterFactory = new ReadOnlyCollectionConverterFactory();
-        options.Converters.Add(addressConverter);
-        options.Converters.Add(objectConverter);
-        options.Converters.Add(messageDeliveryConverter);
-        options.Converters.Add(readOnlyCollectionConverterFactory);
-        options.Converters.Add(new JsonNodeConverter());
-        options.Converters.Add(new ImmutableDictionaryOfStringObjectConverter());
-        options.Converters.Add(new RawJsonConverter());
-        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
+
+        if (parent is not null)
+            foreach (var jsonConverter in parent.JsonSerializerOptions.Converters.Take(parent.JsonSerializerOptions.Converters.Count - standardConverters.Length))
+                if(options.Converters.All(c => c.GetType() != jsonConverter.GetType()))
+                    options.Converters.Add(jsonConverter);
+
+        foreach (var standardConverter in standardConverters)
+            options.Converters.Add(standardConverter);
 
         return options;
+    }
+
+    private static IEnumerable<JsonConverter> GetStandardConverters(IMessageHub hub)
+    {
+        yield return new AddressConverter(hub.TypeRegistry);
+        yield return new ObjectPolymorphicConverter(hub.TypeRegistry);
+        yield return new MessageDeliveryConverter(hub.TypeRegistry);
+        yield return new ReadOnlyCollectionConverterFactory();
+        yield return new JsonNodeConverter();
+        yield return new ImmutableDictionaryOfStringObjectConverter();
+        yield return new RawJsonConverter();
     }
     private static SerializationConfiguration CreateSerializationConfiguration(IMessageHub hub)
     {

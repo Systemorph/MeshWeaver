@@ -61,7 +61,7 @@ public sealed class MessageHub : IMessageHub
         foreach (var disposeAction in configuration.DisposeActions)
             disposeActions.Add(disposeAction);
 
-        JsonSerializerOptions = this.CreateJsonSerializationOptions();
+        JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
