@@ -39,7 +39,8 @@ public class MessageService : IMessageService
 
         deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
         deliveryAction =
-            new(x => x.Invoke()); postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
+            new(x => x.Invoke()); 
+        postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d,_) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
         startupDeferral = Defer(_ => true);

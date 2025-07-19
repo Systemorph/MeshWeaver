@@ -3,9 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Layout.Composition;
-using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
@@ -24,7 +22,7 @@ public static class LayoutDefinitionExtensions
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
-        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl>> generator
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> generator
     ) =>
         layout.WithRenderer(context, (a, ctx, s) => a.RenderArea(ctx, generator.Invoke(a, ctx), s));
 
@@ -38,7 +36,7 @@ public static class LayoutDefinitionExtensions
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
-        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl>> generator,
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> generator,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) =>
         layout

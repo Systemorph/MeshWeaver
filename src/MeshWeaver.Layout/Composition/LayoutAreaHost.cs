@@ -5,7 +5,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using System.Collections.Immutable;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +22,7 @@ public record LayoutAreaHost : IDisposable
     public T? GetVariable<T>(object key) => variables.TryGetValue(key, out var value) ? (T?)value : default;
     public bool ContainsVariable(object key) => variables.ContainsKey(key);
     public object? SetVariable(object key, object? value) => variables[key] = value;
-    public T? GetOrAddVariable<T>(object key, Func<T> factory)
+    public T GetOrAddVariable<T>(object key, Func<T> factory)
     {
         if (!ContainsVariable(key))
         {
@@ -33,7 +32,6 @@ public record LayoutAreaHost : IDisposable
         return GetVariable<T>(key) ?? factory();
     }
 
-    private record LayoutAddress() : Address("layout", Guid.NewGuid().AsString());
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
     public LayoutAreaHost(IWorkspace workspace,
@@ -67,7 +65,7 @@ public record LayoutAreaHost : IDisposable
         executionHub = Stream.Hub.GetHostedHub(
             new LayoutExecutionAddress(),
             x => x
-        )!;
+        );
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
     }
@@ -138,7 +136,7 @@ public record LayoutAreaHost : IDisposable
                      .Where(x => x.Collection == LayoutAreaReference.Areas)
                      .Select(x => (x.Id!.ToString()!, Control: x.Value as UiControl))
                      .Where(x => x.Control != null))
-            RegisterForDisposal(a!, c!);
+            RegisterForDisposal(a, c!);
 
         return ret;
     }
@@ -147,7 +145,7 @@ public record LayoutAreaHost : IDisposable
     private readonly IMessageHub executionHub;
 
 
-    public void UpdateArea(RenderingContext context, object view)
+    public void UpdateArea(RenderingContext context, object? view)
     {
         Stream.Update(store =>
         {
@@ -182,7 +180,7 @@ public record LayoutAreaHost : IDisposable
     }
 
     public void UpdateData(string id, object data)
-        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data!));
+        => Update(LayoutAreaReference.Data, store => store.SetItem(id, data));
 
 
     private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
@@ -198,25 +196,25 @@ public record LayoutAreaHost : IDisposable
         disposablesByArea.GetOrAdd(string.Empty, _ => new()).Add(disposable);
     }
 
-    public IObservable<T> GetDataStream<T>(string id)
+    public IObservable<T?> GetDataStream<T>(string id)
         where T : class
         => GetStream<T>(new EntityReference(LayoutAreaReference.Data, id));
 
 
-    private IObservable<T> GetStream<T>(EntityReference reference) where T : class
+    private IObservable<T?> GetStream<T>(EntityReference reference) where T : class
     {
-        return Stream!
+        return Stream
             .Reduce(reference)!
-            .Select(ci => Convert<T>(ci)!)
+            .Select(Convert<T>)
             .Where(x => x is not null)
             .DistinctUntilChanged();
     }
 
-    private static T Convert<T>(ChangeItem<object> ci) where T : class
+    private static T? Convert<T>(ChangeItem<object?> ci) where T : class
     {
         var result = ci.Value;
         if (result is null)
-            return null!;
+            return null;
 
 
         if (result is T t)
@@ -301,7 +299,7 @@ public record LayoutAreaHost : IDisposable
 
         return new(store.Update(LayoutAreaReference.Areas,
             i => i with { Instances = i.Instances.RemoveRange(existing.Select(x => x.Key)) }), existing.Select(i =>
-            new EntityUpdate(LayoutAreaReference.Areas, i.Key, (object?)null) { OldValue = i.Value }), Stream.StreamId!);
+            new EntityUpdate(LayoutAreaReference.Areas, i.Key, null) { OldValue = i.Value }), Stream.StreamId);
     }
 
 
@@ -362,7 +360,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object> generator, EntityStore store)
+    internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object?> generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
 
@@ -385,7 +383,7 @@ public record LayoutAreaHost : IDisposable
             logger.LogDebug("Start re-rendering");
             var reference = (LayoutAreaReference)Stream.Reference;
             var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(async ct =>
+            Stream.Initialize(async _ =>
                     (await LayoutDefinition
                         .RenderAsync(this, context, new EntityStore()
                             .Update(LayoutAreaReference.Areas, x => x)
@@ -403,16 +401,6 @@ public record LayoutAreaHost : IDisposable
             return Task.CompletedTask;
         });
         return Stream;
-    }
-
-    private void DisposeAllAreas()
-    {
-        logger.LogDebug("Disposing all areas");
-        disposablesByArea
-            .Values
-            .SelectMany(d => d)
-            .ForEach(d => d.Dispose());
-        disposablesByArea.Clear();
     }
 
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
