@@ -128,6 +128,12 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
             return;
         }
 
+        if (value is JsonElement je)
+        {
+            je.WriteTo(writer);
+            return;
+        }
+
         var valueType = value.GetType();
 
         // For primitive types, write directly
