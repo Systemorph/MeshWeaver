@@ -224,8 +224,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                type == typeof(TimeSpan) ||
                type.IsEnum || (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string)) ||
                type.IsValueType || // All structs cannot support polymorphism
-               type.IsSealed ||    // Sealed types cannot support polymorphism
-               (type.IsGenericType && !type.IsGenericTypeDefinition && !ShouldAllowPolymorphismForGenericType(type)); // Some generic types can support polymorphism
+               type.IsSealed; // Some generic types can support polymorphism
     }
     private static bool ShouldAllowPolymorphismForGenericType(Type type)
     {
