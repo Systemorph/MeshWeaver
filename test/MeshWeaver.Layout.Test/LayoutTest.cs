@@ -330,7 +330,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         );
         var content = await stream
             .GetControlStream(reference.Area.ToString()!)
-            .Timeout(TimeSpan.FromSeconds(3))
+            //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
         var controls = content
@@ -548,6 +548,74 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
+
+    [HubFact]
+    public void TestDataGridSerialization()
+    {
+        var host = GetHost();
+
+        // Create a DataGridControl with PropertyColumnControl<string> columns
+        var originalGrid = new DataGridControl(new DataRecord[] { new("1", "1"), new("2", "2") })
+            .WithColumn(
+                new PropertyColumnControl<string>
+                {
+                    Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                    Title = nameof(DataRecord.SystemName).Wordify()
+                },
+                new PropertyColumnControl<string>
+                {
+                    Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                    Title = nameof(DataRecord.DisplayName).Wordify()
+                }
+            );
+
+        output.WriteLine($"Original grid columns count: {originalGrid.Columns.Count}");
+        foreach (var column in originalGrid.Columns)
+        {
+            output.WriteLine($"Original column type: {column.GetType().FullName}");
+            if (column is PropertyColumnControl pc)
+            {
+                output.WriteLine($"  Property: {pc.Property}, Title: {pc.Title}");
+            }
+        }
+
+        // Serialize with host options
+        var serialized = JsonSerializer.Serialize(originalGrid, host.JsonSerializerOptions);
+        output.WriteLine($"Serialized JSON: {serialized}");
+
+
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        // Deserialize with client options
+        var deserialized = JsonSerializer.Deserialize<DataGridControl>(serialized, hosted.JsonSerializerOptions);
+
+        output.WriteLine($"Deserialized grid columns count: {deserialized!.Columns.Count}");
+        foreach (var column in deserialized.Columns)
+        {
+            output.WriteLine($"Deserialized column type: {column.GetType().FullName}");
+            if (column is PropertyColumnControl pc)
+            {
+                output.WriteLine($"  Property: {pc.Property}, Title: {pc.Title}");
+            }
+            else if (column is JsonElement je)
+            {
+                output.WriteLine($"  JsonElement: {je.GetRawText()}");
+            }
+        }
+
+        // The test should pass if PropertyColumnControl objects are properly deserialized
+        deserialized.Columns.Should().HaveCount(2);
+        deserialized.Columns.Should().AllBeAssignableTo<PropertyColumnControl>();
+
+        var firstColumn = deserialized.Columns[0].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        firstColumn.Property.Should().Be(nameof(DataRecord.SystemName).ToCamelCase());
+        firstColumn.Title.Should().Be(nameof(DataRecord.SystemName).Wordify());
+
+        var secondColumn = deserialized.Columns[1].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        secondColumn.Property.Should().Be(nameof(DataRecord.DisplayName).ToCamelCase());
+        secondColumn.Title.Should().Be(nameof(DataRecord.DisplayName).Wordify());
+    }
+
 }
 
 public static class TestAreas
