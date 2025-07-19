@@ -56,10 +56,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                                 .Hub.GetWorkspace()
                                 .GetStream(typeof(DataRecord)).Select(x => x.Value!.GetData<DataRecord>())
                                 .DistinctUntilChanged()
-                                .BindMany(nameof(ItemTemplate), y => 
+                                .BindMany(nameof(ItemTemplate), y =>
                                     Controls.Text(y.DisplayName).WithId(y.SystemName))
                                 )
-                    
+
                     .WithView(nameof(CatalogView), CatalogView)
                     .WithView(
                         nameof(Counter),
@@ -439,7 +439,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x =>x is CheckBoxControl cb && !((bool)cb.Data))
+            .Where(x => x is CheckBoxControl cb && !((bool)cb.Data))
             //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
@@ -550,6 +550,134 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [HubFact]
+    public void TestSerializationOptionsComparison()
+    {
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        output.WriteLine("=== CLIENT HUB CONVERTERS ===");
+        for (int i = 0; i < client.JsonSerializerOptions.Converters.Count; i++)
+        {
+            var converter = client.JsonSerializerOptions.Converters[i];
+            output.WriteLine($"[{i}] {converter.GetType().FullName}");
+        }
+
+        output.WriteLine("\n=== HOSTED HUB CONVERTERS ===");
+        for (int i = 0; i < hosted.JsonSerializerOptions.Converters.Count; i++)
+        {
+            var converter = hosted.JsonSerializerOptions.Converters[i];
+            output.WriteLine($"[{i}] {converter.GetType().FullName}");
+        }
+
+        // Find the missing converters
+        var clientConverterTypes = client.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+        var hostedConverterTypes = hosted.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+
+        var missingInHosted = clientConverterTypes.Except(hostedConverterTypes).ToList();
+        var extraInHosted = hostedConverterTypes.Except(clientConverterTypes).ToList();
+
+        output.WriteLine("\n=== MISSING IN HOSTED ===");
+        foreach (var missing in missingInHosted)
+        {
+            output.WriteLine($"MISSING: {missing.FullName}");
+        }
+
+        output.WriteLine("\n=== EXTRA IN HOSTED ===");
+        foreach (var extra in extraInHosted)
+        {
+            output.WriteLine($"EXTRA: {extra.FullName}");
+        }
+
+        // Test simple serialization
+        var testObject = new PropertyColumnControl<string>
+        {
+            Property = "test",
+            Title = "Test"
+        };
+
+        var clientSerialized = JsonSerializer.Serialize(testObject, client.JsonSerializerOptions);
+        output.WriteLine($"\nClient serialized: {clientSerialized}");
+
+        var hostedSerialized = JsonSerializer.Serialize(testObject, hosted.JsonSerializerOptions);
+        output.WriteLine($"Hosted serialized: {hostedSerialized}");
+
+        try
+        {
+            var clientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(clientSerialized, client.JsonSerializerOptions);
+            output.WriteLine($"Client deserialized type: {clientDeserialized?.GetType().FullName}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"Client deserialization failed: {ex.Message}");
+        }
+
+        try
+        {
+            var hostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(hostedSerialized, hosted.JsonSerializerOptions);
+            output.WriteLine($"Hosted deserialized type: {hostedDeserialized?.GetType().FullName}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"Hosted deserialization failed: {ex.Message}");
+        }
+    }
+
+    [HubFact]
+    public void TestPolymorphicCollectionSerialization()
+    {
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        // Test 1: Simple individual object
+        var singleColumn = new PropertyColumnControl<string>
+        {
+            Property = "test",
+            Title = "Test"
+        };
+
+        var singleSerialized = JsonSerializer.Serialize(singleColumn, client.JsonSerializerOptions);
+        output.WriteLine($"Single object serialized: {singleSerialized}");
+
+        var singleClientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, client.JsonSerializerOptions);
+        var singleHostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, hosted.JsonSerializerOptions);
+
+        output.WriteLine($"Single - Client deserialized type: {singleClientDeserialized?.GetType().FullName}");
+        output.WriteLine($"Single - Hosted deserialized type: {singleHostedDeserialized?.GetType().FullName}");
+
+        // Test 2: Collection of polymorphic objects
+        var columnCollection = new List<object>
+        {
+            new PropertyColumnControl<string> { Property = "test1", Title = "Test1" },
+            new PropertyColumnControl<string> { Property = "test2", Title = "Test2" }
+        };
+
+        var collectionSerialized = JsonSerializer.Serialize(columnCollection, client.JsonSerializerOptions);
+        output.WriteLine($"\nCollection serialized: {collectionSerialized}");
+
+        var collectionClientDeserialized = JsonSerializer.Deserialize<List<object>>(collectionSerialized, client.JsonSerializerOptions);
+        var collectionHostedDeserialized = JsonSerializer.Deserialize<List<object>>(collectionSerialized, hosted.JsonSerializerOptions);
+
+        output.WriteLine($"\nCollection - Client deserialized count: {collectionClientDeserialized?.Count}");
+        output.WriteLine($"Collection - Hosted deserialized count: {collectionHostedDeserialized?.Count}");
+
+        if (collectionClientDeserialized != null)
+        {
+            for (int i = 0; i < collectionClientDeserialized.Count; i++)
+            {
+                output.WriteLine($"Collection - Client item {i} type: {collectionClientDeserialized[i].GetType().FullName}");
+            }
+        }
+
+        if (collectionHostedDeserialized != null)
+        {
+            for (int i = 0; i < collectionHostedDeserialized.Count; i++)
+            {
+                output.WriteLine($"Collection - Hosted item {i} type: {collectionHostedDeserialized[i].GetType().FullName}");
+            }
+        }
+    }
+
+    [HubFact]
     public void TestDataGridSerialization()
     {
         var host = GetHost();
@@ -567,9 +695,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     Property = nameof(DataRecord.DisplayName).ToCamelCase(),
                     Title = nameof(DataRecord.DisplayName).Wordify()
                 }
-            );
-
-        output.WriteLine($"Original grid columns count: {originalGrid.Columns.Count}");
+            ); output.WriteLine($"Original grid columns count: {originalGrid.Columns.Count}");
         foreach (var column in originalGrid.Columns)
         {
             output.WriteLine($"Original column type: {column.GetType().FullName}");
@@ -583,11 +709,56 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var serialized = JsonSerializer.Serialize(originalGrid, host.JsonSerializerOptions);
         output.WriteLine($"Serialized JSON: {serialized}");
 
-
         var client = GetClient();
         var hosted = client.GetHostedHub(new SynchronizationAddress());
-        // Deserialize with client options
-        var deserialized = JsonSerializer.Deserialize<DataGridControl>(serialized, hosted.JsonSerializerOptions);
+
+        output.WriteLine($"Client JsonSerializerOptions converters: {client.JsonSerializerOptions.Converters.Count}");
+        foreach (var converter in client.JsonSerializerOptions.Converters)
+        {
+            output.WriteLine($"  Client converter: {converter.GetType().FullName}");
+        }
+
+        output.WriteLine($"Hosted JsonSerializerOptions converters: {hosted.JsonSerializerOptions.Converters.Count}");
+        foreach (var converter in hosted.JsonSerializerOptions.Converters)
+        {
+            output.WriteLine($"  Hosted converter: {converter.GetType().FullName}");
+        }
+
+        // Deserialize with hosted hub options - this should work the same as client options
+        output.WriteLine($"\nTesting deserialization...");
+        output.WriteLine($"Serialized data: {serialized.Length} characters");
+        output.WriteLine($"First 200 chars: {serialized.Substring(0, Math.Min(200, serialized.Length))}");
+
+        DataGridControl? deserialized = null;
+        try
+        {
+            deserialized = JsonSerializer.Deserialize<DataGridControl>(serialized, hosted.JsonSerializerOptions);
+            output.WriteLine($"Deserialization successful");
+
+            // Debug specific column types
+            for (int i = 0; i < deserialized!.Columns.Count; i++)
+            {
+                var column = deserialized.Columns[i];
+                output.WriteLine($"Column {i}: Type = {column.GetType().FullName}");
+                if (column is PropertyColumnControl pc)
+                {
+                    output.WriteLine($"  PropertyColumnControl - Property: {pc.Property}, Title: {pc.Title}");
+                }
+                else if (column is JsonElement je)
+                {
+                    output.WriteLine($"  JsonElement: {je.GetRawText()}");
+                }
+                else
+                {
+                    output.WriteLine($"  Other type: {column}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"Deserialization failed: {ex.Message}");
+            throw;
+        }
 
         output.WriteLine($"Deserialized grid columns count: {deserialized!.Columns.Count}");
         foreach (var column in deserialized.Columns)
