@@ -57,7 +57,8 @@ public static class SerializationExtensions
 
         foreach (var standardConverter in standardConverters)
             options.Converters.Add(standardConverter);
-
+        options.TypeInfoResolver = new PolymorphicTypeInfoResolver(typeRegistry);
+        
         return options;
     }
 

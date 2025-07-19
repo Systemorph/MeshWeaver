@@ -85,7 +85,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (name.Contains('[') && name.EndsWith(']'))
         {
             var typeName = name.Substring(0, name.IndexOf('['));
-            var baseType = typeByName.GetValueOrDefault(typeName)?.Type;
+            var baseType = GetTypeDefinition(typeName)?.Type;
 
             if (baseType == null)
                 return false;

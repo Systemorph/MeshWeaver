@@ -96,12 +96,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     /// <summary>
     /// The actual synchronization hub
     /// </summary>
-    public IMessageHub Hub { get;  }
+    public IMessageHub Hub { get; }
 
     /// <summary>
     /// The host of the synchronization stream.
     /// </summary>
-    public IMessageHub Host { get;  }
+    public IMessageHub Host { get; }
 
 
 
@@ -124,7 +124,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
-        Hub.Post(new UpdateStreamRequest((stream,_) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
+        Hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
 
     public void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update,
         Func<Exception, Task> exceptionCallback) =>
@@ -179,14 +179,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (Host.IsDisposing)
             throw new ObjectDisposedException($"Hub {Host.Address} is disposing. Cannot create synchronization stream.");
-        this.Host = Host; 
-        
+        this.Host = Host;
+
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
 
         this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId),
             ConfigureSynchronizationHub);
-            
+
         startupDeferrable = Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
 
         this.ReduceManager = ReduceManager;
@@ -200,7 +200,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
-        return ConfigureDefaults(config)
+        return config
+            .WithTypes(
+                typeof(EntityStore),
+                typeof(JsonElement),
+                typeof(SynchronizationAddress)
+            )
             .WithHandler<DataChangedEvent>((hub, delivery) =>
                 {
                     UpdateStream(delivery, hub);
@@ -229,7 +234,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 {
                     SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct));
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
                     await exceptionCallback.Invoke(e);
                 }
@@ -280,20 +285,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Set(currentJson);
     }
 
-    private Task SyncFailed(IMessageDelivery delivery,  Exception exception)
+    private Task SyncFailed(IMessageDelivery delivery, Exception exception)
     {
         Host.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
         return Task.CompletedTask;
     }
 
 
-
-    private static MessageHubConfiguration ConfigureDefaults(MessageHubConfiguration config)
-        => config.WithTypes(
-                typeof(EntityStore),
-                typeof(JsonElement),
-                typeof(SynchronizationAddress)
-            );
 
     public string StreamId { get; } = Guid.NewGuid().AsString();
     public string ClientId => Configuration.ClientId;
@@ -336,7 +334,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         });
     }
 
-    public record UpdateStreamRequest([property:JsonIgnore]Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
+    public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
 
 }
 
