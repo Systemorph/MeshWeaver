@@ -83,7 +83,8 @@ public static class DataExtensions
                     typeof(SchemaResponse),
                     typeof(GetDomainTypesRequest),
                     typeof(DomainTypesResponse),
-                    typeof(TypeDescription)
+                    typeof(TypeDescription),
+                    typeof(PatchDataChangeRequest)
                 )
                 //.WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
                 .RegisterDataEvents()
