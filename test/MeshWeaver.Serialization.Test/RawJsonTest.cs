@@ -42,7 +42,7 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
                 }
             );
         var subscribeRequest = new SubscribeRequest("123", new CollectionReference("TestCollection"));
-        var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions);
+        var delivery = new MessageDelivery<SubscribeRequest>(subscribeRequest, postOptions, client.JsonSerializerOptions);
 
         // act
         var serialized = JsonSerializer.Serialize(delivery, client.JsonSerializerOptions);
@@ -85,8 +85,8 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         var entityStore = new EntityStore();
         var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
         var dataChanged = new DataChangedEvent("123", 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
-        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions);
-        var packedDelivery = delivery.Package(Router.JsonSerializerOptions);
+        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions, Router.JsonSerializerOptions);
+        var packedDelivery = delivery.Package();
 
         // act
         var serialized = JsonSerializer.Serialize(packedDelivery, Router.JsonSerializerOptions);
