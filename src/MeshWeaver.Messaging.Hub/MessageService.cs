@@ -181,27 +181,31 @@ public class MessageService : IMessageService
         if (ParentHub is MessageHub parentMessageHub)
             await parentMessageHub.HasStarted;
 
+
+        if (delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
+
+
+        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address) ||
+                         (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address));
+        if (isOnTarget)
+        {
+            delivery = UnpackIfNecessary(delivery);
+            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+        }
+
+
         logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
         delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
         logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
 
-        if (delivery.State != MessageDeliveryState.Submitted)
-            return delivery;
-
-
-        if (delivery.Target is null || delivery.Target.Equals(hub.Address))
+        if (isOnTarget)
         {
             logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
-            return await deliveryPipeline.Invoke(delivery,cancellationToken);
-        }
-
-        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
-        {
-            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HOSTED_ADDRESS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | HostedAddress: {HostedAddress}",
-                delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
             return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
@@ -214,10 +218,7 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
             delivery.Message.GetType().Name, Address, delivery.Id);
         
-        delivery = UnpackIfNecessary(delivery);        // Reset hang detection timer on execution activity
 
-        logger.LogTrace("MESSAGE_FLOW: POSTING_TO_EXECUTION_BUFFER | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
-            delivery.Message.GetType().Name, Address, delivery.Id);
         
         executionBuffer.Post(async _ =>
         {
