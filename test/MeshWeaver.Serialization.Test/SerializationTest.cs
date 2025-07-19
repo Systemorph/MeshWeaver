@@ -1,15 +1,13 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -28,7 +26,7 @@ public class SerializationTest : HubTestBase
                             (routedAddress, d) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                                var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
+                                var packagedDelivery = d.Package();
                                 hostedHub.DeliverMessage(packagedDelivery);
                                 return d.Forwarded();
                             }
@@ -37,7 +35,7 @@ public class SerializationTest : HubTestBase
                             (routedAddress, d) =>
                             {
                                 var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                                var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
+                                var packagedDelivery = d.Package();
                                 hostedHub.DeliverMessage(packagedDelivery);
                                 return d.Forwarded();
                             }
@@ -101,7 +99,7 @@ public class SerializationTest : HubTestBase
         var hostedConverterTypes = hosted.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
 
         var missingInHosted = clientConverterTypes.Except(hostedConverterTypes).ToList();
-        
+
         Output.WriteLine($"\nClient converters: {clientConverterTypes.Count}");
         Output.WriteLine($"Hosted converters: {hostedConverterTypes.Count}");
         Output.WriteLine($"Missing in hosted: {missingInHosted.Count}");
@@ -191,7 +189,7 @@ public class SerializationTest : HubTestBase
         // Both should deserialize collections the same way
         clientDeserialized.Should().NotBeNull();
         hostedDeserialized.Should().NotBeNull();
-        clientDeserialized!.Count.Should().Be(hostedDeserialized!.Count);
+        clientDeserialized.Count.Should().Be(hostedDeserialized.Count);
 
         // Each item should be properly deserialized as PolymorphicTestMessage
         clientDeserialized.Should().AllBeOfType<PolymorphicTestMessage>();
@@ -239,7 +237,7 @@ public class SerializationTest : HubTestBase
             var genericType = typeof(GenericTestClass<string>);
             Output.WriteLine($"Generic type full name: {genericType.FullName}");
             Output.WriteLine($"Generic type AssemblyQualifiedName: {genericType.AssemblyQualifiedName}");
-            
+
             // Check if type is registered
             var hasTypeName = typeRegistry.TryGetCollectionName(genericType, out var registeredName);
             Output.WriteLine($"Type registered in registry: {hasTypeName}");
@@ -275,7 +273,7 @@ public class SerializationTest : HubTestBase
             {
                 var item = hostedCollectionDeserialized[i];
                 Output.WriteLine($"Hosted item {i} type: {item.GetType().FullName}");
-                if (item is System.Text.Json.JsonElement je)
+                if (item is JsonElement je)
                 {
                     Output.WriteLine($"  JsonElement content: {je.GetRawText()}");
                 }
@@ -284,7 +282,7 @@ public class SerializationTest : HubTestBase
 
         // This test should pass if the polymorphic converter properly handles generic types
         hostedCollectionDeserialized.Should().NotBeNull();
-        hostedCollectionDeserialized!.Should().AllBeOfType<GenericTestClass<string>>("generic types should be properly deserialized, not as JsonElement");
+        hostedCollectionDeserialized.Should().AllBeOfType<GenericTestClass<string>>("generic types should be properly deserialized, not as JsonElement");
     }
 }
 

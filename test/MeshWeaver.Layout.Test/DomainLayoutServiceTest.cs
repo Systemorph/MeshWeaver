@@ -27,7 +27,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<ClientAddress>((_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -44,7 +44,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureClient(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<HostAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<HostAddress>((_, d) => d.Package())
             )
             .AddLayoutClient();
     }

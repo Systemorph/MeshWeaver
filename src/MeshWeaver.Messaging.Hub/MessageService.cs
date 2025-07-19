@@ -338,7 +338,7 @@ public class MessageService : IMessageService
                 .MakeGenericMethod(message.GetType())
                 .Invoke(this, [message, opt])!;
 
-        var delivery = new MessageDelivery<TMessage>(message, opt);
+        var delivery = new MessageDelivery<TMessage>(message, opt, hub.JsonSerializerOptions);
 
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
