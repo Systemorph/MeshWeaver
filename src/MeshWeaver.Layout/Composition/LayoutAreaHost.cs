@@ -78,9 +78,16 @@ public record LayoutAreaHost : IDisposable
     private IMessageDelivery OnClick(IMessageDelivery<ClickedEvent> request)
     {
         if (GetControl(request.Message.Area) is UiControl { ClickAction: not null } control)
-            InvokeAsync(() => control.ClickAction.Invoke(
-                new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
-            ), ex => FailRequest(ex, request));
+            try
+            {
+                control.ClickAction.Invoke(
+                    new(request.Message.Area, request.Message.Payload ?? new object(), Hub, this)
+                );
+            }
+            catch (Exception ex)
+            {
+                FailRequest(ex, request);
+            }
         return request.Processed();
     }
 

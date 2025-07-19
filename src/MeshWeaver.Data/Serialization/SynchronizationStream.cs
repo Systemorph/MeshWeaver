@@ -182,7 +182,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Host = Host; 
         
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-        this.Hub = Host.GetHostedHub(new SynchronizationAddress($"{StreamId}"),
+
+
+        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId),
             ConfigureSynchronizationHub);
             
         startupDeferrable = Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
