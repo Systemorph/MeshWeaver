@@ -11,6 +11,7 @@ internal class HierarchicalRouting
     private readonly RouteConfiguration configuration;
     private readonly IMessageHub hub;
 
+
     internal HierarchicalRouting(IMessageHub hub, IMessageHub? parentHub)
     {
         this.parentHub = parentHub;
@@ -57,12 +58,18 @@ internal class HierarchicalRouting
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
 
+        if (delivery.Target is null || delivery.Target.Equals(hub.Address) ||
+            (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address)))
+            return delivery;
 
         return RouteAlongHostingHierarchy(delivery);
     }
 
     private IMessageDelivery RouteAlongHostingHierarchy(IMessageDelivery delivery)
     {
+        if (delivery.Target is null)
+            return delivery;
+
         // Check if hub is disposing and reject hosted hub routing to prevent deadlocks
         if (hub.IsDisposing)
         {

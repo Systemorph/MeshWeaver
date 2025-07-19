@@ -169,6 +169,7 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
+
         // Double-check disposal state to prevent processing during shutdown
         if (isDisposing && delivery.Message is not ShutdownRequest)
         {
@@ -176,6 +177,18 @@ public class MessageService : IMessageService
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery.Failed("Hub disposing - message rejected");
         }
+        if (ParentHub is MessageHub parentMessageHub)
+            await parentMessageHub.HasStarted;
+
+        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
+
+        if (delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
+
 
         if (delivery.Target is null || delivery.Target.Equals(hub.Address))
         {
@@ -190,39 +203,8 @@ public class MessageService : IMessageService
                 delivery.Message.GetType().Name, Address, delivery.Id, ha.Address);
             return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
-        // Before routing to hierarchical routing (which may route to parent hub), 
-        // ensure parent hub initialization is complete to avoid race conditions
-        if (ParentHub is MessageHub parentMessageHub)
-        {
-            try
-            {
-                // Wait for parent hub to complete startup before routing, but only if it has been initialized
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
 
-                    await parentMessageHub.HasStarted.WaitAsync(timeoutCts.Token);
-                    logger.LogDebug("Parent hub startup completed before routing message {Delivery} in {Address}", delivery, Address);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                logger.LogWarning("Parent hub startup timeout while routing message {Delivery} in {Address}", delivery, Address);
-                // Continue anyway to avoid losing the message, but log the issue
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error waiting for parent hub startup while routing message {Delivery} in {Address}", delivery, Address);
-                // Continue anyway to avoid losing the message
-            }
-        }
-
-        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
-        var result = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
-            delivery.Message.GetType().Name, Address, delivery.Id, result.State);
-        return result;
+        return delivery;
     }
 
     private CancellationTokenSource cancellationTokenSource = new();
