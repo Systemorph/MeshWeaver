@@ -13,9 +13,9 @@ public class DeferralContainer : IAsyncDisposable
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter)
     {
-        var deferralItem = deferralChain.First;
+        var deferralItem = deferralChain.First!;
 
-        var deliveryLink = new DeferralItem(deferredFilter, deferralItem!.Value.DeliverMessage, deferralItem.Value.Failure);
+        var deliveryLink = new DeferralItem(deferredFilter, deferralItem.Value.DeliverMessage, deferralItem.Value.Failure);
         deferralChain.AddFirst(deliveryLink);
         return new AnonymousDisposable(deliveryLink.Release);
     }

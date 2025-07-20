@@ -210,7 +210,7 @@ public record LayoutAreaHost : IDisposable
             .DistinctUntilChanged();
     }
 
-    private static T? Convert<T>(ChangeItem<object?> ci) where T : class
+    private static T? Convert<T>(ChangeItem<object> ci) where T : class
     {
         var result = ci.Value;
         if (result is null)
