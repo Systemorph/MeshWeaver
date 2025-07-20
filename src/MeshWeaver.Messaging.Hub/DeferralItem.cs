@@ -23,7 +23,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
     )
         => failure.Invoke(delivery);
 
-    public IMessageDelivery? DeliverMessage(
+    public IMessageDelivery DeliverMessage(
         IMessageDelivery delivery
     )
     {

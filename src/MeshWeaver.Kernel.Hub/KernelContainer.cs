@@ -259,7 +259,7 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         return @event.Command is SubmitCode submit3 && submit3.Parameters.ContainsKey(IframeUrl);
     }
 
-    private IMessageHub Hub { get; set; } 
+    private IMessageHub Hub { get; set; } = null!;
     public CompositeKernel Kernel { get; set; } = null!;
 
     protected CompositeKernel CreateKernel()

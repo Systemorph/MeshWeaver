@@ -155,7 +155,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .WithView(Template.Bind(toolbar, tb => Controls.Text(tb.Year), nameof(toolbar)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
-                    .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
+                    .Select(tb => Controls.Html($"Report for year {tb?.Year}")), "Content");
     }
 
     [HubFact]
@@ -370,7 +370,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls.Stack
             .WithView(Template.Bind(data, x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Value)), nameof(DataBoundCheckboxes)), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
-                .Select(d => Controls.CheckBox(d.Data.All(y => y.Value))
+                .Select(d => Controls.CheckBox(d!.Data.All(y => y.Value))
                 ), Results);
     }
 
