@@ -6,7 +6,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 

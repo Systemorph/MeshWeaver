@@ -8,7 +8,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Json.Assertions;
 using MeshWeaver.Messaging;
 using MeshWeaver.Pivot.Builder;
-using Xunit.Abstractions;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;

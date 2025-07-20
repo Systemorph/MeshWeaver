@@ -13,7 +13,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test;
 

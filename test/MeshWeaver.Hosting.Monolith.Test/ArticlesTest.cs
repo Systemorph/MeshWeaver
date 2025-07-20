@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -16,7 +17,6 @@ using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -104,7 +104,11 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
 
         var articles = await stack.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()!).FirstAsync())
-            .ToArrayAsync();
+            .ToArrayAsync(CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                ).Token
+            );
 
         articles.Should().HaveCount(2);
         articles.First().Should().BeOfType<ArticleCatalogItemControl>()

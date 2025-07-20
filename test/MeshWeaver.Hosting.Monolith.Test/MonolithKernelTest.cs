@@ -16,7 +16,6 @@ using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -82,7 +81,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         kernelEvents.OfType<CommandSucceeded>().Should().NotBeEmpty();
 
-        await Task.Delay(1000);
+        await Task.Delay(1000, TestContext.Current.CancellationToken);
         kernelEventsStream.OnCompleted();
         var kernelEvents2 = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)

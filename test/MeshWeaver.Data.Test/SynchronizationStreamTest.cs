@@ -6,8 +6,9 @@ using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 using System;
+using System.Threading;
+using FluentAssertions.Extensions;
 
 namespace MeshWeaver.Data.Test;
 
@@ -70,7 +71,10 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             }, _ => Task.CompletedTask);
             return true;
         }).ToArray();
-        await Task.Delay(10);
+        await Task.Delay(10, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)

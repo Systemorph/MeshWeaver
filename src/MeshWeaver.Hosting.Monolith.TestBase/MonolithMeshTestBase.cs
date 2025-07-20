@@ -5,7 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.TestBase;
 
@@ -40,7 +40,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h)); 
     
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         try
         {

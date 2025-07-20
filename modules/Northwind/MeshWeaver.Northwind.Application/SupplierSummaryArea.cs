@@ -140,7 +140,7 @@ public static class SupplierSummaryArea
     ) => GetDataCube(area)
         .CombineLatest(
             area.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
-            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter, dataCube)) // todo apply DataCubeFilter from stream
+            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter!, dataCube)) // todo apply DataCubeFilter from stream
         );
 
     private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)

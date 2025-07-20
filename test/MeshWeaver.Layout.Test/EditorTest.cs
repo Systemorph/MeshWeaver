@@ -17,7 +17,6 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -81,14 +80,18 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => 
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
-            .ToArrayAsync();
+            .ToArrayAsync(
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                    ).Token
+            );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
             .AllBeOfType<NumberFieldControl>()
             ;
 
-        await Task.Delay(1000);
     }
     [Fact]
     public async Task TestEditorWithResult()
@@ -122,7 +125,12 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
-            .ToArrayAsync();
+            .ToArrayAsync(
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                ).Token
+                );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -218,14 +226,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         where TControl : ListControlBase<TControl>
     {
         Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control type: {typeof(TControl).Name}");
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control.Data type: {control.Data?.GetType().Name}");
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control.Data type: {control.Data.GetType().Name}");
         Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Expected data: {benchmark.Data}");
         
         control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
         Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Data validation passed");
 
         var options = control.Options as IReadOnlyCollection<Option>;
-        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options type: {control.Options?.GetType().Name}");
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options type: {control.Options.GetType().Name}");
 
         if (control.Options is JsonPointerReference pointer)
         {
@@ -319,7 +327,12 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                     Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
                     return areaControl;
                 })
-                .ToArrayAsync();
+                .ToArrayAsync(
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        TestContext.Current.CancellationToken,
+                        new CancellationTokenSource(5.Seconds()).Token
+                    ).Token
+                    );
             Output.WriteLine($"🔧 DEBUG: Got {controls.Length} controls");
 
             controls.Should().HaveCount(ListPropertyBenchmarks.Length);

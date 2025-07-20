@@ -5,7 +5,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using Xunit;
 using MeshWeaver.Fixture;
-using Xunit.Abstractions;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Reporting.Test

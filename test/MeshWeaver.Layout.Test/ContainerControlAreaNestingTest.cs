@@ -4,7 +4,6 @@ using FluentAssertions;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 

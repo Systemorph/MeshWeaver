@@ -8,7 +8,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 

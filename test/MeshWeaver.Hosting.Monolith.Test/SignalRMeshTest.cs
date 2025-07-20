@@ -8,7 +8,6 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 

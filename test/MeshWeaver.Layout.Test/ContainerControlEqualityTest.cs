@@ -2,7 +2,6 @@ using FluentAssertions;
 using MeshWeaver.Layout;
 using System.Linq;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 

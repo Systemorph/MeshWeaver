@@ -9,8 +9,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Configuration" />
     <PackageReference Include="Serilog.AspNetCore" />
-    <PackageReference Include="xunit.abstractions" />
-    <PackageReference Include="xunit.extensibility.core" />
+    <PackageReference Include="xunit.v3.extensibility.core" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Activities\MeshWeaver.Activities.csproj" />

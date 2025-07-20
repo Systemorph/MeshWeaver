@@ -19,7 +19,6 @@ using MeshWeaver.TestDomain.Cubes;
 using MeshWeaver.TestDomain.SimpleData;
 using MeshWeaver.Utils;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Pivot.Test;
 

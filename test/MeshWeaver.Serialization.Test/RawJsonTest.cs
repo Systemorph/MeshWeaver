@@ -7,7 +7,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using Xunit;
-using Xunit.Abstractions;
 using System.Linq;
 
 namespace MeshWeaver.Serialization.Test;

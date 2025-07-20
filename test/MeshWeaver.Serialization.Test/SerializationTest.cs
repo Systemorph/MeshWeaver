@@ -10,7 +10,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;
 
@@ -80,7 +79,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             new Boomerang(new MyEvent("Hello")),
             o => o.WithTarget(new HostAddress())
-            //, new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
+            , new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
         );
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Threading;
+using System.Reactive.Linq;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
@@ -6,7 +7,6 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
 using MeshWeaver.Todo.SampleData;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Todo.Test;
 
@@ -109,7 +109,10 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("🔍 Step 6: Creating new subscription to check for data changes...");
 
         // Wait a moment for the DataChangeRequest to be processed
-        await Task.Delay(1000);
+        await Task.Delay(1000, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
 
         try
         {
