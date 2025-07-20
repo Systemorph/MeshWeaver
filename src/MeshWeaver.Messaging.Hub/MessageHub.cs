@@ -59,7 +59,7 @@ public sealed class MessageHub : IMessageHub
             serviceProvider.GetRequiredService<ILogger<MessageService>>(), this, parentHub);
 
         foreach (var disposeAction in configuration.DisposeActions)
-            disposeActions.Add(disposeAction);
+            asyncDisposeActions.Add(disposeAction);
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
@@ -586,16 +586,15 @@ public sealed class MessageHub : IMessageHub
         return messageHub;
     }
 
-    public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction) =>
-        RegisterForDisposal((hub, _) =>
-        {
-            disposeAction.Invoke(hub);
-            return Task.CompletedTask;
-        });
+    public IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction)
+    {
+        disposeActions.Add(disposeAction);
+        return this;
+    }
 
     public IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction)
     {
-        disposeActions.Add(disposeAction);
+        asyncDisposeActions.Add(disposeAction);
         return this;
     }
 
@@ -624,7 +623,10 @@ public sealed class MessageHub : IMessageHub
             
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
-            
+
+            while (disposeActions.TryTake(out var disposeAction))
+                disposeAction.Invoke(this);
+
             // Cancel all pending callbacks to prevent them from waiting indefinitely
             var pendingCallbacks = pendingCallbackCancellations.ToArray();
             logger.LogDebug("Cancelling {callbackCount} pending callbacks during disposal for hub {address}", 
@@ -672,7 +674,7 @@ public sealed class MessageHub : IMessageHub
         // Process dispose actions first
         var disposeActionsStopwatch = Stopwatch.StartNew();
         var disposeActionCount = 0;
-        while (disposeActions.TryTake(out var configurationDisposeAction))
+        while (asyncDisposeActions.TryTake(out var configurationDisposeAction))
         {
             var actionStopwatch = Stopwatch.StartNew();
             disposeActionCount++;
@@ -857,7 +859,8 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> disposeActions = new();
+    private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> asyncDisposeActions = new();
+    private readonly ConcurrentBag<Action<IMessageHub>> disposeActions = new();
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         messageService.Defer(deferredFilter);
