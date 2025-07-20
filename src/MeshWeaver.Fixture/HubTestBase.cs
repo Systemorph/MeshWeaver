@@ -113,6 +113,7 @@ public class HubTestBase : TestBase
         finally
         {
             await base.DisposeAsync();
+            Router = null!;
         }
     }
 }

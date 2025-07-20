@@ -40,6 +40,7 @@ public class TestBase<TFixture> : IDisposable
     public virtual void Dispose()
     {
         Fixture.SetOutputHelper(null);
+        Fixture.Dispose();
     }
 }
 

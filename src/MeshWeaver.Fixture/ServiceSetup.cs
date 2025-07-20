@@ -56,6 +56,7 @@ public class ServiceSetup
             ServiceProvider.GetRequiredService<TestOutputHelperAccessor>().OutputHelper = output;
     }
 
+    public virtual void Dispose() => ServiceProvider = null!;
     protected void Initialize(ITestOutputHelper output)
     {
         Initialize();
