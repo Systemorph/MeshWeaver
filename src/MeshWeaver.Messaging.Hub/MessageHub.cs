@@ -607,7 +607,9 @@ public sealed class MessageHub : IMessageHub
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
     private readonly Stopwatch disposalStopwatch = new();
 
-    private readonly object locker = new(); public void Dispose()
+    private readonly Lock locker = new(); 
+    
+    public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();
         lock (locker)

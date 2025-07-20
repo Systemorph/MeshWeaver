@@ -178,16 +178,16 @@ public class MessageService : IMessageService
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery.Failed("Hub disposing - message rejected");
         }
-        if (ParentHub is MessageHub parentMessageHub)
-            await parentMessageHub.Started;
-
-
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
+        if (ParentHub is MessageHub parentMessageHub)
+        {
+            await parentMessageHub.Started;
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub?.Address))
+                delivery = delivery.WithTarget(ha.Address);
+        }
 
-
-        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address) ||
-                         (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address));
+        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
         if (isOnTarget)
         {
             delivery = UnpackIfNecessary(delivery);

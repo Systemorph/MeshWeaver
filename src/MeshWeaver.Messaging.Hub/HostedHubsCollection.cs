@@ -57,10 +57,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         {
             logger.LogInformation("Creating new hosted hub for address {Address}", address);
             var hub = serviceProvider.CreateMessageHub(address, config);
-            if (hub != null)
-            {
-                logger.LogInformation("Successfully created hosted hub for address {Address}", address);
-            }
+            logger.LogInformation("Successfully created hosted hub for address {Address}", address);
             return hub;
         }
         catch (Exception ex)
@@ -90,7 +87,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         logger.LogInformation("Starting disposal of {count} hosted hubs: [{hubAddresses}]", 
             hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
         
-        var disposalTasks = hubs.Select(hub => DisposeHub(hub)).ToArray();
+        var disposalTasks = hubs.Select(DisposeHub).ToArray();
         var hubAddresses = hubs.Select(h => h.Address.ToString()).ToArray();
 
         try
