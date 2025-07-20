@@ -1250,7 +1250,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         {
             // act
             var response = await client.AwaitResponse(
-                new GetSchemaRequest(typeName!),
+                new GetSchemaRequest(typeName),
                 o => o.WithTarget(new ClientAddress()),
                 new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
             );

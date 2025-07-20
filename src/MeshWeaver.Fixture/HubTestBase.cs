@@ -82,18 +82,15 @@ public class HubTestBase : TestBase
 
             // Log which hubs exist before disposal
             Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, Router.GetType().GetProperty("HostedHubs")?.GetValue(Router)?.ToString() ?? "unknown");
-            
-            if (Router.Disposal != null)
+
+            if (Router.Disposal is not null)
+                await Router.Disposal.WaitAsync(timeout.Token);
+
+            if (Router.Disposal is not null)
             {
                 Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
                 await Router.Disposal.WaitAsync(timeout.Token);
                 Logger.LogInformation("[{DisposalId}] Router.Disposal completed", disposalId);
-            }
-            else
-            {
-                Logger.LogInformation("[{DisposalId}] No active disposal, calling Router.Dispose()", disposalId);
-                Router.Dispose();
-                Logger.LogInformation("[{DisposalId}] Router.Dispose() completed", disposalId);
             }
         }
         catch (OperationCanceledException)

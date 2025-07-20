@@ -132,7 +132,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
     {
-        InvokeAsync(async ct =>
+        Hub.InvokeAsync(async ct =>
         {
             var initialValue = await init.Invoke(ct);
             SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
@@ -165,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
+        Hub.InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
     }
 
     public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
@@ -289,10 +289,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Set(currentJson);
     }
 
-    private Task SyncFailed(IMessageDelivery delivery, Exception exception)
+    private void SyncFailed(IMessageDelivery delivery, Exception exception)
     {
         Host.Post(new DeliveryFailure(delivery, exception.Message), o => o.ResponseFor(delivery));
-        return Task.CompletedTask;
     }
 
 
@@ -302,12 +301,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
 
     internal StreamConfiguration<TStream> Configuration { get; }
-
-    public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback)
-        => Hub.InvokeAsync(action, exceptionCallback);
-
-    public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
-        => Hub.InvokeAsync(action, exceptionCallback);
 
 
     public void Dispose()
