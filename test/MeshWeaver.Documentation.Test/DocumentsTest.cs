@@ -5,7 +5,7 @@ using FluentAssertions;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
 

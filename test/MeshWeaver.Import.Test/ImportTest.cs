@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Equivalency;
@@ -15,7 +16,6 @@ using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Import.Test;
 
@@ -69,7 +69,11 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         Logger.LogInformation("DistributedImportTest {TestId}: Sending import request with {Timeout}s timeout", testId, importRequest.Timeout?.TotalSeconds);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024))
+            o => o.WithTarget(new ImportAddress(2024)),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(30.Seconds()).Token
+            ).Token
         );
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
 
@@ -130,7 +134,11 @@ Id,Year,LoB,BusinessUnit,Value
             .WithTimeout(10.Seconds()); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024))
+            o => o.WithTarget(new ImportAddress(2024)),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = GetWorkspace(
@@ -164,10 +172,17 @@ SystemName,DisplayName
             .WithTimeout(15.Seconds()); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new ImportAddress(2024))
+            o => o.WithTarget(new ImportAddress(2024)),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(15.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         var workspace = GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );

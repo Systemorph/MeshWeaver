@@ -16,7 +16,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 

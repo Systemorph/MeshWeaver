@@ -11,7 +11,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Import.Test;
 
@@ -65,8 +64,11 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = format };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return client;
@@ -83,7 +85,10 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         _ = await DoImport(content);
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         var ret2 = await workspace.GetObservable<MyRecord2>()
             .Timeout(10.Seconds())
             .FirstAsync();

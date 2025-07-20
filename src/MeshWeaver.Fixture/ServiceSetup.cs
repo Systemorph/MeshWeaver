@@ -2,8 +2,8 @@
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Xunit.Abstractions;
 using Serilog;
+using Xunit;
 
 namespace MeshWeaver.Fixture;
 

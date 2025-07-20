@@ -13,7 +13,6 @@ using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.Cubes;
 using VerifyXunit;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Reporting.Test
 {

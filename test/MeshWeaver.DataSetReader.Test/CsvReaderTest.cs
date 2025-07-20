@@ -7,7 +7,6 @@ using FluentAssertions;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataStructures;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.DataSetReader.Test
 {

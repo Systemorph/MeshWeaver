@@ -19,7 +19,6 @@ using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Northwind.Model;
 using MeshWeaver.Reporting.Models;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Northwind.Test;
 

@@ -4,14 +4,14 @@ namespace MeshWeaver.Fixture;
 
 public class BaseFixture : ServiceSetup, IAsyncLifetime
 {
-    public virtual Task InitializeAsync()
+    public virtual ValueTask InitializeAsync()
     {
         Initialize();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public virtual Task DisposeAsync()
+    public virtual ValueTask DisposeAsync()
     {
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

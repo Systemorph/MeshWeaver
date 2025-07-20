@@ -9,7 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
 

@@ -6,7 +6,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Import.Test.Domain;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Import.Test;
 

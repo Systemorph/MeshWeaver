@@ -2,7 +2,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Fixture;
 

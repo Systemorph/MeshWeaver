@@ -4,7 +4,6 @@ using FluentAssertions;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.DataStructures;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.DataSetReader.Test
 {

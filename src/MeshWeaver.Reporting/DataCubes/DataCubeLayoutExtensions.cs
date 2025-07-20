@@ -124,7 +124,7 @@ public static class DataCubeLayoutExtensions
     private static IObservable<ItemTemplateControl> ToDimensionValues(LayoutAreaHost area, string filterId)
     {
         return area.GetDataStream<DataCubeFilter>(filterId)
-            .Select(f => f.SelectedDimension)
+            .Select(f => f!.SelectedDimension)
             .DistinctUntilChanged()
         .Select(selectedDimension => 
                 BindEnumerable<FilterItem, CheckBoxControl>(

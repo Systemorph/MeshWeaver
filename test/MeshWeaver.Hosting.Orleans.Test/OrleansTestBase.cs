@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
 using Orleans.TestingHost;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -17,7 +17,7 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 {
     protected TestCluster Cluster { get; private set; } = null!;
 
-    public override async Task InitializeAsync()
+    public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
@@ -49,7 +49,7 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         configuration;
 
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (Cluster is not null)
             await Cluster.DisposeAsync();

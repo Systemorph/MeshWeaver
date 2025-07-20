@@ -68,6 +68,6 @@ public static class ProductOverviewArea
             .CombineLatest(
                 layoutArea.GetDataStream<ProductOverviewToolbar>(nameof(ProductOverviewToolbar)),
                 (data, tb) => (data, tb))
-            .Select(x => x.data.Where(d => d.Category == x.tb.Category || x.tb.Category == 0))
+            .Select(x => x.data.Where(d => d.Category == x.tb!.Category || x.tb.Category == 0))
     ;
 }

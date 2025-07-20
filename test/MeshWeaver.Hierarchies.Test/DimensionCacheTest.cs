@@ -7,7 +7,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using MeshWeaver.TestDomain.SimpleData;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hierarchies.Test;
 

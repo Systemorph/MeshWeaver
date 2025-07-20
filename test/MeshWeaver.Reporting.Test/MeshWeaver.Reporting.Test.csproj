@@ -3,7 +3,7 @@
     <ProjectGuid>{ae7800f5-e0da-4b6f-a8a2-e8eb46852ef8}</ProjectGuid>
   </PropertyGroup>
 	<ItemGroup>
-		<PackageReference Include="Verify.Xunit" />
+		<PackageReference Include="Verify.XunitV3" />
 	</ItemGroup>
 
   <ItemGroup>

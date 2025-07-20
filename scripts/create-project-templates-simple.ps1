@@ -167,8 +167,8 @@ $testCsproj = @"
   <ItemGroup>
     <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" Version="$Version" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="xunit.v3" Version="3.0.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
   </ItemGroup>
 
 </Project>

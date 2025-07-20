@@ -3,7 +3,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Fixture;
 
@@ -69,7 +69,7 @@ public class HubTestBase : TestBase
     {
         return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
     }
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         var disposalId = Guid.NewGuid().ToString("N")[..8];
         Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);

@@ -7,7 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Data.Test;
 

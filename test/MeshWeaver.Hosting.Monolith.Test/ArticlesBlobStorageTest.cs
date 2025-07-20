@@ -8,7 +8,6 @@ using MeshWeaver.Hosting.AzureBlob;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -17,7 +16,7 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
 
     private readonly IContainer azuriteContainer = ContainerExtensions.Azurite();
 
-    public override async Task InitializeAsync()
+    public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
 
@@ -50,7 +49,7 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         }
     }
 
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         // Cleanup containers
         if (azuriteContainer is not null)

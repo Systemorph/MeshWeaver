@@ -10,7 +10,6 @@ using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Import.Test;
 
@@ -61,8 +60,11 @@ B4,B,4
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
-                new CancellationTokenSource(3.Seconds()).Token)
-        ;
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(3.Seconds()).Token
+            ).Token
+        );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
@@ -85,7 +87,10 @@ SystemName,DisplayName
         importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
-            new CancellationTokenSource(3.Seconds()).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(3.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -122,7 +127,11 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
@@ -145,11 +154,18 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
@@ -168,11 +184,18 @@ SystemName2,DisplayName2
         importRequest = new ImportRequest(content3);
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 
         ret.Should().HaveCount(2);
@@ -194,7 +217,11 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
@@ -213,11 +240,18 @@ SystemName,DisplayName,Number
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
 
         ret = await workspace.GetObservable<MyRecord>().FirstAsync();
 

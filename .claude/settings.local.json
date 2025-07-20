@@ -16,7 +16,12 @@
       "Bash(diff:*)",
       "Bash(mv:*)",
       "Bash(timeout:*)",
-      "Bash(true)"
+      "Bash(true)",
+      "WebFetch(domain:xunit.net)",
+      "Bash(dotnet add:*)",
+      "Bash(dotnet search:*)",
+      "Bash(dotnet list package:*)",
+      "Bash(dotnet remove:*)"
     ],
     "deny": []
   }

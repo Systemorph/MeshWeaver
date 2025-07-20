@@ -5,7 +5,6 @@ using Markdig.Syntax;
 using MeshWeaver.Fixture;
 using MeshWeaver.Markdown;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test;
 

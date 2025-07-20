@@ -4,7 +4,6 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 

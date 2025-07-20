@@ -15,7 +15,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
@@ -116,7 +115,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(3.Seconds()).Token
+            ).Token
         );
 
         // asserts
@@ -144,7 +146,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             .ToArray();
 
         data.ToArray().Should().BeEquivalentTo(expectedItems);
-        await Task.Delay(200);
+        await Task.Delay(200, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         storage.Values.Cast<MyData>().OrderBy(x => x.Id).Should().BeEquivalentTo(expectedItems);
     }
 
@@ -169,8 +174,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(new ClientAddress())
-            //, new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            o => o.WithTarget(new ClientAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
 
@@ -223,7 +231,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await client.AwaitResponse(
             DataChangeRequest.Update([myInstance]),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         var hostWorkspace = GetHost().GetWorkspace();
@@ -231,10 +242,13 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var instance = await hostWorkspace
             .GetObservable<MyData>("1")
             .Timeout(10.Seconds())
-            .FirstAsync(i => i?.Text == TextChange)
-            ;
+            .FirstAsync(i => i?.Text == TextChange);
         instance.Should().NotBeNull();
-        await Task.Delay(100);
+        await Task.Delay(100,
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(5.Seconds()).Token
+            ).Token);
         storage.Values.Should().Contain(i => ((MyData)i).Text == TextChange);
     }
 
@@ -277,8 +291,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress())
-            //, new CancellationTokenSource(TimeSpan.FromSeconds(3)).Token
+            o => o.WithTarget(new ClientAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(3.Seconds()).Token
+            ).Token
         );
 
         // asserts
@@ -323,7 +340,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             new GetSchemaRequest(typeName),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -356,7 +376,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             new GetSchemaRequest(unknownTypeName),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -378,7 +401,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -405,8 +431,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
+        );
+        // assert
         var typesResponse = response.Message.Should().BeOfType<DomainTypesResponse>().Which;
         var types = typesResponse.Types.ToArray();
 
@@ -433,7 +463,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(invalidItems),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -465,7 +498,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { newItem }),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -496,17 +532,26 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             client.AwaitResponse(
                 DataChangeRequest.Update(updates1),
                 o => o.WithTarget(new ClientAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(10.Seconds()).Token
+                ).Token
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates2),
                 o => o.WithTarget(new ClientAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(10.Seconds()).Token
+                ).Token
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates3),
                 o => o.WithTarget(new ClientAddress()),
-                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(10.Seconds()).Token
+                ).Token
             )
         };
 
@@ -540,7 +585,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var responseNull = await client.AwaitResponse(
             new GetSchemaRequest(null!),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         var schemaResponseNull = responseNull.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -550,7 +598,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var responseEmpty = await client.AwaitResponse(
             new GetSchemaRequest(""),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         var schemaResponseEmpty = responseEmpty.Message.Should().BeOfType<SchemaResponse>().Which;
@@ -587,7 +638,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { updateItem }),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert - both client and host should have the same updated data

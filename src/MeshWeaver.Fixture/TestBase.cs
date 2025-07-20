@@ -1,5 +1,4 @@
-﻿using Xunit.Abstractions;
-using Xunit;
+﻿using Xunit;
 
 namespace MeshWeaver.Fixture;
 
@@ -12,17 +11,17 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         Output = output;
     }
 
-    public virtual Task InitializeAsync()
+    public virtual ValueTask InitializeAsync()
     {
         Initialize();
         SetOutputHelper(Output);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public virtual Task DisposeAsync()
+    public virtual ValueTask DisposeAsync()
     {
         SetOutputHelper(null);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 

@@ -12,7 +12,6 @@ using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Data.Test;
 
@@ -180,11 +179,17 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { updatedItem }),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // Wait a bit for the change to propagate
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
 
         // assert
         changeCount.Should().BeGreaterThan(initialChangeCount);
@@ -218,7 +223,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         await client.AwaitResponse(
             DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -244,7 +252,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var response = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { updateItem }),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert
@@ -311,7 +322,10 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         await client1.AwaitResponse(
             DataChangeRequest.Update(new object[] { updateItem }),
             o => o.WithTarget(new ClientAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
 
         // assert - client2 should see the change

@@ -4,7 +4,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 

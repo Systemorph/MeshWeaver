@@ -5,7 +5,6 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using Xunit;
-using Xunit.Abstractions;
 using MeshWeaver.Todo.LayoutAreas;
 
 namespace MeshWeaver.Todo.Test;
