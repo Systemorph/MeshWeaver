@@ -139,6 +139,11 @@ public record MessageHubConfiguration
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         parentHubs?.Add(HubInstance);
+
+        // Execute synchronous initialization actions immediately after hub creation
+        foreach (var initAction in SyncBuildupActions)
+            initAction(HubInstance);
+
         return HubInstance;
     }
 

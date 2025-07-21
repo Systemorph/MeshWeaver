@@ -62,17 +62,20 @@ public class HubTestBase : TestBase
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
+        return Router!.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
+        return Router!.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
     }
     public override async ValueTask DisposeAsync()
     {
+        if (Router is null)
+            return;
         var disposalId = Guid.NewGuid().ToString("N")[..8];
-        Logger?.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
+
+        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router?.Address);
 
         try
         {
