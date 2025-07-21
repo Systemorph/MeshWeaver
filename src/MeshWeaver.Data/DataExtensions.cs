@@ -211,23 +211,22 @@ public static class DataExtensions
                       {
                           if (data.Value != null)
                           {
-                              var jsonContent = System.Text.Json.JsonSerializer.Serialize(data.Value, hub.JsonSerializerOptions);
-                              hub.Post(new GetDataResponse(new RawJson(jsonContent), data.Version), o => o.ResponseFor(request));
+                              hub.Post(new GetDataResponse(data.Value, data.Version), o => o.ResponseFor(request));
                           }
                           else
                           {
-                              hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                              hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(request));
                           }
                       },
                       error =>
                       {
                           // Handle errors (including timeout)
-                          hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                          hub.Post(new GetDataResponse(null, 0){Error = error.ToString()}, o => o.ResponseFor(request));
                       },
                       () =>
                       {
                           // Handle stream completion without data
-                          hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                          hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(request));
                       });
         }
         
@@ -253,7 +252,7 @@ public static class DataExtensions
         catch (Exception ex)
         {
             // Handle any immediate exceptions
-            hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+            hub.Post(new GetDataResponse(null, 0){Error = ex.ToString()}, o => o.ResponseFor(request));
         }
         
         return request.Processed();

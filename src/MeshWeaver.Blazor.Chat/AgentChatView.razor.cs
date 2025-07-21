@@ -220,7 +220,47 @@ public partial class AgentChatView
         // Cancel any existing response
         CancelAnyCurrentResponse();
 
-        var chat = await lazyChat.Value;
+        IAgentChat chat;
+        try
+        {
+            chat = await lazyChat.Value;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("API key") || ex.Message.Contains("endpoint URL"))
+        {
+            // Handle configuration errors (missing API key, endpoint, etc.)
+            var errorMessage = "❌ **Configuration Error**\n\n" +
+                             "The AI service is not properly configured. Please check that:\n" +
+                             "• The API key is set\n" +
+                             "• The Endpoint URL is configured\n" +
+                             "• The configuration section is properly loaded\n\n" +
+                             "Please contact your administrator to configure the AI service.";
+
+            var errorResponseText = new TextContent(errorMessage);
+            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText]);
+
+            // Add the user message to show what they tried to ask
+            messages.Add(userMessage);
+            messages.Add(errorResponseMessage);
+
+            StateHasChanged();
+            return;
+        }
+        catch (Exception ex)
+        {
+            // Handle other initialization errors
+            var errorMessage = $"❌ **Service Error**\n\nFailed to initialize AI service: {ex.Message}\n\nPlease try again or contact your administrator if the problem persists.";
+
+            var errorResponseText = new TextContent(errorMessage);
+            var errorResponseMessage = new ChatMessage(new ChatRole("Assistant"), [errorResponseText]);
+
+            // Add the user message to show what they tried to ask
+            messages.Add(userMessage);
+            messages.Add(errorResponseMessage);
+
+            StateHasChanged();
+            return;
+        }
+
         SetAgentContext(chat);
 
         // Add the user message to the conversation

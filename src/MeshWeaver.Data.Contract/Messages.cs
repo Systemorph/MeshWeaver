@@ -101,4 +101,7 @@ public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataRes
 /// </summary>
 /// <param name="Data">The JSON data retrieved from the workspace reference</param>
 /// <param name="Version">The version of the data at the time of retrieval</param>
-public record GetDataResponse(RawJson Data, long Version);
+public record GetDataResponse(object? Data, long Version)
+{
+    public string? Error { get; init; }
+}
