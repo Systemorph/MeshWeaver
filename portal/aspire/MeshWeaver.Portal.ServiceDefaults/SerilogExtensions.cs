@@ -81,13 +81,13 @@ public static class SerilogExtensions
 
         return builder;
     }
-    public static IReadOnlyDictionary<string, object> ToJsonDictionary(this StructureValue structuredValue)
+    public static IReadOnlyDictionary<string, object?> ToJsonDictionary(this StructureValue structuredValue)
     {
         var dictionary = structuredValue.Properties.ToDictionary(p => p.Name, p => ConvertToJsonCompatibleValue(p.Value));
         return dictionary;
     }
 
-    public static object ConvertToJsonCompatibleValue(this LogEventPropertyValue value)
+    public static object? ConvertToJsonCompatibleValue(this LogEventPropertyValue value)
     {
         return value switch
         {
@@ -97,15 +97,15 @@ public static class SerilogExtensions
             _ => value.ToString()
         };
     }
-    public static IReadOnlyDictionary<string,object> ConvertToJsonCompatibleValue(this IReadOnlyDictionary<string,LogEventPropertyValue> dict)
+    public static IReadOnlyDictionary<string, object?> ConvertToJsonCompatibleValue(this IReadOnlyDictionary<string, LogEventPropertyValue> dict)
     {
-        return dict?.ToDictionary(x => x.Key, x => x.Value.ConvertToJsonCompatibleValue());
+        return dict.ToDictionary(x => x.Key, x => x.Value.ConvertToJsonCompatibleValue());
     }
 
 }
 public class EfCoreSystemLogSink(string service, string id) : ILogEventSink
 {
-    private IServiceProvider serviceProvider;
+    private IServiceProvider serviceProvider = null!;
 
     public void Initialize(IServiceProvider serviceProvider)
         => this.serviceProvider = serviceProvider;
@@ -120,27 +120,25 @@ public class EfCoreSystemLogSink(string service, string id) : ILogEventSink
             logEvent.Timestamp.UtcDateTime,
             logEvent.RenderMessage(),
             logEvent.Exception?.ToString(),
-            logEvent.Properties.ConvertToJsonCompatibleValue()
+            logEvent.Properties.ConvertToJsonCompatibleValue()!
         );
 
         try
         {
             using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
-            if (dbContext is null)
-                return;
 
             dbContext.SystemLogs.Add(logEntry);
             dbContext.SaveChanges();
         }
         catch
-        {   
+        {
         }
     }
 
 }
 public class EfCoreMessageLogSink(string service, string serviceId) : ILogEventSink
 {
-    private IServiceProvider serviceProvider;
+    private IServiceProvider serviceProvider = null!;
 
     public void Initialize(IServiceProvider serviceProvider)
         => this.serviceProvider = serviceProvider;
@@ -162,7 +160,7 @@ public class EfCoreMessageLogSink(string service, string serviceId) : ILogEventS
             return;
 
         // Find the message property in the delivery structure
-        var messageProp = deliveryProps.GetValueOrDefault( "message");
+        var messageProp = deliveryProps.GetValueOrDefault("message");
         if (messageProp is not StructureValue messageValue)
             return;
 
@@ -177,8 +175,8 @@ public class EfCoreMessageLogSink(string service, string serviceId) : ILogEventS
             service,
             serviceId,
             evt.Timestamp.UtcDateTime,
-            evt.Properties.GetValueOrDefault("Address")?.ToString(),
-            deliveryProps.GetValueOrDefault("id").ToString(),
+            evt.Properties.GetValueOrDefault("Address")?.ToString() ?? string.Empty,
+            deliveryProps.GetValueOrDefault("id")?.ToString() ?? string.Empty,
             messageValue.ToJsonDictionary(),
             deliveryProps.GetValueOrDefault("sender")?.ToString(),
             target,
@@ -190,18 +188,16 @@ public class EfCoreMessageLogSink(string service, string serviceId) : ILogEventS
         try
         {
             using var dbContext = serviceProvider.CreateScope().ServiceProvider.GetRequiredService<MeshWeaverDbContext>();
-            if (dbContext is null)
-                return;
 
             dbContext.Messages.Add(logEntry);
             dbContext.SaveChanges();
         }
-        catch{}
+        catch { }
     }
 }
 public class DestructuringPolicy : IDestructuringPolicy
 {
-    public JsonSerializerOptions JsonOptions { get; set; }
+    public JsonSerializerOptions JsonOptions { get; set; } = new();
 
     public bool TryDestructure(object value, ILogEventPropertyValueFactory propertyFactory, out LogEventPropertyValue result)
     {
@@ -213,14 +209,14 @@ public class DestructuringPolicy : IDestructuringPolicy
             return true;
         }
 
-        result = null;
+        result = null!;
         return false;
     }
 
-    LogEventPropertyValue Parse(JsonNode node)
+    LogEventPropertyValue Parse(JsonNode? node)
     {
         if (node is null)
-            return null;
+            return new ScalarValue(null);
         if (node is JsonObject obj)
             return new StructureValue(obj.Select(x => new LogEventProperty(x.Key, Parse(x.Value))));
         if (node is JsonArray arr)

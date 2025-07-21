@@ -3,7 +3,7 @@ using MeshWeaver.Charting.Enums;
 
 namespace MeshWeaver.Charting.Models.Segmented
 {
-    public record PieDataSet(IReadOnlyCollection<object> Data, string Label = null) : SegmentDataSetBase<PieDataSet>(Data, Label)
+    public record PieDataSet(IReadOnlyCollection<object> Data, string? Label = null) : SegmentDataSetBase<PieDataSet>(Data, Label)
     {
         public PieDataSet(IEnumerable data) : this(data.Cast<object>().ToArray()) { }
         #region Styling
@@ -11,7 +11,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         /// <summary>
         /// Arc border join style..
         /// </summary>
-        public IEnumerable<string> BorderJoinStyle { get; init; }
+        public IEnumerable<string> BorderJoinStyle { get; init; } = null!;
 
         /// <summary>
         /// Arc offset (in pixels).
@@ -37,7 +37,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         /// 'inner'
         /// When 'center' is set, the borders of arcs next to each other will overlap.When 'inner' is set, it is guaranteed that all borders will not overlap.
         /// </summary>
-        public string BorderAlign { get; init; }
+        public string BorderAlign { get; init; } = null!;
         #endregion BorderAlign
 
         #region BorderRadius
@@ -45,7 +45,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         /// <summary>
         /// If this value is a number, it is applied to all corners of the arc (outerStart, outerEnd, innerStart, innerRight). If this value is an object, the outerStart property defines the outer-start corner's border radius. Similarly, the outerEnd, innerStart, and innerEnd properties can also be specified.
         /// </summary>
-        public object BorderRadius { get; init; }
+        public object BorderRadius { get; init; } = null!;
         #endregion BorderRadius
 
         #region Interactions
@@ -53,7 +53,7 @@ namespace MeshWeaver.Charting.Models.Segmented
         /// <summary>
         /// Arc border join style when hovered.
         /// </summary>
-        public string HoverBorderJoinStyle { get; init; }
+        public string HoverBorderJoinStyle { get; init; } = null!;
 
         /// <summary>
         /// Arc border width when hovered (in pixels).

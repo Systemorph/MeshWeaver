@@ -43,29 +43,29 @@ public static class TestDomain
     public record StreetAddress() 
     {
         [Required]
-        public string Street { get; set; }
+        public string Street { get; set; } = null!;
 
         [Dimension<Country>]
-        public string Country { get; set; }
+        public string Country { get; set; } = null!;
     }
 
     public record Contract
     {
         [Key]
-        public string SystemName { get; init; }
+        public string SystemName { get; init; } = null!;
 
         [Range(1999, 2023)]
         public int FoundationYear { get; set; }
 
         [Category("ContractType")]
-        public string ContractType { get; set; }
+        public string ContractType { get; set; } = null!;
     }
 
     public record Country : INamed
     {
         [Key]
-        public string SystemName { get; set; }
-        public string DisplayName { get; set; }
+        public string SystemName { get; set; } = null!;
+        public string DisplayName { get; set; } = null!;
     }
 
     public record Discount

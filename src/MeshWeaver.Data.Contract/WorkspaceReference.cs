@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿#nullable enable
+using System.Text.Json;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -47,9 +48,9 @@ public record CollectionsReference(params IReadOnlyCollection<string> Collection
     : WorkspaceReference<EntityStore>
 {
 
-    public override string ToString() => string.Join(',',Collections);
+    public override string ToString() => string.Join(',', Collections);
 
-    public virtual bool Equals(CollectionsReference other) =>
+    public virtual bool Equals(CollectionsReference? other) =>
         other != null && Collections.SequenceEqual(other.Collections);
 
     public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
@@ -57,7 +58,7 @@ public record CollectionsReference(params IReadOnlyCollection<string> Collection
 
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
 
-public record StreamIdentity(Address Owner, object Partition) : WorkspaceReference<EntityStore>
+public record StreamIdentity(Address Owner, object? Partition) : WorkspaceReference<EntityStore>
 {
     public override string ToString()
     {
@@ -68,11 +69,11 @@ public record StreamIdentity(Address Owner, object Partition) : WorkspaceReferen
 
 public interface IPartitionedWorkspaceReference
 {
-    object Partition { get; }
+    object? Partition { get; }
     WorkspaceReference Reference { get; }
 }
 
-public record PartitionedWorkspaceReference<TReduced>(object Partition, WorkspaceReference<TReduced> Reference)
+public record PartitionedWorkspaceReference<TReduced>(object? Partition, WorkspaceReference<TReduced> Reference)
     : WorkspaceReference<TReduced>, IPartitionedWorkspaceReference
 {
     WorkspaceReference IPartitionedWorkspaceReference.Reference => Reference;

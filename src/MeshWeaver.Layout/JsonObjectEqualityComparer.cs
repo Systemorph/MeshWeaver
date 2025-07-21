@@ -5,7 +5,7 @@ namespace MeshWeaver.Layout;
 /// <summary>
 /// Provides a custom equality comparer for JSON objects.
 /// </summary>
-public class JsonObjectEqualityComparer : IEqualityComparer<object>
+public class JsonObjectEqualityComparer : IEqualityComparer<object?>
 {
     /// <summary>
     /// Gets the singleton instance of the <see cref="JsonObjectEqualityComparer"/> class.
@@ -18,7 +18,7 @@ public class JsonObjectEqualityComparer : IEqualityComparer<object>
     /// <param name="x">The first object to compare.</param>
     /// <param name="y">The second object to compare.</param>
     /// <returns><c>true</c> if the specified objects are equal; otherwise, <c>false</c>.</returns>
-    public new bool Equals(object x, object y)
+    public new bool Equals(object? x, object? y)
     {
         if (x == null)
             return y == null;
@@ -39,8 +39,9 @@ public class JsonObjectEqualityComparer : IEqualityComparer<object>
     /// </summary>
     /// <param name="obj">The object for which a hash code is to be returned.</param>
     /// <returns>A hash code for the specified object.</returns>
-    public int GetHashCode(object obj)
+    public int GetHashCode(object? obj)
     {
+        if (obj == null) return 0;
         if (obj is JsonObject jsonObj)
         {
             return jsonObj.ToString().GetHashCode();

@@ -18,12 +18,12 @@ public class OrleansRoutingService(
     public async Task<IMessageDelivery> DeliverMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken = default)
     {
         var target = delivery.Target;
-        var streamInfo = await GetStreamInfoAsync(target);
+        var streamInfo = await GetStreamInfoAsync(target!);
 
         switch (streamInfo?.Type)
         {
             case StreamType.Channel:
-                var grain = grainFactory.GetGrain<IMessageHubGrain>(target.ToString());
+                var grain = grainFactory.GetGrain<IMessageHubGrain>(target!.ToString());
                 await grain.DeliverMessage(delivery);
                 return delivery.Forwarded();
             case StreamType.Stream:
@@ -39,7 +39,7 @@ public class OrleansRoutingService(
 
     }
 
-    private async Task<StreamInfo> GetStreamInfoAsync(Address target)
+    private async Task<StreamInfo?> GetStreamInfoAsync(Address target)
     {
         var streamInfo = cache.TryGetValue(target, out var cached)
             ? cached as StreamInfo
@@ -47,7 +47,7 @@ public class OrleansRoutingService(
         return streamInfo;
     }
 
-    private async Task<StreamInfo> GetStreamInfoFromRoutingGrainAsync(Address target)
+    private async Task<StreamInfo?> GetStreamInfoFromRoutingGrainAsync(Address target)
     {
         var ret = await meshCatalog
             .GetStreamInfoAsync(target.ToString());
@@ -62,7 +62,7 @@ public class OrleansRoutingService(
     {
         var streamInfo = await GetStreamInfoAsync(address);
         if (streamInfo is null)
-            return null;
+            return null!;
 
         var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamInfo.Provider)
             .GetStream<IMessageDelivery>(address.ToString());

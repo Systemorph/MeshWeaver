@@ -91,7 +91,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the identifier of the customer who placed the order.
         /// </summary>
         [property: Dimension(typeof(Customer))]
-        public string Customer { get; init; }
+        public string? Customer { get; init; }
     
         /// <summary>
         /// Gets the identifier of the employee who processed the order.
@@ -115,7 +115,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the shipping region for the order.
         /// </summary>
         [property: Dimension(typeof(Region))]
-        public string Region { get; init; }
+        public string? Region { get; init; }
     
         /// <summary>
         /// Gets the date when the order was placed.
@@ -128,7 +128,7 @@ namespace MeshWeaver.Northwind.Application
         /// </summary>
         [NotVisible]
         [Dimension(typeof(string), nameof(OrderMonth))]
-        public string OrderMonth { get; init; }
+        public string? OrderMonth { get; init; }
 
         /// <summary>
         /// Gets the year when the order was placed.
@@ -159,7 +159,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the country to which the order was shipped.
         /// </summary>
         [NotVisible]
-        public string ShipCountry { get; init; }
+        public string? ShipCountry { get; init; }
     
         /// <summary>
         /// Gets the freight charge for the order.
@@ -177,7 +177,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the name of the product.
         /// </summary>
         [NotVisible]
-        public string ProductName { get; init; }
+        public string? ProductName { get; init; }
     
         /// <summary>
         /// Calculates the total amount for the order detail, considering unit price, quantity, and discount.
@@ -207,7 +207,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the quantity per unit for the product.
         /// </summary>
         [NotVisible]
-        public string QuantityPerUnit { get; init; }
+        public string? QuantityPerUnit { get; init; }
     
         /// <summary>
         /// Gets the number of units in stock for the product.
@@ -231,7 +231,7 @@ namespace MeshWeaver.Northwind.Application
         /// Indicates whether the product is discontinued.
         /// </summary>
         [NotVisible]
-        public string Discontinued { get; init; }
+        public string? Discontinued { get; init; }
     }
 
     /// <summary>
@@ -257,6 +257,6 @@ namespace MeshWeaver.Northwind.Application
         /// </summary>
         [NotVisible]
         [Dimension(typeof(string), nameof(Label))]
-        public string Label { get; init; }
+        public string? Label { get; init; }
     }
 }

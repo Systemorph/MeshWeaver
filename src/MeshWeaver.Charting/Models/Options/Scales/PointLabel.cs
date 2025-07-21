@@ -6,12 +6,12 @@
         /// <summary>
         /// Background color of the point label.
         /// </summary>
-        public ChartColor BackdropColor { get; init; }
+        public ChartColor? BackdropColor { get; init; }
 
         /// <summary>
         /// Padding of label backdrop.
         /// </summary>
-        public object BackdropPadding { get; init; }
+        public object? BackdropPadding { get; init; }
 
         /// <summary>
         /// If true, point labels are shown.
@@ -21,14 +21,14 @@
         /// <summary>
         /// Callback function to transform data labels to point labels. The default implementation simply returns the current string.
         /// </summary>
-        public object Callback { get; init; }
+        public object? Callback { get; init; }
 
         /// <summary>
         /// Color of label.
         /// </summary>
-        public ChartColor Color { get; init; }
+        public ChartColor? Color { get; init; }
 
-        public Font Font { get; init; }
+        public Font? Font { get; init; }
 
         /// <summary>
         /// Padding between chart and point labels.

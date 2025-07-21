@@ -7,7 +7,7 @@ using MeshWeaver.Arithmetics.Aggregation.Implementation;
 namespace MeshWeaver.Arithmetics.Aggregation;
 
 /// <summary>
-/// The <see cref="AggregationFunction"/> class provides the <see cref="Aggregate"/> method, which can aggregate (sum up) an <see cref="IEnumerable{T}"/>
+/// The <see cref="AggregationFunction"/> class provides the see Aggregate method, which can aggregate (sum up) an <see cref="IEnumerable{T}"/>
 /// for a large variety of types T. For details on the used summation see <see cref="SumFunction"/> and also <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
 /// </summary>
 /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
@@ -44,7 +44,7 @@ public static class AggregationFunction
         {
             if (type == typeof(string)) throw new ArgumentException();
 
-            if (type.GetInterface(nameof( ICollection )) != null &&
+            if (type.GetInterface(nameof(ICollection)) != null &&
                 type.IsGenericType &&
                 type.GetGenericTypeDefinition() != typeof(Dictionary<,>) &&
                 type.GetGenericArguments().Length > 0 &&
@@ -56,7 +56,7 @@ public static class AggregationFunction
 
         var aggregated = await toAggregate.Where(x => x != null).AggregateAsync((result, item) => SumFunction.Sum(result, item));
 
-        if (aggregated == null) return (T) Activator.CreateInstance(typeof(T));
+        if (aggregated == null) return (T)Activator.CreateInstance(typeof(T))!;
 
         return aggregated;
     }
@@ -68,14 +68,17 @@ public static class AggregationFunction
     /// <param name="toAggregate">The elements to aggregate</param>
     /// <returns>New instance of <typeparamref name="T"/> with the aggregated result</returns>
     /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
-    public static T Aggregate<T>(params T[] toAggregate) 
+    public static T Aggregate<T>(params T[] toAggregate)
     {
         return GetAggregationFunction<T>()(toAggregate);
     }
 
 
     /// <summary>
-    /// Gets the delegate for the <see cref="Aggregate{T}"/> method which aggregates the elements of an enumerable
+    /// Gets the delegate for the <see>
+    ///     <cref>Aggregate{T}</cref>
+    /// </see>
+    /// method which aggregates the elements of an enumerable
     /// </summary>
     /// <typeparam name="T">Type of the elements</typeparam>
     /// <returns>Delegate to the aggregate method</returns>
@@ -92,10 +95,10 @@ public static class AggregationFunction
     /// <returns>Delegate to the aggregate method</returns>
     public static Delegate GetAggregationFunction(Type elementType)
     {
-        return AggregationFunctions.GetOrAdd(elementType, x => CreateAggregationFunction(elementType));
+        return AggregationFunctions.GetOrAdd(elementType, _ => CreateAggregationFunction(elementType));
     }
 
-       
+
     /// <summary>
     /// Aggregates (sums) all elements into the <paramref name="target"/>
     /// </summary>
@@ -132,13 +135,13 @@ public static class AggregationFunction
     /// <typeparam name="TElement"></typeparam>
     /// <returns>Delegate that aggregates the enumerable into the second parameter instance</returns>
     /// <conceptualLink target="3b557ccf-d392-496f-933b-08672b0e2d02#aggregate" />
-    public static Action<IEnumerable<TElement>, TElement>GetAggregationAction<TElement>()
+    public static Action<IEnumerable<TElement>, TElement> GetAggregationAction<TElement>()
         where TElement : class
     {
         return (Action<IEnumerable<TElement>, TElement>)GetAggregationAction(typeof(TElement));
     }
 
-      
+
     /// <summary>
     /// Non-generic version of <see cref="GetAggregationAction{TElement}"/>. 
     /// </summary>
@@ -150,7 +153,7 @@ public static class AggregationFunction
         return AggregateActionClassDelegateStore.GetOrAdd(elementType, CreateAggregateActionClass);
     }
 
-      
+
     /// <summary>
     /// Unknown usage. Is this legacy Formula Framework? Strange signature.
     /// </summary>
@@ -162,9 +165,9 @@ public static class AggregationFunction
     /// <summary>
     /// Unknown usage. Is this legacy Formula Framework? Strange signature.
     /// </summary>
-    public static Func<IEnumerable<TElement>, TResult>GetAggregationFunction<TElement, TResult>()
+    public static Func<IEnumerable<TElement>, TResult> GetAggregationFunction<TElement, TResult>()
     {
-        return (Func<IEnumerable<TElement>, TResult>)AggregationFunctions.GetOrAdd(typeof(TElement), x => CreateAggregationFunction(typeof(TElement)));
+        return (Func<IEnumerable<TElement>, TResult>)AggregationFunctions.GetOrAdd(typeof(TElement), _ => CreateAggregationFunction(typeof(TElement)));
     }
 
     /// <summary>
@@ -200,10 +203,10 @@ public static class AggregationFunction
         var enumeratorType = typeof(IEnumerator<>).MakeGenericType(type);
 
         var enumeratorVar = Expression.Variable(enumeratorType, "enumerator");
-        var getEnumeratorCall = Expression.Call(elementsParam, enumerableType.GetMethod("GetEnumerator"));
+        var getEnumeratorCall = Expression.Call(elementsParam, enumerableType.GetMethod("GetEnumerator")!);
 
         // The MoveNext method's actually on IEnumerator, not IEnumerator<T>
-        var moveNextCall = Expression.Call(enumeratorVar, typeof(IEnumerator).GetMethod("MoveNext"));
+        var moveNextCall = Expression.Call(enumeratorVar, typeof(IEnumerator).GetMethod("MoveNext")!);
 
         var breakLabel = Expression.Label("LoopBreak");
 
@@ -247,13 +250,13 @@ public static class AggregationFunction
     private static Expression InstantiateResult(ParameterExpression ret, ParameterExpression currentElement)
     {
         if (currentElement.Type.IsArray)
-            return Expression.Assign(ret, Expression.NewArrayBounds(currentElement.Type.GetElementType(), Expression.Property(currentElement, nameof(Array.Length))));
+            return Expression.Assign(ret, Expression.NewArrayBounds(currentElement.Type.GetElementType()!, Expression.Property(currentElement, nameof(Array.Length))));
         return GenericSumFunctionProvider.InstantiateNew(ret, currentElement);
     }
 
     private static readonly ConcurrentDictionary<Type, Delegate> AggregateActionClassDelegateStore = new ConcurrentDictionary<Type, Delegate>();
 
-        
+
 
     private static Delegate CreateAggregateActionClass(Type type)
     {
@@ -268,11 +271,11 @@ public static class AggregationFunction
         var enumeratorType = typeof(IEnumerator<>).MakeGenericType(type);
 
         var enumeratorVar = Expression.Variable(enumeratorType, "enumerator");
-        var getEnumeratorCall = Expression.Call(elementsParam, enumerableType.GetMethod("GetEnumerator"));
+        var getEnumeratorCall = Expression.Call(elementsParam, enumerableType.GetMethod("GetEnumerator")!);
         var enumeratorAssign = Expression.Assign(enumeratorVar, getEnumeratorCall);
 
         // The MoveNext method's actually on IEnumerator, not IEnumerator<T>
-        var moveNextCall = Expression.Call(enumeratorVar, typeof(IEnumerator).GetMethod("MoveNext"));
+        var moveNextCall = Expression.Call(enumeratorVar, typeof(IEnumerator).GetMethod("MoveNext")!);
 
         var breakLabel = Expression.Label("LoopBreak");
 

@@ -15,9 +15,9 @@ namespace MeshWeaver.Layout.Client;
 public static class LayoutClientExtensions
 {
     public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
-        object value,
-        string dataContext,
-        JsonPointerReference reference, ModelParameter<JsonElement> model = null)
+        object? value,
+        string? dataContext,
+        JsonPointerReference? reference, ModelParameter<JsonElement>? model = null)
     {
         if (reference is not null)
         {
@@ -34,17 +34,22 @@ public static class LayoutClientExtensions
                     var patch = stream.GetPatch(value, reference, dataContext, ci);
                     var updated = patch?.Apply(ci) ?? ci;
 
-                    return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
+                    return stream.ToChangeItem(ci, updated, patch!, stream.StreamId);
                 },
-                    ex => stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout"));
+                    ex =>
+                    {
+                        stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger(typeof(LayoutClientExtensions)).LogWarning(ex, "Cannot update layout");
+                        return Task.CompletedTask;
+                    });
 
         }
     }
 
-    private static JsonPatch GetPatch<T>(this ISynchronizationStream<JsonElement> stream,
+    private static JsonPatch? GetPatch<T>(this ISynchronizationStream<JsonElement> stream,
         T value,
         JsonPointerReference reference,
-        string dataContext,
+        string? dataContext,
         JsonElement current)
     {
         var pointer = JsonPointer.Parse(GetPointer(reference.Pointer, dataContext));
@@ -65,11 +70,16 @@ public static class LayoutClientExtensions
 
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
         JsonPointerReference reference, 
-        string dataContext = null, 
-        Func<object,T, T> conversion = null,
-        T defaultValue = default(T)) =>
-        stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext)))
-            .Select(x => conversion is not null ? conversion.Invoke(x,defaultValue) : stream.Hub.ConvertSingle(x, null, defaultValue))
+        string? dataContext = null, 
+        Func<object?,T?, T?>? conversion = null,
+        T? defaultValue = default(T)) =>
+        stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
+            .Select(x => 
+                conversion is not null 
+                    ? conversion.Invoke(x, defaultValue) 
+                    : stream.Hub.ConvertSingle(x, null, defaultValue!))
+            .Where(x => x is not null)
+            .Select(x => (T)x!)
             .DistinctUntilChanged();
 
 
@@ -79,7 +89,7 @@ public static class LayoutClientExtensions
         return pointer.Evaluate(model.Element);
     }
 
-    public static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object value, string dataContext)
+    public static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, object? value, string? dataContext)
     {
         if (value is JsonPointerReference reference)
             return reference.Pointer.StartsWith('/')
@@ -90,11 +100,11 @@ public static class LayoutClientExtensions
             return (T)Enum.Parse(typeof(T), stringValue);
 
         // Use Convert.ChangeType for flexible conversion
-        return (T)Convert.ChangeType(value, typeof(T));
+        return (T?)Convert.ChangeType(value, typeof(T));
     }
-    private static T GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string dataContext = null)
+    private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
-        var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext));
+        var jsonPointer = JsonPointer.Parse(GetPointer(pointer, dataContext!));
 
         if (stream.Current == null)
             return default;
@@ -105,18 +115,20 @@ public static class LayoutClientExtensions
     }
 
     public static IObservable<T> GetDataBoundObservable<T>(this ISynchronizationStream<JsonElement> stream,
-        JsonPointerReference reference, string dataContext = null)
+        JsonPointerReference reference, string? dataContext = null)
     {
-        var pointer = GetPointer(reference.Pointer, dataContext);
+        var pointer = GetPointer(reference.Pointer, dataContext!);
         var jsonPointer = JsonPointer.Parse(pointer);
         return stream.Select(s =>
         {
             var ret = jsonPointer.Evaluate(s.Value);
-            return ret is null ? default(T) : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
-        });
+            return ret is null ? default : ret.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions);
+        })
+        .Where(x => x is not null)
+        .Select(x => x!);
     }
 
-    private static string GetPointer(string pointer, string dataContext)
+    private static string GetPointer(string pointer, string? dataContext)
     {
         if (pointer.StartsWith('/'))
             return pointer.TrimEnd('/');
@@ -125,8 +137,9 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
-    public static T ConvertSingle<T>(this IMessageHub hub, object value, Func<object, T,T> conversion, T defaultValue = default(T))
+    public static T? ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T?,T?>? conversion, T? defaultValue = default(T))
     {
+        conversion ??= null;
         if (conversion != null)
             return conversion.Invoke(value, defaultValue);
         return value switch
@@ -164,7 +177,7 @@ public static class LayoutClientExtensions
 
     }
 
-    private static T ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object, T, T> conversion, T defaultValue = default(T))
+    private static T? ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object?, T?, T?>? conversion, T? defaultValue = default(T))
     {
         if (value == null)
             return default;
@@ -172,8 +185,8 @@ public static class LayoutClientExtensions
             return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions), defaultValue);
         return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
     }
-    private static T ConvertJson<T>(this IMessageHub hub, JsonObject value, Func<object, T,T> conversion,
-        T defaultValue)
+    private static T? ConvertJson<T>(this IMessageHub hub, JsonObject? value, Func<object?, T?, T?>? conversion,
+        T? defaultValue)
     {
         if (value == null)
             return default;

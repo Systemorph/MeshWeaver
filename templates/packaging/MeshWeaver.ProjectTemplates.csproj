@@ -1,0 +1,60 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageType>Template</PackageType>
+    <PackageId>MeshWeaver.ProjectTemplates</PackageId>
+    <Title>MeshWeaver Project Templates</Title>
+    <Authors>Systemorph</Authors>
+    <Description>Starter project templates for MeshWeaver applications including Portal structure, Todo modules, AI agents, and testing infrastructure. Ready to be configured with MeshWeaver packages when available.</Description>
+    <PackageTags>dotnet-new;templates;meshweaver;portal;todo;ai;web;blazor;starter</PackageTags>
+    <TargetFramework>net9.0</TargetFramework>
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <!-- Set default version if not provided -->
+    <Version Condition="'$(Version)' == ''">2.2.0-rc6</Version>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
+  </PropertyGroup>
+
+  <!-- Generate templates before build -->
+  <Target Name="GenerateTemplates" BeforeTargets="Build;Pack">
+    <Message Text="Starting template generation..." Importance="high" />
+    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)\..\..\tools\MeshWeaver.TemplateGenerator\MeshWeaver.TemplateGenerator.csproj&quot; &quot;$(Version)&quot; &quot;$(MSBuildProjectDirectory)\..\dist\templates&quot;" WorkingDirectory="$(MSBuildProjectDirectory)\..\..\" ContinueOnError="false" />
+    <Message Text="Template generation completed." Importance="high" />
+  </Target>
+
+  <ItemGroup>
+    <None Include="../dist/templates/**/*" Exclude="../dist/templates/**/bin/**;../dist/templates/**/obj/**" Pack="true" PackagePath="content/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Area-Nesting-Bug-Fix.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Data-Mesh-Overview.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\DataMesh.jpeg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\Formulas.jpg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\Layout Areas.jpeg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\Libraries.jpg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\meshbros.png" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\Reactive Dialogs.jpeg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\Specification to Implementation.jpeg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\SpecifyingSoftware.jpeg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\stefanbernegger.png" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\images\VibeCoding.jpg" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Including Libraries.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Interactive-UI-Specification.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Layout Areas.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Mathematical Formulae.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Reactive Dialogs.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Specification to Implementation.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Specifying Software.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\The Beginning.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Todo-Module-Overview.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\Vibe Coding.md" />
+    <None Remove="..\dist\templates\MeshWeaverApp1.Portal\Markdown\What is a Data Mesh.md" />
+  </ItemGroup>
+
+</Project>

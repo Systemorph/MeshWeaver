@@ -30,19 +30,19 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
         this.pivotBuilder = pivotBuilder;
     }
 
-    public IPivotChartBuilder WithLegend(Func<Legend, Legend> legendModifier = null)
+    public IPivotChartBuilder WithLegend(Func<Legend, Legend>? legendModifier = null)
     {
         Chart = Chart.WithLegend(legendModifier);
         return this;
     }
 
-    public IPivotChartBuilder WithTitle(string title, Func<Title, Title> titleModifier)
+    public IPivotChartBuilder WithTitle(string title, Func<Title, Title>? titleModifier = null)
     {
         Chart = Chart.WithTitle(title, titleModifier);
         return this;
     }
 
-    public IPivotChartBuilder WithSubTitle(string title, Func<Title, Title> titleModifier)
+    public IPivotChartBuilder WithSubTitle(string title, Func<Title, Title>? titleModifier = null)
     {
         Chart = Chart.WithSubTitle(title, titleModifier);
         return this;
@@ -115,11 +115,12 @@ public abstract record PivotChartBuilderBase<T, TTransformed, TIntermediate, TAg
                 values,
                 row,
                 ref countStackPoints
-            ) with{Label = row.Descriptor.DisplayName };
-            dataSet = dataSet is not IDataSetWithFill<TDataSet> fill ? dataSet : row.Filled  ? fill.WithArea() : fill.WithoutFill();
+            ) with
+            { Label = row.Descriptor.DisplayName };
+            dataSet = dataSet is not IDataSetWithFill<TDataSet> fill ? dataSet : row.Filled ? fill.WithArea() : fill.WithoutFill();
             dataSet = dataSet is not IDataSetWithTension<TDataSet> smoothed
-                ? dataSet 
-                : row.SmoothingCoefficient != null 
+                ? dataSet
+                : row.SmoothingCoefficient != null
                     ?
                     smoothed.WithTension((double)row.SmoothingCoefficient) :
                 dataSet;

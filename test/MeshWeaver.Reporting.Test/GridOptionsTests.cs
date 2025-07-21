@@ -5,7 +5,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using Xunit;
 using MeshWeaver.Fixture;
-using Xunit.Abstractions;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Reporting.Test
@@ -46,7 +45,7 @@ namespace MeshWeaver.Reporting.Test
                 HeaderName = "Name Group",
                 GroupId = "nameGroup",
                 OpenByDefault = true,
-                Children = ImmutableList.Create<ColDef>(childColumn1, childColumn2)
+                Children = ImmutableList.Create(childColumn1, childColumn2)
             };
 
             var gridOptions = new GridOptions
@@ -59,8 +58,8 @@ namespace MeshWeaver.Reporting.Test
             var serializedJson = JsonSerializer.Serialize(gridOptions, options);
 
             // Debug output to see what's actually serialized
-            System.Console.WriteLine("Serialized JSON:");
-            System.Console.WriteLine(serializedJson);
+            Output.WriteLine("Serialized JSON:");
+            Output.WriteLine(serializedJson);
 
             // Assert - This test should pass with System.Text.Json polymorphic serialization
             serializedJson.Should().Contain("children");
@@ -69,7 +68,7 @@ namespace MeshWeaver.Reporting.Test
             serializedJson.Should().Contain("nameGroup");
 
             // Verify we can deserialize back and get the same structure
-            var deserializedOptions = JsonSerializer.Deserialize<GridOptions>(serializedJson, options);
+            var deserializedOptions = JsonSerializer.Deserialize<GridOptions>(serializedJson, options)!;
             deserializedOptions.ColumnDefs.Should().HaveCount(1);
 
             var deserializedGroup = deserializedOptions.ColumnDefs.First() as ColGroupDef;

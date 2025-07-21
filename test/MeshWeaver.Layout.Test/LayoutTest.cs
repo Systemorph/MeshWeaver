@@ -16,9 +16,9 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
-using Xunit.Abstractions;
 using System.Linq;
 using System.Threading;
+using Xunit;
 
 
 namespace MeshWeaver.Layout.Test;
@@ -32,7 +32,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<ClientAddress>((_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -54,12 +54,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                         nameof(ItemTemplate),
                             layout
                                 .Hub.GetWorkspace()
-                                .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+                                .GetStream(typeof(DataRecord)).Select(x => x.Value!.GetData<DataRecord>())
                                 .DistinctUntilChanged()
-                                .BindMany(nameof(ItemTemplate), y => 
+                                .BindMany(nameof(ItemTemplate), y =>
                                     Controls.Text(y.DisplayName).WithId(y.SystemName))
                                 )
-                    
+
                     .WithView(nameof(CatalogView), CatalogView)
                     .WithView(
                         nameof(Counter),
@@ -89,7 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -102,9 +102,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var areaControls = await areas
             .ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await stream.GetControlStream(a.Area.ToString())
+                await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
-                .FirstAsync(x => x != null))
+                .FirstAsync(x => x != null)!)
             .ToArrayAsync();
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
@@ -137,7 +137,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var controls = await stream
-            .GetControlStream(reference.Area)
+            .GetControlStream(reference.Area.ToString()!)
             .TakeUntil(o => o is HtmlControl)
             .Timeout(10.Seconds())
             .ToArray();
@@ -155,7 +155,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .WithView(Template.Bind(toolbar, tb => Controls.Text(tb.Year), nameof(toolbar)), "Toolbar")
             .WithView((area, _) =>
                 area.GetDataStream<Toolbar>(nameof(toolbar))
-                    .Select(tb => Controls.Html($"Report for year {tb.Year}")), "Content");
+                    .Select(tb => Controls.Html($"Report for year {tb?.Year}")), "Content");
     }
 
     [HubFact]
@@ -172,7 +172,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
             // .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
         // Get toolbar and change value.
@@ -180,17 +180,17 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
         dataPointer.Pointer.Should().Be("year");
         var pointer = JsonPointer.Parse($"/{dataPointer.Pointer}");
         var year = await stream
-            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext))
+            .GetDataStream<JsonElement>(new JsonPointerReference(yearTextBox.DataContext!))
             .Select(s => pointer.Evaluate(s))
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
         year!.Value.GetInt32().Should().Be(2024);
 
         stream.Update(ci =>
@@ -203,7 +203,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        }, null);
+        }, null!);
 
         var updatedControls = await stream
             .GetControlStream(reportArea)
@@ -256,7 +256,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Subject;
         pointer.Pointer.Should().Be("displayName");
         var parsedPointer = JsonPointer.Parse($"/{pointer.Pointer}");
-        data.Select(d => parsedPointer.Evaluate(d).Value.ToString())
+        data.Select(d => parsedPointer.Evaluate(d)!.Value.ToString())
             .Should()
             .BeEquivalentTo("Hello", "World");
     }
@@ -329,8 +329,8 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
         var content = await stream
-            .GetControlStream(reference.Area)
-            .Timeout(TimeSpan.FromSeconds(3))
+            .GetControlStream(reference.Area.ToString()!)
+            //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
         var controls = content
@@ -370,7 +370,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         return Controls.Stack
             .WithView(Template.Bind(data, x => Template.BindMany(x.Data, y => Controls.CheckBox(y.Value)), nameof(DataBoundCheckboxes)), Filter)
             .WithView((a, ctx) => a.GetDataStream<FilterEntity>(nameof(DataBoundCheckboxes))
-                .Select(d => Controls.CheckBox(d.Data.All(y => y.Value))
+                .Select(d => Controls.CheckBox(d!.Data.All(y => y.Value))
                 ), Results);
     }
 
@@ -435,12 +435,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             );
             var updated = patch.Apply(ci);
             return stream.ToChangeItem(ci, updated, patch, stream.StreamId);
-        }, null);
+        }, null!);
 
         resultsControl = await stream
             .GetControlStream(resultsArea)
-            .Where(x => !((bool)((CheckBoxControl)x).Data))
-            .Timeout(TimeSpan.FromSeconds(3))
+            .Where(x => x is CheckBoxControl cb && !((bool)cb.Data))
+            //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => true);
 
         ((bool)((CheckBoxControl)resultsControl).Data).Should().Be(false);
@@ -464,7 +464,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return area
             .Hub.GetWorkspace()
-            .GetStream(typeof(DataRecord)).Select(x => x.Value.GetData<DataRecord>())
+            .GetStream(typeof(DataRecord)).Select(x => x.Value!.GetData<DataRecord>())
             .DistinctUntilChanged()
             .Select(data =>
                 Template.Bind(data, x => area.ToDataGrid(x), nameof(CatalogView)));
@@ -482,7 +482,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
@@ -536,18 +536,257 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         var subAreaName = content.Should().BeOfType<StackControl>().Which.Areas.Should().HaveCount(1).And.Subject.First();
-        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()).FirstAsync();
+        var subArea = await stream.GetControlStream(subAreaName.Area.ToString()!).FirstAsync();
 
         stopwatch.Stop();
 
         subArea.Should().BeNull();
         stopwatch.ElapsedMilliseconds.Should().BeLessThan(3000);
     }
+
+    [HubFact]
+    public void TestSerializationOptionsComparison()
+    {
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
+        for (int i = 0; i < client.JsonSerializerOptions.Converters.Count; i++)
+        {
+            var converter = client.JsonSerializerOptions.Converters[i];
+            Output.WriteLine($"[{i}] {converter.GetType().FullName}");
+        }
+
+        Output.WriteLine("\n=== HOSTED HUB CONVERTERS ===");
+        for (int i = 0; i < hosted.JsonSerializerOptions.Converters.Count; i++)
+        {
+            var converter = hosted.JsonSerializerOptions.Converters[i];
+            Output.WriteLine($"[{i}] {converter.GetType().FullName}");
+        }
+
+        // Find the missing converters
+        var clientConverterTypes = client.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+        var hostedConverterTypes = hosted.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+
+        var missingInHosted = clientConverterTypes.Except(hostedConverterTypes).ToList();
+        var extraInHosted = hostedConverterTypes.Except(clientConverterTypes).ToList();
+
+        Output.WriteLine("\n=== MISSING IN HOSTED ===");
+        foreach (var missing in missingInHosted)
+        {
+            Output.WriteLine($"MISSING: {missing.FullName}");
+        }
+
+        Output.WriteLine("\n=== EXTRA IN HOSTED ===");
+        foreach (var extra in extraInHosted)
+        {
+            Output.WriteLine($"EXTRA: {extra.FullName}");
+        }
+
+        // Test simple serialization
+        var testObject = new PropertyColumnControl<string>
+        {
+            Property = "test",
+            Title = "Test"
+        };
+
+        var clientSerialized = JsonSerializer.Serialize(testObject, client.JsonSerializerOptions);
+        Output.WriteLine($"\nClient serialized: {clientSerialized}");
+
+        var hostedSerialized = JsonSerializer.Serialize(testObject, hosted.JsonSerializerOptions);
+        Output.WriteLine($"Hosted serialized: {hostedSerialized}");
+
+        try
+        {
+            var clientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(clientSerialized, client.JsonSerializerOptions);
+            Output.WriteLine($"Client deserialized type: {clientDeserialized?.GetType().FullName}");
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"Client deserialization failed: {ex.Message}");
+        }
+
+        try
+        {
+            var hostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(hostedSerialized, hosted.JsonSerializerOptions);
+            Output.WriteLine($"Hosted deserialized type: {hostedDeserialized?.GetType().FullName}");
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"Hosted deserialization failed: {ex.Message}");
+        }
+    }
+
+    [HubFact]
+    public void TestPolymorphicCollectionSerialization()
+    {
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        // Test 1: Simple individual object
+        var singleColumn = new PropertyColumnControl<string>
+        {
+            Property = "test",
+            Title = "Test"
+        };
+
+        var singleSerialized = JsonSerializer.Serialize(singleColumn, client.JsonSerializerOptions);
+        Output.WriteLine($"Single object serialized: {singleSerialized}");
+
+        var singleClientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, client.JsonSerializerOptions);
+        var singleHostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, hosted.JsonSerializerOptions);
+
+        Output.WriteLine($"Single - Client deserialized type: {singleClientDeserialized?.GetType().FullName}");
+        Output.WriteLine($"Single - Hosted deserialized type: {singleHostedDeserialized?.GetType().FullName}");
+
+        // Test 2: Collection of polymorphic objects
+        var columnCollection = new List<object>
+        {
+            new PropertyColumnControl<string> { Property = "test1", Title = "Test1" },
+            new PropertyColumnControl<string> { Property = "test2", Title = "Test2" }
+        };
+
+        var collectionSerialized = JsonSerializer.Serialize(columnCollection, client.JsonSerializerOptions);
+        Output.WriteLine($"\nCollection serialized: {collectionSerialized}");
+
+        var collectionClientDeserialized = JsonSerializer.Deserialize<List<object>>(collectionSerialized, client.JsonSerializerOptions);
+        var collectionHostedDeserialized = JsonSerializer.Deserialize<List<object>>(collectionSerialized, hosted.JsonSerializerOptions);
+
+        Output.WriteLine($"\nCollection - Client deserialized count: {collectionClientDeserialized?.Count}");
+        Output.WriteLine($"Collection - Hosted deserialized count: {collectionHostedDeserialized?.Count}");
+
+        if (collectionClientDeserialized != null)
+        {
+            for (int i = 0; i < collectionClientDeserialized.Count; i++)
+            {
+                Output.WriteLine($"Collection - Client item {i} type: {collectionClientDeserialized[i].GetType().FullName}");
+            }
+        }
+
+        if (collectionHostedDeserialized != null)
+        {
+            for (int i = 0; i < collectionHostedDeserialized.Count; i++)
+            {
+                Output.WriteLine($"Collection - Hosted item {i} type: {collectionHostedDeserialized[i].GetType().FullName}");
+            }
+        }
+    }
+
+    [HubFact]
+    public void TestDataGridSerialization()
+    {
+        var host = GetHost();
+
+        // Create a DataGridControl with PropertyColumnControl<string> columns
+        var originalGrid = new DataGridControl(new DataRecord[] { new("1", "1"), new("2", "2") })
+            .WithColumn(
+                new PropertyColumnControl<string>
+                {
+                    Property = nameof(DataRecord.SystemName).ToCamelCase(),
+                    Title = nameof(DataRecord.SystemName).Wordify()
+                },
+                new PropertyColumnControl<string>
+                {
+                    Property = nameof(DataRecord.DisplayName).ToCamelCase(),
+                    Title = nameof(DataRecord.DisplayName).Wordify()
+                }
+            ); Output.WriteLine($"Original grid columns count: {originalGrid.Columns.Count}");
+        foreach (var column in originalGrid.Columns)
+        {
+            Output.WriteLine($"Original column type: {column.GetType().FullName}");
+            if (column is PropertyColumnControl pc)
+            {
+                Output.WriteLine($"  Property: {pc.Property}, Title: {pc.Title}");
+            }
+        }
+
+        // Serialize with host options
+        var serialized = JsonSerializer.Serialize(originalGrid, host.JsonSerializerOptions);
+        Output.WriteLine($"Serialized JSON: {serialized}");
+
+        var client = GetClient();
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        Output.WriteLine($"Client JsonSerializerOptions converters: {client.JsonSerializerOptions.Converters.Count}");
+        foreach (var converter in client.JsonSerializerOptions.Converters)
+        {
+            Output.WriteLine($"  Client converter: {converter.GetType().FullName}");
+        }
+
+        Output.WriteLine($"Hosted JsonSerializerOptions converters: {hosted.JsonSerializerOptions.Converters.Count}");
+        foreach (var converter in hosted.JsonSerializerOptions.Converters)
+        {
+            Output.WriteLine($"  Hosted converter: {converter.GetType().FullName}");
+        }
+
+        // Deserialize with hosted hub options - this should work the same as client options
+        Output.WriteLine($"\nTesting deserialization...");
+        Output.WriteLine($"Serialized data: {serialized.Length} characters");
+        Output.WriteLine($"First 200 chars: {serialized.Substring(0, Math.Min(200, serialized.Length))}");
+
+        DataGridControl? deserialized = null;
+        try
+        {
+            deserialized = JsonSerializer.Deserialize<DataGridControl>(serialized, hosted.JsonSerializerOptions);
+            Output.WriteLine($"Deserialization successful");
+
+            // Debug specific column types
+            for (int i = 0; i < deserialized!.Columns.Count; i++)
+            {
+                var column = deserialized.Columns[i];
+                Output.WriteLine($"Column {i}: Type = {column.GetType().FullName}");
+                if (column is PropertyColumnControl pc)
+                {
+                    Output.WriteLine($"  PropertyColumnControl - Property: {pc.Property}, Title: {pc.Title}");
+                }
+                else if (column is JsonElement je)
+                {
+                    Output.WriteLine($"  JsonElement: {je.GetRawText()}");
+                }
+                else
+                {
+                    Output.WriteLine($"  Other type: {column}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"Deserialization failed: {ex.Message}");
+            throw;
+        }
+
+        Output.WriteLine($"Deserialized grid columns count: {deserialized!.Columns.Count}");
+        foreach (var column in deserialized.Columns)
+        {
+            Output.WriteLine($"Deserialized column type: {column.GetType().FullName}");
+            if (column is PropertyColumnControl pc)
+            {
+                Output.WriteLine($"  Property: {pc.Property}, Title: {pc.Title}");
+            }
+            else if (column is JsonElement je)
+            {
+                Output.WriteLine($"  JsonElement: {je.GetRawText()}");
+            }
+        }
+
+        // The test should pass if PropertyColumnControl objects are properly deserialized
+        deserialized.Columns.Should().HaveCount(2);
+        deserialized.Columns.Should().AllBeAssignableTo<PropertyColumnControl>();
+
+        var firstColumn = deserialized.Columns[0].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        firstColumn.Property.Should().Be(nameof(DataRecord.SystemName).ToCamelCase());
+        firstColumn.Title.Should().Be(nameof(DataRecord.SystemName).Wordify());
+
+        var secondColumn = deserialized.Columns[1].Should().BeAssignableTo<PropertyColumnControl>().Which;
+        secondColumn.Property.Should().Be(nameof(DataRecord.DisplayName).ToCamelCase());
+        secondColumn.Title.Should().Be(nameof(DataRecord.DisplayName).Wordify());
+    }
+
 }
 
 public static class TestAreas

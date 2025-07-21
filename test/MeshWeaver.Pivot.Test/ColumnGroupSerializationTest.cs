@@ -6,7 +6,6 @@ using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Pivot.Models;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Pivot.Test;
 

@@ -352,3 +352,6 @@ ASALocalRun/
 
 #sdk choice
 *.SdkResolver.*.proj
+
+# Template generation output
+dist/

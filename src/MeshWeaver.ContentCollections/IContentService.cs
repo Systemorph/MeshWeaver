@@ -2,10 +2,12 @@
 
 public interface IContentService
 {
-    Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default);
+    Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default);
     Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions options, CancellationToken ct = default);
-    IObservable<object> GetArticle(string collection, string article);
+    IObservable<object?> GetArticle(string collection, string article);
 
     Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default);
-    ContentCollection GetCollection(string collectionName);
+    IReadOnlyCollection<ContentCollection> GetCollections(bool includeHidden = false);
+    IReadOnlyCollection<ContentCollection> GetCollections(string context);
+    ContentCollection? GetCollection(string collectionName);
 }

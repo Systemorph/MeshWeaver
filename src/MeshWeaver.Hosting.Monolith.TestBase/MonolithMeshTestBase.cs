@@ -5,7 +5,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.TestBase;
 
@@ -32,13 +32,15 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();
 
 
-    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> config = null)
+    protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
-        return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        return Mesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient)!;
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h)); public override async Task DisposeAsync()
+        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h)); 
+    
+    public override async ValueTask DisposeAsync()
     {
         try
         {
@@ -46,7 +48,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             Mesh.Dispose();
-            await Mesh.Disposal.WaitAsync(cts.Token);
+            await Mesh.Disposal!.WaitAsync(cts.Token);
         }
         catch (OperationCanceledException)
         {

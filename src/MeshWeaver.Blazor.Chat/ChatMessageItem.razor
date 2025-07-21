@@ -100,7 +100,7 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
 
     private IconControl GetIcon(ProgressMessage progress)
     {
-        return new(progress.Icon);
+        return new(progress.Icon ?? new object());
     } /// <summary>
       /// Formats text to ensure proper markdown rendering, especially for bullet points
       /// </summary>

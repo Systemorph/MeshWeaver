@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(dotnet build:*)",
+      "Bash(cat:*)",
+      "Bash(iconv:*)",
+      "Bash(ls:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet clean:*)",
+      "Bash(dotnet nuget locals:*)",
+      "Bash(rm:*)",
+      "Bash(diff:*)",
+      "Bash(mv:*)",
+      "Bash(timeout:*)",
+      "Bash(true)",
+      "WebFetch(domain:xunit.net)",
+      "Bash(dotnet add:*)",
+      "Bash(dotnet search:*)",
+      "Bash(dotnet list package:*)",
+      "Bash(dotnet remove:*)"
+    ],
+    "deny": []
+  }
+}

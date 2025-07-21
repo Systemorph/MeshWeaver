@@ -7,7 +7,6 @@ using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -41,7 +40,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         response.Should().NotBeNull();
 
         client.Post(new DisposeRequest(), o => o.WithTarget(address));
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         response = await client
             .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
                 , new CancellationTokenSource(10.Seconds()).Token

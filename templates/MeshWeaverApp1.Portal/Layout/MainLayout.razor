@@ -1,0 +1,99 @@
+﻿@using MeshWeaverApp1.Portal.Infrastructure
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Blazor.Chat
+@inherits LayoutComponentBase
+@inject IDialogService DialogService
+<div class="layout @(IsAIChatVisible ? "chat-visible" : "")"
+    style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
+    <div class="meshweaver-icon">
+        <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
+            <MeshWeaverLogo></MeshWeaverLogo>
+        </FluentAnchor>
+    </div>
+
+    @if (ViewportInformation.IsDesktop)
+    {
+        <FluentHeader>
+            <FluentAnchor Appearance="Appearance.Stealth" Href="https://www.meshweaver.cloud" Class="logo">
+                MESHWEAVER
+            </FluentAnchor>
+            <FluentSpacer />
+            <div class="links">
+                <FluentAnchor Appearance="Appearance.Hypertext" Href="http://github.com/Systemorph/MeshWeaver"
+                    Target="_blank" Rel="noreferrer noopener" title="MeshWeaver on GitHub"
+                    aria-label="MeshWeaver source on GitHub">
+                    <FluentIcon Value="@(new PortalIcons.Size20.GitHub())" Color="Color.FillInverse" />
+                </FluentAnchor>
+                <FluentAnchor Appearance="Appearance.Hypertext" Href="https://discord.gg/wMTug8qtvc" Target="_blank"
+                    Rel="noreferrer noopener" title="MeshWeaver on Discord" aria-label="MeshWeaver Discord">
+                    <FluentIcon Value="@(new PortalIcons.Size20.Discord())" Color="Color.FillInverse" />
+                </FluentAnchor>
+            </div>
+            <div class="notifications">
+                <NotificationCenter />
+            </div>
+            <div class="chat">
+                <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                </FluentButton>
+            </div>
+            <div class="settings">
+                <FluentButton BackgroundColor="transparent" OnClick="OpenSiteSettingsAsync" Title="Site settings">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Color="Color.Neutral"
+                        Title="Site settings" />
+                </FluentButton>
+            </div>
+            <UserProfile />
+        </FluentHeader>
+
+        <DesktopNavMenu />
+    }
+    else
+    {
+        <FluentHeader>
+            <FluentSpacer />
+
+            <UserProfile />
+            <FluentButton
+                IconEnd="@(isNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
+                Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                OnClick="@(() => isNavMenuOpen = !isNavMenuOpen)" Class="navigation-button" />
+        </FluentHeader>
+
+        <MobileNavMenu IsNavMenuOpen="isNavMenuOpen" CloseNavMenu="@CloseMobileNavMenu"
+            LaunchSettingsAsync="@OpenSiteSettingsAsync" />
+    }
+
+    <div class="messagebar-container">
+        <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
+    </div>
+    <FluentBodyContent Class="custom-body-content body-content">
+        <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+        @Body
+    </FluentBodyContent>
+
+    <FluentDialogProvider />
+    <FluentTooltipProvider />
+    <FluentMenuProvider />
+    <FluentToastProvider MaxToastCount="10" />
+    <FluentKeyCodeProvider />
+
+    @if (IsAIChatVisible)
+    {
+        <div class="ai-chat-overlay">
+            <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
+            <div class="ai-chat-container">
+                <div class="ai-chat-content">
+                    <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Try reloading the page.</a>
+        <a class="dismiss">🗙</a>
+    </div>
+</div>
+

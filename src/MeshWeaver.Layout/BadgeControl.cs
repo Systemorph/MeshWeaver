@@ -14,47 +14,47 @@ public record BadgeControl(object Data)
     /// <summary>
     /// Gets or initializes the appearance of the badge.
     /// </summary>
-    public object Appearance { get; init; }
+    public object? Appearance { get; init; }
 
     /// <summary>
     /// Gets or initializes the background color of the badge.
     /// </summary>
-    public object BackgroundColor { get; init; }
+    public object? BackgroundColor { get; init; }
 
     /// <summary>
     /// Gets or initializes the circular state of the badge.
     /// </summary>
-    public object Circular { get; init; }
+    public object? Circular { get; init; }
 
     /// <summary>
     /// Gets or initializes the color of the badge.
     /// </summary>
-    public object Color { get; init; }
+    public object? Color { get; init; }
 
     /// <summary>
     /// Gets or initializes the dismiss icon of the badge.
     /// </summary>
-    public object DismissIcon { get; init; }
+    public object? DismissIcon { get; init; }
 
     /// <summary>
     /// Gets or initializes the dismiss title of the badge.
     /// </summary>
-    public object DismissTitle { get; init; }
+    public object? DismissTitle { get; init; }
 
     /// <summary>
     /// Gets or initializes the fill of the badge.
     /// </summary>
-    public object Fill { get; init; }
+    public object? Fill { get; init; }
 
     /// <summary>
     /// Gets or initializes the height of the badge.
     /// </summary>
-    public object Height { get; init; }
+    public object? Height { get; init; }
 
     /// <summary>
     /// Gets or initializes the width of the badge.
     /// </summary>
-    public object Width { get; init; }
+    public object? Width { get; init; }
 
     /// <summary>
     /// Sets the appearance of the badge.

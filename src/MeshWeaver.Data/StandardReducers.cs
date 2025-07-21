@@ -20,10 +20,11 @@ public static class StandardReducers
             .AddWorkspaceReference<PartitionedWorkspaceReference<InstanceCollection>, InstanceCollection>(
                 ReduceEntityStoreTo)
             .AddWorkspaceReference<PartitionedWorkspaceReference<object>, object>(ReduceEntityStoreTo)
-            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci,r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
+            .AddWorkspaceReference<JsonPointerReference, JsonElement>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub.JsonSerializerOptions))
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
-                reduced.AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
+                reduced.AddPatchFunction(PatchInstanceCollectionJsonElement)
+                    .AddWorkspaceReference<EntityReference, object>(ReduceInstanceCollectionTo)
                     .AddWorkspaceReference<InstanceReference, object>(ReduceInstanceCollectionTo)
             )
             .ForReducedStream<JsonElement>(reduced =>
@@ -33,43 +34,57 @@ public static class StandardReducers
 
     }
 
+
     private static ChangeItem<JsonElement> ReduceJsonElementTo(ChangeItem<JsonElement> current, JsonPointerReference reference, bool initial)
     {
         var pointer = JsonPointer.Parse(reference.Pointer);
         var value = pointer.Evaluate(current.Value) ?? default;
-        return new(value, current.ChangedBy, current.ChangeType, current.Version, current.Updates
+        return new(value, current.ChangedBy, current.StreamId, current.ChangeType, current.Version, current.Updates
             .Where(u => u.Collection == pointer.First()
                         && pointer.Skip(1).Equals(u.Id)).ToArray());
     }
 
-    private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch patch, string changedBy)
+    private static ChangeItem<JsonElement> PatchJsonElement(ISynchronizationStream<JsonElement> stream, JsonElement current, JsonElement updated, JsonPatch? patch, string changedBy)
     {
-        return new(updated, changedBy, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch, stream.Hub.JsonSerializerOptions));
+        var typeRegistry = stream.Hub.TypeRegistry;
+        return new(updated, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, current.ToEntityUpdates(updated, patch!, stream.Hub.JsonSerializerOptions, typeRegistry));
+    }
+    private static ChangeItem<InstanceCollection> PatchInstanceCollectionJsonElement(ISynchronizationStream<InstanceCollection> stream, InstanceCollection current, JsonElement updated, JsonPatch? patch, string changedBy)
+    {
+        var updatedInstances = updated.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
+        return new(
+            updatedInstances,
+            changedBy,
+            stream.StreamId,
+            ChangeType.Patch,
+            stream.Hub.Version,
+            current.ToEntityUpdates((CollectionReference)stream.Reference, updated, patch!, stream.Hub.JsonSerializerOptions));
     }
 
     private static ChangeItem<object> ReduceInstanceCollectionTo(ChangeItem<InstanceCollection> current, InstanceReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.Get<object>(reference.Id), current.Version);
+            return new(current.Value?.Get<object>(reference.Id), current.StreamId, current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Id == reference.Id);
         if (change == null)
-            return null;
-        return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+            return null!;
+        return new(change.Value!, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, [change]);
     }
 
     private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, EntityReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value?.ReduceImpl(reference), current.StreamId, current.Version);
         var change =
             current.Updates.FirstOrDefault(x => x.Collection == reference.Collection && Equals(x.Id, reference.Id));
         if (change is not null)
-            return new(change.Value, current.ChangedBy, ChangeType.Patch, current.Version, [change]);
+            return new(change.Value, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, [change]);
 
         return new(
-            current.Value.ReduceImpl(reference), 
+            current.Value?.ReduceImpl(reference)!,
             null,
+            current.StreamId,
             ChangeType.Full,
             current.Version,
             ImmutableArray<EntityUpdate>.Empty);
@@ -81,33 +96,33 @@ public static class StandardReducers
         if (!string.IsNullOrWhiteSpace(reference.Pointer) && reference.Pointer != "/")
             serialized = JsonPointer.Parse(reference.Pointer).Evaluate(serialized)!.Value;
 
-        return new(serialized, current.ChangedBy, ChangeType.Patch, current.Version, current.Updates);
+        return new(serialized, current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, current.Updates);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionsReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value?.ReduceImpl(reference)!, current.StreamId, current.Version);
 
 
         var changes =
             current.Updates.Where(x => reference.Collections.Contains(x.Collection))
                 .ToArray();
         if (!changes.Any())
-            return null;
-        return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
+            return null!;
+        return new(current.Value?.Reduce(reference), current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<InstanceCollection> ReduceEntityStoreTo(ChangeItem<EntityStore> current, CollectionReference reference, bool initial)
     {
         if (initial || current.ChangeType != ChangeType.Patch)
-            return new(current.Value.ReduceImpl(reference), current.Version);
+            return new(current.Value?.ReduceImpl(reference)!, current.StreamId, current.Version);
 
 
         var changes =
             current.Updates.Where(x => reference.Name == x.Collection)
                 .ToArray();
         if (!changes.Any())
-            return null;
-        return new(current.Value.Reduce(reference), current.ChangedBy, ChangeType.Patch, current.Version, changes);
+            return null!;
+        return new(current.Value?.Reduce(reference), current.ChangedBy, current.StreamId, ChangeType.Patch, current.Version, changes);
     }
     private static ChangeItem<EntityStore> ReduceEntityStoreTo(ChangeItem<EntityStore> current, PartitionedWorkspaceReference<EntityStore> reference, bool initial) =>
         ReduceEntityStoreTo(current, (dynamic)reference.Reference, initial);
@@ -117,11 +132,11 @@ public static class StandardReducers
         ReduceEntityStoreTo(current, (dynamic)reference.Reference, initial);
 
 
-    private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch patch, string changedBy)
+    private static ChangeItem<EntityStore> PatchEntityStore(ISynchronizationStream<EntityStore> stream, EntityStore currentStore, JsonElement updatedJson, JsonPatch? patch, string changedBy)
     {
         var updates = new List<EntityUpdate>();
         foreach (var g in
-                 patch.Operations
+                 patch!.Operations
                      .GroupBy(p => p.Path.First()))
         {
             var allChanges = g.ToArray();
@@ -162,7 +177,7 @@ public static class StandardReducers
             }))
             {
                 var collection = allChanges.First().Path.First();
-                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions);
+                var id = JsonSerializer.Deserialize<object>(eg.Key.Id, stream.Hub.JsonSerializerOptions)!;
                 var currentCollection = currentStore.GetCollection(collection);
                 if (currentCollection == null)
                     throw new InvalidOperationException(
@@ -196,17 +211,17 @@ public static class StandardReducers
 
         }
 
-        return new(currentStore, changedBy, ChangeType.Patch, stream.Hub.Version, updates);
+        return new(currentStore, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version, updates);
     }
 
     private static object GetEntity(this ISynchronizationStream<EntityStore> stream, JsonPointer entityPointer, JsonElement updatedJson)
     {
         var entity = entityPointer.Evaluate(updatedJson);
-        return entity?.Deserialize<object>(stream.Hub.JsonSerializerOptions);
+        return entity?.Deserialize<object>(stream.Hub.JsonSerializerOptions)!;
     }
     private static InstanceCollection DeserializeCollection(this ISynchronizationStream<EntityStore> stream, JsonElement updatedJson, JsonPointer pointer)
     {
-        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions);
+        return pointer.Evaluate(updatedJson)!.Value.Deserialize<InstanceCollection>(stream.Hub.JsonSerializerOptions)!;
     }
 
 }

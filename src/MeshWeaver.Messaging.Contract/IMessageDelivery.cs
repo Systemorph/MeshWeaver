@@ -12,11 +12,11 @@ public interface IMessageDelivery
     IReadOnlyDictionary<string, object> Properties { get; }
     string Id { get; }
     Address Sender { get; }
-    Address Target { get; }
+    Address? Target { get; }
     string State { get; }
     object Message { get; }
 
-    IMessageDelivery Package(JsonSerializerOptions options);
+    IMessageDelivery Package();
 
     internal IMessageDelivery SetAccessContext(AccessContext accessObject);
     internal IMessageDelivery ChangeState(string state);
@@ -36,7 +36,7 @@ public interface IMessageDelivery
     internal IMessageDelivery WithSender(Address address);
     internal IMessageDelivery WithTarget(Address address);
     IMessageDelivery Forwarded(params IEnumerable<Address> addresses);
-    AccessContext AccessContext { get; }
+    AccessContext? AccessContext { get; }
 
 }
 

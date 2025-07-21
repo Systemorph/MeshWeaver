@@ -73,17 +73,14 @@ namespace MeshWeaver.Reporting.Builder
         }
 
         public ReportBuilder<T, TIntermediate, TAggregate> WithAggregation(
-            Func<
-                Aggregations<T, TIntermediate, TAggregate>,
-                Aggregations<T, TIntermediate, TAggregate>
-            > aggregationsFunc
+            Func<Aggregations<T, TIntermediate, TAggregate>, Aggregations<T, TIntermediate, TAggregate>> aggregationsFunc
         )
         {
             return this with { PivotBuilder = PivotBuilder.WithAggregation(aggregationsFunc) };
         }
 
         public ReportBuilder<T, TIntermediate, TAggregate> WithOptions(
-            Func<GridOptions, GridOptions> gridOptions
+            Func<GridOptions, GridOptions>? gridOptions
         )
         {
             if (gridOptions is null)

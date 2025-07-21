@@ -20,22 +20,22 @@ public record WaterfallChartOptions<TOptions>
 
     internal ImmutableHashSet<int> TotalIndexes { get; init; } = [];
 
-    internal Func<BarDataSet, BarDataSet> BarDataSetModifier { get; init; }
+    internal Func<BarDataSet, BarDataSet> BarDataSetModifier { get; init; } = null!;
 
     internal bool HasLastAsTotal { get; init; }
 
     internal Func<LineDataSet, LineDataSet> ConnectorDataSetModifier { get; init; } = d => d.ThinLine();
 
-    internal Func<WaterfallStyling, WaterfallStyling> StylingOptions { get; init; }
+    internal Func<WaterfallStyling, WaterfallStyling> StylingOptions { get; init; } = null!;
 
-    internal ImmutableList<string> Labels { get; init; }
+    internal ImmutableList<string> Labels { get; init; } = null!;
 
     private TOptions This => (TOptions)this;
 
-    public TOptions WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
-        => This with { IncrementsLabel = incrementsLabel, DecrementsLabel = decrementsLabel, TotalLabel = totalLabel, };
+    public TOptions WithLegendItems(string? incrementsLabel = null, string? decrementsLabel = null, string? totalLabel = null)
+        => This with { IncrementsLabel = incrementsLabel ?? ChartConst.Hidden, DecrementsLabel = decrementsLabel ?? ChartConst.Hidden, TotalLabel = totalLabel ?? ChartConst.Hidden, };
 
-    public TOptions WithConnectors(Func<LineDataSet, LineDataSet> connectorLineModifier = null)
+    public TOptions WithConnectors(Func<LineDataSet, LineDataSet>? connectorLineModifier = null)
         => This with { ConnectorDataSetModifier = connectorLineModifier ?? ConnectorDataSetModifier, IncludeConnectors = true, };
 
     public TOptions WithTotalsAtPositions(IEnumerable<int> totalIndexes)

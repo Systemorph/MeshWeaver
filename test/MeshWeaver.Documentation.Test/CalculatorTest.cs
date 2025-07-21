@@ -13,7 +13,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -51,7 +50,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         foreach (var s in article.CodeSubmissions)
             client.Post(s, o => o.WithTarget(kernelAddress));
 
-        var html = article.PrerenderedHtml.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
+        var html = article.PrerenderedHtml!.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
 
         var (addressString, area) = HtmlParser
             .ExtractDataAddressAttributes(html)
@@ -63,7 +62,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await calcStream.GetControlStream(stack.Areas.Last().Area.ToString())
+        control = await calcStream.GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 

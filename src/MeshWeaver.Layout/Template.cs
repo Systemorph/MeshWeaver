@@ -15,8 +15,8 @@ public static class Template
     /// </summary>
     [ReplaceBindMethod]
     public static TView Bind<T, TView>(T data,
-        Expression<Func<T, TView>> dataTemplate,
-        string id = null)
+        Expression<Func<T, TView>>? dataTemplate,
+        string? id = null)
         where TView : UiControl => BindObject(data, dataTemplate, id);
 
     /// <summary>
@@ -33,7 +33,7 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, data);
+        return new ItemTemplateControl(view, data!);
     }
 
     /// <summary>
@@ -51,7 +51,7 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        object current = null;
+        object? current = null;
 
         return new ItemTemplateControl(view, "/") { DataContext = LayoutAreaReference.GetDataPointer(id) }
             .WithBuildup((host, context, store) =>
@@ -74,13 +74,13 @@ public static class Template
     /// </summary>
     [ReplaceBindMethod]
     public static TView Bind<T, TView>(this IObservable<T> stream,
-        Expression<Func<T, TView>> dataTemplate,
-        string id)
+        Expression<Func<T, TView>>? dataTemplate,
+        string? id)
         where TView : UiControl
     {
-        object current = null;
+        object? current = null;
         id ??= Guid.NewGuid().AsString();
-        return (TView)GetTemplateControl(id, dataTemplate)
+        return (TView)GetTemplateControl(id!, dataTemplate)
             .WithBuildup((host, context, store) =>
             {
                 var forwardSubscription = stream.Subscribe(val =>
@@ -88,7 +88,7 @@ public static class Template
                     if (Equals(val, current))
                         return;
                     current = val;
-                    host.Stream.SetData(id, val, host.Stream.StreamId);
+                    host.Stream.SetData(id!, val, host.Stream.StreamId);
                 });
                 host.RegisterForDisposal(context.Area, forwardSubscription);
                 return new(store, [], null);
@@ -96,7 +96,7 @@ public static class Template
     }
 
     private static readonly MethodInfo ItemTemplateMethodNonGeneric = ReflectionHelper.GetStaticMethodGeneric(
-        () => ItemTemplateNonGeneric<object, UiControl>(default(IEnumerable<object>), null)
+        () => ItemTemplateNonGeneric<object, UiControl>(null, null!)
     );
 
     /// <summary>
@@ -104,7 +104,7 @@ public static class Template
     /// </summary>
     [ReplaceBindMethod]
     public static UiControl ItemTemplateNonGeneric<T, TView>(
-        object data,
+        object? data,
         Expression<Func<T, TView>> dataTemplate
     )
         where TView : UiControl
@@ -113,7 +113,7 @@ public static class Template
         if (view == null)
             throw new ArgumentException("Data template was not specified.");
 
-        return new ItemTemplateControl(view, data);
+        return new ItemTemplateControl(view, data!);
     }
 
     private class ReplaceBindMethodAttribute : ReplaceMethodInTemplateAttribute
@@ -132,24 +132,24 @@ public static class Template
     ).MakeGenericMethod(method.GetGenericArguments());
 
     private static readonly MethodInfo BindObjectMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => BindObject<object, UiControl>(default, default, default)
+        () => BindObject<object, UiControl>(null, null, null)
     );
 
     internal static TView BindObject<T, TView>(
-        object data,
-        Expression<Func<T, TView>> dataTemplate,
-        string id
+        object? data,
+        Expression<Func<T, TView>>? dataTemplate,
+        string? id
     )
         where TView : UiControl
     {
-        id ??= Guid.NewGuid().AsString();
+        id ??= Guid.NewGuid().AsString()!;
         var view = GetTemplateControl(id, dataTemplate);
         if (data != null)
             view = (TView)view.WithBuildup((_, _, store) => store.UpdateData(id, data));
         return view;
     }
 
-    private static TView GetTemplateControl<T, TView>(string id, Expression<Func<T, TView>> dataTemplate)
+    private static TView GetTemplateControl<T, TView>(string id, Expression<Func<T, TView>>? dataTemplate)
         where TView : UiControl
     {
         var dataContext = LayoutAreaReference.GetDataPointer(id);
@@ -194,7 +194,7 @@ public static class Template
 
 
     private static readonly MethodInfo BindManyMethod = ReflectionHelper.GetStaticMethodGeneric(
-        () => BindMany<object, UiControl>(default(IEnumerable<object>), null)
+        () => BindMany<object, UiControl>(null!, null!)
     );
 
 }

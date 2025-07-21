@@ -4,7 +4,6 @@ using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -29,7 +28,7 @@ public class SkinSerializationTest(ITestOutputHelper output) : HubTestBase(outpu
         // Test with various skin scenarios
         var skinsWithNull = ImmutableList<Skin>.Empty
             .Add(validSkin)
-            .Add(null); // This might cause issues
+            .Add(null!); // This might cause issues
 
         var stackWithNullSkin = stackControl with { Skins = skinsWithNull };
 

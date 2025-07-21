@@ -1,8 +1,10 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
+using System.Reflection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Layout.Composition;
-using Microsoft.Extensions.DependencyInjection;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
 
@@ -20,7 +22,7 @@ public static class LayoutDefinitionExtensions
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
-        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl>> generator
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> generator
     ) =>
         layout.WithRenderer(context, (a, ctx, s) => a.RenderArea(ctx, generator.Invoke(a, ctx), s));
 
@@ -34,8 +36,8 @@ public static class LayoutDefinitionExtensions
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
-        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl>> generator,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> generator,
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) =>
         layout
             .WithView(c => c.Area == area, generator)
@@ -126,24 +128,30 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
         IObservable<ViewDefinition<T>> generator,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) where T:UiControl =>
         layout.WithView(c => c.Area == area, generator)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
         ;
 
-    private static LayoutAreaDefinition CreateLayoutAreaDefinition(this LayoutDefinition layout, string area, Func<LayoutAreaDefinition, LayoutAreaDefinition> options, Delegate delgate)
+    private static LayoutAreaDefinition CreateLayoutAreaDefinition(this LayoutDefinition layout, string area, Func<LayoutAreaDefinition, LayoutAreaDefinition>? options, Delegate? delgate)
     {
         LayoutAreaDefinition ret = new(area, $"{layout.Hub.Address}/{area}");
         if (delgate is not null)
         {
             var method = delgate.Method;
-            var doc = layout.Hub.ServiceProvider
-                .GetRequiredService<IDocumentationService>()
-                .GetDocumentation(method);
-            if (doc is not null)
-                ret = ret.WithDescription(doc.Summary.Text)
-                    .WithReferences(doc.Summary.See?.Cref);
+            var doc = method.GetXmlDocsSummary();
+            ret = ret.WithDescription(doc);
+            if(method.GetCustomAttribute<DisplayAttribute>() is { } displayAttribute)
+            {
+                ret = ret with{Order = displayAttribute.Order};
+                if(displayAttribute.Description is not null)
+                    ret = ret.WithDescription(displayAttribute.Description);
+                if(displayAttribute.Name is not null)
+                    ret = ret.WithTitle(displayAttribute.Name);
+            }
+            if (method.GetCustomAttribute<BrowsableAttribute>() is { } browsableAtt)
+                ret = ret with{IsInvisible = !browsableAtt.Browsable};
         }
         if (options is not null)
             ret = options.Invoke(ret);
@@ -154,15 +162,15 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout, 
         Func<RenderingContext, bool> context, 
         object view,
-        LayoutAreaDefinition layoutAreaDefinition = null) =>
+        LayoutAreaDefinition? layoutAreaDefinition = null) =>
         layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, view, s))
-            .WithAreaDefinition(layoutAreaDefinition);
+            .WithAreaDefinition(layoutAreaDefinition!);
 
     public static LayoutDefinition WithView(
         this LayoutDefinition layout, 
         string area, 
         UiControl view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
         ) =>
         layout
             .WithView(c => c.Area == area, view)
@@ -171,12 +179,12 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
-        LayoutAreaDefinition areaDefinition = null)
+        LayoutAreaDefinition? areaDefinition = null)
         => layout
             .WithRenderer(context,
                 (a, c, s)
-                    => a.RenderArea(c, view.Invoke, s))
-            .WithAreaDefinition(areaDefinition);
+                    => a.RenderArea(c, (ViewDefinition)view.Invoke!, s))
+            .WithAreaDefinition(areaDefinition!);
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
@@ -185,7 +193,7 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition)
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition)
         => layout.WithView(c => c.Area == area, view)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 
@@ -193,18 +201,18 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        LayoutAreaDefinition areaDefinition = null) where T:UiControl
+        LayoutAreaDefinition? areaDefinition = null) where T:UiControl
         => layout
             .WithView(context, 
                 (a, ctx) 
                     => Observable.Return<UiControl>(view(a, ctx)))
-            .WithAreaDefinition(areaDefinition);
+            .WithAreaDefinition(areaDefinition!);
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        Func<LayoutAreaDefinition, LayoutAreaDefinition> areaDefinition = null
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
     ) where T : UiControl => layout.WithView(c => c.Area == area, view)
         .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 

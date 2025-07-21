@@ -1,0 +1,34 @@
+﻿@using Microsoft.AspNetCore.Components.Authorization
+
+<AuthorizeView>
+    <Authorized>
+        <div class="profile-menu-container">
+            <FluentProfileMenu Initials="@initials"
+                               EMail="@username"
+                               FullName="@name"
+                               ButtonSize="@ButtonSize"
+                               FooterLink="">
+                <HeaderTemplate>
+                    <FluentStack VerticalAlignment="VerticalAlignment.Center">
+                        <FluentLabel>Logged in as:</FluentLabel>
+                        <FluentSpacer />
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="Logout">Sign out</FluentButton>
+                    </FluentStack>
+                </HeaderTemplate>
+                <ChildContent>
+                    <FluentStack class="inner-persona-container">
+                        <FluentPersona Initials="@initials" ImageSize="@ImageSize" Class="inner-persona">
+                            <div class="full-name">@name</div>
+                            <div class="user-id">@username</div>
+                        </FluentPersona>
+                    </FluentStack>
+                </ChildContent>
+            </FluentProfileMenu>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <div class="login-button-container">
+            <FluentButton Appearance="Appearance.Stealth" OnClick="Login">Login</FluentButton>
+        </div>
+    </NotAuthorized>
+</AuthorizeView>

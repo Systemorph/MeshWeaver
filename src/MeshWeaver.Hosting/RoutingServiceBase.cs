@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting
             {
                 Mesh.Post(new DeliveryFailure(delivery)
                 {
-                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace
+                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace!
                 },
                     o => o.ResponseFor(delivery));
                 return delivery.Failed(e.Message);
@@ -50,7 +50,7 @@ namespace MeshWeaver.Hosting
             if (delivery.Target is HostedAddress { Host: MeshAddress } hosted)
                 delivery = delivery.WithTarget(hosted.Address);
 
-            var address = GetHostAddress(delivery.Target);
+            var address = GetHostAddress(delivery.Target!);
 
             // if we have created the hub ==> route through us.
             var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
@@ -69,7 +69,7 @@ namespace MeshWeaver.Hosting
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
         {
             var kernelId = GetKernelId(delivery, node, address);
-            delivery = delivery.WithTarget(new HostedAddress(delivery.Target, new KernelAddress(){Id = kernelId}));
+            delivery = delivery.WithTarget(new HostedAddress(delivery.Target!, new KernelAddress(){Id = kernelId}));
             return RouteInMesh(delivery, ct);
         }
 
@@ -101,7 +101,7 @@ namespace MeshWeaver.Hosting
         }
 
         protected abstract Task<IMessageDelivery> RouteImplAsync(IMessageDelivery delivery,
-            MeshNode node,
+            MeshNode? node,
             Address address,
             CancellationToken cancellationToken);
 

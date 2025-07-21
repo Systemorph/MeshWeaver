@@ -11,11 +11,25 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
-    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub> hubFactory)
+    public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub?> hubFactory)
         where TAddress:Address=>
         RouteAddress<TAddress>((routedAddress, d) =>
         {
-            var hub = hubFactory(routedAddress);
+            // Check if the parent hub is disposing before attempting to create/route to hosted hubs
+            if (Hub.IsDisposing)
+            {
+                // During disposal, reject messages to hosted hubs to prevent deadlocks
+                Hub.Post(
+                    new DeliveryFailure(d)
+                    {
+                        ErrorType = ErrorType.Rejected,
+                        Message = $"Cannot route to hosted hub {routedAddress} - parent hub {Hub.Address} is disposing"
+                    }, o => o.ResponseFor(d)
+                );
+                return d.Failed("Parent hub disposing");
+            }
+            
+            var hub = hubFactory.Invoke(routedAddress);
             if (hub == null)
                 return d.NotFound();
             hub.DeliverMessage(d);
@@ -51,7 +65,12 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         where TAddress : Address
-        => RouteAddressToHub<TAddress>(a => Hub.GetHostedHub(a, configuration));
+        => RouteAddressToHub<TAddress>(a => 
+        {
+            // During disposal, only try to get existing hubs, don't create new ones
+            var creation = Hub.IsDisposing ? HostedHubCreation.Never : HostedHubCreation.Always;
+            return Hub.GetHostedHub(a, configuration, creation);
+        });
 
 }
 

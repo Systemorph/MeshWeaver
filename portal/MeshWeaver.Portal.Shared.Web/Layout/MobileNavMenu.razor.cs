@@ -24,22 +24,29 @@ public partial class MobileNavMenu : ComponentBase
 
     private IEnumerable<MobileNavMenuEntry> GetMobileNavMenuEntries()
     {
-            yield return new MobileNavMenuEntry(
-                "Articles",
-                () => NavigateToAsync("/articles"),
-                DesktopNavMenu.ArticlesIcon(),
-                LinkMatchRegex: new Regex("^/articles")
-            );
-            yield return new MobileNavMenuEntry("Areas", 
-                () => NavigateToAsync("/content/Documentation/Readme"),
-                DesktopNavMenu.DocumentationIcon(),
-                LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
-
-            yield return new MobileNavMenuEntry(
-            "Settings"                ,
-            LaunchSettingsAsync,
-            new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
+        yield return new MobileNavMenuEntry(
+            "Articles",
+            () => NavigateToAsync("/articles"),
+            DesktopNavMenu.ArticlesIcon(),
+            LinkMatchRegex: new Regex("^/articles")
         );
+        yield return new MobileNavMenuEntry("Areas",
+            () => NavigateToAsync("/content/Documentation/Readme"),
+            DesktopNavMenu.DocumentationIcon(),
+            LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
+
+        yield return new MobileNavMenuEntry(
+            "Todos",
+            () => NavigateToAsync("/app/Todo/TodoList"),
+            DesktopNavMenu.TodoIcon(),
+            LinkMatchRegex: new Regex("^/app/Todo")
+        );
+
+        yield return new MobileNavMenuEntry(
+        "Settings",
+        LaunchSettingsAsync,
+        new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
+    );
         yield return new MobileNavMenuEntry(
             "Sign in",
             () => NavigateToAsync(LoginUrl(), true),

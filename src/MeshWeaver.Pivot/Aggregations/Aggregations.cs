@@ -6,17 +6,17 @@ namespace MeshWeaver.Pivot.Aggregations
 {
     public record Aggregations<TTransformed, TIntermediate, TAggregate>
     {
-        public Func<IEnumerable<TTransformed>, TIntermediate> Aggregation { get; init; }
-        public Func<IEnumerable<TIntermediate>, TIntermediate> AggregationOfAggregates { get; init; }
-        public Func<TIntermediate, TAggregate> ResultTransformation { get; init; }
-        public string Name { get; init; }
+        public Func<IEnumerable<TTransformed>, TIntermediate>? Aggregation { get; init; }
+        public Func<IEnumerable<TIntermediate>, TIntermediate>? AggregationOfAggregates { get; init; }
+        public Func<TIntermediate, TAggregate>? ResultTransformation { get; init; }
+        public string? Name { get; init; }
 
         public Aggregations<TTransformed, TNewIntermediate, TAggregate> WithAggregation<TNewIntermediate>(Func<IEnumerable<TTransformed>, TNewIntermediate> newAggregation)
         {
             return new Aggregations<TTransformed, TNewIntermediate, TAggregate>
-                   {
-                       Aggregation = newAggregation
-                   };
+            {
+                Aggregation = newAggregation,
+            };
         }
 
         public Aggregations<TTransformed, TIntermediate, TAggregate> WithAggregationOfAggregates(Func<IEnumerable<TIntermediate>, TIntermediate> newAggregationOfAggregates)
@@ -27,11 +27,11 @@ namespace MeshWeaver.Pivot.Aggregations
         public Aggregations<TTransformed, TIntermediate, TNewAggregate> WithResultTransformation<TNewAggregate>(Func<TIntermediate, TNewAggregate> newResultTransformation)
         {
             return new Aggregations<TTransformed, TIntermediate, TNewAggregate>
-                   {
-                       Aggregation = Aggregation,
-                       AggregationOfAggregates = AggregationOfAggregates,
-                       ResultTransformation = newResultTransformation
-                   };
+            {
+                Aggregation = Aggregation,
+                AggregationOfAggregates = AggregationOfAggregates,
+                ResultTransformation = newResultTransformation
+            };
         }
     }
 
@@ -51,7 +51,7 @@ namespace MeshWeaver.Pivot.Aggregations
             if (typeof(TElement).IsClass)
             {
                 if (list.Any(x => x == null))
-                    return default;
+                    return default!;
 
                 var aggregateByProperties = typeof(TElement)
                                             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -61,18 +61,18 @@ namespace MeshWeaver.Pivot.Aggregations
                     return (TElement)typeof(AggregationsExtensions)
                                      .GetMethod(nameof(AggregateClass), BindingFlags.NonPublic | BindingFlags.Static)!
                                      .MakeGenericMethod(typeof(TElement))
-                                     .Invoke(null, new object[] { enumerable, aggregateByProperties.Select(p => p.Name).ToArray() });
+                                     .Invoke(null, new object[] { enumerable, aggregateByProperties.Select(p => p.Name).ToArray() })!;
             }
 
             return AggregationFunction.Aggregate<TElement, TElement>(list);
         }
 
-        private static TElement AggregateClass<TElement>(IEnumerable<TElement> enumerable, string[] properties)
+        private static TElement? AggregateClass<TElement>(IEnumerable<TElement> enumerable, string[] properties)
             where TElement : class
         {
             var aggregated = enumerable.AggregateBy(properties).ToList();
             if (aggregated.Count != 1)
-                return default;
+                return null;
             return aggregated[0];
         }
 
@@ -84,7 +84,7 @@ namespace MeshWeaver.Pivot.Aggregations
 
         #region Count
 
-        public static Aggregations<TTransformed, int> Count<TTransformed, TAggregate>(this Aggregations<TTransformed, TAggregate, TAggregate> _, Func<TTransformed, bool> predicate = null)
+        public static Aggregations<TTransformed, int> Count<TTransformed, TAggregate>(this Aggregations<TTransformed, TAggregate, TAggregate> _, Func<TTransformed, bool>? predicate = null)
         {
             return new Aggregations<TTransformed, int>
             {
@@ -173,8 +173,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TAggregate, TAggregate>
             {
                 Name = "Max",
-                Aggregation = enumerable => enumerable.Max(),
-                AggregationOfAggregates = max => max.Max()
+                Aggregation = enumerable => enumerable.Max()!,
+                AggregationOfAggregates = max => max.Max()!
             };
         }
 
@@ -183,8 +183,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TTransformed, TNewAggregate>
             {
                 Name = "Max",
-                Aggregation = enumerable => enumerable.Max(selector),
-                AggregationOfAggregates = max => max.Max()
+                Aggregation = enumerable => enumerable.Max(selector)!,
+                AggregationOfAggregates = max => max.Max()!
             };
         }
 
@@ -197,8 +197,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TAggregate, TAggregate>
             {
                 Name = "Min",
-                Aggregation = enumerable => enumerable.Min(),
-                AggregationOfAggregates = min => min.Min()
+                Aggregation = enumerable => enumerable.Min()!,
+                AggregationOfAggregates = min => min.Min()!
             };
         }
 
@@ -207,8 +207,8 @@ namespace MeshWeaver.Pivot.Aggregations
             return new Aggregations<TTransformed, TNewAggregate>
             {
                 Name = "Min",
-                Aggregation = enumerable => enumerable.Min(selector),
-                AggregationOfAggregates = min => min.Min()
+                Aggregation = enumerable => enumerable.Min(selector)!,
+                AggregationOfAggregates = min => min.Min()!
             };
         }
 

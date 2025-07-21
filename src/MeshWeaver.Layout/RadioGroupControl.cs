@@ -20,12 +20,12 @@ public record RadioGroupControl : ListControlBase<RadioGroupControl>
     /// <summary>
     /// Type of the property of the radio control group.
     /// </summary>
-    public object Type { get; init; }
+    public object? Type { get; init; }
 
     /// <summary>
     /// Gets or initializes the name of the radio group.
     /// </summary>
-    public object Name { get; init; }
+    public object? Name { get; init; }
 
     /// <summary>
     /// Sets the name of the radio group.
@@ -36,7 +36,7 @@ public record RadioGroupControl : ListControlBase<RadioGroupControl>
     /// <summary>
     /// Gets or sets the orientation of the toolbar.
     /// </summary>
-    public object Orientation { get; init; } = Layout.Orientation.Horizontal;
+    public object? Orientation { get; init; } = Layout.Orientation.Horizontal;
 
     /// <summary>
     /// Sets the orientation of the toolbar.

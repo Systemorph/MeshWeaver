@@ -12,7 +12,7 @@ public static class OrleansServerRegistryExtensions
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
         this IHostApplicationBuilder hostBuilder,
         Address address,
-        Func<ISiloBuilder, ISiloBuilder> orleansConfiguration = null
+        Func<ISiloBuilder, ISiloBuilder>? orleansConfiguration = null
         )
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);

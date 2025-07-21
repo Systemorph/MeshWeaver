@@ -6,9 +6,9 @@ namespace MeshWeaver.Pivot.Models
     public record RowGroup : IGroup
     {
         public ImmutableList<object> Coordinates { get; init; } = ImmutableList<object>.Empty;
-        public object Id { get; init; }
-        public string DisplayName { get; init; }
-        public string GrouperName { get; init; }
+        public object? Id { get; init; }
+        public string? DisplayName { get; init; }
+        public string? GrouperName { get; init; }
 
         public RowGroup(object id, string displayName, string grouperName)
         {
@@ -20,7 +20,7 @@ namespace MeshWeaver.Pivot.Models
 
         public RowGroup() { }
 
-        public virtual bool Equals(RowGroup other)
+        public virtual bool Equals(RowGroup? other)
         {
             if (ReferenceEquals(null, other))
                 return false;

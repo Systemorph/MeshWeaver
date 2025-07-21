@@ -6,7 +6,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -21,7 +21,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
         {
             return base.ConfigureHost(configuration)
                 .WithRoutes(r =>
-                    r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                    r.RouteAddress<ClientAddress>((_, d) => d.Package())
                 )
                 .AddLayout(layout =>
                     layout
@@ -50,7 +50,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
                 reference
             );
 
-            var control = await stream.GetControlStream(reference.Area)
+            var control = await stream.GetControlStream(reference.Area.ToString()!)
                 .Timeout(10.Seconds())
                 .FirstAsync();
             

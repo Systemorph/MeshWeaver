@@ -24,12 +24,12 @@ namespace MeshWeaver.DataCubes.Operations
 
         public override IDataCube<T> Filter(params (string filter, object value)[] tuple)
         {
-            return cubes.Select(c => c.Filter(tuple)).Aggregate();
+            return cubes.Select(c => c.Filter(tuple)).Aggregate()!;
         }
 
         public override IDataCube<T> Filter(Func<T, bool> filter)
         {
-            return cubes.Select(c => c.Filter(filter)).Aggregate();
+            return cubes.Select(c => c.Filter(filter)).Aggregate()!;
         }
 
         public override IEnumerable<DataSlice<T>> GetSlices(params string[] dimensions)

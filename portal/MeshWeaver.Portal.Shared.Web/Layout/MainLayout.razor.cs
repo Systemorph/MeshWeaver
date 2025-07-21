@@ -9,8 +9,7 @@ namespace MeshWeaver.Portal.Shared.Web.Layout;
 
 public partial class MainLayout
 {
-    [Inject]
-    private IJSRuntime JSRuntime { get; set; }
+    [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
 
     private const string MessageBarSection = "MessagesTop";
 
@@ -30,7 +29,7 @@ public partial class MainLayout
         isNavMenuOpen = false;
         StateHasChanged();
     }
-    private IDialogReference dialog;
+    private IDialogReference? dialog;
 
     private async Task OpenSiteSettingsAsync()
     {
@@ -47,7 +46,7 @@ public partial class MainLayout
         await dialog.Result;
     }
     public bool IsAIChatVisible { get; private set; }
-    private AgentChatView chatComponent;
+    private AgentChatView? chatComponent;
 
     public void ToggleAIChatVisibility()
     {
@@ -67,5 +66,6 @@ public partial class MainLayout
             await chatComponent.ResetConversationAsync();
         }
     }
+
 
 }

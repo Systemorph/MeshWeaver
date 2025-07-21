@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using MeshWeaver.Reflection;
 
 namespace MeshWeaver.Arithmetics

@@ -7,6 +7,6 @@ namespace MeshWeaver.Pivot.Grouping
         where TGroup : IGroup
     {
         IEnumerable<Column> GetValueColumns();
-        IEnumerable<(TGroup group, Func<TAggregate, object> accessor)> GetAccessors();
+        IEnumerable<(TGroup group, Func<TAggregate, object?> accessor)> GetAccessors();
     }
 }

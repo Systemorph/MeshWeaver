@@ -8,7 +8,7 @@ public record EmbeddedDocumentationSource :
 {
     private Assembly Assembly { get; }
 
-    public override Stream GetStream(string name)
+    public override Stream? GetStream(string name)
         => Assembly.GetManifestResourceStream(DocumentPaths.GetValueOrDefault(name) ?? name);
 
 

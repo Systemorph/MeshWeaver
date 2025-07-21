@@ -43,7 +43,7 @@ public class ThreadSafeLinkedList<T>
         }
     }
 
-    public LinkedListNode<T> First
+    public LinkedListNode<T>? First
     {
         get
         {
@@ -59,7 +59,7 @@ public class ThreadSafeLinkedList<T>
         }
     }
 
-    public LinkedListNode<T> Last
+    public LinkedListNode<T>? Last
     {
         get
         {

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 
@@ -37,7 +37,7 @@ public class MetadataStrippingConverter<T> : JsonConverter<T>
             }
 
             // Deserialize the cleaned JSON
-            return cleanedJson.Deserialize<T>(newOptions);
+            return cleanedJson.Deserialize<T>(newOptions)!;
         }
 
         // For non-object types, deserialize normally
@@ -51,7 +51,7 @@ public class MetadataStrippingConverter<T> : JsonConverter<T>
         }
 
         var json = element.GetRawText();
-        return JsonSerializer.Deserialize<T>(json, newOptionsSimple);
+        return JsonSerializer.Deserialize<T>(json, newOptionsSimple)!;
     }
 
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)

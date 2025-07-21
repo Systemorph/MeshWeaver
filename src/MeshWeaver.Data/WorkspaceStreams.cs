@@ -7,10 +7,10 @@ namespace MeshWeaver.Data;
 
 public static class WorkspaceStreams
 {
-    internal static ISynchronizationStream CreateWorkspaceStream<TReduced, TReference>(
+    internal static ISynchronizationStream? CreateWorkspaceStream<TReduced, TReference>(
         IWorkspace workspace,
         TReference reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration)
         where TReference : WorkspaceReference<TReduced>
     {
         var collections = reference.GetCollections();
@@ -30,17 +30,18 @@ public static class WorkspaceStreams
             var dataSource = groups[0].Key;
             if (dataSource == null)
                 throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-            return groups[0].Key
+            return dataSource
                 .GetStreamForPartition(partition)
-                .Reduce(reference, configuration);
+                ?.Reduce(reference, configuration);
         }
 
         var streams = groups.Select(g =>
-                g.Key.GetStreamForPartition(partition))
+                g.Key?.GetStreamForPartition(partition))
+            .Where(s => s != null)
             .ToArray();
 
 
-        var combinedReference = new CombinedStreamReference(streams.Select(s => s.StreamIdentity).ToArray());
+        var combinedReference = new CombinedStreamReference(streams.Select(s => s!.StreamIdentity).ToArray());
 
         var ret = new SynchronizationStream<EntityStore>(
             new StreamIdentity(workspace.Hub.Address, partition),
@@ -53,20 +54,29 @@ c => c
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         ret.Initialize(async ct => await streams
             .ToAsyncEnumerable()
-            .SelectAwait(async x => await x.FirstAsync())
+            .SelectAwait(async x => await x!.FirstAsync())
             .AggregateAsync(new EntityStore(), (x, y) =>
-            x.Merge(y.Value), cancellationToken: ct), ex => logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address));
+            y.Value is null ? x : x.Merge(y.Value), cancellationToken: ct), ex =>
+        {
+            logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address);
+            return Task.CompletedTask;
+        });
 
         foreach (var stream in streams)
-            ret.RegisterForDisposal(stream.Skip(1).Subscribe(s => 
+            ret.RegisterForDisposal(stream!.Skip(1).Subscribe(s => 
                 ret.Update(
-                    current => ret.ApplyChanges(current.MergeWithUpdates(s.Value, s.ChangedBy)),
-                    ex => logger.LogError(ex, "cannot apply changes to stream for {Address}", workspace.Hub.Address)
-                    )
+                    current => ret.ApplyChanges(current!.MergeWithUpdates(s.Value!, s.ChangedBy ?? string.Empty)),
+                    ex =>
+                    {
+                        logger.LogError(ex, "cannot apply changes to stream for {Address}",
+                            workspace.Hub.Address);
+                        return Task.CompletedTask;
+
+                    })
                 )
             );
 
-        return ret.Reduce(reference, configuration);
+        return ret.Reduce(reference, configuration ?? (c => c));
     }
 
 
@@ -83,7 +93,7 @@ c => c
 
 
 
-    internal static object ReduceApplyRules<TStream, TReference, TReduced>(
+    internal static object? ReduceApplyRules<TStream, TReference, TReduced>(
         ChangeItem<TStream> state,
         WorkspaceReference @ref,
         ReduceFunction<TStream, TReference, TReduced> reducer,
@@ -106,7 +116,7 @@ c => c
     {
         var reducedStream = new SynchronizationStream<TReduced>(
             stream.StreamIdentity,
-            stream.Hub,
+            stream.Host,
             reference,
             stream.ReduceManager.ReduceTo<TReduced>(),
             configuration

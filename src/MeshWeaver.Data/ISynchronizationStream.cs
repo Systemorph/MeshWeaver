@@ -16,19 +16,20 @@ public interface ISynchronizationStream : IDisposable
 
     ISynchronizationStream Reduce(
         WorkspaceReference reference) => Reduce((dynamic)reference);
-    ISynchronizationStream<TReduced> Reduce<TReduced>(
+    ISynchronizationStream<TReduced>? Reduce<TReduced>(
         WorkspaceReference<TReduced> reference);
 
-    ISynchronizationStream<TReduced> Reduce<TReduced>(
+    ISynchronizationStream<TReduced>? Reduce<TReduced>(
         WorkspaceReference<TReduced> reference,
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> config
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config
     );
 
     IMessageHub Hub { get; }
-    T Get<T>(string key);
-    T Get<T>();
-    void Set<T>(string key, T value);
-    void Set<T>(T value);
+    IMessageHub Host { get; }
+    T? Get<T>(string key);
+    T? Get<T>();
+    void Set<T>(string key, T? value);
+    void Set<T>(T? value);
 
 
 }
@@ -38,16 +39,13 @@ public interface ISynchronizationStream<TStream>
         IObservable<ChangeItem<TStream>>,
         IObserver<ChangeItem<TStream>>
 {
-    ChangeItem<TStream> Current { get; }
-    void Update(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback);
-    void Update(Func<TStream, CancellationToken, Task<ChangeItem<TStream>>> update, Action<Exception> exceptionCallback);
-    void Initialize(Func<CancellationToken, Task<TStream>> init, Action<Exception> exceptionCallback);
-    void Initialize(Func<TStream> init, Action<Exception> exceptionCallback) => Initialize(_ => Task.FromResult(init()), exceptionCallback);
+    ChangeItem<TStream>? Current { get; }
+    void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback);
+    void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Func<Exception, Task> exceptionCallback);
+    void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback);
+    void Initialize(Func<TStream> init, Func<Exception, Task> exceptionCallback) => Initialize(_ => Task.FromResult(init()), exceptionCallback);
     void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
-    void RequestChange(Func<TStream, ChangeItem<TStream>> update, Action<Exception> exceptionCallback);
-    void InvokeAsync(Action action, Action<Exception> exceptionCallback);
-    void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback);
 
 }
 

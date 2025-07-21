@@ -9,63 +9,63 @@ namespace MeshWeaver.Reflection
     {
         #region GetActions
 
-        public static Action GetAction(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action GetAction(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, Type.EmptyTypes);
             var @delegate = InnerCache.GetInstance(token);
             return (Action)@delegate;
         }
 
-        public static Action<T1> GetAction<T1>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1> GetAction<T1>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1>)@delegate;
         }
 
-        public static Action<T1, T2> GetAction<T1, T2>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2> GetAction<T1, T2>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2>)@delegate;
         }
 
-        public static Action<T1, T2, T3> GetAction<T1, T2, T3>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3> GetAction<T1, T2, T3>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2, T3>)@delegate;
         }
 
-        public static Action<T1, T2, T3, T4> GetAction<T1, T2, T3, T4>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3, T4> GetAction<T1, T2, T3, T4>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2, T3, T4>)@delegate;
         }
 
-        public static Action<T1, T2, T3, T4, T5> GetAction<T1, T2, T3, T4, T5>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3, T4, T5> GetAction<T1, T2, T3, T4, T5>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2, T3, T4, T5>)@delegate;
         }
 
-        public static Action<T1, T2, T3, T4, T5, T6> GetAction<T1, T2, T3, T4, T5, T6>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3, T4, T5, T6> GetAction<T1, T2, T3, T4, T5, T6>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2, T3, T4, T5, T6>)@delegate;
         }
 
-        public static Action<T1, T2, T3, T4, T5, T6, T7> GetAction<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3, T4, T5, T6, T7> GetAction<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7) });
             var @delegate = InnerCache.GetInstance(token);
             return (Action<T1, T2, T3, T4, T5, T6, T7>)@delegate;
         }
 
-        public static Action<T1, T2, T3, T4, T5, T6, T7, T8> GetAction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, DelegateCacheArgs args = null)
+        public static Action<T1, T2, T3, T4, T5, T6, T7, T8> GetAction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var token = Token.Action(method, args, new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7), typeof(T8) });
             var @delegate = InnerCache.GetInstance(token);
@@ -76,55 +76,55 @@ namespace MeshWeaver.Reflection
 
         #region InvokeAsActions
 
-        public static void InvokeAsAction(this MethodInfo method, DelegateCacheArgs args = null)
+        public static void InvokeAsAction(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var action = GetAction(method, args);
             action();
         }
 
-        public static void InvokeAsAction<T1>(this MethodInfo method, T1 arg1, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1>(this MethodInfo method, T1 arg1, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1>(method, args);
             action(arg1);
         }
 
-        public static void InvokeAsAction<T1, T2>(this MethodInfo method, T1 arg1, T2 arg2, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2>(this MethodInfo method, T1 arg1, T2 arg2, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2>(method, args);
             action(arg1, arg2);
         }
 
-        public static void InvokeAsAction<T1, T2, T3>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3>(method, args);
             action(arg1, arg2, arg3);
         }
 
-        public static void InvokeAsAction<T1, T2, T3, T4>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3, T4>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3, T4>(method, args);
             action(arg1, arg2, arg3, arg4);
         }
 
-        public static void InvokeAsAction<T1, T2, T3, T4, T5>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3, T4, T5>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3, T4, T5>(method, args);
             action(arg1, arg2, arg3, arg4, arg5);
         }
 
-        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3, T4, T5, T6>(method, args);
             action(arg1, arg2, arg3, arg4, arg5, arg6);
         }
 
-        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3, T4, T5, T6, T7>(method, args);
             action(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }
 
-        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs args = null)
+        public static void InvokeAsAction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs? args = null)
         {
             var action = GetAction<T1, T2, T3, T4, T5, T6, T7, T8>(method, args);
             action(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
@@ -134,55 +134,55 @@ namespace MeshWeaver.Reflection
 
         #region InvokeAsActions
 
-        public static async Task InvokeAsActionAsync(this MethodInfo method, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync(this MethodInfo method, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<Task>(method, args);
             await action();
         }
 
-        public static async Task InvokeAsActionAsync<T1>(this MethodInfo method, T1 arg1, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1>(this MethodInfo method, T1 arg1, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1,Task>(method, args);
             await action(arg1);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2>(this MethodInfo method, T1 arg1, T2 arg2, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2>(this MethodInfo method, T1 arg1, T2 arg2, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2,Task>(method, args);
             await action(arg1, arg2);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3,Task>(method, args);
             await action(arg1, arg2, arg3);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3, T4>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3, T4>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3, T4,Task>(method, args);
             await action(arg1, arg2, arg3, arg4);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3, T4, T5,Task>(method, args);
             await action(arg1, arg2, arg3, arg4, arg5);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3, T4, T5, T6,Task>(method, args);
             await action(arg1, arg2, arg3, arg4, arg5, arg6);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3, T4, T5, T6, T7,Task>(method, args);
             await action(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }
 
-        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs args = null)
+        public static async Task InvokeAsActionAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodInfo method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs? args = null)
         {
             var action = GetFunc<T1, T2, T3, T4, T5, T6, T7, T8,Task>(method, args);
             await action(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
@@ -192,63 +192,63 @@ namespace MeshWeaver.Reflection
 
         #region GetFuncs
 
-        public static Func<TResult> GetFunc<TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<TResult> GetFunc<TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), Type.EmptyTypes);
             var @delegate = InnerCache.GetInstance(token);
             return (Func<TResult>)@delegate;
         }
 
-        public static Func<T1, TResult> GetFunc<T1, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, TResult> GetFunc<T1, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, TResult> GetFunc<T1, T2, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, TResult> GetFunc<T1, T2, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, TResult> GetFunc<T1, T2, T3, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, TResult> GetFunc<T1, T2, T3, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, TResult> GetFunc<T1, T2, T3, T4, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, TResult> GetFunc<T1, T2, T3, T4, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, TResult> GetFunc<T1, T2, T3, T4, T5, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, TResult> GetFunc<T1, T2, T3, T4, T5, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, TResult> GetFunc<T1, T2, T3, T4, T5, T6, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, TResult> GetFunc<T1, T2, T3, T4, T5, T6, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, T6, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, T7, TResult> GetFunc<T1, T2, T3, T4, T5, T6, T7, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, T7, TResult> GetFunc<T1, T2, T3, T4, T5, T6, T7, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, T6, T7, TResult>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult> GetFunc<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult> GetFunc<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(TResult), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7), typeof(T8) });
             var @delegate = InnerCache.GetInstance(token);
@@ -258,63 +258,63 @@ namespace MeshWeaver.Reflection
         #endregion
         #region GetFuncsAsync
 
-        public static Func<Task<object>> GetFuncAsync(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<Task<object>> GetFuncAsync(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), Type.EmptyTypes);
             var @delegate = InnerCache.GetInstance(token);
             return (Func<Task<object>>)@delegate;
         }
 
-        public static Func<T1, Task<object>> GetFuncAsync<T1>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, Task<object>> GetFuncAsync<T1>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, Task<object>> GetFuncAsync<T1, T2>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, Task<object>> GetFuncAsync<T1, T2>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, Task<object>> GetFuncAsync<T1, T2, T3>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, Task<object>> GetFuncAsync<T1, T2, T3>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, Task<object>> GetFuncAsync<T1, T2, T3, T4>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, Task<object>> GetFuncAsync<T1, T2, T3, T4>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, T6, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, T7, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, T7, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7) });
             var @delegate = InnerCache.GetInstance(token);
             return (Func<T1, T2, T3, T4, T5, T6, T7, Task<object>>)@delegate;
         }
 
-        public static Func<T1, T2, T3, T4, T5, T6, T7, T8, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, DelegateCacheArgs args = null)
+        public static Func<T1, T2, T3, T4, T5, T6, T7, T8, Task<object>> GetFuncAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var token = Token.Func(method, args, typeof(Task<object>), new[] { typeof(T1), typeof(T2), typeof(T3), typeof(T4), typeof(T5), typeof(T6), typeof(T7), typeof(T8) });
             var @delegate = InnerCache.GetInstance(token);
@@ -325,55 +325,55 @@ namespace MeshWeaver.Reflection
 
         #region InvokeAsFuncs
 
-        public static object InvokeAsFunction(this MethodBase method, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<object>(method, args);
             return func();
         }
 
-        public static object InvokeAsFunction<T1>(this MethodBase method, T1 arg1, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1>(this MethodBase method, T1 arg1, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, object>(method, args);
             return func(arg1);
         }
 
-        public static object InvokeAsFunction<T1, T2>(this MethodBase method, T1 arg1, T2 arg2, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2>(this MethodBase method, T1 arg1, T2 arg2, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, object>(method, args);
             return func(arg1, arg2);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, object>(method, args);
             return func(arg1, arg2, arg3);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3, T4>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3, T4>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, T4, object>(method, args);
             return func(arg1, arg2, arg3, arg4);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3, T4, T5>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3, T4, T5>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, T4, T5, object>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, T4, T5, T6, object>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, T4, T5, T6, T7, object>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }
 
-        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs args = null)
+        public static object InvokeAsFunction<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs? args = null)
         {
             var func = GetFunc<T1, T2, T3, T4, T5, T6, T7, T8, object>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
@@ -382,55 +382,55 @@ namespace MeshWeaver.Reflection
         #endregion
         #region InvokeAsFuncsAsync
 
-        public static Task<object> InvokeAsFunctionAsync(this MethodBase method, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync(this MethodBase method, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync(method, args);
             return func();
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1>(this MethodBase method, T1 arg1, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1>(this MethodBase method, T1 arg1, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1>(method, args);
             return func(arg1);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2>(this MethodBase method, T1 arg1, T2 arg2, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2>(this MethodBase method, T1 arg1, T2 arg2, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2>(method, args);
             return func(arg1, arg2);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3>(method, args);
             return func(arg1, arg2, arg3);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3, T4>(method, args);
             return func(arg1, arg2, arg3, arg4);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3, T4, T5>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3, T4, T5, T6>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6, T7>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3, T4, T5, T6, T7>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }
 
-        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs args = null)
+        public static Task<object> InvokeAsFunctionAsync<T1, T2, T3, T4, T5, T6, T7, T8>(this MethodBase method, T1 arg1, T2 arg2, T3 arg3, T4 arg4, T5 arg5, T6 arg6, T7 arg7, T8 arg8, DelegateCacheArgs? args = null)
         {
             var func = GetFuncAsync<T1, T2, T3, T4, T5, T6, T7, T8>(method, args);
             return func(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
@@ -442,7 +442,7 @@ namespace MeshWeaver.Reflection
 
         private static readonly CreatableObjectStore<Token, Delegate> InnerCache = new CreatableObjectStore<Token, Delegate>(CreateDelegate);
 #pragma warning disable 4014
-        private static readonly MethodInfo AsTaskMethod = ReflectionHelper.GetStaticMethodGeneric(() => TaskCast<MethodInfo, MethodBase>(default)); // <MethodInfo, MethodBase> are used as example of types of one hierarchy
+        private static readonly MethodInfo AsTaskMethod = ReflectionHelper.GetStaticMethodGeneric(() => TaskCast<MethodInfo, MethodBase>(default!)); // <MethodInfo, MethodBase> are used as example of types of one hierarchy
 #pragma warning restore 4014
 
         private static Delegate CreateDelegate(Token token)
@@ -469,7 +469,7 @@ namespace MeshWeaver.Reflection
             var parameterInfos = methodBase.GetParameters();
             var methodCallParameters = allParameters.Skip(methodBase.IsStatic || isCtor ? 0 : 1)
                                                     .Zip(parameterInfos,
-                                                         (pe, pi) => ConvertIfNeeded(pe, pi.ParameterType, pi.Name, token.Args))
+                                                         (pe, pi) => ConvertIfNeeded(pe, pi.ParameterType, pi.Name ?? "", token.Args))
                                                     .ToList();
 
             var constantExpressions = parameterInfos.Skip(methodCallParameters.Count)
@@ -477,14 +477,14 @@ namespace MeshWeaver.Reflection
             methodCallParameters.AddRange(constantExpressions);
 
             if (isCtor)
-                return Expression.New(ctor, methodCallParameters);
+                return Expression.New(ctor!, methodCallParameters);
 
             var methodInfo = methodBase as MethodInfo;
             if (methodInfo != null)
             {
                 Expression body = methodBase.IsStatic
                                           ? Expression.Call(methodInfo, methodCallParameters)
-                                          : Expression.Call(ConvertIfNeeded(allParameters[0], methodBase.DeclaringType, "this", token.Args),
+                                          : Expression.Call(ConvertIfNeeded(allParameters[0], methodBase.DeclaringType!, "this", token.Args),
                                                             methodInfo, methodCallParameters);
 
                 if (methodInfo.ReturnType != typeof(void) && methodInfo.ReturnType != token.ReturnType)
@@ -562,12 +562,12 @@ namespace MeshWeaver.Reflection
 
         private class Token : IEquatable<Token>
         {
-            public static Token Func(MethodBase method, DelegateCacheArgs args, Type returnType, Type[] types)
+            public static Token Func(MethodBase method, DelegateCacheArgs? args, Type returnType, Type[] types)
             {
                 return new Token(method, types, returnType, args);
             }
 
-            public static Token Action(MethodBase method, DelegateCacheArgs args, Type[] types)
+            public static Token Action(MethodBase method, DelegateCacheArgs? args, Type[] types)
             {
                 return new Token(method, types, typeof(void), args);
             }
@@ -580,7 +580,7 @@ namespace MeshWeaver.Reflection
             public readonly DelegateCacheArgs Args;
             private readonly TypeArrayKey typesKey;
 
-            private Token(MethodBase method, Type[] types, Type returnType, DelegateCacheArgs args)
+            private Token(MethodBase method, Type[] types, Type returnType, DelegateCacheArgs? args)
             {
                 if (method == null)
                     throw new ArgumentNullException(nameof(method));
@@ -608,7 +608,7 @@ namespace MeshWeaver.Reflection
 
             #region Equality
 
-            public bool Equals(Token other)
+            public bool Equals(Token? other)
             {
                 if (ReferenceEquals(null, other))
                     return false;
@@ -621,7 +621,7 @@ namespace MeshWeaver.Reflection
                        && Args.Equals(other.Args);
             }
 
-            public sealed override bool Equals(object obj)
+            public sealed override bool Equals(object? obj)
             {
                 if (ReferenceEquals(null, obj))
                     return false;
@@ -642,7 +642,7 @@ namespace MeshWeaver.Reflection
             public override string ToString()
             {
                 var signature = Method.GetSignature();
-                return $"Method: {Method.DeclaringType.GetSpeakingName()} {ReturnType.GetSpeakingName()} {signature}. Args: {Args}";
+                return $"Method: {Method.DeclaringType?.GetSpeakingName() ?? "Unknown"} {ReturnType.GetSpeakingName()} {signature}. Args: {Args}";
             }
         }
 
@@ -674,7 +674,7 @@ namespace MeshWeaver.Reflection
         }
 
         #region Equality members
-        public bool Equals(DelegateCacheArgs other)
+        public bool Equals(DelegateCacheArgs? other)
         {
             if (ReferenceEquals(null, other))
                 return false;
@@ -683,7 +683,7 @@ namespace MeshWeaver.Reflection
             return OmitCastCheck.Equals(other.OmitCastCheck);
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (ReferenceEquals(null, obj))
                 return false;

@@ -1,5 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using AspectCore.Extensions.Reflection;
+﻿using AspectCore.Extensions.Reflection;
 using MeshWeaver.Pivot.Models;
 using MeshWeaver.Pivot.Processors;
 
@@ -9,7 +8,7 @@ namespace MeshWeaver.Pivot.Grouping
     {
         private Type TransposedValue { get; }
 
-        public TransposedPivotRowsConfiguration([NotNull]Type transposedValue)
+        public TransposedPivotRowsConfiguration(Type transposedValue)
         {
             TransposedValue = transposedValue;
         }
@@ -19,7 +18,7 @@ namespace MeshWeaver.Pivot.Grouping
             throw new NotImplementedException();
         }
 
-        public IEnumerable<(RowGroup group, Func<TAggregate, object> accessor)> GetAccessors()
+        public IEnumerable<(RowGroup group, Func<TAggregate, object?> accessor)> GetAccessors()
         {
             var propertiesForProcessing = typeof(TAggregate).GetPropertiesForProcessing(string.Empty);
             if (TransposedValue != typeof(TAggregate))
@@ -29,9 +28,9 @@ namespace MeshWeaver.Pivot.Grouping
             foreach (var property in propertiesForProcessing)
             {
                 var reflector = property.Property.GetReflector();
-                yield return (new RowGroup(property.SystemName, property.DisplayName, PivotConst.PropertyPivotGrouperName), x => new Dictionary<string, object>
+                yield return (new RowGroup(property.SystemName, property.DisplayName, PivotConst.PropertyPivotGrouperName), x => new Dictionary<string, object?>
                                                                                                                                  {
-                                                                                                                                     { PivotConst.DefaultValueName, x == null ? null : reflector.GetValue(x) }
+                                                                                                                                     { PivotConst.DefaultValueName, reflector.GetValue(x) }
                                                                                                                                  });
             }
         }

@@ -97,7 +97,7 @@ public static class AnnualReportSummaryArea
             )
         ;
 
-    private static UiControl Customers(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Customers(SummaryItem current, SummaryItem? previous) =>
         ValueBox(
             "Customers",
             FluentIcons.Person(),
@@ -105,7 +105,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Customers, previous.Customers) : null
         );
 
-    private static UiControl Sales(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Sales(SummaryItem current, SummaryItem? previous) =>
         ValueBox(
             "Sales",
             FluentIcons.WalletCreditCard(),
@@ -113,7 +113,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Sales, previous.Sales) : null
         );
 
-    private static UiControl Products(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Products(SummaryItem current, SummaryItem? previous) =>
         ValueBox(
             "Products",
             FluentIcons.Box(),
@@ -121,7 +121,7 @@ public static class AnnualReportSummaryArea
             previous is not null ? GrowthPercentage(current.Products, previous.Products) : null
         );
 
-    private static UiControl Orders(SummaryItem current, SummaryItem previous) =>
+    private static UiControl Orders(SummaryItem current, SummaryItem? previous) =>
         ValueBox(
             "Orders",
             FluentIcons.Checkmark(),

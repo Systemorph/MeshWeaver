@@ -20,23 +20,25 @@ public class PercentageAttribute : ValidationAttribute
 
     public int DecimalDigits { get; set; } = 2;
 
-    protected override ValidationResult IsValid(object value, ValidationContext validationContext)
+    protected override ValidationResult? IsValid(object? value, ValidationContext validationContext)
     {
+        if (value == null) return ValidationResult.Success!;
+        
         var valueType = value.GetType();
 
         if (!ValidationByType.TryGetValue(valueType, out var validation))
             return new ValidationResult(
                 $"The {validationContext.MemberName} field must have type from these: {SupportedTypesList}.",
-                new[] { validationContext.MemberName }
+                new[] { validationContext.MemberName ?? "Unknown" }
             );
 
         if (!validation(value, MinPercentage, MaxPercentage))
             return new ValidationResult(
                 $"The {validationContext.MemberName} field value should be in interval from {MinPercentage} to {MaxPercentage}.",
-                new[] { validationContext.MemberName }
+                new[] { validationContext.MemberName ?? "Unknown" }
             );
 
-        return ValidationResult.Success;
+        return ValidationResult.Success!;
     }
 
     private static readonly IReadOnlyDictionary<

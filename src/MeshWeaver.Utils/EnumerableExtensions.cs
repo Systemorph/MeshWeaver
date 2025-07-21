@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 
@@ -30,6 +31,7 @@ public static class EnumerableExtensions
     }
 
     public static TValue GetOrAdd<TKey, TValue>(this IDictionary<TKey, TValue> dictionary, TKey key, Func<TKey, TValue> factory)
+        where TKey : notnull
     {
         switch (dictionary)
         {
@@ -62,7 +64,7 @@ public static class EnumerableExtensions
     /// <summary>
     /// UNTESTED!
     /// </summary>
-    public static bool EquivalentTo<T>(this IEnumerable<T> enumerable, IEnumerable<T> other, IEqualityComparer<T> instanceComparer = null)
+    public static bool EquivalentTo<T>(this IEnumerable<T> enumerable, IEnumerable<T> other, IEqualityComparer<T>? instanceComparer = null)
     {
         if (enumerable == null)
             throw new ArgumentNullException(nameof(enumerable));
@@ -73,7 +75,7 @@ public static class EnumerableExtensions
         return comparer.Equals(enumerable, other);
     }
 
-    public static IEqualityComparer<IEnumerable<T>> GetEnumerableComparer<T>(IEqualityComparer<T> instanceComparer = null)
+    public static IEqualityComparer<IEnumerable<T>> GetEnumerableComparer<T>(IEqualityComparer<T>? instanceComparer = null)
     {
         return new MultiSetComparer<T>(instanceComparer);
     }
@@ -83,12 +85,12 @@ public static class EnumerableExtensions
     {
         private readonly IEqualityComparer<T> instanceComparer;
 
-        public MultiSetComparer(IEqualityComparer<T> instanceComparer)
+        public MultiSetComparer(IEqualityComparer<T>? instanceComparer)
         {
             this.instanceComparer = instanceComparer ?? EqualityComparer<T>.Default;
         }
 
-        public bool Equals(IEnumerable<T> first, IEnumerable<T> second)
+        public bool Equals(IEnumerable<T>? first, IEnumerable<T>? second)
         {
             if (first == null)
                 return second == null;
@@ -136,9 +138,11 @@ public static class EnumerableExtensions
             return false;
         }
 
+#pragma warning disable CS8714 // The type cannot be used as type parameter in the generic type or method. Nullability of type argument doesn't match 'notnull' constraint.
         private Dictionary<T, int> GetElementCounts(IEnumerable<T> enumerable, out int nullCount)
         {
             var dictionary = new Dictionary<T, int>(instanceComparer);
+#pragma warning restore CS8714
             nullCount = 0;
 
             foreach (T element in enumerable)
@@ -161,10 +165,13 @@ public static class EnumerableExtensions
 
         public int GetHashCode(IEnumerable<T> enumerable)
         {
+            if (enumerable == null)
+                return 0;
+
             var hash = 17;
 
             foreach (T val in enumerable.OrderBy(x => x))
-                hash = hash * 23 + instanceComparer.GetHashCode(val);
+                hash = hash * 23 + (val != null ? instanceComparer.GetHashCode(val) : 0);
 
             return hash;
         }
@@ -191,6 +198,7 @@ public static class EnumerableExtensions
     /// A <see cref="T:System.Collections.ObjectModel.ReadOnlyDictionary`1"/> that acts as a read-only wrapper around the current dictionary.
     /// </returns>
     public static ReadOnlyDictionary<TKey, TValue> AsReadOnly<TKey, TValue>(this IDictionary<TKey, TValue> dictionary)
+        where TKey : notnull
     {
         if (dictionary == null)
             throw new ArgumentNullException(nameof(dictionary));

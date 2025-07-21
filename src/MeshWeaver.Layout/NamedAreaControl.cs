@@ -10,12 +10,12 @@
         /// <summary>
         /// Gets or initializes the progress display state of the named area control.
         /// </summary>
-        public object ShowProgress { get; init; }
+        public object? ShowProgress { get; init; }
 
         /// <summary>
         /// Message to be shown while waiting for the area.
         /// </summary>
-        public object ProgressMessage { get; init; }
+        public object? ProgressMessage { get; init; }
 
         /// <summary>
         /// Sets the area of the named area control.

@@ -8,7 +8,7 @@ public record PartitionedTypeSourceWithType<T, TPartition>(
     object DataSource
 ) : TypeSourceWithType<T>(Workspace, DataSource), IPartitionedTypeSource
 {
-    public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance);
+    public object GetPartition(object instance) => PartitionFunction.Invoke((T)instance) ?? new object();
 }
 
 public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
@@ -43,14 +43,14 @@ public record TypeSourceWithType<T>(IWorkspace Workspace, object DataSource)
 }
 
 public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, object DataSource)
-    : TypeSource<TTypeSource>(Workspace, DataSource, typeof(T))
+    : TypeSource<TTypeSource>(Workspace, typeof(T))
     where TTypeSource : TypeSourceWithType<T, TTypeSource>
 {
-    public TTypeSource WithQuery(Func<string, T> query) => This with { QueryFunction = query };
+    public TTypeSource WithQuery(Func<string, T?> query) => This with { QueryFunction = query };
 
-    protected Func<string, T> QueryFunction { get; init; }
+    protected Func<string, T?>? QueryFunction { get; init; }
 
     public TTypeSource WithKey<TProp>(Func<T, TProp> keyFunc)
-        => WithKey(new KeyFunction(o => keyFunc.Invoke((T)o), typeof(TProp)));
+        => WithKey(new KeyFunction(o => keyFunc.Invoke((T)o)!, typeof(TProp)));
 
 }

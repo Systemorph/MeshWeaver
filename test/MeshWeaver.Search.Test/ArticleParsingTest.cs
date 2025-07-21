@@ -6,7 +6,7 @@ using Azure.Storage.Blobs;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
-using Xunit.Abstractions;
+using Xunit;
 using MarkdownExtensions = MeshWeaver.ContentCollections.MarkdownExtensions;
 
 namespace MeshWeaver.Search.Test;

@@ -38,7 +38,7 @@ public class OptionConverter : JsonConverter<Option>
         }
 
         // Parse the type name to determine the concrete Option<T> type
-        Type concreteType = null;
+        Type? concreteType = null;
 
         // Handle both simple type names and full type names
         if (typeName.StartsWith("MeshWeaver.Layout.Option`1[") && typeName.EndsWith("]"))
@@ -86,7 +86,7 @@ public class OptionConverter : JsonConverter<Option>
             }
         }
 
-        return (Option)JsonSerializer.Deserialize(jsonObject.GetRawText(), concreteType, converterOptions);
+        return (Option)JsonSerializer.Deserialize(jsonObject.GetRawText(), concreteType, converterOptions)!;
     }
 
     public override void Write(Utf8JsonWriter writer, Option value, JsonSerializerOptions options)

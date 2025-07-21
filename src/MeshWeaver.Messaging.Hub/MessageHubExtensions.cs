@@ -8,7 +8,7 @@ namespace MeshWeaver.Messaging;
 
 public static class MessageHubExtensions
 {
-    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    public static IMessageHub CreateMessageHub(this IServiceProvider serviceProvider, Address address, Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = null)
     {
         var hubSetup = new MessageHubConfiguration(serviceProvider, address)
             .WithTypes(address.GetType());
@@ -16,7 +16,7 @@ public static class MessageHubExtensions
         return configuration(hubSetup).Build(serviceProvider, address);
     }
 
-    public static string GetRequestId(this IMessageDelivery delivery)
+    public static string? GetRequestId(this IMessageDelivery delivery)
         => delivery.Properties.GetValueOrDefault(PostOptions.RequestId) as string;
 
     public static MessageHubConfiguration WithRoutes(this MessageHubConfiguration config,
@@ -35,8 +35,8 @@ public static class MessageHubExtensions
 
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
-        if(instance is JsonObject jObj)
-            return (jObj[EntitySerializationExtensions.TypeProperty]?.ToString(), jObj[EntitySerializationExtensions.TypeProperty]?.ToString());
+        if (instance is JsonObject jObj)
+            return (jObj[EntitySerializationExtensions.TypeProperty]?.ToString() ?? string.Empty, jObj[EntitySerializationExtensions.TypeProperty]?.ToString() ?? string.Empty);
 
         var s = instance.ToString();
         var split = s!.Split('/');
@@ -46,7 +46,7 @@ public static class MessageHubExtensions
         return (split[0], string.Join('/', split.Skip(1)));
     }
 
-    public static T GetAddressOfType<T>(object address)
+    public static T? GetAddressOfType<T>(object address)
     {
         if (address is T ret)
             return ret;
@@ -62,9 +62,9 @@ public static class MessageHubExtensions
             throw new InvalidOperationException($"Address {address} is not in the correct format. Expected format is AddressType/AddressId");
         var type = hub.GetTypeRegistry().GetType(split[0]);
 
-        if(type is null)
+        if (type is null)
             throw new InvalidOperationException($"Unknown address type {split[0]} for {address}. Expected format is AddressType/AddressId");
 
-        return (Address)Activator.CreateInstance(type, [string.Join('/',split.Skip(1))]);
+        return (Address)Activator.CreateInstance(type, [string.Join('/', split.Skip(1))])!;
     }
 }

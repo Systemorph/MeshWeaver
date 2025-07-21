@@ -7,9 +7,9 @@ namespace MeshWeaver.Charting.Models.Options.Scales
         /// <summary>
         /// How data is plotted.
         /// </summary>
-        public string Distribution { get; init; }
+        public string Distribution { get; init; } = null!;
 
-        public Time Time { get; init; }
+        public Time Time { get; init; } = null!;
 
         public TimeScale()
         {

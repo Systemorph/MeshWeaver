@@ -1,6 +1,7 @@
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Fixture;
 
@@ -9,11 +10,11 @@ namespace MeshWeaver.Fixture;
 /// </summary>
 public class DebugFileLogger : ILogger
 {
-    private static readonly string LogDirectory = Path.Combine(Environment.GetEnvironmentVariable("TEMP") ?? ".", "MeshWeaverDebugLogs");
+    private static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
     private static readonly object FileLock = new();
-    private static int _instanceCounter = 0;
+    private static readonly string TestInstanceId = Guid.NewGuid().ToString("N")[..8];
+    private static readonly string SharedLogFileName = Path.Combine(LogDirectory, $"meshweaver-{DateTime.Now:yyyyMMdd_HHmmss}_{Environment.ProcessId}_{TestInstanceId}.log");
     private readonly string _categoryName;
-    private readonly string _logFileName;
 
     static DebugFileLogger()
     {
@@ -23,15 +24,14 @@ public class DebugFileLogger : ILogger
     public DebugFileLogger(string categoryName)
     {
         _categoryName = categoryName;
-        var instanceId = Interlocked.Increment(ref _instanceCounter);
-        var processId = Environment.ProcessId;
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-        _logFileName = Path.Combine(LogDirectory, $"debug_{timestamp}_{processId}_{instanceId}_{categoryName.Replace(".", "_")}.log");
     }
 
-    public IDisposable BeginScope<TState>(TState state) => new NoOpDisposable();
+    public IDisposable BeginScope<TState>(TState state)
+        where TState:notnull => new NoOpDisposable();
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
         if (!IsEnabled(logLevel))
             return;
@@ -52,6 +52,7 @@ public class DebugFileLogger : ILogger
                 {
                     try
                     {
+                        //var m = prop.Value is ExecutionRequest er ? er with { Action = null! } : prop.Value;
                         var serialized = JsonSerializer.Serialize(prop.Value, new JsonSerializerOptions { WriteIndented = false });
                         logEntry += $"\n  {prop.Key}: {serialized}";
                     }
@@ -70,7 +71,7 @@ public class DebugFileLogger : ILogger
             {
                 lock (FileLock)
                 {
-                    File.AppendAllText(_logFileName, logEntry + Environment.NewLine);
+                    File.AppendAllText(SharedLogFileName, logEntry + Environment.NewLine);
                 }
                 break; // Success, exit retry loop
             }
@@ -99,14 +100,37 @@ public class DebugFileLogger : ILogger
 public class DebugFileLoggerProvider : ILoggerProvider
 {
     private readonly ConcurrentDictionary<string, DebugFileLogger> _loggers = new();
+    private bool _disposed = false;
 
     public ILogger CreateLogger(string categoryName)
     {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DebugFileLoggerProvider));
+            
         return _loggers.GetOrAdd(categoryName, name => new DebugFileLogger(name));
     }
 
     public void Dispose()
     {
+        if (_disposed)
+            return;
+            
+        _disposed = true;
+        
+        // Dispose all loggers
+        foreach (var logger in _loggers.Values)
+        {
+            try
+            {
+                if (logger is IDisposable disposableLogger)
+                    disposableLogger.Dispose();
+            }
+            catch
+            {
+                // Ignore disposal exceptions to prevent test failures
+            }
+        }
+        
         _loggers.Clear();
     }
 }

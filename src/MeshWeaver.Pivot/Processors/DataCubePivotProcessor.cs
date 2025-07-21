@@ -19,7 +19,7 @@ namespace MeshWeaver.Pivot.Processors
     {
         public DataCubePivotProcessor(
             IPivotConfiguration<TAggregate, ColumnGroup> colConfig,
-            IPivotConfiguration<TAggregate, RowGroup> rowConfig,
+            IPivotConfiguration<TAggregate, RowGroup>? rowConfig,
             DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder,
             IWorkspace workspace
         )
@@ -32,7 +32,7 @@ namespace MeshWeaver.Pivot.Processors
 
         protected override IObservable<DimensionCache> GetStream(IReadOnlyCollection<DataSlice<TElement>> objects)
         {
-            var types = 
+            var types =
                 PivotBuilder
                     .SliceColumns
                     .Dimensions
@@ -44,30 +44,44 @@ namespace MeshWeaver.Pivot.Processors
                     .Select(d => d.Dim)
                     )
                 .Distinct()
-                    .Select(dim => (Dimension:dim.Type, IdAccessor:(Func<DataSlice<TElement>,object>)(slice => slice.Tuple.GetValue(dim.SystemName))))
+                    .Select(dim => (Dimension: dim.Type, IdAccessor: (Func<DataSlice<TElement>, object?>)(slice => slice.Tuple.GetValue(dim.SystemName))))
                 .ToArray();
             return GetStream(objects, types);
         }
 
 
 
-        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup>
-            GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        //protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup> GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        //{
+        //    var ret = PivotBuilder.SliceRows!.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
+        //    return ret;
+        //}
+
+
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, RowGroup> GetRowGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
             var ret = PivotBuilder.SliceRows.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;
         }
 
-        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup>
+            GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
         {
-            var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache,PivotBuilder.Aggregations);
+            var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
             return ret;
         }
+        //protected override PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, ColumnGroup?> GetColumnGroupManager(DimensionCache dimensionCache, IReadOnlyCollection<DataSlice<TElement>> transformed)
+        //{
+        //    var ret = PivotBuilder.SliceColumns.GetGroupManager(dimensionCache, PivotBuilder.Aggregations);
+        //    return ret;
+        //}
 
         public override IObservable<PivotModel> Execute()
         {
             var dimensions = PivotBuilder
-                .SliceRows.Dimensions.Select(d => d.Dim)
+                .SliceRows
+                .Dimensions
+                .Select(d => d.Dim)
                 .Concat(PivotBuilder.SliceColumns.Dimensions.Select(d => d.Dim))
                 .Select(x => x.SystemName)
                 .Distinct()

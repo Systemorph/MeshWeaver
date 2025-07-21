@@ -1,7 +1,9 @@
-﻿using System.Reflection;
+﻿using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Logging;
+// ReSharper disable InconsistentlySynchronizedField
 
 namespace MeshWeaver.Messaging;
 
@@ -9,24 +11,25 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
-    private bool isDisposing; private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
+    private bool isDisposing; 
+    private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
-    private readonly AsyncDelivery deliveryPipeline; private readonly DeferralContainer deferralContainer;
-    private readonly CancellationTokenSource hangDetectionCts = new(); private volatile bool isStarted = false;
+    private readonly AsyncDelivery deliveryPipeline; 
+    private readonly DeferralContainer deferralContainer;
+    private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
-    private readonly TaskCompletionSource<bool> startupProcessingCompletionSource = new();
-    private volatile int pendingStartupMessages = 0;
+    //private volatile int pendingStartupMessages;
 
 
     public MessageService(
         Address address,
         ILogger<MessageService> logger,
         IMessageHub hub,
-        IMessageHub parentHub
+        IMessageHub? parentHub
         )
     {
         Address = address;
@@ -34,12 +37,13 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deferralContainer = new DeferralContainer(NotifyAsync, ReportFailure);
+        deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
         deliveryAction =
-            new(x => x.Invoke()); postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
+            new(x => x.Invoke()); 
+        postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverAsync(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
-        startupDeferral = Defer(x => x.Message is not ExecutionRequest);
+        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d,_) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
+        startupDeferral = Defer(_ => true);
     }
     void IMessageService.Start()
     {
@@ -51,43 +55,29 @@ public class MessageService : IMessageService
 
         executionBuffer.Post(async ct =>
       {
-          CancellationTokenSource timeoutCts = null;
+          CancellationTokenSource? timeoutCts = null;
           try
           {
               // Add a timeout to prevent startup hangs
               timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); await hub.StartAsync(combinedCts.Token);              // Mark as started and complete the startup task
-              isStarted = true;
+              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); 
+              await hub.StartAsync(combinedCts.Token);              
+              // Mark as started and complete the startup task
               startupCompletionSource.SetResult(true);
 
-              // Check if there are no pending startup messages - if so, complete immediately
-              if (pendingStartupMessages == 0)
-              {
-                  startupProcessingCompletionSource.TrySetResult(true);
-                  logger.LogDebug("No pending startup messages in {Address}", Address);
-
-                  // If there are no pending startup messages, we can dispose the startup deferral immediately
-                  startupDeferral?.Dispose();
-                  logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
-              }
-              else
-              {
-                  logger.LogDebug("Deferring startup deferral disposal until {PendingCount} pending messages are processed in {Address}", pendingStartupMessages, Address);
-                  // The startup deferral will be disposed in WrapDeliveryWithStartupTracking when pendingStartupMessages reaches 0
-              }
-
+              logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
+              startupDeferral.Dispose();
               logger.LogDebug("MessageService startup completed for {Address}", Address);
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
           {
               logger.LogError("MessageService startup timed out after 30 seconds for {Address}", Address);
               startupCompletionSource.SetException(new TimeoutException("MessageService startup timed out"));
-              startupProcessingCompletionSource.TrySetException(new TimeoutException("MessageService startup timed out"));
 
               // If startup timed out, dispose the startup deferral to unblock any pending operations
               try
               {
-                  startupDeferral?.Dispose();
+                  startupDeferral.Dispose();
                   logger.LogDebug("Startup deferral disposed due to startup timeout in {Address}", Address);
               }
               catch (Exception disposeEx)
@@ -100,13 +90,12 @@ public class MessageService : IMessageService
           catch (Exception ex)
           {
               logger.LogError(ex, "MessageService startup failed for {Address}", Address);
-              startupCompletionSource.SetException(ex);
-              startupProcessingCompletionSource.TrySetException(ex);
+              startupCompletionSource.TrySetException(ex);
 
               // If startup failed, dispose the startup deferral to unblock any pending operations
               try
               {
-                  startupDeferral?.Dispose();
+                  startupDeferral.Dispose();
                   logger.LogDebug("Startup deferral disposed due to startup failure in {Address}", Address);
               }
               catch (Exception disposeEx)
@@ -148,152 +137,163 @@ public class MessageService : IMessageService
 
 
     public Address Address { get; }
-    public IMessageHub ParentHub { get; }
+    public IMessageHub? ParentHub { get; }
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
-        ScheduleNotify(delivery, cancellationToken); private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
+        ScheduleNotify(delivery, cancellationToken); 
+    
+    private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+        
         logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
-        lock (locker)
+        if (isDisposing)
         {
-            if (isDisposing)
-                return delivery.Failed("Hub disposing");            // For non-ExecutionRequest messages, ensure startup is complete to avoid race conditions
-            if (delivery.Message is not ExecutionRequest && !isStarted)
-            {
-                // Increment pending startup messages counter
-                Interlocked.Increment(ref pendingStartupMessages);                // Schedule the message to be processed after startup completes
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        // Wait for startup to complete with a reasonable timeout
-                        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-
-                        await startupCompletionSource.Task.WaitAsync(timeoutCts.Token);
-
-                        // Startup completed successfully, now it's safe to process the message
-                        logger.LogDebug("Startup completed successfully, processing scheduled message {Delivery} in {Address}", delivery, Address);
-                        buffer.Post(() => WrapDeliveryWithStartupTracking(delivery, cancellationToken));
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        logger.LogWarning("Startup timeout while scheduling message {Delivery} in {Address}", delivery, Address);
-                        // Mark as failed and decrement counter to avoid hanging
-                        var remaining = Interlocked.Decrement(ref pendingStartupMessages);
-                        logger.LogDebug("Decremented pending startup messages due to timeout, remaining: {Remaining} in {Address}", remaining, Address);
-
-                        // Complete startup processing if this was the last message
-                        if (remaining == 0 && isStarted)
-                        {
-                            startupProcessingCompletionSource.TrySetResult(true);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Startup failed while scheduling message {Delivery} in {Address}", delivery, Address);
-                        // Mark as failed and decrement counter to avoid hanging
-                        var remaining = Interlocked.Decrement(ref pendingStartupMessages);
-                        logger.LogDebug("Decremented pending startup messages due to startup failure, remaining: {Remaining} in {Address}", remaining, Address);
-
-                        // Complete startup processing if this was the last message
-                        if (remaining == 0 && isStarted)
-                        {
-                            startupProcessingCompletionSource.TrySetResult(true);
-                        }
-                    }
-                }, cancellationToken);
-
-                return delivery.Forwarded();
-            }
-
-            buffer.Post(() => deliveryPipeline(delivery, cancellationToken));
+            logger.LogTrace("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+            return delivery.Failed("Hub disposing");
         }
+
+        logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+            delivery.Message.GetType().Name, Address, delivery.Id);
+        buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
+            delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        if (delivery.Target is null || delivery.Target.Equals(hub.Address))
-            return ScheduleExecution(delivery, cancellationToken);
+        logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
-        if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address))
-            return ScheduleExecution(delivery.WithTarget(ha.Address), cancellationToken);
 
-        // Before routing to hierarchical routing (which may route to parent hub), 
-        // ensure parent hub initialization is complete to avoid race conditions
-        if (ParentHub != null && ParentHub is MessageHub parentMessageHub)
+        // Double-check disposal state to prevent processing during shutdown
+        if (isDisposing && delivery.Message is not ShutdownRequest)
         {
-            try
-            {
-                // Wait for parent hub to complete startup before routing, but only if it has been initialized
-                if (parentMessageHub.HasStarted != null)
-                {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-
-                    await parentMessageHub.HasStarted.WaitAsync(timeoutCts.Token);
-                    logger.LogDebug("Parent hub startup completed before routing message {Delivery} in {Address}", delivery, Address);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                logger.LogWarning("Parent hub startup timeout while routing message {Delivery} in {Address}", delivery, Address);
-                // Continue anyway to avoid losing the message, but log the issue
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error waiting for parent hub startup while routing message {Delivery} in {Address}", delivery, Address);
-                // Continue anyway to avoid losing the message
-            }
+            logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+            return delivery.Failed("Hub disposing - message rejected");
+        }
+        if (delivery.State != MessageDeliveryState.Submitted)
+            return delivery;
+        if (ParentHub is MessageHub parentMessageHub)
+        {
+            await parentMessageHub.Started;
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub?.Address))
+                delivery = delivery.WithTarget(ha.Address);
         }
 
-        return await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-    }
-    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
-    {
-        delivery = UnpackIfNecessary(delivery);        // Reset hang detection timer on execution activity
+        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        if (isOnTarget)
+        {
+            delivery = UnpackIfNecessary(delivery);
+            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+        }
 
+
+        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
+
+        if (isOnTarget)
+        {
+            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                delivery.Message.GetType().Name, Address, delivery.Id);
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+        }
+
+        return delivery;
+    }
+
+    private CancellationTokenSource cancellationTokenSource = new();
+    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
+    {
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            delivery.Message.GetType().Name, Address, delivery.Id);
+        
+
+        
         executionBuffer.Post(async _ =>
         {
-            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
+            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            delivery.Message.GetType().Name, Address, delivery.Id);
+        logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
+            
+            var executionStopwatch = Stopwatch.StartNew();
             try
             {
-                delivery = await hub.HandleMessageAsync(delivery, cancellationToken);
+                // Add timeout for disposal-related messages to prevent hangs
+                if (isDisposing || delivery.Message is ShutdownRequest)
+                {
+                    
+                    logger.LogDebug("Executing {MessageType} with 30-second timeout during disposal for hub {Address}", 
+                        delivery.Message.GetType().Name, Address);
+                    
+                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
+                }
+                else
+                {
+                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
+                }
 
-                logger.LogDebug("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address}",
-                    delivery.Message?.GetType().Name ?? "null", Address);
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                    delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
+            }
+            catch (OperationCanceledException) when (isDisposing)
+            {
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
+                    delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
+                
+                // During disposal, timeouts are acceptable to prevent hangs
+                if (delivery.Message is not ExecutionRequest)
+                {
+                    logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}", 
+                        delivery, executionStopwatch.ElapsedMilliseconds, Address);
+                }
             }
             catch (Exception e)
             {
-                logger.LogError("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error}",
-                    delivery.Message?.GetType().Name ?? "null", Address, e.Message);
+                logger.LogTrace("MESSAGE_FLOW: EXECUTION_FAILED | {MessageType} | Hub: {Address} | Error: {Error} | Duration: {Duration}ms",
+                    delivery.Message.GetType().Name, Address, e.Message, executionStopwatch.ElapsedMilliseconds);
 
                 if (delivery.Message is ExecutionRequest er)
-                    er.ExceptionCallback?.Invoke(e);
+                    await er.ExceptionCallback.Invoke(e);
                 else
                 {
-                    logger.LogError("An exception occurred during the processing of {@Delivery}. Exception: {Exception}. Address: {Address}.", delivery, e, Address);
+                    logger.LogError("An exception occurred during the processing of {@Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.", 
+                        delivery, executionStopwatch.ElapsedMilliseconds, e, Address);
                     ReportFailure(delivery.Failed(e.ToString()));
                 }
             }
 
             if (delivery.Message is not ExecutionRequest)
-                logger.LogInformation("Finished processing {@Delivery} in {Address}", delivery, Address);
+                logger.LogInformation("Finished processing {@Delivery} in {Address} after {Duration}ms", 
+                    delivery, Address, executionStopwatch.ElapsedMilliseconds);
 
         });
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded", 
+            delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded(hub.Address);
     }
 
-    public IMessageDelivery Post<TMessage>(TMessage message, PostOptions opt)
+    public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
         {
             if (isDisposing)
                 return null;
+            if (message == null)
+                return null;
             var ret = PostImpl(message, opt);
+            logger.LogTrace("MESSAGE_FLOW: POST_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+                typeof(TMessage).Name, Address, ret.Id, opt.Target);
             logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
             return ret;
         }
@@ -319,23 +319,28 @@ public class MessageService : IMessageService
             return delivery;
         logger.LogDebug("Deserializing {@Delivery} in {Address}", delivery, Address);
         var deserializedMessage = JsonSerializer.Deserialize(rawJson.Content, typeof(object), hub.JsonSerializerOptions);
+        if (deserializedMessage == null)
+            return delivery.Failed("Deserialization returned null");
         return delivery.WithMessage(deserializedMessage);
     }
 
     private IMessageDelivery PostImpl(object message, PostOptions opt)
-    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt });
+    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt })!;
 
 
-    private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     private IMessageDelivery PostImplGeneric<TMessage>(TMessage message, PostOptions opt)
     {
+        if (message == null)
+            throw new ArgumentNullException(nameof(message));
+
         if (typeof(TMessage) != message.GetType())
             return (IMessageDelivery<TMessage>)PostImplMethod
                 .MakeGenericMethod(message.GetType())
-                .Invoke(this, [message, opt]);
+                .Invoke(this, [message, opt])!;
 
-        var delivery = new MessageDelivery<TMessage>(message, opt);
+        var delivery = new MessageDelivery<TMessage>(message, opt, hub.JsonSerializerOptions);
 
 
         // TODO V10: Which cancellation token to pass here? (12.01.2025, Roland Bürgi)
@@ -343,87 +348,81 @@ public class MessageService : IMessageService
         return delivery;
     }
     private readonly Lock locker = new();
-    private readonly IDisposable startupDeferral; public async ValueTask DisposeAsync()
+    private readonly IDisposable startupDeferral; 
+    
+    public async ValueTask DisposeAsync()
     {
+        var totalStopwatch = Stopwatch.StartNew();
         lock (locker)
         {
             if (isDisposing)
+            {
+                logger.LogWarning("DisposeAsync called multiple times for message service in {Address}", Address);
                 return;
+            }
             isDisposing = true;
         }
 
-        logger.LogDebug("Starting disposal of message service in {Address}", Address);
+        logger.LogInformation("Starting disposal of message service in {Address}", Address);
 
         // Dispose hang detection timer first
+        var hangDetectionStopwatch = Stopwatch.StartNew();
         try
         {
-            hangDetectionCts?.Cancel();
-            hangDetectionCts?.Dispose();
+            logger.LogDebug("Disposing hang detection timer for message service in {Address}", Address);
+            await hangDetectionCts.CancelAsync();
+            hangDetectionCts.Dispose();
+            logger.LogDebug("Hang detection timer disposed successfully in {elapsed}ms for {Address}", 
+                hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error disposing hang detection timer in {Address}", Address);
+            logger.LogWarning(ex, "Error disposing hang detection timer in {elapsed}ms for {Address}", 
+                hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
 
         // Complete the buffers to stop accepting new messages
+        var bufferStopwatch = Stopwatch.StartNew();
+        logger.LogDebug("Completing buffers for message service in {Address}", Address);
         buffer.Complete();
         executionBuffer.Complete();
+        logger.LogDebug("Buffers completed in {elapsed}ms for {Address}", bufferStopwatch.ElapsedMilliseconds, Address);
 
+        var deliveryStopwatch = Stopwatch.StartNew();
         try
         {
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
             using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogDebug("Deliveries completed successfully in {Address}", Address);
+            logger.LogInformation("Deliveries completed successfully in {elapsed}ms for {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 5 seconds in {Address}", Address);
+            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during delivery completion in {Address}", Address);
+            logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}", 
+                deliveryStopwatch.ElapsedMilliseconds, Address);
         }        // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
         logger.LogDebug("Skipping execution completion wait during disposal for {Address}", Address);
 
         // Wait for startup processing to complete before disposing deferrals
-        try
-        {
-            logger.LogDebug("Awaiting startup processing completion in {Address}", Address);
-            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-            // If there are no pending startup messages and startup is complete, complete immediately
-            if (pendingStartupMessages == 0 && isStarted)
-            {
-                startupProcessingCompletionSource.TrySetResult(true);
-            }
-
-            await startupProcessingCompletionSource.Task.WaitAsync(startupTimeout.Token);
-            logger.LogDebug("Startup processing completed successfully in {Address}", Address);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogWarning("Startup processing completion timed out after 10 seconds in {Address}", Address);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error during startup processing completion in {Address}", Address);
-        }
+        var deferralsStopwatch = Stopwatch.StartNew();
         try
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
-            using var deferralsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            await deferralContainer.DisposeAsync().AsTask().WaitAsync(deferralsTimeout.Token);
-            logger.LogDebug("Deferrals completed successfully in {Address}", Address);
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogError("Deferrals disposal timed out after 3 seconds in {Address}", Address);
+            await deferralContainer.DisposeAsync();
+            logger.LogInformation("Deferrals completed successfully in {elapsed}ms for {Address}", 
+                deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during deferrals disposal in {Address}", Address);
+            logger.LogError(ex, "Error during deferrals disposal after {elapsed}ms in {Address}", 
+                deferralsStopwatch.ElapsedMilliseconds, Address);
         }        // Complete the startup task if it's still pending
         try
         {
@@ -431,45 +430,15 @@ public class MessageService : IMessageService
             {
                 startupCompletionSource.TrySetCanceled();
             }
-            if (!startupProcessingCompletionSource.Task.IsCompleted)
-            {
-                startupProcessingCompletionSource.TrySetCanceled();
-            }
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error completing startup tasks during disposal in {Address}", Address);
         }
 
-        logger.LogDebug("Finished disposing message service in {Address}", Address);
-    }
-    private async Task<IMessageDelivery> WrapDeliveryWithStartupTracking(IMessageDelivery delivery, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await deliveryPipeline(delivery, cancellationToken);
-        }
-        finally
-        {
-            // Decrement the counter and check if all startup messages are processed
-            var remaining = Interlocked.Decrement(ref pendingStartupMessages);
-            if (remaining == 0 && isStarted)
-            {
-                // All startup-related messages have been processed
-                startupProcessingCompletionSource.TrySetResult(true);
-
-                // Dispose the startup deferral now that all pending startup messages are processed
-                try
-                {
-                    startupDeferral?.Dispose();
-                    logger.LogDebug("Startup deferral disposed after all pending messages processed in {Address}, remaining: {Remaining}", Address, remaining);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Error disposing startup deferral after pending messages processed in {Address}", Address);
-                }
-            }
-        }
+        totalStopwatch.Stop();
+        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms", 
+            Address, totalStopwatch.ElapsedMilliseconds);
     }
 
 }

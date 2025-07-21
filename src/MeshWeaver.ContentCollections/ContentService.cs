@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -21,29 +22,33 @@ public class ContentService : IContentService
     private ContentCollection CreateCollection(ContentSourceConfig config)
     {
         var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
-        if(factory is null)
+        if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
         return factory.Create(config);
     }
 
     private readonly IReadOnlyDictionary<string, ContentCollection> collections;
 
-    public ContentCollection GetCollection(string collection)
+    public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
-    public Task<Stream> GetContentAsync(string collection, string path, CancellationToken ct = default)
+    public Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = GetCollection(collection);
+        if (coll == null)
+            throw new ArgumentException($"Collection '{collection}' not found");
         return coll.GetContentAsync(path, ct);
     }
 
     public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
         CancellationToken ct)
     {
-        var allCollections = 
+        var allCollections =
             string.IsNullOrEmpty(catalogOptions.Collection)
             ? collections.Values
-            : [collections[catalogOptions.Collection]];
+            : collections.TryGetValue(catalogOptions.Collection, out var collection)
+                ? [collection]
+                : [];
         return (await allCollections.Select(c => c.GetMarkdown(catalogOptions))
                 .CombineLatest()
                 .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
@@ -72,13 +77,35 @@ public class ContentService : IContentService
         };
     }
 
-    public IObservable<object> GetArticle(string collection, string article)
+    public IObservable<object?> GetArticle(string collection, string article)
     {
-        return GetCollection(collection)?.GetMarkdown(article);
+        return GetCollection(collection)?.GetMarkdown(article) ?? Observable.Return(Controls.Markdown($"No article {article} found in collection {collection}"));
     }
 
     public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)
     {
         return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
+    }
+
+    public IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default)
+    {
+        return collections.Values.ToArray();
+    }
+
+    public IReadOnlyCollection<ContentCollection> GetCollections(bool includeHidden = false)
+    {
+        var result = collections.Values;
+        if (!includeHidden)
+        {
+            result = result.Where(c => !c.IsHidden);
+        }
+        return result.ToArray();
+    }
+
+    public IReadOnlyCollection<ContentCollection> GetCollections(string context)
+    {
+        return collections.Values
+            .Where(c => !c.IsHiddenFrom(context))
+            .ToArray();
     }
 }

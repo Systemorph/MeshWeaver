@@ -12,7 +12,7 @@ public record EntityStore
     public ImmutableDictionary<string, InstanceCollection> Collections { get; init; } =
         ImmutableDictionary<string, InstanceCollection>.Empty;
 
-    public Func<Type, string> GetCollectionName { get; init; }
+    public Func<Type, string>? GetCollectionName { get; init; } = null!;
 
 
     public object Reduce(WorkspaceReference reference) => ReduceImpl((dynamic)reference);
@@ -25,10 +25,10 @@ public record EntityStore
             $"Reducer type {reference.GetType().FullName} not supported"
         );
 
-    internal object ReduceImpl(EntityReference reference) =>
+    internal object? ReduceImpl(EntityReference reference) =>
         GetCollection(reference.Collection)?.GetInstance(reference.Id);
 
-    internal InstanceCollection ReduceImpl(CollectionReference reference) =>
+    internal InstanceCollection? ReduceImpl(CollectionReference reference) =>
         GetCollection(reference.Name);
     internal EntityStore ReduceImpl(PartitionedWorkspaceReference<EntityStore> reference) =>
         ReduceImpl((dynamic)reference.Reference);
@@ -42,16 +42,16 @@ public record EntityStore
         this with
         {
             Collections = reference
-                .Collections.Select(c => new KeyValuePair<string, InstanceCollection>(
+                .Collections.Select(c => new KeyValuePair<string, InstanceCollection?>(
                     c,
                     GetCollection(c)
                 ))
-                .Where(x => x.Value != null)
-                .ToImmutableDictionary()
+                .Where(x => x.Value != null)!
+                .ToImmutableDictionary<string,InstanceCollection>()
         };
 
 
-    public InstanceCollection GetCollection(string collection) =>
+    public InstanceCollection? GetCollection(string collection) =>
         Collections.GetValueOrDefault(collection);
 
     public EntityStore Remove(string collection)
@@ -59,7 +59,7 @@ public record EntityStore
         return this with { Collections = Collections.Remove(collection) };
     }
 
-    public virtual bool Equals(EntityStore other)
+    public virtual bool Equals(EntityStore? other)
     {
         if (other is null)
             return false;
@@ -82,24 +82,19 @@ public record EntityStore
     {
         var oldValues = Collections.GetValueOrDefault(collection);
         if (oldValues == null)
-            yield return new EntityUpdate(collection, null, updated);
+            yield return new EntityUpdate(collection, null!, updated);
         else
         {
             foreach (var u in updated.Instances)
             {
                 var existing = oldValues.GetInstance(u.Key);
-                if(u.Value is null)
-                    if(existing is null)
-                        continue;
-                    else
-                        yield return new EntityUpdate(collection, u.Key, null) { OldValue = existing };
-                else if (!u.Value.Equals(existing))
+                if (!u.Value.Equals(existing))
                     yield return new EntityUpdate(collection, u.Key, u.Value) { OldValue = existing };
             }
 
             foreach (var kvp in oldValues.Instances.Where(i => !updated.Instances.ContainsKey(i.Key)))
             {
-                yield return new EntityUpdate(collection, kvp.Key, null) { OldValue = kvp.Value };
+                yield return new EntityUpdate(collection, kvp.Key, null!) { OldValue = kvp.Value };
             }
         }
     }
@@ -126,14 +121,14 @@ public record EntityStore
         };
 }
 
-public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string ChangedBy)
+public record EntityStoreAndUpdates(EntityStore Store, IEnumerable<EntityUpdate> Updates, string? ChangedBy)
 {
     public EntityStoreAndUpdates(EntityStore Store, string ChangedBy) : this(Store, [], ChangedBy)
     {
     }
 }
 
-public record EntityUpdate(string Collection, object Id, object Value)
+public record EntityUpdate(string Collection, object? Id, object? Value)
 {
-    public object OldValue { get; init; }
+    public object? OldValue { get; init; }
 }

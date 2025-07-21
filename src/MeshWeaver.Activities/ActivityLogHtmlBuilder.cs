@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Globalization;
 using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
@@ -50,7 +51,7 @@ namespace MeshWeaver.Activities
             return logElement.OuterHtml;
         }
 
-        private static void AddColumns(IDocument document, IElement row, string name, string value, IElement child = null)
+        private static void AddColumns(IDocument document, IElement row, string name, string? value, IElement? child = null)
         {
             var nameCol = document.CreateElement("td");
             nameCol.SetAttribute("style", "padding-right: 5px;");
@@ -62,7 +63,7 @@ namespace MeshWeaver.Activities
             if (child != null)
                 valueCol.AppendChild(child);
             else
-                valueCol.TextContent = value;
+                valueCol.TextContent = value ?? "";
             row.AppendChild(nameCol);
             row.AppendChild(valueCol);
         }
@@ -90,14 +91,14 @@ namespace MeshWeaver.Activities
                 var type = item.GetType();
                 var properties = type.GetProperties().Select(x =>
                 {
-                    object value = x.GetValue(item);
+                    object? value = x.GetValue(item);
 
 
                     if (value is IEnumerable enumerable && x.PropertyType != typeof(string))
                     {
                         var propertyList = new List<string>();
                         foreach (var property in enumerable)
-                            propertyList.Add(property?.ToString());
+                            propertyList.Add(property?.ToString() ?? "");
                         value = string.Join(',', propertyList);
                     }
 

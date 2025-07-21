@@ -68,10 +68,7 @@ public record PivotBuilder<T, TIntermediate, TAggregate>
 
 
     public PivotBuilder<T, TIntermediate, TAggregate> WithAggregation(
-        Func<
-            Aggregations<T, TIntermediate, TAggregate>,
-            Aggregations<T, TIntermediate, TAggregate>
-        > aggregationsFunc
+        Func<Aggregations<T, TIntermediate, TAggregate>, Aggregations<T, TIntermediate, TAggregate>> aggregationsFunc
     )
     {
         Aggregations = aggregationsFunc(new Aggregations<T, TIntermediate, TAggregate>());

@@ -5,8 +5,8 @@ namespace MeshWeaver.Data.Documentation.Model;
 public record Summary
 {
     [XmlText]
-    public string Text { get; init; }
+    public string? Text { get; init; }
 
     [XmlElement("see")]
-    public See See { get; init; }
+    public See? See { get; init; }
 }

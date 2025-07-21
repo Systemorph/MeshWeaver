@@ -26,7 +26,7 @@ public static class ArticleCatalogLayoutArea
     }
 
     private static ArticleCatalogItemControl CreateControl(Article a) =>
-        new(a with { Content = null, PrerenderedHtml = null });
+        new(a with { Content = string.Empty, PrerenderedHtml = string.Empty });
 
     /// <summary>
     /// This is the deserialization of Id to catalog options. Need to see how we use.
@@ -38,11 +38,11 @@ public static class ArticleCatalogLayoutArea
         // TODO V10: Need to create some link from layout area reference id to options ==> url parsing. (24.01.2025, Roland Bürgi)
         return new()
         {
-            Collection = reference.Id?.ToString()
+            Collection = reference.Id?.ToString() ?? string.Empty
         };
     }
 
-    public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection, string displayName = null)
+    public static NavMenuControl ArticlesNavMenu(this NavMenuControl menu, string collection, string? displayName = null)
         => menu.WithView(Controls.NavLink(displayName ?? collection.Wordify(), $"articles/{collection}"));
 
 

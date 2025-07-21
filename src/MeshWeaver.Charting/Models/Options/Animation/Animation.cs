@@ -29,11 +29,11 @@ namespace MeshWeaver.Charting.Models.Options.Animation
         /// <summary>
         /// Callback called on each step of an animation. Passed a single argument, an object, containing the chart instance and an object with details of the animation.
         /// </summary>
-        public object OnProgress { get; init; }
+        public object OnProgress { get; init; } = null!;
 
         /// <summary>
         /// Callback called at the end of an animation. Passed the same arguments as onProgress.
         /// </summary>
-        public object OnComplete { get; init; }
+        public object OnComplete { get; init; } = null!;
     }
 }

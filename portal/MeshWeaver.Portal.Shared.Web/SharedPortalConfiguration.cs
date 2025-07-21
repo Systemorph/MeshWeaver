@@ -1,6 +1,7 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using MeshWeaver.AI;
+using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Infrastructure;
@@ -48,7 +49,15 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             }); services.AddPortalAI();
         services.AddMemoryChatPersistence();
-        services.Configure<AIConfiguration>(builder.Configuration.GetSection("AzureOpenAI"));
+
+        // configure AzureOpenAI chat
+        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureOpenAIS"));
+        services.AddAzureOpenAI();
+
+        // configure Azure Foundry chat
+        //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
+        //services.AddAzureAIFoundry();
+
 
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
@@ -67,7 +76,7 @@ public static class SharedPortalConfiguration
                 var roleMappings = builder.Configuration
                     .GetSection("EntraId:RoleMappings")
                     .GetChildren()
-                    .ToDictionary(x => x.Value, x => x.Key);
+                    .ToDictionary(x => x.Value!, x => x.Key);
 
                 options.Events.OnTokenValidated = async context =>
                 {

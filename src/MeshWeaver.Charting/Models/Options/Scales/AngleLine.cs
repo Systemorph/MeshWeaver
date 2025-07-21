@@ -11,7 +11,7 @@
         /// <summary>
         /// Color of angled lines.
         /// </summary>
-        public ChartColor Color { get; init; }
+        public ChartColor Color { get; init; } = null!;
 
         /// <summary>
         /// Width of angled lines.
@@ -21,7 +21,7 @@
         /// <summary>
         /// Length and spacing of dashes on angled lines.
         /// </summary>
-        public IEnumerable<int> BorderDash { get; init; }
+        public IEnumerable<int> BorderDash { get; init; } = null!;
 
         /// <summary>
         /// Offset for line dashes.

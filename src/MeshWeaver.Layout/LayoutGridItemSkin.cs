@@ -8,52 +8,52 @@
         /// <summary>
         /// Gets or initializes the adaptive rendering state of the layout grid item.
         /// </summary>
-        public object AdaptiveRendering { get; init; }
+        public object? AdaptiveRendering { get; init; }
 
         /// <summary>
         /// Gets or initializes the justification of the layout grid item.
         /// </summary>
-        public object Justify { get; init; }
+        public object? Justify { get; init; }
 
         /// <summary>
         /// Gets or initializes the hidden state of the layout grid item based on conditions.
         /// </summary>
-        public object HiddenWhen { get; init; }
+        public object? HiddenWhen { get; init; }
 
         /// <summary>
         /// Gets or initializes the gap between items in the layout grid.
         /// </summary>
-        public object Gap { get; init; }
+        public object? Gap { get; init; }
 
         /// <summary>
         /// Gets or initializes the large screen size configuration for the layout grid item.
         /// </summary>
-        public object Lg { get; init; }
+        public object? Lg { get; init; }
 
         /// <summary>
         /// Gets or initializes the medium screen size configuration for the layout grid item.
         /// </summary>
-        public object Md { get; init; }
+        public object? Md { get; init; }
 
         /// <summary>
         /// Gets or initializes the small screen size configuration for the layout grid item.
         /// </summary>
-        public object Sm { get; init; }
+        public object? Sm { get; init; }
 
         /// <summary>
         /// Gets or initializes the extra large screen size configuration for the layout grid item.
         /// </summary>
-        public object Xl { get; init; }
+        public object? Xl { get; init; }
 
         /// <summary>
         /// Gets or initializes the extra small screen size configuration for the layout grid item.
         /// </summary>
-        public object Xs { get; init; }
+        public object? Xs { get; init; }
 
         /// <summary>
         /// Gets or initializes the extra extra large screen size configuration for the layout grid item.
         /// </summary>
-        public object Xxl { get; init; }
+        public object? Xxl { get; init; }
 
         /// <summary>
         /// Sets the adaptive rendering state of the layout grid item.

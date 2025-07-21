@@ -7,22 +7,12 @@
         public IDataSlice Enrich(DimensionTuple additionalTuple);
     }
 
-    public readonly struct DataSlice<T> : IDataSlice
+    public readonly struct DataSlice<T>(T data, DimensionTuple tuple) : IDataSlice
     {
-        public T Data { get; }
-        public DimensionTuple Tuple { get; }
-        object IDataSlice.Data => Data;
+        public T Data { get; } = data;
+        public DimensionTuple Tuple { get; } = tuple;
+        object IDataSlice.Data => Data!;
 
-        public DataSlice(T data, DimensionTuple tuple)
-        {
-            Data = data;
-            Tuple = tuple;
-        }
-
-        private static IEnumerable<DataSlice<T>> Trivial(T data, string[] dimensions)
-        {
-            yield return new DataSlice<T>(data, new DimensionTuple(dimensions.Select(d => (d, (object)null))));
-        }
 
         IDataSlice IDataSlice.Enrich(DimensionTuple additionalTuple)
         {

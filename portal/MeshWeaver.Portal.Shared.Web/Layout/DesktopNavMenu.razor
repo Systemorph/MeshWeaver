@@ -2,30 +2,18 @@
 @using Microsoft.AspNetCore.Components.Authorization
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
-    <FluentAppBarItem
-        Href="/articles"
-        Match="NavLinkMatch.All"
-        IconRest="ArticlesIcon()"
-        IconActive="ArticlesIcon(active: true)"
-        Text="Blog" />
-    <FluentAppBarItem Href="/content/Documentation/Readme.md"
-                      Match="NavLinkMatch.All"
-                      IconRest="DocumentationIcon()"
-                      IconActive="DocumentationIcon(active: true)"
-                      Text="Areas" />
-    <FluentAppBarItem Href="/app/Agents/Overview" 
-                      Match="NavLinkMatch.All" 
-                      IconRest="AgentsIcon()" 
-                      IconActive="AgentsIcon(true)"
-                      Text="Agents"/>
+    <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="ArticlesIcon()"
+        IconActive="ArticlesIcon(active: true)" Text="Blog" />
+    <FluentAppBarItem Href="/content/Documentation/Readme.md" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
+        IconActive="DocumentationIcon(active: true)" Text="Areas" />
+    <FluentAppBarItem Href="/app/Todo/TodoList" Match="NavLinkMatch.All" IconRest="TodoIcon()"
+        IconActive="TodoIcon(true)" Text="Todos" />
+    <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
+        IconActive="AgentsIcon(true)" Text="Agents" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
-            <FluentAppBarItem
-                Href="/collections"
-                Match="NavLinkMatch.All"
-                IconRest="CollectionsIcon()"
-                IconActive="CollectionsIcon(active: true)"
-                Text="Collections" />
+            <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"
+                IconActive="CollectionsIcon(active: true)" Text="Collections" />
         </Authorized>
     </AuthorizeView>
 

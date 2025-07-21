@@ -14,15 +14,17 @@ public abstract class ReplaceMethodInTemplateAttribute : Attribute
 public static class TemplateBuilder
 {
     public static TView Build<T, TView>(
-        this Expression<Func<T, TView>> layout,
+        this Expression<Func<T, TView>>? layout,
         string dataContext,
         out IReadOnlyCollection<Type> types
     )
         where TView : UiControl
     {
+        if (layout == null)
+            throw new ArgumentNullException(nameof(layout));
         var rootParameter = layout.Parameters.First();
         var visitor = new TemplateBuilderVisitor(rootParameter, "");
-        var body = visitor.Visit(layout.Body);
+        var body = visitor.Visit(layout.Body)!;
         var lambda = Expression.Lambda<Func<TView>>(body);
         var ret = lambda.Compile().Invoke();
         types = visitor.DataBoundTypes;
@@ -38,7 +40,7 @@ public static class TemplateBuilder
         public TemplateBuilderVisitor(ParameterExpression rootParameter, string rootName)
         {
             this.rootParameter = rootParameter;
-            bindings.Add(rootParameter, rootParameter.Name);
+            bindings.Add(rootParameter, rootParameter.Name ?? string.Empty);
             rootBindingExpression = GetBinding(rootName, rootParameter.Type);
         }
 
@@ -46,7 +48,7 @@ public static class TemplateBuilder
             typeof(JsonPointerReference).GetConstructor(
                 BindingFlags.Public | BindingFlags.Instance,
                 new[] { typeof(string) }
-            );
+            )!;
         internal readonly List<Type> DataBoundTypes = new();
 
         private Expression GetBinding(string path, Type type)
@@ -90,7 +92,12 @@ public static class TemplateBuilder
             )
             {
                 var slashIfNotEmpty = string.IsNullOrEmpty(path) ? string.Empty : "/";
-                return GetBinding($"{path}{slashIfNotEmpty}{args.First()}", node.Method.ReturnType);
+                var firstArg = args.First();
+                if (firstArg is ConstantExpression constExpr && constExpr.Value != null)
+                {
+                    return GetBinding($"{path}{slashIfNotEmpty}{constExpr.Value}", node.Method.ReturnType);
+                }
+                throw new InvalidOperationException("Expected constant expression for indexer access");
             }
 
             var replaceMethodAttribute =
@@ -101,11 +108,11 @@ public static class TemplateBuilder
                     ? replaceMethodAttribute.Replace(node.Method)
                     : node.Method;
             if (
-                args.Zip(method.GetParameters(), (a, p) => p.ParameterType.IsAssignableFrom(a.Type))
+                args.Zip(method.GetParameters(), (a, p) => a != null && p.ParameterType.IsAssignableFrom(a.Type))
                     .Any(x => !x)
             )
-                method = TrySubstituteMethod(method, args.Select(a => a.Type).ToArray());
-            return Expression.Call(obj, method, args);
+                method = TrySubstituteMethod(method, args.Where(a => a != null).Select(a => a!.Type).ToArray());
+            return Expression.Call(obj, method, args.Where(a => a != null).ToArray()!);
         }
 
         private MethodInfo TrySubstituteMethod(MethodInfo method, Type[] types)

@@ -18,18 +18,18 @@ public record ComboboxControl(object Data, object Options) : ListControlBase<Com
     /// <summary>
     /// Gets or initializes the autofocus state of the combobox.
     /// </summary>
-    public object Autofocus { get; init; }
+    public object? Autofocus { get; init; }
 
     /// <summary>
     /// Gets or initializes the autocomplete state of the combobox.
     /// </summary>
-    public object Autocomplete { get; init; }
+    public object? Autocomplete { get; init; }
 
 
     /// <summary>
     /// Gets or initializes the position of the combobox.
     /// </summary>
-    public object Position { get; init; }
+    public object? Position { get; init; }
 
     /// <summary>
     /// Sets the autofocus state of the combobox.
@@ -68,7 +68,7 @@ public record ComboboxControl(object Data, object Options) : ListControlBase<Com
         {
             {
                 ReflectionHelper.GetMethod<ComboboxControl>(x => x.WithAutofocus(default(bool))),
-                ReflectionHelper.GetMethod<ComboboxControl>(x => x.WithAutofocus(default(object)))
+                ReflectionHelper.GetMethod<ComboboxControl>(x => x.WithAutofocus(default(object)!))
             }
         };
 

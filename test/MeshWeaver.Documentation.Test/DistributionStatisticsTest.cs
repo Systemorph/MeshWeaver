@@ -10,7 +10,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -38,7 +37,7 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         stack.Areas.Should().HaveCount(4);
 
         // let's find the selection control in the first area.
-         control = await stream.GetControlStream(stack.Areas.First().Area.ToString())
+         control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
          
@@ -47,16 +46,16 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
          basicInputEditor.Areas.Should().HaveCount(2);
 
-         control = await stream.GetControlStream(basicInputEditor.Areas.Last().Area.ToString())
+         control = await stream.GetControlStream(basicInputEditor.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var select = control.Should().BeOfType<SelectControl>().Which;
 
         // let's get the options to be displayed in the combobox.
         var pointer = select.Options.Should().BeOfType<JsonPointerReference>().Which;
-        var options = (await stream.Reduce(pointer)
+        var options = (await stream.Reduce(pointer)!
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null))
+            .FirstAsync())
             .Value;
         options.ValueKind.Should().Be(JsonValueKind.Array);
         var jsonArray = options.EnumerateArray().ToArray();
@@ -65,15 +64,15 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         var selectionPointer = select.Data.Should().BeOfType<JsonPointerReference>().Which;
         var absoluteSelectionPointer =
             selectionPointer with { Pointer = $"{basicInputEditor.DataContext}/{selectionPointer.Pointer}" };
-        var selection = (await stream.Reduce(absoluteSelectionPointer)
+        var selection = (await stream.Reduce(absoluteSelectionPointer)!
                 .Timeout(10.Seconds())
-                .FirstAsync(x => x is not null))
+                .FirstAsync())
             .Value;
 
         selection.ToString().Should().Be("Pareto");
 
         // let's find the distribution control in the second area.
-        control = await stream.GetControlStream(stack.Areas[1].Area.ToString())
+        control = await stream.GetControlStream(stack.Areas[1].Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -83,15 +82,15 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
 
         // let's find the distribution.
-        var distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
+        var distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))!
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)).Value;
+            .FirstAsync()).Value;
 
         distribution.GetProperty("$type").ToString().Should().Contain("Pareto");
 
         // let's check we get the placeholder for the results section
 
-        var resultArea = stack.Areas[3].Area.ToString();
+        var resultArea = stack.Areas[3].Area.ToString()!;
         control = await stream.GetControlStream(resultArea)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
@@ -101,15 +100,16 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
 
         // let's find the button and click
         var buttonArea = stack.Areas[2].Area;
-        control = await stream.GetControlStream(buttonArea.ToString())
+        control = await stream.GetControlStream(buttonArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<ButtonControl>();
-        client.Post(new ClickedEvent(buttonArea.ToString(), stream.StreamId), o => o.WithTarget(stream.Owner));
+        client.Post(new ClickedEvent(buttonArea.ToString()!, stream.StreamId), o => o.WithTarget(stream.Owner));
 
         control = await stream.GetControlStream(resultArea)
-            .Timeout(10.Seconds())
+            .Where(x => x != null)
+            .Timeout(10.Seconds())!
             .OfType<MarkdownControl>()
             .FirstAsync(md => md.Markdown.ToString()!.Contains("Mean"));
 
@@ -120,16 +120,17 @@ public class DistributionStatisticsTest(ITestOutputHelper output) : Documentatio
         stream.UpdatePointer(JsonSerializer.SerializeToNode("LogNormal"), basicInputEditor.DataContext, selectionPointer);
         
         // which should change the distribution
-        distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))
+        distribution = (await stream.Reduce(new JsonPointerReference(distributionEditor.DataContext))!
             .Timeout(10.Seconds())
             .Select(x => x.Value)
             .FirstAsync(x => !x.GetProperty("$type").ToString().Contains("Pareto")));
 
         distribution.GetProperty("$type").ToString().Should().Contain("LogNormal");
-        client.Post(new ClickedEvent(buttonArea.ToString(), stream.StreamId), o => o.WithTarget(stream.Owner));
+        client.Post(new ClickedEvent(buttonArea.ToString()!, stream.StreamId), o => o.WithTarget(stream.Owner));
 
         control = await stream.GetControlStream(resultArea)
-            .Timeout(10.Seconds())
+            .Where(x => x != null)
+            .Timeout(10.Seconds())!
             .OfType<MarkdownControl>()
             .FirstAsync(md => md.Markdown != paretoResults);
         results = control.Should().BeOfType<MarkdownControl>().Which;

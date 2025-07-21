@@ -5,8 +5,8 @@ namespace MeshWeaver.Data.Documentation.Model;
 public record Param
 {
     [XmlAttribute("name")]
-    public string Name { get; init; }
+    public string? Name { get; init; }
 
     [XmlText]
-    public string Description { get; init; }
+    public string? Description { get; init; }
 }

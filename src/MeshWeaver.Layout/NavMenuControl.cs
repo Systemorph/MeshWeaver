@@ -8,12 +8,12 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     /// <summary>
     /// Gets or initializes the width of the navigation menu.
     /// </summary>
-    public object Width { get; init; }= 250;
+    public object? Width { get; init; } = 250;
 
     /// <summary>
     /// Gets or initializes the collapsible state of the navigation menu.
     /// </summary>
-    public object Collapsible { get; init; } = true;
+    public object? Collapsible { get; init; } = true;
 
     /// <summary>
     /// Sets the collapsible state of the navigation menu.
@@ -32,7 +32,7 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     /// <summary>
     /// Sets whether the menu is expanded.
     /// </summary>
-    public object Expanded { get; init; } = true;
+    public object? Expanded { get; init; } = true;
 
     /// <summary>
     /// Collapse the menu
@@ -55,7 +55,7 @@ public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(M
     /// <param name="href">The href of the navigation link.</param>
     /// <returns>A new <see cref="NavMenuControl"/> instance with the specified navigation link.</returns>
     public NavMenuControl WithNavLink(object title, object href) =>
-        WithView(new NavLinkControl(title, null,href));
+        WithView(new NavLinkControl(title, null, href));
 
     /// <summary>
     /// Adds a navigation link with an icon to the navigation menu.
@@ -94,12 +94,12 @@ public record NavMenuControl() : ContainerControl<NavMenuControl, NavMenuSkin>(M
 
 public interface IMenuItem : IUiControl
 {
-    object Title { get; init; }
-    object Icon { get; init; }
-    object Url { get; init; }
+    object? Title { get; init; }
+    object? Icon { get; init; }
+    object? Url { get; init; }
 }
 
-public record NavLinkControl(object Title, object Icon, object Url) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IMenuItem
+public record NavLinkControl(object? Title, object? Icon, object? Url) : UiControl<NavLinkControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion), IMenuItem
 {
     public NavLinkControl WithTitle(object title) => This with { Title = title };
     public NavLinkControl WithHref(object href) => This with { Url = href };
@@ -132,7 +132,7 @@ public record NavGroupControl(object Title) : ContainerControl<NavGroupControl, 
 }
 public record NavGroupSkin(object Title) : Skin<NavGroupSkin>
 {
-    public object Expanded { get; init; } = true;
+    public object? Expanded { get; init; } = true;
 
     public NavGroupSkin WithTitle(object title) => this with { Title = title };
 
@@ -142,8 +142,8 @@ public record NavGroupSkin(object Title) : Skin<NavGroupSkin>
 
     public NavGroupSkin Expand(bool expanded = true) => this with { Expanded = expanded };
 
-    public object Url { get; init; }
-    public object Icon { get; init; }
+    public object? Url { get; init; }
+    public object? Icon { get; init; }
     public NavGroupSkin WithIcon(object icon)
         => this with { Icon = icon };
 }

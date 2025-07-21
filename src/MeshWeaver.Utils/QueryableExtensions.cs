@@ -142,6 +142,7 @@ namespace MeshWeaver.Utils
         [SuppressMessage("Microsoft.Design", "CA1006:DoNotNestGenericTypesInMemberSignatures")]
         public static ValueTask<Dictionary<TKey, TSource>> ToDictionaryAsync<TSource, TKey>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -177,6 +178,7 @@ namespace MeshWeaver.Utils
         [SuppressMessage("Microsoft.Design", "CA1006:DoNotNestGenericTypesInMemberSignatures")]
         public static ValueTask<Dictionary<TKey, TSource>> ToDictionaryAsync<TSource, TKey>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, CancellationToken cancellationToken)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -212,6 +214,7 @@ namespace MeshWeaver.Utils
         [SuppressMessage("Microsoft.Design", "CA1006:DoNotNestGenericTypesInMemberSignatures")]
         public static ValueTask<Dictionary<TKey, TSource>> ToDictionaryAsync<TSource, TKey>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, IEqualityComparer<TKey> comparer)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -251,6 +254,7 @@ namespace MeshWeaver.Utils
         public static ValueTask<Dictionary<TKey, TSource>> ToDictionaryAsync<TSource, TKey>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, IEqualityComparer<TKey> comparer,
             CancellationToken cancellationToken)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -288,6 +292,7 @@ namespace MeshWeaver.Utils
         [SuppressMessage("Microsoft.Design", "CA1006:DoNotNestGenericTypesInMemberSignatures")]
         public static ValueTask<Dictionary<TKey, TElement>> ToDictionaryAsync<TSource, TKey, TElement>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, Func<TSource, TElement> elementSelector)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -330,6 +335,7 @@ namespace MeshWeaver.Utils
         public static ValueTask<Dictionary<TKey, TElement>> ToDictionaryAsync<TSource, TKey, TElement>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, Func<TSource, TElement> elementSelector,
             CancellationToken cancellationToken)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -372,6 +378,7 @@ namespace MeshWeaver.Utils
         public static ValueTask<Dictionary<TKey, TElement>> ToDictionaryAsync<TSource, TKey, TElement>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, Func<TSource, TElement> elementSelector,
             IEqualityComparer<TKey> comparer)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
@@ -417,6 +424,7 @@ namespace MeshWeaver.Utils
         public static ValueTask<Dictionary<TKey, TElement>> ToDictionaryAsync<TSource, TKey, TElement>(
             this IQueryable<TSource> source, Func<TSource, TKey> keySelector, Func<TSource, TElement> elementSelector,
             IEqualityComparer<TKey> comparer, CancellationToken cancellationToken)
+            where TKey : notnull
         {
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");

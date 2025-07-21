@@ -5,7 +5,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="Newtonsoft.Json" />
-		<PackageReference Include="Verify.Xunit" />
+		<PackageReference Include="Verify.XunitV3" />
 	</ItemGroup>
 	<ItemGroup>
 	  <ProjectReference Include="..\..\src\MeshWeaver.Charting\MeshWeaver.Charting.csproj" />

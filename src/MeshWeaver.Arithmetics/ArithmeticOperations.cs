@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Arithmetics.Aggregation;
+﻿#nullable enable
+using MeshWeaver.Arithmetics.Aggregation;
 using MeshWeaver.Arithmetics.MapOver;
 
 namespace MeshWeaver.Arithmetics;

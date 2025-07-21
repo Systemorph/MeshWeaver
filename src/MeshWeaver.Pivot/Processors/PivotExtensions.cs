@@ -12,7 +12,7 @@ namespace MeshWeaver.Pivot.Processors
             string SystemName,
             string DisplayName,
             PropertyInfo Property
-        )> GetPropertiesForProcessing(this Type tObject, string prefix)
+        )> GetPropertiesForProcessing(this Type tObject, string? prefix)
         {
             var dot = string.IsNullOrEmpty(prefix) ? string.Empty : ".";
             var properties = tObject
@@ -31,11 +31,5 @@ namespace MeshWeaver.Pivot.Processors
             return properties;
         }
 
-        public static T[] NullIfEmpty<T>(this T[] array)
-        {
-            if (array?.Length > 0)
-                return array;
-            return null;
-        }
     }
 }

@@ -18,7 +18,6 @@ using Microsoft.DotNet.Interactive.Formatting.Csv;
 using Microsoft.DotNet.Interactive.Formatting.TabularData;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -86,7 +85,7 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
             .GetRemoteStream(new KernelAddress() { Id = addressId }, new LayoutAreaReference(area));
 
         var control = await stream
-            .GetControlStream(area)
+            .GetControlStream(area.ToString()!)
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null);
 

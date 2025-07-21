@@ -5,7 +5,7 @@ namespace MeshWeaver.Connection.Orleans;
 
 public class ModulesAssemblyLoadContext(string basePath) : AssemblyLoadContext(true){
 
-    protected override Assembly Load(AssemblyName assemblyName)
+    protected override Assembly? Load(AssemblyName assemblyName)
     {
         // Check if the assembly is already loaded
         var loadedAssembly = AssemblyLoadContext.Default.Assemblies

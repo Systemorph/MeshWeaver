@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿#nullable enable
+using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -100,6 +101,7 @@ public static class MarkdownExtensions
         var document = Markdig.Markdown.Parse(content, pipeline);
         var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
         var name = Path.GetFileNameWithoutExtension(path);
+        var pathWithoutExtension = path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
 
         if (yamlBlock is null)
             return new MarkdownElement
@@ -107,11 +109,11 @@ public static class MarkdownExtensions
                 Name = name,
                 Path = path,
                 Collection = collection,
-                Url = GetContentUrl(collection, name),
+                Url = GetContentUrl(collection, pathWithoutExtension),
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
-                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+                CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
 
             };
 
@@ -121,10 +123,20 @@ public static class MarkdownExtensions
             ret = new YamlDotNet.Serialization.DeserializerBuilder().Build()
                 .Deserialize<Article>(yamlBlock.Lines.ToString());
         }
-        catch 
+        catch
         {
-
-            ret = new();
+            ret = new Article
+            {
+                Name = string.Empty,
+                Collection = string.Empty,
+                PrerenderedHtml = string.Empty,
+                Content = string.Empty,
+                Url = string.Empty,
+                Path = string.Empty,
+                CodeSubmissions = [],
+                Title = string.Empty,
+                Source = string.Empty
+            };
         }
 
         // Remove the YAML block from the content
@@ -135,11 +147,11 @@ public static class MarkdownExtensions
             Name = name,
             Path = path,
             Collection = collection,
-            Url = GetContentUrl(collection, name),
+            Url = GetContentUrl(collection, pathWithoutExtension),
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
-            CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray(),
+            CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
             AuthorDetails = ret.Authors.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray()
         };
     }
@@ -164,7 +176,7 @@ public static class MarkdownExtensions
 
 public record ArticleCatalogOptions
 {
-    public string Collection { get; init; }
+    public string Collection { get; init; } = string.Empty;
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
 

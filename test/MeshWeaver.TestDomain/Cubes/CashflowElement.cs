@@ -18,33 +18,33 @@ public record CashflowElement : IHasValue
     [NotVisible]
     [Dimension(typeof(LineOfBusiness))]
     [IdentityProperty]
-    public string LineOfBusiness { get; init; }
+    public string? LineOfBusiness { get; init; }
 
     [NotVisible]
     [Dimension(typeof(Country))]
     [IdentityProperty]
-    public string Country { get; init; }
+    public string? Country { get; init; }
 
     [NotVisible]
     [Dimension(typeof(AmountType))]
     [IdentityProperty]
-    public string AmountType { get; init; }
+    public string? AmountType { get; init; }
 
     [NotVisible]
     [Dimension(typeof(Scenario))]
     [IdentityProperty]
-    public string Scenario { get; init; }
+    public string? Scenario { get; init; }
 
     [NotVisible]
     [Dimension(typeof(Split))]
     [IdentityProperty]
-    public string Split { get; init; }
+    public string? Split { get; init; }
 
     [NotVisible]
     [Dimension(typeof(Currency))]
     [IdentityProperty]
     [AggregateBy]
-    public string Currency { get; init; }
+    public string? Currency { get; init; }
 
     public double Value { get; init; }
 

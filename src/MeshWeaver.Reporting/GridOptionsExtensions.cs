@@ -1,32 +1,28 @@
 ﻿using System.Collections.Immutable;
 using System.Text.RegularExpressions;
-using MeshWeaver.DataCubes;
 using MeshWeaver.GridModel;
 using MeshWeaver.Reporting.Models;
 
 namespace MeshWeaver.Reporting
 {
     // TODO V10: move to the builder (2021/12/08, Ekaterina Mishina)
-    public class GridRowSelector
+    public class GridRowSelector(string dimension)
     {
-        private readonly string dimension;
         private readonly IList<Func<GridRow, bool>> orConditions = new List<Func<GridRow, bool>>();
-
-        public GridRowSelector(string dimension)
-        {
-            this.dimension = dimension;
-        }
 
         public void Level(params int[] levels)
         {
-            orConditions.Add(row => levels.Contains(row.RowGroup.Coordinates.Count - 1));
+            orConditions.Add(row => row.RowGroup != null && levels.Contains(row.RowGroup.Coordinates.Count - 1));
         }
 
         public bool TrueFor(GridRow gridRow)
         {
+            if (gridRow.RowGroup?.GrouperName == null)
+                return false;
+                
             var ret = Regex
                 .Match(
-                    gridRow.RowGroup.GrouperName.ToString(),
+                    gridRow.RowGroup.GrouperName,
                     $"{dimension}[0-9]{{0,}}$",
                     RegexOptions.IgnoreCase
                 )
@@ -37,7 +33,7 @@ namespace MeshWeaver.Reporting
 
         public void SystemNames(string[] systemNames)
         {
-            orConditions.Add(row => systemNames.Contains(row.RowGroup.Coordinates.Last()));
+            orConditions.Add(row => row.RowGroup != null && systemNames.Contains(row.RowGroup.Coordinates.Last()));
         }
     }
 
@@ -51,7 +47,7 @@ namespace MeshWeaver.Reporting
         public static GridOptions HideRowValuesForDimension(
             this GridOptions gridOptions,
             string dimension,
-            Func<GridRowSelector, GridRowSelector> rowSelectorFunc = null
+            Func<GridRowSelector, GridRowSelector>? rowSelectorFunc = null
         )
         {
             var gridRowSelector = new GridRowSelector(dimension);
@@ -106,7 +102,7 @@ namespace MeshWeaver.Reporting
         {
             return gridOptions with
             {
-                AutoGroupColumnDef = definitionModifier(gridOptions.AutoGroupColumnDef)
+                AutoGroupColumnDef = definitionModifier(gridOptions.AutoGroupColumnDef ?? new ColDef())
             };
         }
 
@@ -115,7 +111,7 @@ namespace MeshWeaver.Reporting
             Func<ColDef, ColDef> definitionModifier
         )
         {
-            return def with { DefaultColDef = definitionModifier(def.DefaultColDef) };
+            return def with { DefaultColDef = definitionModifier(def.DefaultColDef ?? new ColDef()) };
         }
 
         public static GridOptions WithDefaultColumnGroup(
@@ -123,7 +119,7 @@ namespace MeshWeaver.Reporting
             Func<ColGroupDef, ColGroupDef> definitionModifier
         )
         {
-            return def with { DefaultColGroupDef = definitionModifier(def.DefaultColGroupDef) };
+            return def with { DefaultColGroupDef = definitionModifier(def.DefaultColGroupDef ?? new ColGroupDef()) };
         }
 
         public static GridOptions WithRowStyle(this GridOptions def, CellStyle style)
@@ -151,8 +147,7 @@ namespace MeshWeaver.Reporting
         {
             if (def is ColGroupDef cg)
             {
-                var modifiedColumnGroup =
-                    definitionFilter == null || definitionFilter(cg)
+                var modifiedColumnGroup = definitionFilter(cg)
                         ? (ColGroupDef)definitionModifier(cg)
                         : cg;
                 return modifiedColumnGroup with
@@ -165,14 +160,14 @@ namespace MeshWeaver.Reporting
                 };
             }
 
-            return definitionFilter == null || definitionFilter(def)
+            return definitionFilter(def)
                 ? definitionModifier(def)
                 : def;
         }
 
         public static IReadOnlyCollection<ColDef> Modify(
             this IReadOnlyCollection<ColDef> definitions,
-            string systemNameRegex,
+            string? systemNameRegex,
             Func<ColDef, ColDef> definitionModifier
         )
         {
@@ -180,7 +175,7 @@ namespace MeshWeaver.Reporting
                 x =>
                     Regex
                         .Match(
-                            x is ColGroupDef g ? g.GroupId.ToString() : x.ColId.ToString(),
+                            x is ColGroupDef g ? g.GroupId!.ToString()!  : x.ColId!.ToString()! ,
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )
@@ -198,7 +193,7 @@ namespace MeshWeaver.Reporting
         public static ColDef WithNumberFormat(
             this ColDef def,
             string locales,
-            string options = null
+            string? options = null
         )
         {
             options ??= "{ maximumFractionDigits: 2 }";
@@ -267,7 +262,7 @@ namespace MeshWeaver.Reporting
 
         public static IReadOnlyCollection<GridRow> Modify(
             this IReadOnlyCollection<GridRow> rows,
-            string systemNameRegex,
+            string? systemNameRegex,
             Func<GridRow, GridRow> rowModifier
         )
         {
@@ -276,7 +271,7 @@ namespace MeshWeaver.Reporting
                     x.RowGroup != null
                     && Regex
                         .Match(
-                            x.RowGroup.Id.ToString(),
+                            x.RowGroup.Id?.ToString() ?? string.Empty,
                             systemNameRegex ?? string.Empty,
                             RegexOptions.IgnoreCase
                         )
@@ -293,7 +288,7 @@ namespace MeshWeaver.Reporting
         {
             var rowsWithModifiedDefinitions = rows.Select(row =>
                 {
-                    if (rowFilter == null || rowFilter(row))
+                    if (rowFilter(row))
                         return rowModifier(row);
                     return row;
                 })
@@ -303,6 +298,8 @@ namespace MeshWeaver.Reporting
 
         public static GridRow WithDisplayName(this GridRow row, string name)
         {
+            if (row.RowGroup == null)
+                throw new ArgumentException("GridRow.RowGroup cannot be null when setting DisplayName", nameof(row));
             return row with { RowGroup = row.RowGroup with { DisplayName = name } };
         }
 

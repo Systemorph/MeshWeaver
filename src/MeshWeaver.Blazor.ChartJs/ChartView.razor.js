@@ -4,6 +4,10 @@
 // Keep track of chart instances for theme updates
 const chartInstances = new Map();
 
+// Loading state management for concurrent requests
+let chartJsLoadingPromise = null;
+let chartJsLoaded = false;
+
 /**
  * Load Chart.js (if needed) and render the chart in the provided element
  * @param {HTMLCanvasElement} element - The canvas element to render the chart
@@ -12,51 +16,67 @@ const chartInstances = new Map();
  */
 export async function renderChart(element, config) {
     console.log("Starting Chart.js loading and rendering process");
-    console.log("Config received:", config);    // Check if Chart.js is already loaded
+    console.log("Config received:", config);
+
+    // Check if Chart.js is already loaded
     if (!window.Chart) {
-        // Load Chart.js from CDN
-        const loaded = await loadChartJs();
+        // Use shared loading promise to prevent concurrent loading
+        if (!chartJsLoadingPromise) {
+            chartJsLoadingPromise = loadChartJs();
+        }
+
+        const loaded = await chartJsLoadingPromise;
         if (!loaded) {
             console.error("Failed to load Chart.js");
             return;
         }
-    } else {
-        // If Chart.js is already loaded, just configure defaults safely
+    } else if (!chartJsLoaded) {
+        // Chart.js is loaded but we haven't configured it yet
         configureChartDefaults();
+        chartJsLoaded = true;
     }    // Render or update the chart
-    const existingChart = window.Chart.getChart(element);
-    const chartConfig = deserialize(config);
+    try {
+        const existingChart = window.Chart.getChart(element);
+        const chartConfig = deserialize(config);
 
-    console.log("Deserialized config:", chartConfig);
-    console.log("Chart options:", chartConfig.options);
-    console.log("Legend config:", chartConfig.options?.plugins?.legend);
+        console.log("Deserialized config:", chartConfig);
+        console.log("Chart options:", chartConfig.options);
+        console.log("Legend config:", chartConfig.options?.plugins?.legend);
 
-    // Ensure the chart config has the correct structure for Chart.js
-    // Chart.js expects { type, data, options } but we might have a nested structure
-    let finalConfig;
-    if (chartConfig.data && chartConfig.options) {
-        // Extract type from the first dataset if not at root level
-        const chartType = chartConfig.data.datasets?.[0]?.type || 'bar';
-        finalConfig = {
-            type: chartType,
-            data: chartConfig.data,
-            options: chartConfig.options
-        };
-    } else {
-        finalConfig = chartConfig;
-    }
+        // Ensure the chart config has the correct structure for Chart.js
+        // Chart.js expects { type, data, options } but we might have a nested structure
+        let finalConfig;
+        if (chartConfig.data && chartConfig.options) {
+            // Extract type from the first dataset if not at root level
+            const chartType = chartConfig.data.datasets?.[0]?.type || 'bar';
+            finalConfig = {
+                type: chartType,
+                data: chartConfig.data,
+                options: chartConfig.options
+            };
+        } else {
+            finalConfig = chartConfig;
+        }
 
-    console.log("Final config for Chart.js:", finalConfig); if (existingChart) {
-        existingChart.config.data = finalConfig.data;
-        existingChart.config.options = finalConfig.options;
-        existingChart.update();
-        // Update our tracking
-        chartInstances.set(element.id || element, existingChart);
-    } else {
-        const ctx = element.getContext("2d");
-        const newChart = new window.Chart(ctx, finalConfig);
-        // Track this chart instance
-        chartInstances.set(element.id || element, newChart);
+        console.log("Final config for Chart.js:", finalConfig);
+
+        if (existingChart) {
+            existingChart.config.data = finalConfig.data;
+            existingChart.config.options = finalConfig.options;
+            existingChart.update();
+            // Update our tracking
+            chartInstances.set(element.id || element, existingChart);
+        } else {
+            const ctx = element.getContext("2d");
+            const newChart = new window.Chart(ctx, finalConfig);
+            // Track this chart instance
+            chartInstances.set(element.id || element, newChart);
+        }
+    } catch (error) {
+        console.error("Error rendering chart:", error);
+        console.error("Element:", element);
+        console.error("Config:", config);
+        throw error; // Re-throw to let calling code handle it
     }
 }
 
@@ -66,21 +86,24 @@ export async function renderChart(element, config) {
  */
 async function loadChartJs() {
     try {
-        // Load Chart.js core
-        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');        // Load Chart.js plugins
-        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js', 'chartjs-datalabels-script');
-        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js', 'chartjs-moment-script');
+        console.log("Starting Chart.js loading process");
 
-        // Try to load colorschemes plugin (may cause issues, so load it last)
-        try {
-            await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-colorschemes@0.4.0/dist/chartjs-plugin-colorschemes.min.js', 'chartjs-colorschemes-script');
-            console.log('ColorSchemes plugin loaded successfully');
-        } catch (error) {
-            console.warn('Failed to load ColorSchemes plugin:', error);
-        }
+        // Load Chart.js core
+        await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js', 'chartjs-script');
+
+        // Wait for Chart.js to be available with timeout
+        await waitForGlobal('Chart', 5000);
+
+        // Load DataLabels plugin
+        await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js', 'chartjs-datalabels-script');
+
+        // Wait for DataLabels to be available with timeout
+        await waitForGlobal('ChartDataLabels', 3000);
 
         // Load moment.js for the adapter
-        await loadScript('https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js', 'moment-script');        // Register plugins
+        await loadScript('https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js', 'moment-script');
+
+        // Register plugins
         if (window.Chart && window.ChartDataLabels) {
             window.Chart.register(window.ChartDataLabels);
             console.log('Chart.js DataLabels plugin registered successfully');
@@ -91,8 +114,9 @@ async function loadChartJs() {
         // Configure defaults after plugins are registered
         if (window.Chart) {
             configureChartDefaults();
+            chartJsLoaded = true;
         } else {
-            console.warn('Chart.js not available for configuration');
+            throw new Error('Chart.js not available for configuration');
         }
 
         // Set up theme change callback once Chart.js is loaded
@@ -104,15 +128,17 @@ async function loadChartJs() {
             console.warn('Theme handler not available for Chart.js. Theme changes will not be applied automatically.');
         }
 
+        console.log("Chart.js loading completed successfully");
         return true;
     } catch (error) {
         console.error("Error loading Chart.js:", error);
+        chartJsLoadingPromise = null; // Reset on error to allow retry
         return false;
     }
 }
 
 /**
- * Load a script from CDN
+ * Load a script from CDN with better error handling and concurrency support
  * @param {string} src - The script source URL
  * @param {string} id - The script element ID
  * @returns {Promise<void>} - A promise that resolves when the script is loaded
@@ -120,17 +146,64 @@ async function loadChartJs() {
 function loadScript(src, id) {
     return new Promise((resolve, reject) => {
         // Check if script is already loaded
-        if (document.getElementById(id)) {
-            resolve();
-            return;
+        const existingScript = document.getElementById(id);
+        if (existingScript) {
+            // If script exists and has loaded successfully, resolve immediately
+            if (existingScript.dataset.loaded === 'true') {
+                resolve();
+                return;
+            }
+            // If script exists but is still loading, wait for it
+            if (existingScript.dataset.loading === 'true') {
+                existingScript.addEventListener('load', () => resolve());
+                existingScript.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)));
+                return;
+            }
         }
 
         const script = document.createElement('script');
         script.src = src;
         script.id = id;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+        script.dataset.loading = 'true';
+
+        script.onload = () => {
+            script.dataset.loaded = 'true';
+            script.dataset.loading = 'false';
+            resolve();
+        };
+
+        script.onerror = () => {
+            script.dataset.loading = 'false';
+            reject(new Error(`Failed to load script: ${src}`));
+        };
+
         document.head.appendChild(script);
+    });
+}
+
+/**
+ * Wait for a global variable to become available with timeout
+ * @param {string} globalName - The name of the global variable to wait for
+ * @param {number} timeout - Timeout in milliseconds
+ * @returns {Promise<void>} - A promise that resolves when the global is available
+ */
+function waitForGlobal(globalName, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        if (window[globalName]) {
+            resolve();
+            return;
+        }
+
+        const startTime = Date.now();
+        const checkInterval = setInterval(() => {
+            if (window[globalName]) {
+                clearInterval(checkInterval);
+                resolve();
+            } else if (Date.now() - startTime > timeout) {
+                clearInterval(checkInterval);
+                reject(new Error(`Timeout waiting for ${globalName} to load`));
+            }
+        }, 100);
     });
 }
 

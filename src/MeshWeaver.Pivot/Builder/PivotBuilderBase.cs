@@ -26,7 +26,7 @@ public abstract record PivotBuilderBase<
 
     public Aggregations<TTransformed, TIntermediate, TAggregate> Aggregations;
     public Func<IEnumerable<T>, IEnumerable<TTransformed>> Transformation { get; init; } = (x => x.Cast<TTransformed>());
-    protected Type TransposedValue { get; init; }
+    protected Type? TransposedValue { get; init; }
     public IWorkspace Workspace { get; init; }
     protected PivotBuilderBase(IWorkspace workspace, IEnumerable<T> objects)
     {

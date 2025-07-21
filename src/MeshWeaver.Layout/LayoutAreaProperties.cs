@@ -16,12 +16,12 @@ namespace MeshWeaver.Layout
         /// <summary>
         /// Gets or initializes the page title of the layout area.
         /// </summary>
-        public string PageTitle { get; init; }
+        public string? PageTitle { get; init; }
 
         /// <summary>
         /// Gets or initializes the heading of the layout area.
         /// </summary>
-        public string Heading { get; init; }
+        public string? Heading { get; init; }
 
         /// <summary>
         /// Gets or initializes the heading menu items of the layout area.

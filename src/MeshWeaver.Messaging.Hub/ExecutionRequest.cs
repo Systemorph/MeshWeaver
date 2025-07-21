@@ -2,4 +2,4 @@
 
 namespace MeshWeaver.Messaging;
 
-public record ExecutionRequest(Func<CancellationToken, Task> Action, Action<Exception> ExceptionCallback);
+public record ExecutionRequest([property:JsonIgnore]Func<CancellationToken, Task> Action, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
