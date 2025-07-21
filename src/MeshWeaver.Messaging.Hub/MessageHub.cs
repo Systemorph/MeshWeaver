@@ -33,6 +33,9 @@ public sealed class MessageHub : IMessageHub
     public ITypeRegistry TypeRegistry { get; }
     private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
     private readonly HashSet<Type> registeredTypes = new();
+    private readonly Lock registeredTypesLock = new();
+    private readonly Lock messageHandlerRegistrationLock = new();
+    private readonly Lock typeRegistryLock = new();
 
     public MessageHub(
         IServiceProvider serviceProvider,
@@ -66,11 +69,14 @@ public sealed class MessageHub : IMessageHub
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
-        foreach (var messageHandler in configuration.MessageHandlers)
-            Register(
-                messageHandler.MessageType,
-                (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
-            ); Register(HandleCallbacks);
+        lock (messageHandlerRegistrationLock)
+        {
+            foreach (var messageHandler in configuration.MessageHandlers)
+                Register(
+                    messageHandler.MessageType,
+                    (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
+                );
+        } Register(HandleCallbacks);
         Register(ExecuteRequest);
 
         messageService.Start();
@@ -97,7 +103,10 @@ public sealed class MessageHub : IMessageHub
             if (registry!.Action != null)
                 Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
-            registeredTypes.Add(registry.Type);
+            lock (registeredTypesLock)
+            {
+                registeredTypes.Add(registry.Type);
+            }
             WithTypeAndRelatedTypesFor(registry.Type);
         }
     }
@@ -105,27 +114,30 @@ public sealed class MessageHub : IMessageHub
     {
         if (typeToRegister == null) return;
 
-        logger.LogDebug("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
-
-        TypeRegistry.WithType(typeToRegister);
-
-        var types = typeToRegister
-            .GetAllInterfaces()
-            .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
-            .SelectMany(x => x.GetGenericArguments());
-
-        foreach (var type in types)
+        lock (typeRegistryLock)
         {
-            TypeRegistry.WithType(type);
-        }
+            logger.LogDebug("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
 
-        if (typeToRegister.IsGenericType)
-        {
-            foreach (var genericType in typeToRegister.GetGenericArguments())
-                TypeRegistry.WithType(genericType);
-        }
+            TypeRegistry.WithType(typeToRegister);
 
-        logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
+            var types = typeToRegister
+                .GetAllInterfaces()
+                .Where(x => x.IsGenericType && x.GetGenericTypeDefinition() == typeof(IRequest<>))
+                .SelectMany(x => x.GetGenericArguments());
+
+            foreach (var type in types)
+            {
+                TypeRegistry.WithType(type);
+            }
+
+            if (typeToRegister.IsGenericType)
+            {
+                foreach (var genericType in typeToRegister.GetGenericArguments())
+                    TypeRegistry.WithType(genericType);
+            }
+
+            logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
+        }
     }
 
     private TypeAndHandler? GetTypeAndHandler(Type type, object instance)
@@ -201,8 +213,11 @@ public sealed class MessageHub : IMessageHub
 
     public bool IsDeferred(IMessageDelivery delivery)
     {
-        return (Address.Equals(delivery.Target) || delivery.Target == null)
-               && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
+        lock (registeredTypesLock)
+        {
+            return (Address.Equals(delivery.Target) || delivery.Target == null)
+                   && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
+        }
     }
 
     #endregion
@@ -945,7 +960,10 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
-        registeredTypes.Add(tMessage);
+        lock (registeredTypesLock)
+        {
+            registeredTypes.Add(tMessage);
+        }
         WithTypeAndRelatedTypesFor(tMessage);
         return Register(action, d => tMessage.IsInstanceOfType(d.Message));
     }
@@ -992,7 +1010,10 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
-        registeredTypes.Add(tMessage);
+        lock (registeredTypesLock)
+        {
+            registeredTypes.Add(tMessage);
+        }
         WithTypeAndRelatedTypesFor(tMessage);
         return Register(
             (d, c) => action(d, c),
