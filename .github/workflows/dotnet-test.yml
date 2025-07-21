@@ -28,8 +28,14 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
+    - name: Setup logging directory
+      run: mkdir -p logs
+    - name: Copy test appsettings for logging
+      run: cp test/appsettings.json ./appsettings.json
     - name: Run Tests
       continue-on-error: true
+      env:
+        DOTNET_ENVIRONMENT: Development
       run: |
         dotnet test --no-build --verbosity detailed -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
     - name: Publish Test Results
@@ -49,5 +55,6 @@ jobs:
         path: |
           test/**/*.trx
           test/test-results.log
+          logs/**/*.log
         compression-level: 9
         retention-days: 15
