@@ -52,6 +52,8 @@ public class MessageService : IMessageService
 
         // Link the delivery buffer to the action block immediately to avoid race conditions
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
+        foreach (var buildup in hub.Configuration.SyncBuildupActions)
+            buildup(hub);
 
         executionBuffer.Post(async ct =>
       {
