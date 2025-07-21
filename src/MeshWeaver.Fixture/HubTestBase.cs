@@ -72,7 +72,7 @@ public class HubTestBase : TestBase
     public override async ValueTask DisposeAsync()
     {
         var disposalId = Guid.NewGuid().ToString("N")[..8];
-        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
+        Logger?.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
 
         try
         {
