@@ -81,18 +81,18 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
-        var transactionalItems1 = await GetWorkspace(
+        var transactionalItems1 = await (await GetWorkspace(
                 Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
-            )
+            ))
             .GetObservable<TransactionalData>()
             .Timeout(timeout)
             .FirstAsync(x => x.Count > 1);
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
-        var computedItems1 = await GetWorkspace(
+        var computedItems1 = await (await GetWorkspace(
                 Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
-            )
+            ))
             .GetObservable<ComputedData>()
             .Timeout(timeout)
             .FirstAsync(x => x is { Count: > 0 });
@@ -112,8 +112,9 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
-    private IWorkspace GetWorkspace(IMessageHub hub)
+    private async Task<IWorkspace> GetWorkspace(IMessageHub hub)
     {
+        await hub.Started;
         return hub.ServiceProvider.GetRequiredService<IWorkspace>();
     }
 
@@ -141,7 +142,7 @@ Id,Year,LoB,BusinessUnit,Value
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var workspace = GetWorkspace(
+        var workspace = await GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var items = await workspace
@@ -183,7 +184,7 @@ SystemName,DisplayName
             TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
-        var workspace = GetWorkspace(
+        var workspace = await GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));

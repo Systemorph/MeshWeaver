@@ -83,7 +83,9 @@ SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsL
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         _ = await DoImport(content);
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
         await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken,
@@ -122,7 +124,9 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
         var ret = await workspace
             .GetObservable<MyRecord>()
@@ -200,7 +204,9 @@ Record3SystemName,Record3DisplayName";
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
         var ret2 = await workspace
             .GetObservable<MyRecord2>()
