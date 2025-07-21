@@ -31,6 +31,7 @@ public record MessageHubConfiguration
     internal ImmutableList<MessageHandlerItem> MessageHandlers { get; init; } = ImmutableList<MessageHandlerItem>.Empty;
 
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
+    protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
 
     internal IMessageHub HubInstance { get; set; } = null!;
@@ -111,10 +112,7 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {
-        BuildupActions = BuildupActions.Add((hub, _) =>
-        {
-            action(hub); return Task.CompletedTask;
-        })
+        SyncBuildupActions = SyncBuildupActions.Add(action)
     };
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
 
