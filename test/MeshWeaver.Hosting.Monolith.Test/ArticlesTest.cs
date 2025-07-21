@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -11,13 +12,11 @@ using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -51,7 +50,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected string GetAssemblyLocation()
     {
         var location = GetType().Assembly.Location;
-        return Path.GetDirectoryName(location);
+        return Path.GetDirectoryName(location)!;
     }
 
 
@@ -82,8 +81,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var articleStream = client.RenderArticle("Test","NotFound");
 
         var control = await articleStream
-            .Timeout(40.Seconds())
-            .FirstAsync(x => x is not null);
+            .Timeout(20.Seconds())
+            .FirstAsync();
 
         control.Should().BeOfType<MarkdownControl>();
     }
@@ -104,8 +103,12 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         stack.Areas.Should().HaveCount(2);
 
         var articles = await stack.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()).FirstAsync())
-            .ToArrayAsync();
+            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()!).FirstAsync())
+            .ToArrayAsync(CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                ).Token
+            );
 
         articles.Should().HaveCount(2);
         articles.First().Should().BeOfType<ArticleCatalogItemControl>()
@@ -129,7 +132,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected static string GetIdFromDataContext(UiControl articleControl)
     {
         var pattern = @"/data/\""(?<id>[^\""]+)\""";
-        var match = Regex.Match(articleControl.DataContext, pattern);
+        var match = Regex.Match(articleControl.DataContext!, pattern);
         var id = match.Groups["id"].Value;
         return id;
     }

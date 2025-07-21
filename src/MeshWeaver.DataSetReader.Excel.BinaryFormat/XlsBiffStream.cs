@@ -74,7 +74,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// </summary>
 		/// <returns></returns>
 		[MethodImpl(MethodImplOptions.Synchronized)]
-		public XlsBiffRecord Read()
+		public XlsBiffRecord? Read()
 		{
 			XlsBiffRecord rec = XlsBiffRecord.GetRecord(_bytes, (uint)_offset, _reader);
 			_offset += rec.Size;
@@ -88,7 +88,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// </summary>
 		/// <param name="offset"></param>
 		/// <returns></returns>
-		public XlsBiffRecord ReadAt(int offset)
+		public XlsBiffRecord? ReadAt(int offset)
 		{
 			XlsBiffRecord rec = XlsBiffRecord.GetRecord(_bytes, (uint)offset, _reader);
 

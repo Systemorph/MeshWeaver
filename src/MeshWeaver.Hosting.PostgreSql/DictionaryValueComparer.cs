@@ -9,8 +9,8 @@ namespace MeshWeaver.Hosting.PostgreSql
     /// Used by Entity Framework Core for value comparisons of JSON column values.
     /// </summary>
     public class DictionaryValueComparer() : ValueComparer<IReadOnlyDictionary<string, object>>(
-        (d1, d2) => DictionaryEquals(d1, d2),
-        d => GetDictionaryHashCode(d),
+        (d1, d2) => DictionaryEquals(d1!, d2!),
+        d => GetDictionaryHashCode(d!),
         d => d)
     {
         private static bool DictionaryEquals(IReadOnlyDictionary<string, object> left, IReadOnlyDictionary<string, object> right)

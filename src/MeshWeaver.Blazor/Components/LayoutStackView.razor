@@ -16,14 +16,14 @@
 </FluentStack>
 
 @code{
-    private string Width { get; set; }
-    private string Height { get; set; }
+    private string? Width { get; set; }
+    private string? Height { get; set; }
     private int? VerticalGap { get; set; }
     private int? HorizontalGap { get; set; }
     private bool Wrap { get; set; }
-    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; }
-    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; }
-    private Orientation Orientation { get; set; }
+    private Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment Vertical { get; set; } = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment.Top;
+    private Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment Horizontal { get; set; } = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment.Left;
+    private Orientation Orientation { get; set; } = Orientation.Vertical;
     protected override void BindData()
     {
         base.BindData();
@@ -33,7 +33,7 @@
         DataBind(Skin.HorizontalGap, x => x.HorizontalGap);
         DataBind(Skin.VerticalAlignment, x => x.Vertical);
         DataBind(Skin.HorizontalAlignment, x => x.Horizontal);
-        DataBind(Skin.Orientation, x => x.Orientation);
+        DataBind(Skin?.Orientation, x => x.Orientation);
     }
 
 

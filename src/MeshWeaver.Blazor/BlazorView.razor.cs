@@ -19,27 +19,27 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     where TViewModel : IUiControl
     where TView : BlazorView<TViewModel, TView>
 {
-    [Inject] protected ILogger<TView> Logger { get; set; }
-    [Inject] protected PortalApplication PortalApplication { get; set; }
-    [Inject] protected IJSRuntime JSRuntime { get; set; }
+    [Inject] protected ILogger<TView> Logger { get; set; } = null!;
+    [Inject] protected PortalApplication PortalApplication { get; set; } = null!;
+    [Inject] protected IJSRuntime JSRuntime { get; set; } = null!;
     protected IMessageHub Hub => PortalApplication.Hub;
-    [Parameter] public TViewModel ViewModel { get; set; }
+    [Parameter] public required TViewModel ViewModel { get; set; } 
 
-    [Parameter] public ISynchronizationStream<JsonElement> Stream { get; set; }
-    [Parameter] public string Area { get; set; }
+    [Parameter] public ISynchronizationStream<JsonElement>? Stream { get; set; } 
+    [Parameter] public string Area { get; set; } = null!;
 
-    [CascadingParameter(Name = "Context")] public object Context { get; set; }
+    [CascadingParameter(Name = "Context")] public object? Context { get; set; }
 
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
 
     [CascadingParameter(Name = nameof(DataContext))]
-    public string DataContext { get; set; }
+    public string? DataContext { get; set; }
 
     [CascadingParameter(Name = nameof(Model))]
-    public ModelParameter<JsonElement> Model { get; set; }
+    public ModelParameter<JsonElement>? Model { get; set; }
 
-    protected string Style { get; set; }
+    protected string? Style { get; set; }
 
     protected override void OnParametersSet()
     {
@@ -56,8 +56,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
 
-    protected string Class { get; set; }
-    protected string Id { get; set; }
+    protected string? Class { get; set; }
+    protected string? Id { get; set; }
 
     protected List<IDisposable> Disposables { get; } = new();
 
@@ -77,13 +77,13 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     }
 
     protected void DataBind<T>(
-        object value, 
-        Expression<Func<TView, T>> propertySelector, 
-        Func<object,T, T> conversion = null,
-        T defaultValue = default(T))
+        object? value, 
+        Expression<Func<TView, T?>> propertySelector, 
+        Func<object?,T?, T?>? conversion = null,
+        T defaultValue = default!)
     {
-        var expr = propertySelector?.Body as MemberExpression;
-        Action<object> setter = expr?.Member is PropertyInfo pi 
+        var expr = propertySelector.Body as MemberExpression;
+        Action<object?> setter = expr?.Member is PropertyInfo pi 
             ? o => pi.SetValue(this,o) 
             : expr?.Member is FieldInfo fi 
                 ? o => fi.SetValue(this, o) 
@@ -96,7 +96,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         {
             if (Model is not null && !reference.Pointer.StartsWith('/'))
                 setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue));
-            else
+            else if(Stream is not null)
                 bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
                     .Subscribe(v =>
                         {
@@ -109,7 +109,7 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
                         }
                     )
                 );
-
+            
         }
         else if (value is ContextProperty contextProperty)
         {
@@ -134,20 +134,19 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     protected string SubArea(string area)
         => $"{Area}/{area}";
 
-    protected virtual void UpdatePointer(object value, JsonPointerReference reference)
+    protected virtual void UpdatePointer(object? value, JsonPointerReference reference)
     {
-        Stream.UpdatePointer(value, DataContext, reference, Model);
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before updating pointers.");
+        Stream.UpdatePointer(value, DataContext ?? "/", reference, Model);
     }
 
 
     protected virtual void BindData()
     {
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Id, x => x.Id);
-            DataBind(ViewModel.Class, x => x.Class);
-            DataBind(ViewModel.Style, x => x.Style);
-        }
+        DataBind(ViewModel.Id, x => x.Id);
+        DataBind(ViewModel.Class, x => x.Class);
+        DataBind(ViewModel.Style, x => x.Style);
     }
     private readonly List<IDisposable> bindings = new();
 
@@ -160,6 +159,8 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     protected virtual void OnClick()
     {
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before sending click events.");
         Stream.Hub.Post(new ClickedEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
 

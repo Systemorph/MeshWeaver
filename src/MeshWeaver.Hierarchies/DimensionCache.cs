@@ -15,20 +15,20 @@ public class DimensionCache(IWorkspace workspace, EntityStore store)
 
 
 
-    public T Get<T>(object id)
+    public T? Get<T>(object? id)
         where T : class =>
-        id == null ? null : (T)Get(typeof(T))?.GetValueOrDefault(id);
+        id == null ? null : (T?)Get(typeof(T))?.GetValueOrDefault(id);
 
-    public IReadOnlyDictionary<object,object> Get(Type type)
+    public IReadOnlyDictionary<object, object>? Get(Type type)
     {
         var collection = workspace.DataContext.GetCollectionName(type);
         return collection == null ? null : store.GetCollection(collection)?.Instances;
     }
 
-    public HierarchyNode<T> GetHierarchy<T>(object id)
+    public HierarchyNode<T>? GetHierarchy<T>(object? id)
         where T : class, IHierarchicalDimension
     {
-        return GetHierarchy<T>()?.GetNode(id);
+        return id == null ? null : GetHierarchy<T>()?.GetNode(id);
     }
 
     private readonly ConcurrentDictionary<Type, object> hierarchies = new();
@@ -38,13 +38,13 @@ public class DimensionCache(IWorkspace workspace, EntityStore store)
     public IHierarchy<T> GetHierarchy<T>()
         where T : class, IHierarchicalDimension
     {
-        return (IHierarchy<T>)hierarchies.GetOrAdd(typeof(T), _ => new Hierarchy<T>(Get(typeof(T))));
+        return (IHierarchy<T>)hierarchies.GetOrAdd(typeof(T), _ => new Hierarchy<T>(Get(typeof(T)) ?? new Dictionary<object, object>()));
     }
 
     public IHierarchy GetHierarchy(Type type)
         => (IHierarchy)GetHierarchyMethod.MakeGenericMethod(type).InvokeAsFunction(this);
 
-    public T Parent<T>(string dim) where T : class, IHierarchicalDimension => GetHierarchy<T>(dim)?.Parent;
+    public T? Parent<T>(string dim) where T : class, IHierarchicalDimension => GetHierarchy<T>(dim)?.Parent;
 
     private readonly ConcurrentDictionary<Type, int> maxHierarchyDataLevels = new();
 

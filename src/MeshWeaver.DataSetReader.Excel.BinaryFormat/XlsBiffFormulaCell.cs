@@ -59,7 +59,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		/// <summary>
 		/// Returns type-dependent value of formula
 		/// </summary>
-		public new object Value
+		public new object? Value
 		{
 			get
 			{
@@ -74,7 +74,7 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 
                             //////////////fix
                             XlsBiffRecord rec = GetRecord(Bytes, (uint)(Offset + Size), reader);
-                            XlsBiffFormulaString str;
+                            XlsBiffFormulaString? str;
                             if (rec.ID == BIFFRECORDTYPE.SHRFMLA)
 								str = GetRecord(Bytes, (uint)(Offset + Size + rec.Size), reader) as XlsBiffFormulaString;
                             else

@@ -15,11 +15,11 @@ public abstract record WaterfallBar
         DataLabelAlignment = dataLabelAlignment;
     }
 
-    public double[] Range { get; init; }
-    public string Label { get; init; }
-    public string DataLabel { get; init; }
-    public string DataLabelColor { get; init; }
-    public string DataLabelAlignment { get; init; }
+    public double[] Range { get; init; } = null!;
+    public string Label { get; init; } = null!;
+    public string DataLabel { get; init; } = null!;
+    public string DataLabelColor { get; init; } = null!;
+    public string DataLabelAlignment { get; init; } = null!;
 }
 
 public record IncrementBar : WaterfallBar

@@ -23,7 +23,7 @@ public class Hierarchy<T> : IHierarchy<T>
                 dim.Value.Parent,
                 dim.Value.Parent == null
                     ? null
-                    : (T)this.elementsById.GetValueOrDefault(dim.Value.Parent)
+                    : (T?)this.elementsById.GetValueOrDefault(dim.Value.Parent)
             ))
             .ToDictionary(x => x.Id);
 
@@ -45,14 +45,14 @@ public class Hierarchy<T> : IHierarchy<T>
         return (hierarchy[node.Id] = node with { Level = GetLevel(node.ParentId) + 1 }).Level;
     }
 
-    public T Get(object id)
+    public T? Get(object? id)
     {
         if (id == null || !elementsById.TryGetValue(id, out var ret))
             return null;
         return (T)ret;
     }
 
-    public HierarchyNode<T> GetNode(object id)
+    public HierarchyNode<T>? GetNode(object? id)
     {
         return id == null ? null : hierarchy.GetValueOrDefault(id);
     }

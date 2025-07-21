@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿#nullable enable
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.Charting;
 

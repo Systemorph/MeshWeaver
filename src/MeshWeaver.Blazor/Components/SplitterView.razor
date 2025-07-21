@@ -16,16 +16,16 @@
 
 @code
 {
-    private string Width { get; set; }
-    private string Height { get; set; }
-    protected Orientation Orientation { get; set; }
+    private string? Width { get; set; }
+    private string? Height { get; set; }
+    protected Orientation Orientation { get; set; } = Orientation.Horizontal;
 
     protected override void BindData()
     {
         base.BindData();
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Height, x => x.Height);
-        DataBind(Skin.Orientation, x => x.Orientation);
+        DataBind(Skin?.Orientation, x => x.Orientation);
     }
 
 }

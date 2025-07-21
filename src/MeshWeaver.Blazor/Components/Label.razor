@@ -14,11 +14,11 @@
 
 @code
 {
-    private string InternalData { get; set; }
+    private string? InternalData { get; set; }
     private HorizontalAlignment? Alignment { get; set; }
     private bool Disabled { get; set; }
-    private Typography Typo { get; set; }
-    private FontWeight Weight { get; set; }
+    private Typography Typo { get; set; } = Typography.Body;
+    private FontWeight Weight { get; set; } = FontWeight.Normal;
 
     protected override void BindData()
     {

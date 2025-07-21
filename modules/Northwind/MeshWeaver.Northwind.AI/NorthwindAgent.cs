@@ -1,6 +1,5 @@
-﻿using System.ComponentModel;
-using System.Reflection;
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -16,7 +15,7 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     /// <inheritdoc cref="IAgentDefinition"/>
-    public string AgentName => "NorthwindAgent";
+    public string Name => "NorthwindAgent";
 
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Description => "Any question around the Northwind domain should direct here. Provides access to Northwind domain data including customers, orders, products, and other business entities. Can query and analyze Northwind business data.";
@@ -42,10 +41,9 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
 
-    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins()
+    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
     {
-        typeDefinitionMap ??= new Dictionary<string, TypeDescription>();
-        var data = new DataPlugin(hub, typeDefinitionMap, _ => NorthwindAddress, hub.JsonSerializerOptions);
+        var data = new DataPlugin(hub, chat, typeDefinitionMap);
         yield return data.CreateKernelPlugin();
     }
 

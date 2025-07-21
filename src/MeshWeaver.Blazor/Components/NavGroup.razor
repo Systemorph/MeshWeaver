@@ -8,23 +8,19 @@
 </FluentNavGroup>
 
 @code{
-
-    protected string Title { get; set; }
-    protected string Href { get; set; }
-    protected Icon Icon { get; set; }
-    private bool Expanded { get; set; }
+    protected string? Title;
+    protected string? Href;
+    protected Icon? Icon;
+    private bool Expanded;
 
     protected override void BindData()
     {
         base.BindData();
 
-        if (ViewModel != null)
-        {
-            DataBind(Skin.Title, x => x.Title);
-            DataBind(Skin.Url, x => x.Href);
-            DataBind(Skin.Icon, x => x.Icon);
-            DataBind(Skin.Expanded, x => x.Expanded);
-        }
+        DataBind(Skin.Title, x => x.Title);
+        DataBind(Skin.Url, x => x.Href);
+        DataBind(Skin.Icon, x => x.Icon);
+        DataBind(Skin.Expanded, x => x.Expanded);
     }
 
 }

@@ -5,15 +5,14 @@ using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Rendering;
-using Microsoft.FluentUI.AspNetCore.Components;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Blazor.Components;
 
 public partial class MarkdownView
 {
-    private string Html { get; set; }
-    private string Markdown { get; set; }
+    private string? Html { get; set; }
+    private string? Markdown;
 
     protected override void BindData()
     {
@@ -23,7 +22,7 @@ public partial class MarkdownView
         if (Html == null)
         {
             var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner);
-            var document = Markdig.Markdown.Parse(Markdown, pipeline);
+            var document = Markdig.Markdown.Parse(Markdown ?? "", pipeline);
             Html = document.ToHtml(pipeline);
         }
     }
@@ -101,12 +100,5 @@ public partial class MarkdownView
         builder.CloseElement();
     }
 
-    protected override void OnAfterRender(bool firstRender)
-    {
-        base.OnAfterRender(firstRender);
-        IsNotPrerender = true;
-    }
 
-    private bool IsNotPrerender { get; set; }
-    private string ComponentContainerId(string id) => $"component-container-{id}";
 }

@@ -83,7 +83,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                     continue;
 
                 // Use the type discriminator from the attribute if available, otherwise use the type name
-                var typeDiscriminator = attr.TypeDiscriminator?.ToString() ?? attr.DerivedType.FullName;
+                var typeDiscriminator = attr.TypeDiscriminator?.ToString() ?? attr.DerivedType.FullName!;
 
                 // Only add if it's a valid derived type for the base
                 if (IsValidDerivedTypeForBase(baseType, attr.DerivedType))
@@ -224,8 +224,7 @@ public class PolymorphicTypeInfoResolver(ITypeRegistry typeRegistry) : DefaultJs
                type == typeof(TimeSpan) ||
                type.IsEnum || (typeof(IEnumerable).IsAssignableFrom(type) && type != typeof(string)) ||
                type.IsValueType || // All structs cannot support polymorphism
-               type.IsSealed ||    // Sealed types cannot support polymorphism
-               (type.IsGenericType && !type.IsGenericTypeDefinition && !ShouldAllowPolymorphismForGenericType(type)); // Some generic types can support polymorphism
+               type.IsSealed; // Some generic types can support polymorphism
     }
     private static bool ShouldAllowPolymorphismForGenericType(Type type)
     {

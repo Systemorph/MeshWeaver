@@ -3,7 +3,6 @@ using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.BusinessRules.Test;
 
@@ -19,7 +18,7 @@ public class ScopesTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void RandomNumberIsCached()
     {
-        var registry = GetHost().ServiceProvider.CreateScopeRegistry<object>(null);
+        var registry = GetHost().ServiceProvider.CreateScopeRegistry<object>(null!);
         var randomScope = registry.GetScope<IRandomScope>(Guid.NewGuid());
 
         var randomNumber = randomScope.RandomNumber;

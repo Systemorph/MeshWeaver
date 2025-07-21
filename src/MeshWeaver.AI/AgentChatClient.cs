@@ -1,6 +1,8 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using MeshWeaver.AI.Persistence;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
@@ -14,134 +16,117 @@ namespace MeshWeaver.AI;
 
 public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvider) : IAgentChat
 {
-    private const int MaxDelegationDepth = 10; // Prevent infinite delegation loops
-
+    private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly DelegationState delegationState = new();
-    private AgentContext? context; 
+    private string? currentRunningAgent;
+
+    public AgentContext? Context { get; private set; }
+
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Check if we have a pending reply that needs user input
-        var firstMessage = messages.FirstOrDefault();
-        if (delegationState.HasPendingReply && firstMessage != null)
+        AddUserMessages(messages);
+
+        var maxDelegations = 10; // Prevent infinite delegation loops
+        var delegationCount = 0;
+
+        while (delegationCount <= maxDelegations)
         {
-            var userText = ExtractTextFromMessage(firstMessage);
-
-            // Show the reply message to the user (without user input appendix)
-            if (delegationState.PendingReply != null)
-            {
-                var displayMessage = $"@{delegationState.PendingReply.AgentName} {delegationState.PendingReply.Content}";
-                yield return new ChatMessage(ChatRole.Assistant, [new TextContent(displayMessage)])
-                {
-                    AuthorName = new("Assistant")
-                };
-            }
-
-            var replyMessage = delegationState.ProcessPendingReply(userText);
-            if (replyMessage != null)
-            {
-                AddUserMessages([replyMessage]);
-            }
-        }
-        else
-        {
-            AddUserMessages(messages);
-        }
-
-        int delegationDepth = 0;
-        string? originalAuthorName = null;
-
-        while (delegationDepth < MaxDelegationDepth)
-        {
-            var responseMessages = new List<ChatMessage>();
-            var fullResponseText = new StringBuilder();
-
+            var hasContent = false;
             await foreach (var content in agentChat.InvokeAsync(cancellationToken))
             {
-                // Capture the original author name from the first content
-                originalAuthorName ??= content.AuthorName ?? "Assistant";
-
+                hasContent = true;
                 var aiContent = ConvertToExtensionsAI(content);
                 if (aiContent == null) continue;
+
+                // Track the current running agent
+                currentRunningAgent = content.AuthorName ?? "Assistant";
 
                 var message = new ChatMessage(ChatRole.Assistant, [aiContent])
                 {
                     AuthorName = new(content.AuthorName ?? "Assistant")
                 };
 
-                responseMessages.Add(message);
-
-                // Accumulate text content for delegation detection
-                if (aiContent is TextContent textContent)
-                {
-                    fullResponseText.Append(textContent.Text);
-                }
-            }
-
-            if (responseMessages.Count == 0)
-            {
-                // No content was generated, end the workflow
-                yield break;
-            }
-
-            // Parse the response for code blocks
-            var responseText = fullResponseText.ToString();
-            var (delegationInstruction, cleanedMessages) = ProcessResponseForDelegation(responseMessages, responseText);
-
-            if (delegationInstruction == null)
-            {
-                // No delegation found, return cleaned messages
-                foreach (var message in cleanedMessages)
-                {
-                    yield return message;
-                }
-                yield break;
-            }
-
-            // Return cleaned messages before delegation
-            foreach (var message in cleanedMessages)
-            {
                 yield return message;
             }
 
-            if (delegationInstruction.Type == DelegationType.ReplyTo)
+            // Only check for delegations if we actually got content from an agent
+            if (!hasContent)
             {
-                // For reply_to, set pending state and yield break
-                delegationState.SetPendingReply(delegationInstruction);
-                yield break;
-            }            // Handle delegate_to
-            delegationDepth++;
+                break; // No content, exit loop
+            }
 
-            var delegationMessage = CreateDelegationMessageWithContext(delegationInstruction);
+            // Check for pending delegations after agent completes
+            if (delegationState.HasPendingDelegation)
+            {
+                var delegationInstruction = delegationState.PendingDelegation;
+                var delegationMessage = delegationState.ProcessPendingDelegation();
+                if (delegationMessage != null && delegationInstruction != null)
+                {
+                    // Create and yield delegation message for the GUI
+                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
+                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
+                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
 
-            AddUserMessages([delegationMessage]);            // Add delegation message showing actual content for the user
-            // Add newline to ensure proper separation from previous content  
-            var delegationDisplay = $"\n@{delegationInstruction.AgentName} {delegationInstruction.Content}";
-            yield return new ChatMessage(ChatRole.Assistant,
-                [new TextContent(delegationDisplay)])
-            { AuthorName = new(originalAuthorName) };
+                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
+                    {
+                        AuthorName = new(delegationInstruction.DelegatingAgent)
+                    };
+
+                    yield return delegationGuiMessage;
+
+                    // Add delegation message and continue the loop
+                    agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
+                    delegationCount++;
+                }
+                else
+                {
+                    break; // No delegation message to process
+                }
+            }
+            else
+            {
+                break; // No more delegations
+            }
         }
-        yield return new ChatMessage(ChatRole.Assistant,
-            [new TextContent($"[System: Maximum delegation depth ({MaxDelegationDepth}) reached. Ending workflow to prevent infinite loops.]")])
-        { AuthorName = new(originalAuthorName ?? "System") };
     }
     private void AddUserMessages(IEnumerable<ChatMessage> messages)
     {
-        var processedMessages = messages.Select(message => ProcessMessageWithContext(message)).ToArray();
+        var messagesToProcess = new List<ChatMessage>();
+
+        // Check for pending reply that needs user input
+        if (delegationState.HasPendingReply)
+        {
+            var userMessage = messages.FirstOrDefault(m => m.Role == ChatRole.User);
+            if (userMessage != null)
+            {
+                var userInput = ExtractTextFromMessage(userMessage);
+                var delegationMessage = delegationState.ProcessPendingReply(userInput);
+                if (delegationMessage != null)
+                {
+                    messagesToProcess.Add(delegationMessage);
+                }
+            }
+        }
+
+        // Add the original messages
+        messagesToProcess.AddRange(messages);
+
+        var processedMessages = messagesToProcess.Select(ProcessMessageWithContext).ToArray();
         agentChat.AddChatMessages(processedMessages.Select(ConvertToAgentChat).ToArray());
     }
 
     private ChatMessage ProcessMessageWithContext(ChatMessage message)
     {
-        if (context == null || message.Role != ChatRole.User)
+        if (Context == null || message.Role != ChatRole.User)
             return message;
 
         // Extract original text content
         var originalText = ExtractTextFromMessage(message);
 
         // Create new message with context template
-        var contextJson = JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = false });
+        var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
         var messageWithContext = $"{originalText}\n<Context>\n{contextJson}\n</Context>";
 
         return new ChatMessage(ChatRole.User, [new TextContent(messageWithContext)])
@@ -153,145 +138,74 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Check if we have a pending reply that needs user input
-        var firstMessage = messages.FirstOrDefault();
-        if (delegationState.HasPendingReply && firstMessage != null)
+        AddUserMessages(messages);
+
+        var maxDelegations = 10; // Prevent infinite delegation loops
+        var delegationCount = 0;
+
+        while (delegationCount <= maxDelegations)
         {
-            var userText = ExtractTextFromMessage(firstMessage);
-
-            // Show the reply message to the user (without user input appendix)
-            if (delegationState.PendingReply != null)
+            var hasContent = false;
+            await foreach (var update in agentChat.InvokeStreamingAsync(cancellationToken))
             {
-                var displayMessage = $"@{delegationState.PendingReply.AgentName} {delegationState.PendingReply.Content}";
-                yield return new ChatResponseUpdate(ChatRole.Assistant, displayMessage) { AuthorName = "Assistant" };
-            }
-
-            var replyMessage = delegationState.ProcessPendingReply(userText);
-            if (replyMessage != null)
-            {
-                AddUserMessages([replyMessage]);
-            }
-        }
-        else
-        {
-            AddUserMessages(messages);
-        }
-
-        int delegationDepth = 0;
-        string? originalAuthorName = null;
-
-        while (delegationDepth < MaxDelegationDepth)
-        {
-            var codeBlockTracker = new CodeBlockTracker();
-            var responseBuilder = new StringBuilder();
-            var delegationDetected = false;
-            DelegationInstruction? delegationInstruction = null; await foreach (var update in agentChat.InvokeStreamingAsync(cancellationToken))
-            {
+                hasContent = true;
                 var converted = ConvertToExtensionsAI(update);
                 if (converted == null) continue;
 
-                responseBuilder.Append(converted.Text);
-
-                // Update originalAuthorName whenever it changes during streaming
-                if (!string.IsNullOrEmpty(converted.AuthorName))
+                // Track the current running agent
+                if (!string.IsNullOrEmpty(update.AuthorName))
                 {
-                    originalAuthorName = converted.AuthorName;
+                    currentRunningAgent = update.AuthorName;
                 }
 
-                foreach (var c in converted.Text)
+                yield return converted;
+            }
+
+            // Only check for delegations if we actually got content from an agent
+            if (!hasContent)
+            {
+                break; // No content, exit loop
+            }
+
+            // Check for pending delegations after agent completes
+            if (delegationState.HasPendingDelegation)
+            {
+                var delegationInstruction = delegationState.PendingDelegation;
+                var delegationMessage = delegationState.ProcessPendingDelegation();
+                if (delegationMessage != null && delegationInstruction != null)
                 {
-                    if (delegationDetected)
+                    // Create and yield delegation message for the GUI
+                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
+                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
+                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
+
+                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
                     {
-                        // After delegation detected, continue buffering but don't output
-                        continue;
-                    }
+                        AuthorName = new(delegationInstruction.DelegatingAgent)
+                    };
 
-                    var streamContent = codeBlockTracker.ProcessCharacter(c);
-                    if (streamContent != null)
-                    {
-                        // Normal content that can be streamed immediately
-                        yield return new ChatResponseUpdate(converted.Role, streamContent) { AuthorName = converted.AuthorName };
-                    }
+                    yield return ConvertToStreamingUpdate(delegationGuiMessage);
 
-                    // Check if we have a completed code block
-                    if (codeBlockTracker.HasCompleteBlock && codeBlockTracker.CompletedBlock != null)
-                    {
-                        var result = CodeBlockParser.ProcessCodeBlock(codeBlockTracker.CompletedBlock);
-
-                        if (result.Type == CodeBlockType.Delegation && result.DelegationInstruction != null)
-                        {
-                            delegationDetected = true;
-                            delegationInstruction = result.DelegationInstruction;
-
-                            if (result.DelegationInstruction.Type == DelegationType.DelegateTo)
-                            {
-                                // For delegate_to, we continue to the next agent immediately
-                                break;
-                            }
-                            else if (result.DelegationInstruction.Type == DelegationType.ReplyTo)
-                            {
-                                // For reply_to, we set pending state and yield break
-                                delegationState.SetPendingReply(result.DelegationInstruction);
-                                yield break;
-                            }
-                        }
-                        else
-                        {
-                            // Regular code block, output it normally
-                            yield return new ChatResponseUpdate(converted.Role, FormatCodeBlock(codeBlockTracker.CompletedBlock))
-                            { AuthorName = converted.AuthorName };
-                        }
-
-                        codeBlockTracker.Reset();
-                    }
+                    // Add delegation message and continue the loop
+                    agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
+                    delegationCount++;
                 }
-            }
-
-            // Flush any remaining buffered content
-            var remainingContent = codeBlockTracker.Flush();
-            if (!delegationDetected && !string.IsNullOrEmpty(remainingContent))
-            {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, remainingContent) { AuthorName = originalAuthorName };
-            }
-
-            if (!delegationDetected)
-            {
-                yield break;
-            }
-
-            // Handle delegation
-            if (delegationInstruction == null)
-            {
-                yield break;
-            }
-            delegationDepth++; var delegationMessage = CreateDelegationMessageWithContext(delegationInstruction);
-
-            AddUserMessages([delegationMessage]); if (agentChat.Agents.Any(a => a.Name == delegationInstruction.AgentName))
-            {
-                // Show the actual delegation message content, not just a generic message
-                // Add newline to ensure proper separation from previous content
-                var delegationDisplay = $"\n@{delegationInstruction.AgentName} {delegationInstruction.Content}";
-                yield return new ChatResponseUpdate(ChatRole.Assistant, delegationDisplay)
-                { AuthorName = originalAuthorName };
+                else
+                {
+                    break; // No delegation message to process
+                }
             }
             else
             {
-                yield break;
+                break; // No more delegations
             }
         }
-        yield return new ChatResponseUpdate(ChatRole.Assistant,
-          $"Maximum delegation depth ({MaxDelegationDepth}) reached. Ending workflow to prevent infinite loops.")
-        { AuthorName = originalAuthorName ?? "System" };
     }
 
-    public object? GetService(Type serviceType, object? serviceKey = null)
-        => serviceKey is null
-            ? serviceProvider.GetService(serviceType)
-            : serviceProvider.GetKeyedServices(serviceType, serviceKey);
 
     public void SetContext(AgentContext applicationContext)
     {
-        context = applicationContext;
+        Context = applicationContext;
     }
 
     public Task ResumeAsync(ChatConversation conversation)
@@ -300,6 +214,36 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         return Task.CompletedTask;
     }
 
+    public string Delegate(string agentName, string message, bool askUserFeedback = false)
+    {
+        agentName = agentName.TrimStart('@');
+        // Check if the requested agent exists
+        if (agentChat.Agents.All(a => a.Name != agentName))
+        {
+            return $"Agent '{agentName}' not found. Available agents: {string.Join(", ", agentChat.Agents.Select(a => a.Name))}";
+        }
+
+        // Capture the delegating agent
+        var delegatingAgent = currentRunningAgent ?? "System";
+
+        // Schedule the delegation to be processed when the chat is available
+        var instruction = new DelegationInstruction(
+            askUserFeedback ? DelegationType.ReplyTo : DelegationType.DelegateTo,
+            agentName,
+            message,
+            delegatingAgent);
+
+        if (askUserFeedback)
+        {
+            delegationState.SetPendingReply(instruction);
+            return "Delegation scheduled. Please return to get user input to continue.";
+        }
+        else
+        {
+            delegationState.SetPendingDelegation(instruction);
+            return $"Delegation to {agentName} scheduled. It will be processed after you return.";
+        }
+    }
     private ChatMessageContent ConvertToAgentChat(ChatMessage message)
     {
         ChatMessageContentItemCollection collection = new();
@@ -355,6 +299,18 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                     JsonSerializer.Deserialize<IDictionary<string, object?>>(functionContent.Arguments))]),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Converts a ChatMessage to a ChatResponseUpdate for streaming.
+    /// </summary>
+    private ChatResponseUpdate ConvertToStreamingUpdate(ChatMessage message)
+    {
+        var textContent = message.Contents.OfType<TextContent>().FirstOrDefault()?.Text ?? string.Empty;
+        return new ChatResponseUpdate(message.Role, textContent)
+        {
+            AuthorName = message.AuthorName
+        };
     }    /// <summary>
          /// Extracts text content from a chat message.
          /// </summary>
@@ -372,149 +328,128 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
     }
 
     /// <summary>
-    /// Formats a code block for output.
+    /// Manages the state for delegation scenarios within this chat client.
     /// </summary>
-    private string FormatCodeBlock(CodeBlock codeBlock)
+    private class DelegationState
     {
-        var fence = "```";
-        if (!string.IsNullOrEmpty(codeBlock.Language))
+        private DelegationInstruction? _pendingReply;
+        private DelegationInstruction? _pendingDelegation;
+
+        /// <summary>
+        /// Gets whether there is a pending reply instruction waiting for user input.
+        /// </summary>
+        public bool HasPendingReply => _pendingReply != null;
+
+        /// <summary>
+        /// Gets whether there is a pending delegation waiting to be processed.
+        /// </summary>
+        public bool HasPendingDelegation => _pendingDelegation != null;
+
+        /// <summary>
+        /// Gets the pending reply instruction if one exists.
+        /// </summary>
+        public DelegationInstruction? PendingReply => _pendingReply;
+
+        /// <summary>
+        /// Gets the pending delegation instruction if one exists.
+        /// </summary>
+        public DelegationInstruction? PendingDelegation => _pendingDelegation;
+
+        /// <summary>
+        /// Sets a pending reply instruction that will wait for the next user message.
+        /// </summary>
+        public void SetPendingReply(DelegationInstruction instruction)
         {
-            return $"{fence}{codeBlock.Language}\n{codeBlock.Content}\n{fence}";
+            if (instruction.Type != DelegationType.ReplyTo)
+            {
+                throw new ArgumentException("Only ReplyTo instructions can be set as pending", nameof(instruction));
+            }
+            _pendingReply = instruction;
         }
-        return $"{fence}\n{codeBlock.Content}\n{fence}";
+
+        /// <summary>
+        /// Sets a pending delegation instruction that will be processed with the next user message.
+        /// </summary>
+        public void SetPendingDelegation(DelegationInstruction instruction)
+        {
+            if (instruction.Type != DelegationType.DelegateTo)
+            {
+                throw new ArgumentException("Only DelegateTo instructions can be set as pending", nameof(instruction));
+            }
+            _pendingDelegation = instruction;
+        }
+
+        /// <summary>
+        /// Processes the pending reply with user input and returns the delegation message.
+        /// </summary>
+        public ChatMessage? ProcessPendingReply(string userInput)
+        {
+            if (_pendingReply == null) return null;
+
+            var delegationContent = CreateDelegationMessage(_pendingReply, userInput);
+            _pendingReply = null; // Clear the pending reply
+
+            return new ChatMessage(ChatRole.User, [new TextContent(delegationContent)]);
+        }
+
+        /// <summary>
+        /// Processes the pending delegation and returns the delegation message.
+        /// </summary>
+        public ChatMessage? ProcessPendingDelegation()
+        {
+            if (_pendingDelegation == null) return null;
+
+            var delegationContent = CreateDelegationMessage(_pendingDelegation);
+            _pendingDelegation = null; // Clear the pending delegation
+
+            return new ChatMessage(ChatRole.User, [new TextContent(delegationContent)]);
+        }
+
+        /// <summary>
+        /// Creates a delegation message from the instruction.
+        /// </summary>
+        private static string CreateDelegationMessage(DelegationInstruction instruction, string? userInput = null)
+        {
+            var message = instruction.Type switch
+            {
+                DelegationType.DelegateTo => $"@{instruction.AgentName} {instruction.Message}",
+                DelegationType.ReplyTo when userInput != null => $"@{instruction.AgentName} {instruction.Message}\n\nUser input: {userInput}",
+                DelegationType.ReplyTo => $"@{instruction.AgentName} {instruction.Message}",
+                _ => throw new ArgumentException($"Unknown delegation type: {instruction.Type}")
+            };
+
+            return message;
+        }
+
+        /// <summary>
+        /// Clears all pending delegations.
+        /// </summary>
+        public void Clear()
+        {
+            _pendingReply = null;
+            _pendingDelegation = null;
+        }
     }
 
     /// <summary>
-    /// Processes a response for delegation instructions using code block parsing.
+    /// Represents a delegation instruction.
     /// </summary>
-    private (DelegationInstruction? delegationInstruction, List<ChatMessage> cleanedMessages) ProcessResponseForDelegation(
-        List<ChatMessage> responseMessages, string responseText)
-    {
-        var codeBlockTracker = new CodeBlockTracker();
-        List<ChatMessage> cleanedMessages;
-        DelegationInstruction? foundDelegation = null;
-
-        // Process the response text character by character to find code blocks
-        foreach (var c in responseText)
-        {
-            codeBlockTracker.ProcessCharacter(c); if (codeBlockTracker.HasCompleteBlock && codeBlockTracker.CompletedBlock != null)
-            {
-                var result = CodeBlockParser.ProcessCodeBlock(codeBlockTracker.CompletedBlock);
-                if (result.Type == CodeBlockType.Delegation && result.DelegationInstruction != null && foundDelegation == null)
-                {
-                    foundDelegation = result.DelegationInstruction;
-                }
-                codeBlockTracker.Reset();
-            }
-        }
-
-        // If delegation found, clean the messages by removing delegation code blocks
-        if (foundDelegation != null)
-        {
-            cleanedMessages = RemoveDelegationCodeBlocks(responseMessages, foundDelegation);
-        }
-        else
-        {
-            cleanedMessages = responseMessages;
-        }
-
-        return (foundDelegation, cleanedMessages);
-    }
+    private record DelegationInstruction(DelegationType Type, string AgentName, string Message, string DelegatingAgent);
 
     /// <summary>
-    /// Removes delegation code blocks from response messages.
+    /// The type of delegation.
     /// </summary>
-    private List<ChatMessage> RemoveDelegationCodeBlocks(List<ChatMessage> messages, DelegationInstruction delegationInstruction)
+    private enum DelegationType
     {
-        var cleanedMessages = new List<ChatMessage>();
+        /// <summary>
+        /// Delegate to another agent immediately.
+        /// </summary>
+        DelegateTo,
 
-        foreach (var message in messages)
-        {
-            var cleanedContents = new List<AIContent>();
-
-            foreach (var content in message.Contents)
-            {
-                if (content is TextContent textContent)
-                {
-                    var cleanedText = RemoveCodeBlocksFromText(textContent.Text, delegationInstruction);
-                    if (!string.IsNullOrWhiteSpace(cleanedText))
-                    {
-                        cleanedContents.Add(new TextContent(cleanedText));
-                    }
-                }
-                else
-                {
-                    cleanedContents.Add(content);
-                }
-            }
-
-            if (cleanedContents.Count > 0)
-            {
-                cleanedMessages.Add(new ChatMessage(message.Role, cleanedContents) { AuthorName = message.AuthorName });
-            }
-        }
-
-        return cleanedMessages;
+        /// <summary>
+        /// Reply to another agent after getting user feedback.
+        /// </summary>
+        ReplyTo
     }
 
-    /// <summary>
-    /// Removes code blocks from text that match the delegation instruction.
-    /// </summary>
-    private string RemoveCodeBlocksFromText(string text, DelegationInstruction delegationInstruction)
-    {
-        var result = new StringBuilder();
-        var codeBlockTracker = new CodeBlockTracker();
-
-        foreach (char c in text)
-        {
-            var streamContent = codeBlockTracker.ProcessCharacter(c);
-
-            if (streamContent != null)
-            {
-                // Normal content - add to result
-                result.Append(streamContent);
-            }
-            if (codeBlockTracker.HasCompleteBlock && codeBlockTracker.CompletedBlock != null)
-            {
-                var result_block = CodeBlockParser.ProcessCodeBlock(codeBlockTracker.CompletedBlock);
-                if (result_block.Type != CodeBlockType.Delegation ||
-                    result_block.DelegationInstruction == null ||
-                    result_block.DelegationInstruction.AgentName != delegationInstruction.AgentName ||
-                    result_block.DelegationInstruction.Type != delegationInstruction.Type)
-                {
-                    // Not a delegation block or different delegation - include it
-                    result.Append(FormatCodeBlock(codeBlockTracker.CompletedBlock));
-                }
-                // If it's the delegation block, we skip it (don't add to result)
-
-                codeBlockTracker.Reset();
-            }
-        }
-
-        // Flush any remaining content
-        var remaining = codeBlockTracker.Flush();
-        if (!string.IsNullOrEmpty(remaining))
-        {
-            result.Append(remaining);
-        }
-
-        return result.ToString();
-    }
-
-    /// <summary>
-    /// Creates a delegation message that preserves the current context.
-    /// </summary>
-    private ChatMessage CreateDelegationMessageWithContext(DelegationInstruction delegationInstruction)
-    {
-        var delegationContent = CodeBlockParser.CreateDelegationMessage(delegationInstruction);
-
-        // If we have context, append it to the delegation message
-        if (context != null)
-        {
-            var contextJson = JsonSerializer.Serialize(context, new JsonSerializerOptions { WriteIndented = false });
-            delegationContent = $"{delegationContent}\n<Context>\n{contextJson}\n</Context>";
-        }
-
-        return new ChatMessage(ChatRole.User, [new TextContent(delegationContent)]);
-    }
 }

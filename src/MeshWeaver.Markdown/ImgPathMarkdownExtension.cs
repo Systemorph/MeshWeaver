@@ -15,7 +15,7 @@ public class ImgPathMarkdownExtension(Func<string, string> transformation) : IMa
     {
         foreach (var link in document.Descendants<LinkInline>())
         {
-            if (link.IsImage)
+            if (link is { IsImage: true, Url: not null })
                 link.Url = transformation.Invoke(link.Url);
         }
     }

@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Xml;
 using System.Xml.Schema;
 using System.Xml.Serialization;
@@ -9,10 +10,10 @@ namespace MeshWeaver.DataStructures
     [Serializable]
     public class DataSet : IDataSet, IXmlSerializable
     {
-        public string DataSetName { get; set; }
+        public string? DataSetName { get; set; }
         public IDataTableCollection Tables { get; } = new DataTableCollection();
 
-        public DataSet(string name = null)
+        public DataSet(string? name = null)
         {
             DataSetName = name;
         }
@@ -36,12 +37,12 @@ namespace MeshWeaver.DataStructures
         {
             foreach (var table in dataSet.Tables)
             {
-                var myTable = Tables[table.TableName];
+                var myTable = Tables[table.TableName ?? string.Empty];
                 IDictionary<int, int> map;
                 if (myTable == null)
                 {
                     myTable = new DataTable(table.TableName, table.Columns);
-                    Tables.Add(table);
+                    Tables.Add(myTable);
                     map = Enumerable.Range(0, table.Columns.Count).ToDictionary(x => x);
                 }
                 else
@@ -71,7 +72,7 @@ namespace MeshWeaver.DataStructures
 
         #region IXmlSerializable Implementation
 
-        public XmlSchema GetSchema()
+        public XmlSchema? GetSchema()
         {
             return null;
         }
@@ -107,7 +108,7 @@ namespace MeshWeaver.DataStructures
 
                 subreader.Read();
 
-                var rowDict = new Dictionary<string, string>();
+                var rowDict = new Dictionary<string, string?>();
 
                 while (subreader.NodeType != XmlNodeType.EndElement)
                 {
@@ -142,6 +143,8 @@ namespace MeshWeaver.DataStructures
 
             foreach (var table in Tables)
             {
+                if (table.TableName == null) continue;
+
                 foreach (var row in table.Rows)
                 {
                     writer.WriteStartElement(table.TableName);
@@ -149,7 +152,7 @@ namespace MeshWeaver.DataStructures
                     {
                         writer.WriteStartElement(column.ColumnName);
                         if (row[column.ColumnName] != null)
-                            writer.WriteString(row[column.ColumnName].ToString());
+                            writer.WriteString(row[column.ColumnName]!.ToString());
                         writer.WriteEndElement();
                     }
                     writer.WriteEndElement();
@@ -178,7 +181,7 @@ namespace MeshWeaver.DataStructures
 
         public IDataTable this[int i] => tables[i];
 
-        public IDataTable this[string name]
+        public IDataTable? this[string name]
         {
             get
             {
@@ -198,8 +201,7 @@ namespace MeshWeaver.DataStructures
             tables.Add(table);
             tableNames.Add(table.TableName, tables.Count - 1);
             var internalImpl = table as DataTable;
-            if (internalImpl != null)
-                internalImpl.DataTableCollections.Add(this);
+            internalImpl?.DataTableCollections.Add(this);
         }
 
         public IDataTable Add(string name)
@@ -237,7 +239,8 @@ namespace MeshWeaver.DataStructures
             {
                 var table = tables[j];
                 var newIndex = j;
-                tableNames[table.TableName] = newIndex;
+                if (table.TableName != null)
+                    tableNames[table.TableName] = newIndex;
             }
         }
 

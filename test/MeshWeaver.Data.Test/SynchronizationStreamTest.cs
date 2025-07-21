@@ -6,8 +6,9 @@ using FluentAssertions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 using System;
+using System.Threading;
+using FluentAssertions.Extensions;
 
 namespace MeshWeaver.Data.Test;
 
@@ -44,13 +45,12 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
     {
         List<MyData> tracker = new();
         var workspace = GetHost().GetWorkspace();
-        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData)).CollectionName;
+        var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName));
         stream.Should().NotBeNull();
-        stream.Reduce(new EntityReference(collectionName, Instance))
-            .Select(i => i.Value)
-            .Cast<MyData>()
-            .Where(i => i != null)
+        stream.Reduce(new EntityReference(collectionName, Instance))!
+            .Select(i => i.Value!)
+            .OfType<MyData>()
             .Subscribe(tracker.Add);
 
         var count = 0;
@@ -68,10 +68,13 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                         [new EntityUpdate(collectionName, Instance, instance) { OldValue = existingInstance }],
                         stream.StreamId)
                 );
-            }, null);
+            }, _ => Task.CompletedTask);
             return true;
         }).ToArray();
-        await Task.Delay(10);
+        await Task.Delay(10, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         await DisposeAsync();
 
         tracker.Should().HaveCount(10)

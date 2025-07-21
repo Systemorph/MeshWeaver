@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿#nullable enable
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -10,7 +11,7 @@ namespace MeshWeaver.Charting;
 [SuppressMessage("ReSharper", "InconsistentNaming")]
 public sealed class Palettes
 {
-    public string Palette { get; set; }
+    public string Palette { get; set; } = string.Empty;
 
     private Palettes(string palette) => Palette = palette;
     public override string ToString() => Palette;
@@ -515,7 +516,7 @@ public class PaletteJsonConverter : JsonConverter<Palettes>
 {
     public override Palettes Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        return Palettes.FromColor(reader.GetString());
+        return Palettes.FromColor(reader.GetString() ?? string.Empty);
     }
 
     public override void Write(Utf8JsonWriter writer, Palettes value, JsonSerializerOptions options)

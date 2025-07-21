@@ -12,7 +12,7 @@ namespace MeshWeaver.Arithmetics.Aggregation.Implementation
         public Delegate GetDelegate(Type elementType)
         {
             var sumFunction = typeof(Enumerable).GetMethod(nameof(Enumerable.Sum),
-                new[] { typeof(IEnumerable<>).MakeGenericType(elementType) });
+                [typeof(IEnumerable<>).MakeGenericType(elementType)])!;
             var prm = Expression.Parameter(typeof(IEnumerable<>).MakeGenericType(elementType));
             return Expression.Lambda(Expression.Call(sumFunction, prm), prm).Compile();
         }

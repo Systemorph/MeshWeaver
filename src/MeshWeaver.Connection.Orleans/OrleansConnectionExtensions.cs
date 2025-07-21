@@ -12,7 +12,7 @@ namespace MeshWeaver.Connection.Orleans;
 
 public static class OrleansConnectionExtensions
 {
-    internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address = null)
+    internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address? address = null)
     {
         var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? new MeshAddress());
         ConfigureMeshWeaver(builder);

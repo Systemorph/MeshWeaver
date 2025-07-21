@@ -8,12 +8,12 @@ namespace MeshWeaver.Charting.Models.Bubble;
 public record BubbleDataSet : DataSetBase<BubbleDataSet>, IDataSetWithOrder<BubbleDataSet>,
     IDataSetWithPointStyle<BubbleDataSet>
 {
-    public BubbleDataSet(IEnumerable<(double x, double y, double radius)> values, string label = null)
+    public BubbleDataSet(IEnumerable<(double x, double y, double radius)> values, string? label = null)
         : this(values.Select(e => new BubbleData(e.x, e.y, e.radius)).ToArray(), label)
     {
     }
 
-    public BubbleDataSet(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string Label = null)
+    public BubbleDataSet(IEnumerable<double> x, IEnumerable<double> y, IEnumerable<double> radius, string? Label = null)
         : this(TransformBubbles(x.Select(a => a).ToArray(), y.ToArray(), radius.ToArray()), Label){}
 
     public BubbleDataSet(IReadOnlyCollection<double> x, IReadOnlyCollection<double> y, IReadOnlyCollection<double> radius)
@@ -24,7 +24,7 @@ public record BubbleDataSet : DataSetBase<BubbleDataSet>, IDataSetWithOrder<Bubb
     /// <summary>
     /// Represents a dataset for a bubble chart.
     /// </summary>
-    public BubbleDataSet(IReadOnlyCollection<BubbleData> Data, string Label = null) : base(Data, Label)
+    public BubbleDataSet(IReadOnlyCollection<BubbleData> Data, string? Label = null) : base(Data.Cast<object>().ToArray(), Label)
     {
     }
 

@@ -1,7 +1,6 @@
 ﻿using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using Xunit;
-using Xunit.Abstractions;
 using System.Threading;
 using FluentAssertions;
 using FluentAssertions.Extensions;

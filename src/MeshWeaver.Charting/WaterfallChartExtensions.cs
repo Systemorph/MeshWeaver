@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿#nullable enable
+using System.Collections.Immutable;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Line;
@@ -14,9 +15,9 @@ internal static class WaterfallChartExtensions
 
     internal record WaterfallChartDataModel(List<double> deltas)
     {
-        internal ImmutableList<(double[] range, string label, double? delta)> IncrementRanges { get; init; } = [];
-        internal ImmutableList<(double[] range, string label, double? delta)> DecrementRanges { get; init; } = [];
-        internal ImmutableList<(double[] range, string label, double? delta)> TotalRanges { get; init; } = [];
+        internal ImmutableList<(double[]? range, string label, double? delta)> IncrementRanges { get; init; } = [];
+        internal ImmutableList<(double[]? range, string label, double? delta)> DecrementRanges { get; init; } = [];
+        internal ImmutableList<(double[]? range, string label, double? delta)> TotalRanges { get; init; } = [];
         internal ImmutableList<double?> FirstDottedValues { get; init; } = [];
         internal ImmutableList<double?> SecondDottedValues { get; init; } = [];
         internal ImmutableList<double?> ThirdDottedValues { get; init; } = [];
@@ -24,9 +25,9 @@ internal static class WaterfallChartExtensions
 
     internal static WaterfallChartDataModel CalculateModel(this List<double> deltas, IReadOnlyList<string> labels, IReadOnlySet<int> totalIndexes)
     {
-        var incrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
-        var decrementRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
-        var totalRanges = new List<(double[] range, string label, double? delta)>(deltas.Count);
+        var incrementRanges = new List<(double[]? range, string label, double? delta)>(deltas.Count);
+        var decrementRanges = new List<(double[]? range, string label, double? delta)>(deltas.Count);
+        var totalRanges = new List<(double[]? range, string label, double? delta)>(deltas.Count);
 
         var firstDottedValues = new List<double?>(deltas.Count);
         var secondDottedValues = new List<double?>(deltas.Count);
@@ -134,9 +135,9 @@ internal static class WaterfallChartExtensions
         where TOptions : WaterfallChartOptions<TOptions>
 
     {
-        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range, d.label, d.delta, styling)).ToList();
-        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range, d.label, d.delta, styling)).ToList();
+        var incrementRanges = dataModel.IncrementRanges.Select(d => new IncrementBar(d.range!, d.label, d.delta, styling)).ToList();
+        var decrementRanges = dataModel.DecrementRanges.Select(d => new DecrementBar(d.range!, d.label, d.delta, styling)).ToList();
+        var totalRanges = dataModel.TotalRanges.Select(d => new TotalBar(d.range!, d.label, d.delta, styling)).ToList();
 
         var barDataSetModifier = options.BarDataSetModifier;
 
@@ -171,7 +172,7 @@ internal static class WaterfallChartExtensions
     }
 
     internal static ChartModel ToWaterfallChart<TOptions>(this ChartModel chart, List<double> deltas,
-        Func<TOptions, TOptions> optionsFunc = null
+        Func<TOptions, TOptions>? optionsFunc = null
     )
         where TOptions : WaterfallChartOptions<TOptions>, new()
     {

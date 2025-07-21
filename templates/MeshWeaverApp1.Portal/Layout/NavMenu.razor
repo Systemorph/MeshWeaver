@@ -1,0 +1,9 @@
+﻿@using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Blazor.Infrastructure
+@inject PortalApplication PortalApplication
+<LayoutArea 
+    Area="@NavMenuExtensions.NavMenu"
+    Address="@PortalApplication.Hub.Address"
+    ShowProgress="false"
+/>

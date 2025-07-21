@@ -7,7 +7,6 @@ using FluentAssertions;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataStructures;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.DataSetReader.Test
 {
@@ -23,10 +22,10 @@ namespace MeshWeaver.DataSetReader.Test
         private const string NamedSubject = nameof(NamedSubject);
         private const string ReportingNodeByCurrency = nameof(ReportingNodeByCurrency);
 
-        private Task<(IDataSet DataSet, string Format)> ReadFromStream(Stream stream, DataSetReaderOptions options = null) =>
-            DataSetCsvSerializer.ReadAsync(stream, options ?? new());
+        private Task<(IDataSet DataSet, string? Format)> ReadFromStream(Stream stream, DataSetReaderOptions? options = null) =>
+            DataSetCsvSerializer.ReadAsync(stream, options ?? new() { EntityType = typeof(TestImportEntityWithOrder), ContentType = "text/csv" });
 
-        public CsvReaderTest( ITestOutputHelper output)
+        public CsvReaderTest(ITestOutputHelper output)
             : base(output)
         {
         }
@@ -54,11 +53,11 @@ namespace MeshWeaver.DataSetReader.Test
             var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
-            ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(0);
-            ret.DataSet.Tables[Cashflow].Rows.Count().Should().Be(0);
+            ret.DataSet.Tables[Cashflow]!.Columns.Count().Should().Be(0);
+            ret.DataSet.Tables[Cashflow]!.Rows.Count().Should().Be(0);
 
-            ret.DataSet.Tables[ResultsKey].Columns.Count().Should().Be(0);
-            ret.DataSet.Tables[ResultsKey].Rows.Count().Should().Be(0);
+            ret.DataSet.Tables[ResultsKey]!.Columns.Count().Should().Be(0);
+            ret.DataSet.Tables[ResultsKey]!.Rows.Count().Should().Be(0);
         }
 
         [Fact]
@@ -68,11 +67,11 @@ namespace MeshWeaver.DataSetReader.Test
             var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
-            ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(4);
-            ret.DataSet.Tables[Cashflow].Rows.Count().Should().Be(3);
+            ret.DataSet.Tables[Cashflow]!.Columns.Count().Should().Be(4);
+            ret.DataSet.Tables[Cashflow]!.Rows.Count().Should().Be(3);
 
-            ret.DataSet.Tables[ResultsKey].Columns.Count().Should().Be(3);
-            ret.DataSet.Tables[ResultsKey].Rows.Count().Should().Be(2);
+            ret.DataSet.Tables[ResultsKey]!.Columns.Count().Should().Be(3);
+            ret.DataSet.Tables[ResultsKey]!.Rows.Count().Should().Be(2);
         }
 
         [Fact]
@@ -82,7 +81,7 @@ namespace MeshWeaver.DataSetReader.Test
             var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(1);
-            var table = ret.DataSet.Tables[ReportingNodeByCurrency];
+            var table = ret.DataSet.Tables[ReportingNodeByCurrency]!;
             table.Columns.Count().Should().Be(3);
             table.Rows.Count().Should().Be(6);
 
@@ -113,17 +112,17 @@ namespace MeshWeaver.DataSetReader.Test
             var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(4);
-            ret.DataSet.Tables[NamedSubject].Columns.Count().Should().Be(0);
-            ret.DataSet.Tables[NamedSubject].Rows.Count().Should().Be(0);
+            ret.DataSet.Tables[NamedSubject]!.Columns.Count().Should().Be(0);
+            ret.DataSet.Tables[NamedSubject]!.Rows.Count().Should().Be(0);
 
-            ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(4);
-            ret.DataSet.Tables[Cashflow].Rows.Count().Should().Be(3);
+            ret.DataSet.Tables[Cashflow]!.Columns.Count().Should().Be(4);
+            ret.DataSet.Tables[Cashflow]!.Rows.Count().Should().Be(3);
 
-            ret.DataSet.Tables[ResultsKey].Columns.Count().Should().Be(3);
-            ret.DataSet.Tables[ResultsKey].Rows.Count().Should().Be(2);
+            ret.DataSet.Tables[ResultsKey]!.Columns.Count().Should().Be(3);
+            ret.DataSet.Tables[ResultsKey]!.Rows.Count().Should().Be(2);
 
-            ret.DataSet.Tables[CashflowWrapper].Columns.Count().Should().Be(0);
-            ret.DataSet.Tables[CashflowWrapper].Rows.Count().Should().Be(0);
+            ret.DataSet.Tables[CashflowWrapper]!.Columns.Count().Should().Be(0);
+            ret.DataSet.Tables[CashflowWrapper]!.Rows.Count().Should().Be(0);
         }
 
         [Theory]
@@ -137,11 +136,11 @@ namespace MeshWeaver.DataSetReader.Test
             var ret = await ReadFromStream(stream);
 
             ret.DataSet.Tables.Count.Should().Be(2);
-            ret.DataSet.Tables[NamedSubject].Columns.Count().Should().Be(0);
-            ret.DataSet.Tables[NamedSubject].Rows.Count().Should().Be(0);
+            ret.DataSet.Tables[NamedSubject]!.Columns.Count().Should().Be(0);
+            ret.DataSet.Tables[NamedSubject]!.Rows.Count().Should().Be(0);
 
-            ret.DataSet.Tables[Cashflow].Columns.Count().Should().Be(4);
-            ret.DataSet.Tables[Cashflow].Rows.Count().Should().Be(3);
+            ret.DataSet.Tables[Cashflow]!.Columns.Count().Should().Be(4);
+            ret.DataSet.Tables[Cashflow]!.Rows.Count().Should().Be(3);
         }
 
         [Theory]

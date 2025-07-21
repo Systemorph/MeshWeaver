@@ -17,7 +17,8 @@ public record DataSourceAddress(string Id) : Address(TypeName, Id)
 
 public interface IDataSource : IDisposable
 {
-    ITypeSource GetTypeSource(Type type);
+    ITypeSource? GetTypeSource(Type type);
+    ITypeSource? GetTypeSource(string collectionName);
     IReadOnlyCollection<Type> MappedTypes { get; }
     object Id { get; }
     CollectionsReference Reference { get; }
@@ -25,19 +26,19 @@ public interface IDataSource : IDisposable
 
     ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference);
 
-    ISynchronizationStream<EntityStore> GetStreamForPartition(object partition);
+    ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition);
     IEnumerable<ITypeSource> TypeSources { get; }
 
 }
 
 public interface IUnpartitionedDataSource : IDataSource
 {
-    IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config = null);
-    IUnpartitionedDataSource WithType<T>(Func<ITypeSource, ITypeSource> config = null) where T : class;
+    IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config = null);
+    IUnpartitionedDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config = null) where T : class;
 }
 public interface IPartitionedDataSource<in TPartition> : IDataSource
 {
-    IPartitionedDataSource<TPartition> WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config = null) where T : class;
+    IPartitionedDataSource<TPartition> WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null) where T : class;
 }
 
 
@@ -49,7 +50,7 @@ public abstract record PartitionedDataSource<TDataSource, TTypeSource, TPartitio
 
     public abstract TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<TTypeSource, TTypeSource> config)
         where T : class;
-    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config) =>
+    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config) =>
         WithType(partitionFunction, ts => (TTypeSource)(config ?? (x => x)).Invoke(ts));
 
 
@@ -60,8 +61,8 @@ public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object 
     where TDataSource : UnpartitionedDataSource<TDataSource, TTypeSource>
     where TTypeSource : ITypeSource
 {
-    public virtual IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource> config) =>
-        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config);
+    public virtual IUnpartitionedDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config) =>
+        (TDataSource)WithTypeMethod.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (x => x));
 
     private static readonly MethodInfo WithTypeMethod = ReflectionHelper.GetMethodGeneric<
         UnpartitionedDataSource<TDataSource, TTypeSource>
@@ -69,10 +70,10 @@ public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object 
 
     public TDataSource WithType<T>()
         where T : class => WithType<T>(d => d);
-    public abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config)
+    public abstract TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config)
         where T : class;
-    IUnpartitionedDataSource IUnpartitionedDataSource.WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(config);
+    IUnpartitionedDataSource IUnpartitionedDataSource.WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
+        WithType<T>(config ?? (x => x));
 
     public IUnpartitionedDataSource WithTypes(IEnumerable<Type> types) =>
         types.Aggregate((IUnpartitionedDataSource)This, (ds, t) => ds.WithType(t, x => x));
@@ -100,27 +101,27 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     public IReadOnlyCollection<Type> MappedTypes => TypeSources.Keys.ToArray();
 
-    public ITypeSource GetTypeSource(string collectionName) =>
+    public ITypeSource? GetTypeSource(string collectionName) =>
         TypeSources.Values.FirstOrDefault(x => x.CollectionName == collectionName);
 
-    public ITypeSource GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
+    public ITypeSource? GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
 
-    private IReadOnlyCollection<IDisposable> changesSubscriptions;
+    private IReadOnlyCollection<IDisposable>? changesSubscriptions;
 
 
 
-    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
+    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
     protected virtual CollectionsReference GetReference() =>
-        new CollectionsReference(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
+        new(TypeSources.Values.Select(ts => ts.CollectionName).ToArray());
 
     public virtual void Dispose()
     {
         foreach (var stream in Streams.Values)
-            stream.Dispose();
+            stream?.Dispose();
 
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
@@ -129,18 +130,18 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
         var stream = GetStreamForPartition(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
-        return stream.Reduce(reference);
+        return stream?.Reduce(reference) ?? throw new InvalidOperationException("Unable to create stream");
     }
 
-    public ISynchronizationStream<EntityStore> GetStreamForPartition(object partition)
+    public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
     {
-        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString()), partition);
+        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
         return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
     }
 
-    protected abstract ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity);
+    protected abstract ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity);
 
-    protected virtual ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected virtual ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var reference = GetReference();
 
@@ -164,7 +165,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 public record GenericUnpartitionedDataSource(object Id, IWorkspace Workspace)
     : GenericUnpartitionedDataSource<GenericUnpartitionedDataSource>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore> GetStream()
+    public ISynchronizationStream<EntityStore>? GetStream()
         => GetStreamForPartition(null);
 
 }
@@ -174,16 +175,16 @@ public record GenericUnpartitionedDataSource<TDataSource>(object Id, IWorkspace 
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
 
-    public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource> config) =>
-        WithType<T>(x => (TypeSourceWithType<T>)(config ??(y => y))(x));
+    public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
+        WithType<T>(x => (TypeSourceWithType<T>)(config ?? (y => y))(x));
 
-    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>> configurator)
-        where T : class => WithTypeSource(typeof(T), configurator.Invoke(new(Workspace, Id)));
+    public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>>? configurator)
+        where T : class => WithTypeSource(typeof(T), (configurator ?? (x => x)).Invoke(new(Workspace, Id)));
 }
 public record GenericPartitionedDataSource<TPartition>(object Id, IWorkspace Workspace)
     : GenericPartitionedDataSource<GenericPartitionedDataSource<TPartition>, TPartition>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore> GetStream()
+    public ISynchronizationStream<EntityStore>? GetStream()
         => GetStreamForPartition(null);
 
 }
@@ -192,8 +193,8 @@ public record GenericPartitionedDataSource<TDataSource, TPartition>(object Id, I
     : TypeSourceBasedPartitionedDataSource<TDataSource, IPartitionedTypeSource, TPartition>(Id, Workspace)
     where TDataSource : GenericPartitionedDataSource<TDataSource, TPartition>
 {
-    public override TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config)
-        => WithTypeSource(typeof(T), config.Invoke(new PartitionedTypeSourceWithType<T, TPartition>(Workspace, partitionFunction, Id)));
+    public override TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config)
+        => WithTypeSource(typeof(T), (config ?? (x => x)).Invoke(new PartitionedTypeSourceWithType<T, TPartition>(Workspace, partitionFunction, Id)));
 }
 
 public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace)
@@ -241,7 +242,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             .AggregateAsync(
                 new EntityStore()
                 {
-                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddType
+                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
                 },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken
@@ -249,17 +250,21 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         return initial;
     }
 
-    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
     {
         return SetupDataSourceStream(identity);
     }
 
-    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
+        if (stream == null) return null;
         stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
-            ex => Logger.LogWarning(ex, "An error occurred initializing data source {DataSource}", Id)
-        );
+            ex =>
+            {
+                Logger.LogWarning(ex, "An error occurred initializing data source {DataSource}", Id);
+                return Task.CompletedTask;
+            });
         stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }
@@ -309,7 +314,7 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
             .AggregateAsync(
                 new EntityStore()
                 {
-                    GetCollectionName = Workspace.DataContext.TypeRegistry.GetOrAddType
+                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
                 },
                 (store, selected) => store.Update(selected.Reference, selected.Initialized),
                 cancellationToken: cancellationToken
@@ -317,18 +322,22 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         return initial;
     }
 
-    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
     {
         return SetupDataSourceStream(identity);
     }
 
-    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
+        if (stream == null) return null;
         stream.Initialize(
             cancellationToken => GetInitialValue(stream, cancellationToken),
-            ex => Logger.LogWarning(ex, "An error occurred updating data source {DataSource}", Id)
-        );
+            ex =>
+            {
+                Logger.LogWarning(ex, "An error occurred updating data source {DataSource}", Id);
+                return Task.CompletedTask;
+            });
         stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
         return stream;
     }

@@ -1,13 +1,32 @@
 @inherits SkinnedView<SplitterPaneSkin, SplitterPane>
 
-<FluentMultiSplitterPane
-    Collapsible="@Skin.Collapsible"
-    Collapsed="@Skin.Collapsed"
-    Max="@Skin.Max"
-    Min="@Skin.Min"
-    Size="@Skin.Size"
-    Resizable="@Skin.Resizable"
-    Class="@Class">
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"/>
+<FluentMultiSplitterPane Collapsible="@Collapsible" Collapsed="@Collapsed" Max="@Max" Min="@Min" Size="@Size"
+    Resizable="@Resizable" Class="@Class">
+    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
 </FluentMultiSplitterPane>
 
+@code {
+    private bool Collapsible;
+    private bool Collapsed;
+    private string? Max;
+    private string? Min;
+    private string? Size;
+    private bool Resizable;
+
+    protected override void BindData()
+    {
+        base.BindData();
+        if (Skin?.Collapsible != null)
+            DataBind(Skin.Collapsible, x => x.Collapsible);
+        if (Skin?.Collapsed != null)
+            DataBind(Skin.Collapsed, x => x.Collapsed);
+        if (Skin?.Max != null)
+            DataBind(Skin.Max, x => x.Max);
+        if (Skin?.Min != null)
+            DataBind(Skin.Min, x => x.Min);
+        if (Skin?.Size != null)
+            DataBind(Skin.Size, x => x.Size);
+        if (Skin?.Resizable != null)
+            DataBind(Skin.Resizable, x => x.Resizable, defaultValue:true);
+    }
+}

@@ -2,19 +2,18 @@
 @inject IJSRuntime JsRuntime
 
 <HeadContent>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/default.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
 </HeadContent>
 
 <div @ref="CodeBlockElement" class="code-content">
-    @((MarkupString)Html)
+    @((MarkupString)(Html ?? ""))
     <i class="copy-to-clipboard" @onclick="CopyToClipboard"></i>
 </div>
 
 @code {
-    [Parameter] public string Html { get; set; }
+    [Parameter] public string? Html { get; set; }
     private ElementReference CodeBlockElement;
-    private IJSObjectReference jsModule;
+    private IJSObjectReference? jsModule;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -26,8 +25,10 @@
                 "./_content/MeshWeaver.Blazor/Components/CodeBlock.razor.js");
             }
 
-            if (jsModule is not null)
+            if (jsModule is not null && !string.IsNullOrEmpty(Html))
             {
+                // Add a small delay to ensure DOM is fully rendered
+                await Task.Delay(10);
                 await jsModule.InvokeVoidAsync("highlightBlock", CodeBlockElement);
             }
         }

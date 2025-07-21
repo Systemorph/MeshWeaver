@@ -21,7 +21,7 @@ public abstract class ContentCollection : IDisposable
         markdownStream = CreateStream();
     }
 
-    private  ISynchronizationStream<InstanceCollection> CreateStream()
+    private ISynchronizationStream<InstanceCollection> CreateStream()
     {
         var ret = new SynchronizationStream<InstanceCollection>(
             new(Collection, null),
@@ -29,22 +29,30 @@ public abstract class ContentCollection : IDisposable
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
             x => x);
-        ret.Initialize(InitializeAsync, null);
+        ret.Initialize(InitializeAsync, _ => Task.CompletedTask);
         return ret;
     }
-    protected IMessageHub Hub { get; } 
-    public string Collection  => config.Name;
-    public string DisplayName  => config.DisplayName ?? config.Name.Wordify();
+    protected IMessageHub Hub { get; }
+    public string Collection => config.Name!;
+    public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
+    public bool IsHidden => config.HiddenFrom.Length > 0;
+    public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
 
-    public IObservable<object> GetMarkdown(string path)
-        => markdownStream.Reduce(new InstanceReference(Path.GetFileNameWithoutExtension(path.TrimStart('/'))), c => c.ReturnNullWhenNotPresent()).Select(x => x?.Value);
+    public IObservable<object?>? GetMarkdown(string path)
+        => markdownStream
+            .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) 
+                ? path[..^3] 
+                : path.TrimStart('/')), 
+                c => c.ReturnNullWhenNotPresent())!
+            .Select(x => x.Value);
 
 
     public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)
-        => markdownStream.Select(x => x.Value.Instances.Values);
+        => markdownStream.Where(x => x.Value != null)
+            .Select(x => x.Value!.Instances.Values);
 
 
-    public abstract Task<Stream> GetContentAsync(string path, CancellationToken ct = default);
+    public abstract Task<Stream?> GetContentAsync(string path, CancellationToken ct = default);
 
     public virtual void Dispose()
     {
@@ -59,13 +67,13 @@ public abstract class ContentCollection : IDisposable
             .Deserialize<ImmutableDictionary<string, Author>>(
                 content
             );
-        return ret.Select(x =>
+        return ret?.Select(x =>
             new KeyValuePair<string, Author>(
                 x.Key,
                 x.Value with
                 {
                     ImageUrl = x.Value.ImageUrl is null ? null : $"static/{Collection}/{x.Value.ImageUrl}"
-                })).ToImmutableDictionary();
+                })).ToImmutableDictionary() ?? ImmutableDictionary<string, Author>.Empty;
     }
 
     public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
@@ -98,9 +106,9 @@ public abstract class ContentCollection : IDisposable
         Authors = await LoadAuthorsAsync(ct);
         var ret = new InstanceCollection(
             await GetStreams(MarkdownFilter, ct)
-                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream,tuple.Path, tuple.LastModified, ct))
+                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)Path.GetFileNameWithoutExtension(x.Path), x => (object)x, cancellationToken: ct)
+                .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
         );
         AttachMonitor();
         return ret;
@@ -113,17 +121,23 @@ public abstract class ContentCollection : IDisposable
             if (tuple.Stream is null)
                 return null;
             var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
-            return article is null ? null : new ChangeItem<InstanceCollection>(x.SetItem(article.Name, article), Hub.Version);
-        }, null);
+            if (article is null)
+                return null;
+            var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
+            return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
+                
+        }, _ => Task.CompletedTask);
     }
 
-    protected abstract Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
+    protected abstract Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
-    private async Task<MarkdownElement> ParseArticleAsync(Stream stream, string path, DateTime lastModified, CancellationToken ct)
+    private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
     {
+        if (stream is null)
+            return null;
         using var reader = new StreamReader(stream);
         var content = await reader.ReadToEndAsync(ct);
- 
+
 
         return MarkdownExtensions.ParseContent(
             Collection,
@@ -138,19 +152,19 @@ public abstract class ContentCollection : IDisposable
 
     protected abstract Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct);
 
-    public abstract Task CreateFolderAsync(string returnValue);
+    public abstract Task CreateFolderAsync(string folderPath);
 
     public abstract Task DeleteFolderAsync(string folderPath);
 
     public abstract Task DeleteFileAsync(string filePath);
-    protected abstract IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
+    protected abstract IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
 
 
 
     public virtual string GetContentType(string path)
     {
         var extension = Path.GetExtension(path).ToLowerInvariant();
-        if(string.IsNullOrEmpty(extension))
+        if (string.IsNullOrEmpty(extension))
             return "text/markdown";
         return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }

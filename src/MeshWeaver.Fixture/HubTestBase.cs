@@ -3,24 +3,26 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Fixture;
 
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress(string Id = null) : Address("router", Id ?? "1");
+    protected record RouterAddress(string? Id = default) : Address("router", Id ?? "1");
 
-    protected record HostAddress(string Id = null) : Address("host", Id ?? "1");
+    protected record HostAddress(string? Id = default) : Address("host", Id ?? "1");
 
 
-    protected record ClientAddress(string Id = null) : Address("client", Id ?? "1");
+    protected record ClientAddress(string? Id = default) : Address("client", Id ?? "1");
 
     [Inject]
-    protected IMessageHub Router;
+    protected IMessageHub Router = null!;
     [Inject]
-    protected ILogger<HubTestBase> Logger; protected HubTestBase(ITestOutputHelper output)
+    protected ILogger<HubTestBase> Logger = null!;
+    
+    protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
         // Add debug file logging for message flow tracking
@@ -31,9 +33,7 @@ public class HubTestBase : TestBase
         });
 
         Services.AddSingleton(
-            (Func<IServiceProvider, IMessageHub>)(
-                sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
-            )
+            sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
         );
     }
     private static readonly Dictionary<string, Type> AddressTypes = new()
@@ -60,49 +60,63 @@ public class HubTestBase : TestBase
         MessageHubConfiguration configuration
     ) => configuration.WithTypes(AddressTypes);
 
-    protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
+        return Router!.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
     }
 
-    protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration> configuration = null)
+    protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
+        return Router!.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
     }
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
-        Logger.LogInformation("Starting disposal of router");
+        if (Router is null)
+            return;
+        var disposalId = Guid.NewGuid().ToString("N")[..8];
 
-        // Log debug file location
-        var tempDir = Environment.GetEnvironmentVariable("TEMP") ?? ".";
-        var debugLogDir = Path.Combine(tempDir, "MeshWeaverDebugLogs");
-        Logger.LogInformation("Debug logs are written to: {DebugLogDir}", debugLogDir);
+        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router?.Address);
 
         try
         {
-            // Force dispose the router synchronously first
-            Router.Dispose();
+            // Simple timeout - just enough to detect hangs without aggressive intervention
+            var timeoutSeconds = 10;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
-            // Add aggressive 5 second timeout to prevent hanging
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Log which hubs exist before disposal
+            Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, Router.GetType().GetProperty("HostedHubs")?.GetValue(Router)?.ToString() ?? "unknown");
 
-            // If Router.Disposal is null, don't wait
-            if (Router.Disposal != null)
-            {
+            if (Router.Disposal is not null)
                 await Router.Disposal.WaitAsync(timeout.Token);
-            }
 
-            Logger.LogInformation("Finished disposal of router");
+            if (Router.Disposal is not null)
+            {
+                Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
+                await Router.Disposal.WaitAsync(timeout.Token);
+                Logger.LogInformation("[{DisposalId}] Router.Disposal completed", disposalId);
+            }
         }
         catch (OperationCanceledException)
         {
-            Logger.LogError("Router disposal timed out after 5 seconds - forcing completion");
-            // Don't throw, just log and continue to prevent test hanging
+            Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
+            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
+            Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, 
+                Router.Disposal?.IsCompleted == true ? "Completed" : 
+                Router.Disposal?.IsFaulted == true ? "Faulted" : 
+                Router.Disposal == null ? "Null" : "Pending");
+            
+            // Don't fight symptoms - let it timeout and provide diagnostic info
+            throw;
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error during router disposal - continuing");
-            // Don't throw, just log and continue
+            Logger.LogError(ex, "[{DisposalId}] Exception during router disposal", disposalId);
+            throw;
+        }
+        finally
+        {
+            await base.DisposeAsync();
+            Router = null!;
         }
     }
 }

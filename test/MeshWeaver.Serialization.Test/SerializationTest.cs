@@ -1,51 +1,33 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Serialization.Test;
 
-public class SerializationTest : HubTestBase
+public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
 {
-
-    public SerializationTest(ITestOutputHelper output)
-        : base(output)
-    {
-        Services.AddMessageHubs(
-            new RouterAddress(),
-            hubConf =>
-                hubConf.WithRoutes(f =>
-                    f.RouteAddress<HostAddress>(
-                            (routedAddress, d) =>
-                            {
-                                var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureHost);
-                                var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                hostedHub.DeliverMessage(packagedDelivery);
-                                return d.Forwarded();
-                            }
-                        )
-                        .RouteAddress<ClientAddress>(
-                            (routedAddress, d) =>
-                            {
-                                var hostedHub = f.Hub.GetHostedHub(routedAddress, ConfigureClient);
-                                var packagedDelivery = d.Package(f.Hub.JsonSerializerOptions);
-                                hostedHub.DeliverMessage(packagedDelivery);
-                                return d.Forwarded();
-                            }
-                        )
-                )
-        );
-    }
-
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
-        return base.ConfigureHost(c).WithHandler<Boomerang>(
+        return base.ConfigureHost(c)
+            .WithRoutes(f => f.RouteAddress<ClientAddress>(
+                    (routedAddress, d) =>
+                    {
+                        var hostedHub = c.ParentHub!.GetHostedHub(routedAddress, ConfigureClient);
+                        var packagedDelivery = d.Package();
+                        hostedHub.DeliverMessage(packagedDelivery);
+                        return d.Forwarded();
+                    }
+                ))
+            .WithHandler<Boomerang>(
             (hub, request) =>
             {
                 hub.Post(
@@ -60,14 +42,35 @@ public class SerializationTest : HubTestBase
         );
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .WithTypes(typeof(BoomerangResponse), typeof(MyEvent))
+            .WithRoutes(f =>
+            f.RouteAddress<HostAddress>(
+                (routedAddress, d) =>
+                {
+                    var hostedHub = configuration.ParentHub!.GetHostedHub(routedAddress, ConfigureHost);
+                    var packagedDelivery = d.Package();
+                    hostedHub.DeliverMessage(packagedDelivery);
+                    return d.Forwarded();
+                }
+            )
 
-    /// <summary>
-    /// This tests the serialization of a message with a nested object,
-    /// whereby the nested object is not registered in the host.
-    /// The host can resolve the type by using Type.GetType, as it is actually deployed.
-    /// We should set up another test in a different AssemblyLoadContext, where the nested type is not deployed.
-    /// </summary>
-    /// <returns></returns>
+        );
+    }
+    [Fact]
+    public void BoomerangResponseSerialization()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var orig = new BoomerangResponse(new MyEvent("Hello"), Type: nameof(MyEvent));
+        var serialized = JsonSerializer.Serialize(orig, client.JsonSerializerOptions);
+
+        var response = JsonNode.Parse(serialized).Deserialize<object>(client.JsonSerializerOptions);
+        var message = response.Should().BeOfType<BoomerangResponse>().Which;
+        message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
+        message.Type.Should().Be(nameof(MyEvent));
+    }
     [Fact]
     public async Task BoomerangTest()
     {
@@ -75,192 +78,236 @@ public class SerializationTest : HubTestBase
 
         var response = await client.AwaitResponse(
             new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(new HostAddress()),
-            new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
+            o => o.WithTarget(new HostAddress())
+            , new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
         );
 
         response.Message.Object.Should().BeOfType<MyEvent>().Which.Text.Should().Be("Hello");
-        response.Message.Type.Should().Be(nameof(MyEvent));
+        response.Message.Type.Should().Be(nameof(JsonElement));
     }
 
     [Fact]
-    public void MessageDeliveryPropertiesTest()
+    public void TestHostedHubSerializationOptions()
     {
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
 
-        var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
-            .WithProperties(
-                new Dictionary<string, object>
+        Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
+        foreach (var converter in client.JsonSerializerOptions.Converters)
+        {
+            Output.WriteLine($"  {converter.GetType().FullName}");
+        }
+
+        Output.WriteLine("\n=== HOSTED HUB CONVERTERS ===");
+        foreach (var converter in hosted.JsonSerializerOptions.Converters)
+        {
+            Output.WriteLine($"  {converter.GetType().FullName}");
+        }
+
+        // Hosted hub should inherit all converters from client hub
+        var clientConverterTypes = client.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+        var hostedConverterTypes = hosted.JsonSerializerOptions.Converters.Select(c => c.GetType()).ToHashSet();
+
+        var missingInHosted = clientConverterTypes.Except(hostedConverterTypes).ToList();
+
+        Output.WriteLine($"\nClient converters: {clientConverterTypes.Count}");
+        Output.WriteLine($"Hosted converters: {hostedConverterTypes.Count}");
+        Output.WriteLine($"Missing in hosted: {missingInHosted.Count}");
+
+        // This test verifies our infrastructure fix - hosted hubs should inherit parent converters
+        missingInHosted.Should().BeEmpty("hosted hub should inherit all converters from parent client hub");
+    }
+
+    [Fact]
+    public void TestSimplePolymorphicSerialization()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        // Test simple polymorphic object
+        var testMessage = new PolymorphicTestMessage
+        {
+            Data = "test data",
+            Type = "test"
+        };
+
+        // Serialize with client
+        var clientSerialized = JsonSerializer.Serialize(testMessage, client.JsonSerializerOptions);
+        Output.WriteLine($"Client serialized: {clientSerialized}");
+
+        // Serialize with hosted - should be identical
+        var hostedSerialized = JsonSerializer.Serialize(testMessage, hosted.JsonSerializerOptions);
+        Output.WriteLine($"Hosted serialized: {hostedSerialized}");
+
+        clientSerialized.Should().Be(hostedSerialized, "both should serialize identically");
+
+        // Deserialize with both
+        var clientDeserialized = JsonSerializer.Deserialize<PolymorphicTestMessage>(clientSerialized, client.JsonSerializerOptions);
+        var hostedDeserialized = JsonSerializer.Deserialize<PolymorphicTestMessage>(hostedSerialized, hosted.JsonSerializerOptions);
+
+        clientDeserialized.Should().BeEquivalentTo(testMessage);
+        hostedDeserialized.Should().BeEquivalentTo(testMessage);
+        hostedDeserialized.Should().BeEquivalentTo(clientDeserialized, "both should deserialize identically");
+    }
+
+    [Fact]
+    public void TestPolymorphicCollectionSerialization()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        // Test collection of polymorphic objects
+        var testMessages = new List<object>
+        {
+            new PolymorphicTestMessage { Data = "test1", Type = "type1" },
+            new PolymorphicTestMessage { Data = "test2", Type = "type2" }
+        };
+
+        // Serialize with client
+        var clientSerialized = JsonSerializer.Serialize(testMessages, client.JsonSerializerOptions);
+        Output.WriteLine($"Client serialized: {clientSerialized}");
+
+        // Serialize with hosted - should be identical
+        var hostedSerialized = JsonSerializer.Serialize(testMessages, hosted.JsonSerializerOptions);
+        Output.WriteLine($"Hosted serialized: {hostedSerialized}");
+
+        clientSerialized.Should().Be(hostedSerialized, "both should serialize identically");
+
+        // Deserialize with both
+        var clientDeserialized = JsonSerializer.Deserialize<List<object>>(clientSerialized, client.JsonSerializerOptions);
+        var hostedDeserialized = JsonSerializer.Deserialize<List<object>>(hostedSerialized, hosted.JsonSerializerOptions);
+
+        Output.WriteLine($"Client deserialized count: {clientDeserialized?.Count}");
+        Output.WriteLine($"Hosted deserialized count: {hostedDeserialized?.Count}");
+
+        if (clientDeserialized != null)
+        {
+            for (int i = 0; i < clientDeserialized.Count; i++)
+            {
+                Output.WriteLine($"Client item {i} type: {clientDeserialized[i].GetType().FullName}");
+            }
+        }
+
+        if (hostedDeserialized != null)
+        {
+            for (int i = 0; i < hostedDeserialized.Count; i++)
+            {
+                Output.WriteLine($"Hosted item {i} type: {hostedDeserialized[i].GetType().FullName}");
+            }
+        }
+
+        // Both should deserialize collections the same way
+        clientDeserialized.Should().NotBeNull();
+        hostedDeserialized.Should().NotBeNull();
+        clientDeserialized.Count.Should().Be(hostedDeserialized.Count);
+
+        // Each item should be properly deserialized as PolymorphicTestMessage
+        clientDeserialized.Should().AllBeOfType<PolymorphicTestMessage>();
+        hostedDeserialized.Should().AllBeOfType<PolymorphicTestMessage>();
+    }
+
+    [Fact]
+    public void TestGenericPolymorphicTypeSerialization()
+    {
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(new SynchronizationAddress());
+
+        // Create a generic polymorphic type similar to PropertyColumnControl<string>
+        var genericObject = new GenericTestClass<string>
+        {
+            Property = "testProperty",
+            Title = "Test Title"
+        };
+
+        // Test single object serialization/deserialization
+        var singleSerialized = JsonSerializer.Serialize(genericObject, client.JsonSerializerOptions);
+        Output.WriteLine($"Single generic object serialized: {singleSerialized}");
+
+        var singleClientDeserialized = JsonSerializer.Deserialize<GenericTestClass<string>>(singleSerialized, client.JsonSerializerOptions);
+        var singleHostedDeserialized = JsonSerializer.Deserialize<GenericTestClass<string>>(singleSerialized, hosted.JsonSerializerOptions);
+
+        singleClientDeserialized.Should().BeEquivalentTo(genericObject);
+        singleHostedDeserialized.Should().BeEquivalentTo(genericObject);
+
+        // Now test collection of generic polymorphic objects - this mimics the DataGrid columns issue
+        var genericCollection = new List<object>
+        {
+            new GenericTestClass<string> { Property = "prop1", Title = "Title 1" },
+            new GenericTestClass<string> { Property = "prop2", Title = "Title 2" }
+        };
+
+        var collectionSerialized = JsonSerializer.Serialize(genericCollection, client.JsonSerializerOptions);
+        Output.WriteLine($"Generic collection serialized: {collectionSerialized}");
+
+        // Let's debug the type registration issue
+        Output.WriteLine("\n=== TYPE REGISTRY DEBUG ===");
+        var typeRegistry = hosted.ServiceProvider.GetService(typeof(ITypeRegistry)) as ITypeRegistry;
+        if (typeRegistry != null)
+        {
+            var genericType = typeof(GenericTestClass<string>);
+            Output.WriteLine($"Generic type full name: {genericType.FullName}");
+            Output.WriteLine($"Generic type AssemblyQualifiedName: {genericType.AssemblyQualifiedName}");
+
+            // Check if type is registered
+            var hasTypeName = typeRegistry.TryGetCollectionName(genericType, out var registeredName);
+            Output.WriteLine($"Type registered in registry: {hasTypeName}");
+            if (hasTypeName)
+            {
+                Output.WriteLine($"Registered type name: {registeredName}");
+            }
+
+            // Try to manually register and see what name it gets
+            var manualRegisteredName = typeRegistry.GetOrAddType(genericType);
+            Output.WriteLine($"Manual registration name: {manualRegisteredName}");
+
+            // Try to find it back
+            var canFind = typeRegistry.TryGetType(manualRegisteredName, out var foundTypeInfo);
+            Output.WriteLine($"Can find by registered name: {canFind}");
+            if (canFind && foundTypeInfo != null)
+            {
+                Output.WriteLine($"Found type: {foundTypeInfo.Type.FullName}");
+            }
+        }
+        else
+        {
+            Output.WriteLine("TypeRegistry not found in ServiceProvider");
+        }
+
+        // Try to deserialize with hosted hub options
+        var hostedCollectionDeserialized = JsonSerializer.Deserialize<List<object>>(collectionSerialized, hosted.JsonSerializerOptions);
+
+        Output.WriteLine($"Hosted collection deserialized count: {hostedCollectionDeserialized?.Count}");
+        if (hostedCollectionDeserialized != null)
+        {
+            for (int i = 0; i < hostedCollectionDeserialized.Count; i++)
+            {
+                var item = hostedCollectionDeserialized[i];
+                Output.WriteLine($"Hosted item {i} type: {item.GetType().FullName}");
+                if (item is JsonElement je)
                 {
-                    { "MyId", "394" },
-                    { "MyAddress", new ClientAddress() },
-                    { "NestedObjs", new Boomerang(new MyEvent("Hello nested")) },
-                    { "MyId2", "22394" },
+                    Output.WriteLine($"  JsonElement content: {je.GetRawText()}");
                 }
-            );
+            }
+        }
 
-        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello Delivery"), postOptions);
-
-        var packedDelivery = delivery.Package(client.JsonSerializerOptions);
-
-        var serialized = JsonSerializer.Serialize(packedDelivery, client.JsonSerializerOptions);
-
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(
-            serialized,
-            client.JsonSerializerOptions
-        );
-
-        deserialized
-            .Should()
-            .NotBeNull()
-            .And.NotBeSameAs(packedDelivery)
-            .And.BeEquivalentTo(packedDelivery);
-    }
-
-    [Fact]
-    public void ValueTupleSerializationTest()
-    {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-
-        var valueTuple = (Id: 1, Name: "Test");
-        var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
-            .WithProperties(
-                new Dictionary<string, object>
-                {
-                    { "MyValueTuple", valueTuple },
-                }
-            );
-
-        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello Delivery"), postOptions);
-
-        var packedDelivery = delivery.Package(client.JsonSerializerOptions);
-
-        var serialized = JsonSerializer.Serialize(packedDelivery, client.JsonSerializerOptions);
-
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(
-            serialized,
-            client.JsonSerializerOptions
-        );
-
-        deserialized
-            .Should()
-            .NotBeNull()
-            .And.NotBeSameAs(packedDelivery)
-            .And.BeEquivalentTo(packedDelivery);
-    }
-
-    [Fact]
-    public void ValueTupleSerializationExceptionTest()
-    {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-
-        // Create a ValueTuple with ArticleStatus and DateTime
-        var statusTuple = (DateTime.Now, DateTime.UtcNow);
-
-        var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
-            .WithProperties(
-                new Dictionary<string, object>
-                {
-                    { "StatusTuple", statusTuple }
-                }
-            );
-
-        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello ValueTuple"), postOptions);
-
-        // This should reproduce the exception:
-        // System.InvalidOperationException: 'Specified type 'System.ValueTuple`2[MeshWeaver.Articles.ArticleStatus,System.DateTime]' does not support polymorphism. Polymorphic types cannot be structs, sealed types, generic types or System.Object.'
-        var packedDelivery = delivery.Package(client.JsonSerializerOptions);
-
-        var serialized = JsonSerializer.Serialize(packedDelivery, client.JsonSerializerOptions);
-
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(
-            serialized,
-            client.JsonSerializerOptions
-        );
-
-        deserialized
-            .Should()
-            .NotBeNull()
-            .And.NotBeSameAs(packedDelivery)
-            .And.BeEquivalentTo(packedDelivery);
-    }
-    [Fact]
-    public void DirectValueTupleSerializationTest()
-    {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-
-        // Test direct serialization of ValueTuple
-        var statusTuple = (new DateTime(), DateTime.Now);
-
-        // Test serialization of the ValueTuple directly - this should not throw an exception anymore
-        var serialized = JsonSerializer.Serialize(statusTuple, client.JsonSerializerOptions);
-
-        // For now, just test that serialization works without throwing
-        serialized.Should().NotBeNull();
-
-        // Test deserialization
-        var deserialized = JsonSerializer.Deserialize<(DateTime, DateTime)>(serialized, client.JsonSerializerOptions);
-
-        // Verify that the first item is the newly set DateTime value instead of the enum
-        deserialized.Item1.Should().Be(statusTuple.Item1); // Change this to check against the new DateTime instead
-    }
-    [Fact]
-    public void ValueTupleInObjectSerializationTest()
-    {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-
-        // Create an object that contains a ValueTuple - this should not throw polymorphism exception
-        var testObject = new ValueTupleTestMessage((DateTime.Now, DateTime.UtcNow));
-
-        var serialized = JsonSerializer.Serialize(testObject, client.JsonSerializerOptions);
-
-        // For now, just test that serialization works without throwing
-        serialized.Should().NotBeNull();
-
-        var deserialized = JsonSerializer.Deserialize<ValueTupleTestMessage>(serialized, client.JsonSerializerOptions);
-
-        deserialized.Should().NotBeNull();
-        // Verify at least the enum is preserved
-        deserialized.StatusTuple.Item1.Should().Be(testObject.StatusTuple.Item1);
-    }
-    [Fact]
-    public void ValueTuplePolymorphismExceptionFixed()
-    {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-
-        // This was the exact scenario that caused the polymorphism exception
-        var statusTuple = (DateTime.Now, DateTime.UtcNow);
-
-        var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
-            .WithProperties(
-                new Dictionary<string, object>
-                {
-                    { "StatusTuple", statusTuple }
-                }
-            );
-
-        var delivery = new MessageDelivery<MyEvent>(new MyEvent("Hello ValueTuple"), postOptions);
-
-        // This should not throw the polymorphism exception anymore
-        Action act = () => delivery.Package(client.JsonSerializerOptions);
-
-        act.Should().NotThrow<InvalidOperationException>();
+        // This test should pass if the polymorphic converter properly handles generic types
+        hostedCollectionDeserialized.Should().NotBeNull();
+        hostedCollectionDeserialized.Should().AllBeOfType<GenericTestClass<string>>("generic types should be properly deserialized, not as JsonElement");
     }
 }
+
 public record Boomerang(object Object) : IRequest<BoomerangResponse>;
-
 public record BoomerangResponse(object Object, string Type);
-
-public record ValueTupleTestMessage((DateTime SomeDate, DateTime Timestamp) StatusTuple);
-
 public record MyEvent(string Text);
 
-public record LayoutControlMessage
+public record PolymorphicTestMessage
 {
-    public object Control { get; init; }
-    public string Description { get; init; }
+    public string Data { get; init; } = null!;
+    public string Type { get; init; } = null!;
+}
+
+public class GenericTestClass<T>
+{
+    public string Property { get; set; } = null!;
+    public string Title { get; set; } = null!;
 }

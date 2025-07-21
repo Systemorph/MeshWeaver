@@ -14,7 +14,7 @@
 @code
 {
     ElementReference Element;
-    private IJSObjectReference JSModule;
+    private IJSObjectReference? JSModule;
 
 
 
@@ -26,7 +26,7 @@
             JSModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
             "import", "./_content/MeshWeaver.Blazor.AgGrid/AgGrid.razor.js");
 
-            string licenseKey = Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY");
+            string? licenseKey = Environment.GetEnvironmentVariable("AG_GRID_LICENSE_KEY");
             if (!string.IsNullOrEmpty(licenseKey))
             {
                 await JSModule.InvokeVoidAsync("setLicenseKey", licenseKey);
@@ -55,7 +55,7 @@
 
     private readonly string id = Guid.NewGuid().ToString();
 
-    private object Options { get; set; }
+    private object? Options { get; set; }
 
 
 }

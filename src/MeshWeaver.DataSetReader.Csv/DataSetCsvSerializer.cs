@@ -63,7 +63,7 @@ namespace MeshWeaver.DataSetReader.Csv
             return sb.ToString();
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> Parse(
+        public static async Task<(IDataSet DataSet, string? Format)> Parse(
             StreamReader reader,
             char delimiter,
             bool withHeaderRow,
@@ -76,7 +76,7 @@ namespace MeshWeaver.DataSetReader.Csv
             while (string.IsNullOrEmpty(content) && !reader.EndOfStream)
                 content = await reader.ReadLineAsync();
 
-            string format = null;
+            string? format = null;
             if (content != null && content.StartsWith(FormatPrefix))
             {
                 format = content.RemoveRedundantChars(FormatPrefix);
@@ -91,7 +91,7 @@ namespace MeshWeaver.DataSetReader.Csv
 
             var csvFactory = new Factory();
             var isHeaderRow = withHeaderRow;
-            IDataTable dataTable = null;
+            IDataTable? dataTable = null;
 
             if (content != null && !content.StartsWith(TablePrefix))
             {
@@ -149,7 +149,7 @@ namespace MeshWeaver.DataSetReader.Csv
                         csvReader.ReadHeader();
                         var fieldHeaders = csvReader.HeaderRecord;
                         foreach (
-                            var header in fieldHeaders.TakeWhile(header =>
+                            var header in fieldHeaders!.TakeWhile(header =>
                                 !string.IsNullOrWhiteSpace(header)
                             )
                         )
@@ -166,7 +166,7 @@ namespace MeshWeaver.DataSetReader.Csv
                             var row = dataTable.NewRow();
                             for (var i = 0; i < dataTable.Columns.Count; i++)
                             {
-                                var sourceValue = i >= record.Length ? null : record[i];
+                                var sourceValue = i >= record!.Length ? null : record[i];
                                 row[i] = string.IsNullOrEmpty(sourceValue) ? null : sourceValue;
                             }
                             dataTable.Rows.Add(row);
@@ -196,7 +196,7 @@ namespace MeshWeaver.DataSetReader.Csv
 
             foreach (var property in properties)
             {
-                var propertyInfo = property.PropertyInfo;
+                var propertyInfo = property.PropertyInfo!;
                 var propertyType = property.PropertyInfo.PropertyType;
                 if (
                     propertyType.IsGenericType
@@ -204,7 +204,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 )
                 {
                     var genericArguments = propertyType.GetGenericArgumentTypes(typeof(IList<>));
-                    var listElementType = genericArguments[0];
+                    var listElementType = genericArguments![0];
                     for (var i = 0; i < property.Length; i++)
                     {
                         dataTable.Columns.Add(string.Concat(propertyInfo.Name, i), listElementType);
@@ -223,7 +223,7 @@ namespace MeshWeaver.DataSetReader.Csv
             if (singularQuotesMatches.Count % 2 == 0)
                 return content;
             var sb = new StringBuilder(content);
-            string newLine;
+            string? newLine;
             while ((newLine = await reader.ReadLineAsync()) != null)
             {
                 sb.AppendLine();
@@ -240,7 +240,7 @@ namespace MeshWeaver.DataSetReader.Csv
             return Regex.Match(content, $"[^{prefix}]*\\w", RegexOptions.Compiled).Value;
         }
 
-        public static async Task<(IDataSet DataSet, string Format)> ReadAsync(
+        public static async Task<(IDataSet DataSet, string? Format)> ReadAsync(
             Stream stream,
             DataSetReaderOptions options
         )
@@ -250,7 +250,7 @@ namespace MeshWeaver.DataSetReader.Csv
                 reader,
                 options.Delimiter,
                 options.IncludeHeaderRow,
-                options.EntityType
+                options.EntityType!
             );
         }
     }

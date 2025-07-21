@@ -2,7 +2,6 @@
 using DotNet.Testcontainers.Containers;
 using DotNet.Testcontainers.Builders;
 using Testcontainers.PostgreSql;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 

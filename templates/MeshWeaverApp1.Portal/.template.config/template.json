@@ -1,0 +1,51 @@
+{
+  "schema": "http://json.schemastore.org/template",
+  "author": "Systemorph",
+  "classifications": [
+    "Web",
+    "Portal",
+    "MeshWeaver"
+  ],
+  "name": "MeshWeaver Portal Application",
+  "identity": "MeshWeaver.Portal.CSharp",
+  "groupIdentity": "MeshWeaver.Portal",
+  "shortName": "meshweaver-portal",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "MeshWeaverApp1.Portal",
+  "preferNameDirectory": true,
+  "symbols": {
+    "framework": {
+      "type": "parameter",
+      "description": "The target framework for the project.",
+      "datatype": "choice",
+      "choices": [
+        {
+          "choice": "net9.0",
+          "description": ".NET 9.0"
+        }
+      ],
+      "defaultValue": "net9.0",
+      "replaces": "net9.0"
+    }
+  },
+  "primaryOutputs": [
+    {
+      "path": "MeshWeaverApp1.Portal.csproj"
+    }
+  ],
+  "postActions": [
+    {
+      "description": "Restore NuGet packages required by this project.",
+      "manualInstructions": [
+        {
+          "text": "Run \u0027dotnet restore\u0027"
+        }
+      ],
+      "actionId": "210D431B-A78B-4D2F-B762-4ED3E3EA9025",
+      "continueOnError": true
+    }
+  ]
+}

@@ -13,7 +13,7 @@ public record TabsControl() :
     /// <returns>A new instance of <see cref="TabSkin"/>.</returns>
     protected override TabSkin CreateItemSkin(NamedAreaControl namedArea)
     {
-        return new TabSkin(namedArea.Id);
+        return new TabSkin(namedArea.Id ?? "");
     }
 }
 
@@ -25,17 +25,17 @@ public record TabsSkin : Skin<TabsSkin>
     /// <summary>
     /// Gets or initializes the ID of the active tab.
     /// </summary>
-    public object ActiveTabId { get; init; }
+    public object? ActiveTabId { get; init; }
 
     /// <summary>
     /// Gets or sets the orientation of the tabs.
     /// </summary>
-    public object Orientation { get; set; }
+    public object? Orientation { get; set; }
 
     /// <summary>
     /// Gets or sets the height of the tabs.
     /// </summary>
-    public object Height { get; set; }
+    public object? Height { get; set; }
 
     /// <summary>
     /// Sets the ID of the active tab.

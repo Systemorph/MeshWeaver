@@ -22,7 +22,7 @@ public record TypeDefinition : ITypeDefinition
         if (iconAttribute != null)
             Icon = new Icon(iconAttribute.Provider, iconAttribute.Id);
 
-        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
+        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type)!);
         
         Description = Type.GetXmlDocsSummary();
     }
@@ -37,20 +37,20 @@ public record TypeDefinition : ITypeDefinition
     public Type Type { get; }
     public string DisplayName { get; }
     public string CollectionName { get; }
-    public object Icon { get; init; }
-    public Address Address { get; init; }
+    public object? Icon { get; init; }
+    public Address? Address { get; init; }
 
     public int? Order { get; }
-    public string GroupName { get; }
-    public string Description { get; }
+    public string? GroupName { get; }
+    public string Description { get; init; }
 
     public virtual object GetKey(object instance) =>
-        Key.Value.Function?.Invoke(instance)
+        Key.Value.Function(instance)
         ?? throw new InvalidOperationException(
             $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
 
     public Type GetKeyType() =>
-        Key.Value?.KeyType
+        Key.Value.KeyType
         ?? throw new InvalidOperationException(
             $"No key mapping is defined for type {CollectionName}. Please specify in the configuration of the data sources source.");
     internal Lazy<KeyFunction> Key { get; init; }

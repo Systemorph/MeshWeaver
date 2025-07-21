@@ -11,35 +11,35 @@ public record NumberFieldControl(object Data, object Type)
     /// <summary>
     /// Gets or initializes the state to hide the step value for the number field control.
     /// </summary>
-    public object HideStep { get; init; }
+    public object? HideStep { get; init; }
 
     /// <summary>
     /// Gets or initializes the data list for the number field control.
     /// </summary>
-    public object DataList { get; init; }
+    public object? DataList { get; init; }
 
     /// <summary>
     /// Gets or initializes the step value for the number field control.
     /// </summary>
-    public object Step { get; init; }
+    public object? Step { get; init; }
 
     /// <summary>
     /// Gets or initializes the minimum value for the number field control.
     /// </summary>
-    public object Min { get; init; }
+    public object? Min { get; init; }
 
     /// <summary>
     /// Gets or initializes the maximum value for the number field control.
     /// </summary>
-    public object Max { get; init; }
+    public object? Max { get; init; }
 
     /// <summary>
     /// Gets or initializes the appearance of the number field control.
     /// </summary>
-    public object Appearance { get; init; }
+    public object? Appearance { get; init; }
 
     /// <summary>
     /// Gets or initializes the parsing error message for the number field control.
     /// </summary>
-    public object ParsingErrorMessage { get; init; }
+    public object? ParsingErrorMessage { get; init; }
 }

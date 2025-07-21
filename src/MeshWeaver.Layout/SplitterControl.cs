@@ -3,7 +3,7 @@
     /// <summary>
     /// Represents a splitter control with customizable properties.
     /// </summary>
-    public record SplitterControl() : 
+    public record SplitterControl() :
         ContainerControlWithItemSkin<SplitterControl, SplitterSkin, SplitterPaneSkin>
         (ModuleSetup.ModuleName, ModuleSetup.ApiVersion, new SplitterSkin())
     {
@@ -24,17 +24,17 @@
         /// <summary>
         /// Gets or sets the width of the splitter.
         /// </summary>
-        public object Width { get; set; }
+        public object? Width { get; set; }
 
         /// <summary>
         /// Gets or sets the height of the splitter.
         /// </summary>
-        public object Height { get; set; }
+        public object? Height { get; set; }
 
         /// <summary>
         /// Gets or sets the orientation of the splitter.
         /// </summary>
-        public object Orientation { get; set; }
+        public object? Orientation { get; set; }
 
         /// <summary>
         /// Sets the width of the splitter.

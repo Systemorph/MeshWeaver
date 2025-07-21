@@ -17,9 +17,9 @@ public class MeshConfiguration
     }
 
 
-    internal List<Func<Address, MeshNode>> MeshNodeFactories { get;  } = [];
+    internal List<Func<Address, MeshNode?>> MeshNodeFactories { get;  } = [];
 
-    public MeshConfiguration AddMeshNodeFactory(Func<Address, MeshNode> meshNodeFactory)
+    public MeshConfiguration AddMeshNodeFactory(Func<Address, MeshNode?> meshNodeFactory)
     {
         MeshNodeFactories.Add(meshNodeFactory);
         return this;
@@ -36,8 +36,8 @@ public class MeshConfiguration
 
         return this;
     }
-    internal Dictionary<Type, object> Properties { get; } = new();
-    public T Get<T>() => (T)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
+    internal Dictionary<Type, object?> Properties { get; } = new();
+    public T? Get<T>() => (T?)(Properties.GetValueOrDefault(typeof(T)) ?? default(T));
     public MeshConfiguration Set<T>(T value)
     {
         Properties[typeof(T)] = value;

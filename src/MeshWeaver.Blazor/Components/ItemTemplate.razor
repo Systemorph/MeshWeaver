@@ -4,13 +4,8 @@
 
 @if (Data != null)
 {
-    <FluentStack
-        Class="@Class"
-        Style="@Style"
-        Orientation="@Orientation"
-        Wrap="@ViewModel.Wrap"
-    >
-        @for (int i=0;i<Data.Count;++i)
+    <FluentStack Class="@Class" Style="@Style" Orientation="@Orientation" Wrap="@Wrap">
+        @for (int i = 0; i < Data.Count; ++i)
         {
             <DispatchView ViewModel="@GetViewWithPath(i)" Stream="@Stream" Area="@ViewArea" />
         }
@@ -21,7 +16,7 @@
 {
     private IReadOnlyCollection<object> Data { get; set; } = Array.Empty<object>();
     private Orientation Orientation { get; set; }
-    private UiControl view;
+    private bool Wrap { get; set; }
 
     private string ViewArea => $"{Area}/{ItemTemplateControl.ViewArea}";
 
@@ -29,9 +24,14 @@
     {
         await base.OnParametersSetAsync();
         DataBind(ViewModel.Data, d => d.Data);
-        view = Stream.GetControl(await Stream.FirstAsync(), ViewArea);
+        if (ViewModel?.Wrap != null)
+            DataBind(ViewModel.Wrap, x => x.Wrap);
     }
 
-    private UiControl GetViewWithPath(int i) => ViewModel.View with { DataContext = $"{ViewModel.DataContext}{ViewModel.Data}/{i}" };
+    private UiControl GetViewWithPath(int i) => ViewModel.View with
+    {
+        DataContext =
+    $"{ViewModel.DataContext}{ViewModel.Data}/{i}"
+    };
 
 }

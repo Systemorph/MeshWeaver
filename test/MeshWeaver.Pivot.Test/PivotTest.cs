@@ -19,7 +19,6 @@ using MeshWeaver.TestDomain.Cubes;
 using MeshWeaver.TestDomain.SimpleData;
 using MeshWeaver.Utils;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Pivot.Test;
 
@@ -147,7 +146,7 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact(Skip = "Not clear what the use case should be for this")]
     public async Task NullQuerySourceShouldFlatten()
     {
-        PivotModel qs = null;
+        PivotModel? qs = null;
         var exception = await Record.ExceptionAsync(
             async () =>
                 qs = await GetHost().GetWorkspace()
@@ -166,9 +165,9 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             .Execute()
             .FirstAsync();
 
-        qs.Columns.Should().BeEquivalentTo(flattened.Columns);
+        qs!.Columns.Should().BeEquivalentTo(flattened.Columns);
         // excluding display names, as they differ due to missing data source
-        qs.Rows.Should().BeEquivalentTo(flattened.Rows, o => o.Excluding(r => r.RowGroup.DisplayName));
+        qs.Rows.Should().BeEquivalentTo(flattened.Rows, o => o.Excluding(r => r.RowGroup!.DisplayName));
         qs.HasRowGrouping.Should().Be(flattened.HasRowGrouping);
     }
 
@@ -568,12 +567,12 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
         yield return new TestCase<CashflowElement, CashflowElement>(
             "ManualGroupRowsByDimensionSingleCurrency",
             CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
-            x => x.GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
+            x => x.GroupRowsBy(y => new RowGroup(y.AmountType!, y.AmountType!, nameof(y.AmountType)))
         );
         yield return new TestCase<CashflowElement, CashflowElement>(
             "ManualGroupRowsByDimension",
             CashflowFactory.GenerateEquallyWeightedAllPopulated(),
-            x => x.GroupRowsBy(y => new RowGroup(y.AmountType, y.AmountType, nameof(y.AmountType)))
+            x => x.GroupRowsBy(y => new RowGroup(y.AmountType!, y.AmountType!, nameof(y.AmountType)))
         );
 
         yield return new TestCase<CashflowElement, CashflowElement>(
@@ -593,8 +592,8 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
             x =>
                 x.GroupColumnsBy(y => new ColumnGroup(
-                    y.AmountType,
-                    y.AmountType,
+                    y.AmountType!,
+                    y.AmountType!,
                     nameof(y.AmountType)
                 ))
         );
@@ -603,8 +602,8 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             CashflowFactory.GenerateEquallyWeightedAllPopulated(),
             x =>
                 x.GroupColumnsBy(y => new ColumnGroup(
-                    y.AmountType,
-                    y.AmountType,
+                    y.AmountType!,
+                    y.AmountType!,
                     nameof(y.AmountType)
                 ))
         );
@@ -625,13 +624,13 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             CashflowFactory.GenerateEquallyWeightedAllPopulatedSingleCurrency(),
             x =>
                 x.GroupRowsBy(y => new RowGroup(
-                        y.LineOfBusiness,
-                        y.LineOfBusiness,
+                        y.LineOfBusiness!,
+                        y.LineOfBusiness!,
                         nameof(y.LineOfBusiness)
                     ))
                     .GroupRowsBy(y => new RowGroup(
-                        y.AmountType,
-                        y.AmountType,
+                        y.AmountType!,
+                        y.AmountType!,
                         nameof(y.AmountType)
                     ))
         );
@@ -640,13 +639,13 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             CashflowFactory.GenerateEquallyWeightedAllPopulated(),
             x =>
                 x.GroupRowsBy(y => new RowGroup(
-                        y.LineOfBusiness,
-                        y.LineOfBusiness,
+                        y.LineOfBusiness!,
+                        y.LineOfBusiness!,
                         nameof(y.LineOfBusiness)
                     ))
                     .GroupRowsBy(y => new RowGroup(
-                        y.AmountType,
-                        y.AmountType,
+                        y.AmountType!,
+                        y.AmountType!,
                         nameof(y.AmountType)
                     ))
         );
@@ -657,13 +656,13 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             x =>
                 x.Transpose<double>()
                     .GroupColumnsBy(y => new ColumnGroup(
-                        y.LineOfBusiness,
-                        y.LineOfBusiness,
+                        y.LineOfBusiness!,
+                        y.LineOfBusiness!,
                         nameof(y.LineOfBusiness)
                     ))
                     .GroupColumnsBy(y => new ColumnGroup(
-                        y.AmountType,
-                        y.AmountType,
+                        y.AmountType!,
+                        y.AmountType!,
                         nameof(y.AmountType)
                     ))
         );
@@ -674,13 +673,13 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             x =>
                 x.Transpose<double>()
                     .GroupColumnsBy(y => new ColumnGroup(
-                        y.LineOfBusiness,
-                        y.LineOfBusiness,
+                        y.LineOfBusiness!,
+                        y.LineOfBusiness!,
                         nameof(y.LineOfBusiness)
                     ))
                     .GroupColumnsBy(y => new ColumnGroup(
-                        y.AmountType,
-                        y.AmountType,
+                        y.AmountType!,
+                        y.AmountType!,
                         nameof(y.AmountType)
                     ))
         );
@@ -852,25 +851,6 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
             > pivotBuilder
         )
             : base(benchmarkFile, data, pivotBuilder) { }
-    }
-
-    private class ScopeDataCubeTestCase<TScope, TElement, TAggregate>(
-        string benchmarkFile,
-        Func<
-            DataCubePivotBuilder<TScope, TElement, TElement, TElement>,
-            DataCubePivotBuilder<TScope, TElement, TAggregate, TAggregate>
-        > pivotBuilder)
-        where TScope : IDataCube<TElement>
-    {
-        private readonly Func<
-            DataCubePivotBuilder<TScope, TElement, TElement, TElement>,
-            DataCubePivotBuilder<TScope, TElement, TAggregate, TAggregate>
-        > pivotBuilder = pivotBuilder;
-        private readonly string benchmarkFile = benchmarkFile;
-
-        public static implicit operator object[](
-            ScopeDataCubeTestCase<TScope, TElement, TAggregate> testCase
-        ) => [testCase.benchmarkFile, testCase.pivotBuilder];
     }
 
     private async Task ExecuteDataCubeTest<TElement>(

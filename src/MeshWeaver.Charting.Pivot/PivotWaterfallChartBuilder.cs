@@ -13,7 +13,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, FloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
-    private Func<PivotElementDescriptor, bool> totalsFilter;
+    private Func<PivotElementDescriptor, bool>? totalsFilter;
 
     private List<double> deltas = [];
     private ImmutableList<Func<WaterfallChartOptions, WaterfallChartOptions>> WaterfallOptions { get; init; } = [];
@@ -28,7 +28,7 @@ public record PivotWaterfallChartBuilder<T, TTransformed, TIntermediate, TAggreg
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<WaterfallChartOptions, WaterfallChartOptions> option)
         => this with { WaterfallOptions = WaterfallOptions.Add(option), };
 
-    public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
+    public IPivotWaterfallChartBuilder WithLegendItems(string? incrementsLabel = null, string? decrementsLabel = null, string? totalLabel = null)
         => WithWaterfallOptions(w => w.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel));
 
     public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> func)
@@ -102,7 +102,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     : PivotChartBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder, HorizontalFloatingBarDataSet>, IPivotWaterfallChartBuilder
     where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
 {
-    private Func<PivotElementDescriptor, bool> totalsFilter;
+    private Func<PivotElementDescriptor, bool>? totalsFilter;
 
     private List<double> deltas = [];
     private ImmutableList<Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions>> WaterfallOptions { get; init; } = [];
@@ -117,7 +117,7 @@ public record PivotHorizontalWaterfallChartBuilder<T, TTransformed, TIntermediat
     private IPivotWaterfallChartBuilder WithWaterfallOptions(Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> option)
         => this with { WaterfallOptions = WaterfallOptions.Add(option), };
 
-    public IPivotWaterfallChartBuilder WithLegendItems(string incrementsLabel = null, string decrementsLabel = null, string totalLabel = null)
+    public IPivotWaterfallChartBuilder WithLegendItems(string? incrementsLabel = null, string? decrementsLabel = null, string? totalLabel = null)
         => WithWaterfallOptions(w => w.WithLegendItems(incrementsLabel, decrementsLabel, totalLabel));
 
     public IPivotWaterfallChartBuilder WithStylingOptions(Func<WaterfallStyling, WaterfallStyling> func)

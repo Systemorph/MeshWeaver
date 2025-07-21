@@ -12,26 +12,26 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     where TViewModel : UiControl, IFormControl
     where TView : FormComponentBase<TViewModel, TView, TValue>
 {
-    private TValue data;
+    private TValue? data;
 
     public const string Edit = nameof(Edit);
-    protected string Label { get; set; }
+    protected string? Label { get; set; }
     protected int ImmediateDelay { get; set; }
-    private JsonPointerReference DataPointer { get; set; }
+    private JsonPointerReference? DataPointer { get; set; }
 
     protected bool AutoFocus { get; set; }
     protected bool Immediate { get; set; }
-    protected Icon IconStart { get; set; }
-    protected Icon IconEnd { get; set; }
-    protected string Placeholder { get; set; }
+    protected Icon? IconStart { get; set; }
+    protected Icon? IconEnd { get; set; }
+    protected string? Placeholder { get; set; }
     protected bool Disabled { get; set; }
     protected bool Readonly { get; set; }
     protected bool Required { get; set; }
 
 
-    private Subject<TValue> valueUpdateSubject;
+    private Subject<TValue>? valueUpdateSubject;
 
-    protected TValue Value
+    protected TValue? Value
     {
         get => data;
         set
@@ -40,11 +40,11 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             var needsUpdate = !EqualityComparer<TValue>.Default.Equals(this.data, value);
             this.data = value;
             if (needsUpdate)
-                UpdatePointer(this.data, DataPointer);
+                if (DataPointer is not null && this.data is not null) UpdatePointer(this.data, DataPointer);
         }
     }
 
-    protected void SetValue(TValue v)
+    protected void SetValue(TValue? v)
         => this.data = v;
 
     protected override void BindData()
@@ -67,19 +67,19 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             .Debounce(TimeSpan.FromMilliseconds(20))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => UpdatePointer(ConvertToData(x), Pointer))
+            .Subscribe(x => { if (Pointer is not null) UpdatePointer(ConvertToData(x)!, Pointer); })
         );
-        DataBind(ViewModel.Data, x => x.data, ConversionToValue);
+        DataBind(ViewModel.Data, x => x.data, ConversionToValue!);
         Pointer = ViewModel.Data as JsonPointerReference;
     }
 
-    protected virtual TValue ConversionToValue(object v, TValue defaultValue)
+    protected virtual TValue? ConversionToValue(object v, TValue defaultValue)
     {
         if (v is JsonElement je)
         {
-            return default(JsonElement).Equals(je)
-                ? default(TValue)
-                : je.Deserialize<TValue>(Stream.Hub.JsonSerializerOptions);
+            return je.ValueKind == JsonValueKind.Undefined
+                ? default
+                : je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
         }
 
         // Handle specific conversions
@@ -131,9 +131,6 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
         try
         {
-            if (v is IConvertible && typeof(TValue).IsAssignableFrom(v.GetType()))
-                return (TValue)Convert.ChangeType(v, typeof(TValue));
-
             return (TValue)Convert.ChangeType(v, typeof(TValue));
         }
         catch
@@ -144,13 +141,13 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
 
     }
 
-    protected virtual object ConvertToData(TValue v) => v;
+    protected virtual object? ConvertToData(TValue v) => v;
 
     protected virtual bool NeedsUpdate(TValue v)
     {
         return !Equals(data, v);
     }
 
-    protected JsonPointerReference Pointer { get; set; }
+    protected JsonPointerReference? Pointer { get; set; }
 
 }

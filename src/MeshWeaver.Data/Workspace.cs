@@ -12,9 +12,12 @@ namespace MeshWeaver.Data;
 
 public class Workspace : IWorkspace
 {
+    private readonly ILogger<Workspace> _logger;
+    
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
+        _logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
@@ -27,20 +30,28 @@ public class Workspace : IWorkspace
     public IReadOnlyCollection<Type> MappedTypes => DataContext.MappedTypes.ToArray();
 
 
-    public IObservable<IReadOnlyCollection<T>> GetStream<T>()
+    public IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address)
+    {
+        return GetRemoteStream(
+            address,
+            new CollectionReference(Hub.TypeRegistry.GetOrAddType(typeof(TType), typeof(TType).Name))
+            )?.Select(x => x.Value!.Instances.Values.OfType<TType>());
+    }
+
+    public IObservable<T[]?>? GetStream<T>()
     {
         var collection = DataContext.GetTypeSource(typeof(T));
         if (collection == null)
             return null;
         return GetStream(typeof(T))
-            .Select(x => x.Value.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
+            .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
-    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
+    public ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
         Address id,
         WorkspaceReference<TReduced> reference
     ) =>
-        (ISynchronizationStream<TReduced>)
+        (ISynchronizationStream<TReduced>?)
             GetSynchronizationStreamMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
                 .Invoke(this, [id, reference]);
@@ -48,7 +59,7 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo GetSynchronizationStreamMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.GetRemoteStream<object, WorkspaceReference<object>>(default, default)
+            x.GetRemoteStream<object, WorkspaceReference<object>>(null!, null!)
         );
 
 
@@ -95,29 +106,29 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference, 
-        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
     {
-        return (ISynchronizationStream<TReduced>) ReduceManager.ReduceStream(
+        return (ISynchronizationStream<TReduced>?) ReduceManager.ReduceStream(
             this,
             reference, 
             configuration
-        ); 
+        ) ?? throw new InvalidOperationException("Failed to create stream"); 
     }
 
 
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
-        => (ISynchronizationStream<EntityStore>)
+        => (ISynchronizationStream<EntityStore>?)
             
             ReduceManager.ReduceStream<EntityStore>(
     this,
     new CollectionsReference(types
-            .Select(t =>
-                DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
-                    ? name
-                    : throw new ArgumentException($"Type {t.FullName} is unknown.")
-            ).ToArray()),
-    x => x);
+        .Select(t =>
+            DataContext.TypeRegistry.TryGetCollectionName(t, out var name)
+                ? name
+                : throw new ArgumentException($"Type {t.FullName} is unknown.")
+        ).ToArray()!),
+    x => x) ?? throw new InvalidOperationException("Failed to create stream");
  
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
@@ -127,7 +138,7 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery request)
+    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery? request)
     {
         this.Change(change, activity, request);
     }
@@ -136,18 +147,55 @@ public class Workspace : IWorkspace
 
     public async ValueTask DisposeAsync()
     {
+        _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}", 
+            Id, Thread.CurrentThread.ManagedThreadId);
+        
         if (isDisposing)
+        {
+            _logger.LogDebug("Workspace {WorkspaceId} already disposing, returning", Id);
             return;
+        }
         isDisposing = true;
+        
+        _logger.LogDebug("Workspace {WorkspaceId} disposing {AsyncCount} async disposables", Id, asyncDisposables.Count);
         while (asyncDisposables.TryTake(out var d))
-            await d.DisposeAsync();
+        {
+            try
+            {
+                await d.DisposeAsync();
+                _logger.LogTrace("Workspace {WorkspaceId} disposed async disposable {DisposableType}", Id, d.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workspace {WorkspaceId} error disposing async disposable {DisposableType}", Id, d.GetType().Name);
+            }
+        }
 
+        _logger.LogDebug("Workspace {WorkspaceId} disposing {SyncCount} sync disposables", Id, disposables.Count);
         while (disposables.TryTake(out var d))
-            d.Dispose();
+        {
+            try
+            {
+                d.Dispose();
+                _logger.LogTrace("Workspace {WorkspaceId} disposed sync disposable {DisposableType}", Id, d.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Workspace {WorkspaceId} error disposing sync disposable {DisposableType}", Id, d.GetType().Name);
+            }
+        }
 
-
-
-        DataContext.Dispose();
+        _logger.LogDebug("Workspace {WorkspaceId} disposing DataContext", Id);
+        try
+        {
+            DataContext.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Workspace {WorkspaceId} error disposing DataContext", Id);
+        }
+        
+        _logger.LogInformation("Workspace {WorkspaceId} DisposeAsync completed", Id);
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
     private readonly ConcurrentBag<IAsyncDisposable> asyncDisposables = new();
@@ -162,10 +210,10 @@ public class Workspace : IWorkspace
         asyncDisposables.Add(disposable);
     }
 
-    public ISynchronizationStream<EntityStore> GetStream(StreamIdentity identity)
+    public ISynchronizationStream<EntityStore>? GetStream(StreamIdentity identity)
     {
         var ds = DataContext.GetDataSourceForId(identity.Owner);
-        return ds.GetStreamForPartition(identity.Partition);
+        return ds?.GetStreamForPartition(identity.Partition);
     }
 
 
@@ -183,7 +231,7 @@ public class Workspace : IWorkspace
     {
         var referenceType = request.Reference.GetType();
         var genericWorkspaceType = referenceType;
-        while (!genericWorkspaceType.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
+        while (!genericWorkspaceType!.IsGenericType || genericWorkspaceType.GetGenericTypeDefinition() != typeof(WorkspaceReference<>))
         {
             genericWorkspaceType = genericWorkspaceType.BaseType;
         }
@@ -197,7 +245,7 @@ public class Workspace : IWorkspace
 
     private static readonly MethodInfo SubscribeToClientMethod =
         ReflectionHelper.GetMethodGeneric<Workspace>(x =>
-            x.SubscribeToClient<object, WorkspaceReference<object>>(default)
+            x.SubscribeToClient<object, WorkspaceReference<object>>(null!)
         );
 
     private void SubscribeToClient<TReduced, TReference>(SubscribeRequest request)

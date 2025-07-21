@@ -28,7 +28,7 @@ public record ImportMapContainer(IWorkspace Workspace)
         Func<TableToTypeMapping, TableToTypeMapping> config
     ) => WithTableMapping(name, config.Invoke(new TableToTypeMapping(name, type, Workspace)));
 
-    internal TableMapping Get(string tableName) =>
+    internal TableMapping? Get(string tableName) =>
         Mappings.TryGetValue(tableName, out var mapping) ? mapping : null;
 
     internal ImportMapContainer SetItem(string name, TableMapping tableMapping) =>
@@ -72,7 +72,7 @@ public record ImportMapContainer(IWorkspace Workspace)
     {
         foreach (var table in dataSet.Tables)
         {
-            if (Mappings.TryGetValue(table.TableName, out var mapping))
+            if (Mappings.TryGetValue(table.TableName!, out var mapping))
                 store = await mapping.Map(dataSet, table, store);
         }
 

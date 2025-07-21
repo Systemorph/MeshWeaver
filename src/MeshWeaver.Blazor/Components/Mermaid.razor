@@ -5,10 +5,10 @@
 <div @ref="Element" @attributes="AdditionalAttributes" class="mermaid">
 </div>
 @code {
-    [Parameter] public string Diagram { get; set; }
-    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object> AdditionalAttributes { get; set; }
+    [Parameter] public string? Diagram { get; set; }
+    [Parameter(CaptureUnmatchedValues = true)] public Dictionary<string, object>? AdditionalAttributes { get; set; }
     private ElementReference Element;
-    private IJSObjectReference jsModule;
+    private IJSObjectReference? jsModule;
     [Parameter]public DesignThemeModes Mode { get; set; }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

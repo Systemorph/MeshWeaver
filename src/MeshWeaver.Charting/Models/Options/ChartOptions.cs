@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿#nullable enable
+using System.Text.Json.Serialization;
 using MeshWeaver.Charting.Enums;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Charting.Models.Options.Scales.Ticks;
@@ -29,7 +30,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Called when a resize occurs. Gets passed two arguments: the chart instance and the new size.
         /// </summary>
-        public string OnResize { get; init; }
+        public string OnResize { get; init; } = null!;
 
         /// <summary>
         /// Delay the resize update by give amount of milliseconds. This can ease the resize process by debouncing update of the elements.
@@ -50,7 +51,7 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// A string with a BCP 47 language tag, leveraging on INTL NumberFormat
         /// </summary>
-        public string Locale { get; init; }
+        public string Locale { get; init; } = null!;
         #endregion Locale
 
         #region Interactions
@@ -58,42 +59,42 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// Configure which events trigger chart interactions
         /// </summary>
-        public Interaction Interaction { get; init; }
+        public Interaction Interaction { get; init; } = null!;
 
         /// <summary>
         /// Events that the chart should listen to for tooltips and hovering.
         /// </summary>
-        public IEnumerable<string> Events { get; init; }
+        public IEnumerable<string> Events { get; init; } = null!;
 
         /// <summary>
         /// Called when any of the events fire over chartArea. Passed the event, an array of active elements (bars, points, etc), and the chart.
         /// </summary>
-        public object OnHover { get; init; }
+        public object OnHover { get; init; } = null!;
 
         /// <summary>
         /// Called if the event is of type 'mouseup' or 'click'. Called in the context of the chart and passed an array of active elements.
         /// </summary>
-        public object OnClick { get; init; }
+        public object OnClick { get; init; } = null!;
         #endregion Interactions
 
         #region Animations
         // https://www.chartjs.org/docs/3.5.1/configuration/animations.html
-        public Animation.Animation Animation { get; init; }// = new();
+        public Animation.Animation Animation { get; init; } = null!;
         #endregion Animations
 
         #region Layout
         // https://www.chartjs.org/docs/3.5.1/configuration/layout.html
-        public Layout.Layout Layout { get; init; }// = new();
+        public Layout.Layout Layout { get; init; } = null!;
         #endregion Layout
 
-        public Dictionary<string, Scale> Scales { get; private set; }// = new(); // TODO V10: consider to return from "private set" back to "init" here (2024/08/21, Dmitry Kalabin)
+        public Dictionary<string, Scale> Scales { get; private set; } = null!;
 
         public Plugins Plugins { get; init; } = new();
 
         /// <summary>
         /// The base axis of the dataset. 'x' for vertical bars and 'y' for horizontal bars.
         /// </summary>
-        public string IndexAxis { get; init; }
+        public string IndexAxis { get; init; } = null!;
 
 
         public ChartOptions WithoutAnimation()

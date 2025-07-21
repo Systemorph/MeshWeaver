@@ -82,8 +82,8 @@ public class Playground
         var pointer = JsonPointer.Parse("/grandParent");
         var grandParent = pointer.Evaluate(element);
         pointer = JsonPointer.Parse("/parent/child");
-        var child = pointer.Evaluate(grandParent.Value);
-        child.Value.GetProperty("name").GetString().Should().Be("John");
+        var child = pointer.Evaluate(grandParent!.Value);
+        child!.Value.GetProperty("name").GetString().Should().Be("John");
     }
 
     /// <summary>
@@ -100,7 +100,7 @@ public class Playground
         var res = Extract<IEnumerable<object>>(element, "/DataContext");
     }
 
-    private TResult Extract<TResult>(JsonElement element, string path)
+    private TResult? Extract<TResult>(JsonElement element, string path)
     {
         var pointer = JsonPointer.Parse(path);
         var ret = pointer.Evaluate(element);

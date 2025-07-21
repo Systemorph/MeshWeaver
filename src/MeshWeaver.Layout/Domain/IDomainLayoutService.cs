@@ -27,7 +27,7 @@ public class DomainLayoutService(DomainViewConfiguration configuration) : IDomai
         configuration.ViewBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null);
+            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No view builder found for the context");
 
     public UiControl GetCatalog(EntityRenderingContext context)
     {
@@ -72,7 +72,7 @@ public record DomainViewConfiguration
 
         var id = Guid.NewGuid().AsString();
         host.RegisterForDisposal(stream
-            .Select(i => i.Value.Instances.Values.Select(o =>
+            .Select(i => i?.Value?.Instances.Values.Select(o =>
             {
                 var serialized = typeDefinition.SerializeEntityAndId(o,
                     context.Host.Hub.JsonSerializerOptions);
@@ -82,7 +82,7 @@ public record DomainViewConfiguration
                         $"{typeDefinition.CollectionName}/{serialized[EntitySerializationExtensions.IdProperty]}"
                 }.ToHref(host.Hub.Address);
                 return serialized;
-            }))
+            }) ?? [])
 
             .Subscribe(x => host.UpdateData(id, x))
         );
@@ -97,9 +97,9 @@ public record DomainViewConfiguration
             );
     }
 
-    internal ImmutableList<Func<EntityRenderingContext, UiControl>> ViewBuilders { get; init; }
-    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl>> PropertyViewBuilders { get; init; } = [];
-    internal ImmutableList<Func<EntityRenderingContext, UiControl>> CatalogBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl?>> ViewBuilders { get; init; }
+    internal ImmutableList<Func<EditFormControl, PropertyRenderingContext, EditFormControl?>> PropertyViewBuilders { get; init; } = [];
+    internal ImmutableList<Func<EntityRenderingContext, UiControl?>> CatalogBuilders { get; init; } = [];
 
     private UiControl DefaultViewBuilder(EntityRenderingContext context)
     {
@@ -115,9 +115,9 @@ public record DomainViewConfiguration
 
 
 
-    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl> viewBuilder)
+    public DomainViewConfiguration WithView(Func<EntityRenderingContext, UiControl?> viewBuilder)
         => this with { ViewBuilders = ViewBuilders.Add(viewBuilder) };
-    public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl> viewBuilder)
+    public DomainViewConfiguration WithPropertyView(Func<EditFormControl, PropertyRenderingContext, EditFormControl?> viewBuilder)
         => this with { PropertyViewBuilders = PropertyViewBuilders.Add(viewBuilder) };
 
 
@@ -125,11 +125,11 @@ public record DomainViewConfiguration
     {
         var id = Guid.NewGuid().AsString();
         var stream = host.Workspace
-            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id));
+            .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id!));
 
         var typeDefinition = context.TypeDefinition;
         host.RegisterForDisposal(stream
-            .Select(e => typeDefinition.SerializeEntityAndId(e.Value, context.Host.Hub.JsonSerializerOptions))
+            .Select(e => typeDefinition.SerializeEntityAndId(e?.Value ?? throw new InvalidOperationException("Entity value is null"), context.Host.Hub.JsonSerializerOptions))
             .Subscribe(e => host.UpdateData(id,e))
         );
 
@@ -140,7 +140,7 @@ public record DomainViewConfiguration
                             .Select(b =>
                                 b.Invoke(grid, new PropertyRenderingContext(context, property))
                             )
-                            .FirstOrDefault(x => x != null)
+                            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No property view builder found")
                     );
     }
 
@@ -151,14 +151,14 @@ public record DomainViewConfiguration
         CatalogBuilders
             .Reverse()
             .Select(x => x.Invoke(context))
-            .FirstOrDefault(x => x != null);
+            .FirstOrDefault(x => x != null) ?? throw new InvalidOperationException("No catalog builder found for the context");
 }
 
 public record EntityRenderingContext(
     LayoutAreaHost Host,
     ITypeDefinition TypeDefinition,
-    string IdString,
-    object Id,
+    string? IdString,
+    object? Id,
     RenderingContext RenderingContext);
 
 public record PropertyRenderingContext(EntityRenderingContext EntityContext, PropertyInfo Property);

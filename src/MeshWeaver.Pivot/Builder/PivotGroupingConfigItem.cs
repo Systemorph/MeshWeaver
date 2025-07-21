@@ -8,7 +8,7 @@ namespace MeshWeaver.Pivot.Builder
     public record PivotGroupingConfigItem<T, TGroup>
         where TGroup : class, IGroup, new()
     {
-        private readonly PivotGroupBuilder<T, TGroup> builder;
+        private readonly PivotGroupBuilder<T, TGroup>? builder;
 
         protected PivotGroupingConfigItem() { }
 
@@ -20,10 +20,13 @@ namespace MeshWeaver.Pivot.Builder
             TAggregate
         >(
             DimensionCache dimensionCache,
-            PivotGroupManager<T, TIntermediate, TAggregate, TGroup> subGroup,
+            PivotGroupManager<T, TIntermediate, TAggregate, TGroup>? subGroup,
             Aggregations<T, TIntermediate, TAggregate> aggregationFunctions
             )
         {
+            if (builder == null)
+                throw new InvalidOperationException("Builder is not initialized");
+
             var grouper = builder.GetGrouper(dimensionCache);
             if (grouper is IHierarchicalGrouper<TGroup, T> hierarchicalGrouper)
             {

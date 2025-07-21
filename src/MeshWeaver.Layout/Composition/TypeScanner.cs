@@ -4,12 +4,12 @@ namespace MeshWeaver.Layout.Composition;
 
 public static class TypeScanner
 {
-    public static IEnumerable<T> ScanFor<T>(object instance)
+    public static IEnumerable<T> ScanFor<T>(object? instance)
     {
         return ScanForInner<T>(instance, new HashSet<object>());
     }
 
-    private static IEnumerable<T> ScanForInner<T>(object instance, HashSet<object> scanned)
+    private static IEnumerable<T> ScanForInner<T>(object? instance, HashSet<object> scanned)
     {
         if (instance == null || scanned.Contains(instance))
             yield break;

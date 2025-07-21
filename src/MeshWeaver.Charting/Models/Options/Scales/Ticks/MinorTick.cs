@@ -5,18 +5,18 @@
         /// <summary>
         /// Returns the string representation of the tick value as it should be displayed on the chart.
         /// </summary>
-        public object Callback { get; init; }
+        public object Callback { get; init; } = null!;
 
         /// <summary>
         /// Font color for tick labels.
         /// </summary>
-        public ChartColor FontColor { get; init; }
+        public ChartColor FontColor { get; init; } = null!;
 
         /// <summary>
         /// Font family for the tick labels, follows CSS font-family options.
 
         /// </summary>
-        public string FontFamily { get; init; }
+        public string FontFamily { get; init; } = null!;
 
         /// <summary>
         /// Font size for the tick labels.
@@ -26,6 +26,6 @@
         /// <summary>
         /// Font style for the tick labels, follows CSS font-style options (i.e. normal, italic, oblique, initial, inherit).
         /// </summary>
-        public string FontStyle { get; init; }
+        public string FontStyle { get; init; } = null!;
     }
 }

@@ -1,4 +1,4 @@
-﻿using MeshWeaver.AI;
+﻿#nullable enable
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
@@ -18,15 +18,17 @@ public static class AgentOverviewArea
 
         // Create view model for the diagram
         var viewModel = new AgentOverviewViewModel(agents, host.Hub.Address);
-        var mermaidDiagram = viewModel.GenerateMermaidDiagram(); return Controls.Stack
-            .WithView(
-                Controls.Markdown(
-                    $"""
-                    ## Agent Overview
-                    ```mermaid
-                    {mermaidDiagram}
-                    ```
-                    """), "DiagramArea");
+        var mermaidDiagram = viewModel.GenerateMermaidDiagram();
+
+        var markdown = $"""
+            ## Agent Overview
+
+            ```mermaid
+            {mermaidDiagram}
+            ```
+            """;
+
+        return Controls.Markdown(markdown);
     }
 }
 
@@ -44,100 +46,171 @@ public class AgentOverviewViewModel
     }
     public string GenerateMermaidDiagram()
     {
-        var diagram = new List<string>
-        {
-            "graph TD"
-        };        // Add agent nodes with proper font sizes and styling
+        var mermaid = new System.Text.StringBuilder();
+        mermaid.AppendLine("flowchart TD");
+
+        // Add nodes for all agents
+        var defaultAgentNodes = new List<string>();
+        var regularAgentNodes = new List<string>();
+        var unreachableAgentNodes = new List<string>();
+
         foreach (var agent in agents)
         {
-            var nodeId = GetNodeId(agent.AgentName);
+            var nodeId = GetNodeId(agent.Name);
+            var name = EscapeForMermaid(agent.Name.Wordify());
+            var description = EscapeForMermaid(agent.Description ?? string.Empty);
             var isDefault = agent == defaultAgent;
-            var agentNameWordified = agent.AgentName.Wordify();
-            var description = EscapeForMermaid(agent.Description);
+            var isDirectlyReachable = IsDirectlyReachableFromDefault(agent, defaultAgent);
 
-            // Determine reachability and apply proper styling
-            var nodeStyle = GetNodeStyle(agent, agents, defaultAgent);            // Create node with proper font sizes (14pt title, 12pt description) and left-aligned with consistent colors
-            diagram.Add($"    {nodeId}[\"<div align='left'><b style='font-size:14pt;color:#ffffff'>{agentNameWordified}</b><br/><span style='font-size:12pt;color:#ffffff'>{description}</span></div>\"]");
-            diagram.Add($"    style {nodeId} {nodeStyle}");
-        }// Add delegation arrows from agents that implement IAgentWithDelegation
-        foreach (var agent in agents.OfType<IAgentWithDelegation>())
-        {
-            var sourceNodeId = GetNodeId(agent.AgentName);
-            foreach (var delegation in agent.Delegations)
-            {
-                var targetAgent = agents.FirstOrDefault(a => a.AgentName == delegation.AgentName);
-                if (targetAgent != null)
-                {
-                    var targetNodeId = GetNodeId(targetAgent.AgentName);
-                    var instruction = EscapeForMermaid(delegation.Instructions);
-                    diagram.Add($"    {sourceNodeId} -->|\"delegate when: {instruction}\"| {targetNodeId}");
-                }
-            }
-        }        // Add arrows from default agent to agents exposed in navigator
+            // Create a clickable node with name and description
+            var nodeLabel = $"{name}<br/><small>{TruncateText(description, 60)}</small>";
+
+            mermaid.AppendLine($"    {nodeId}[\"{nodeLabel}\"]");
+
+            // Collect nodes for styling
+            if (isDefault)
+                defaultAgentNodes.Add(nodeId);
+            else if (isDirectlyReachable)
+                regularAgentNodes.Add(nodeId);
+            else
+                unreachableAgentNodes.Add(nodeId);
+        }
+
+        // Add edges for delegations
+        var processedEdges = new HashSet<string>();
+
+        // Start with default agent if it exists
         if (defaultAgent != null)
         {
-            var defaultNodeId = GetNodeId(defaultAgent.AgentName);
-            foreach (var agent in agents.Where(a => a != defaultAgent && a.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any()))
+            var defaultNodeId = GetNodeId(defaultAgent.Name);
+
+            // Add delegations from default agent to explicitly configured delegations
+            if (defaultAgent is IAgentWithDelegations defaultDelegating)
             {
-                var exposedNodeId = GetNodeId(agent.AgentName);
-                diagram.Add($"    {defaultNodeId} -.->|delegate| {exposedNodeId}");
+                foreach (var delegation in defaultDelegating.Delegations)
+                {
+                    var targetAgent = agents.FirstOrDefault(a => a.Name == delegation.AgentName);
+                    if (targetAgent != null)
+                    {
+                        var targetNodeId = GetNodeId(targetAgent.Name);
+                        var edgeKey = $"{defaultNodeId}->{targetNodeId}";
+
+                        if (!processedEdges.Contains(edgeKey))
+                        {
+                            mermaid.AppendLine($"    {defaultNodeId} -->|delegates to| {targetNodeId}");
+                            processedEdges.Add(edgeKey);
+                        }
+                    }
+                }
+            }
+
+            // Add delegations from default agent to agents with ExposedInNavigatorAttribute
+            foreach (var agent in agents)
+            {
+                if (agent != defaultAgent && IsExposedInNavigator(agent))
+                {
+                    var targetNodeId = GetNodeId(agent.Name);
+                    var edgeKey = $"{defaultNodeId}->{targetNodeId}";
+
+                    if (!processedEdges.Contains(edgeKey))
+                    {
+                        mermaid.AppendLine($"    {defaultNodeId} -->|delegates to| {targetNodeId}");
+                        processedEdges.Add(edgeKey);
+                    }
+                }
             }
         }
 
-        // Add click events for navigation to agent details
+        // Add delegations from other agents
         foreach (var agent in agents)
         {
-            var nodeId = GetNodeId(agent.AgentName);
-            diagram.Add($"    click {nodeId} \"{hubAddress}/AgentDetails/{agent.AgentName}\"");
+            if (agent is IAgentWithDelegations delegating && agent != defaultAgent)
+            {
+                var sourceNodeId = GetNodeId(agent.Name);
+
+                foreach (var delegation in delegating.Delegations)
+                {
+                    var targetAgent = agents.FirstOrDefault(a => a.Name == delegation.AgentName);
+                    if (targetAgent != null)
+                    {
+                        var targetNodeId = GetNodeId(targetAgent.Name);
+                        var edgeKey = $"{sourceNodeId}->{targetNodeId}";
+
+                        if (!processedEdges.Contains(edgeKey))
+                        {
+                            mermaid.AppendLine($"    {sourceNodeId} -->|delegates to| {targetNodeId}");
+                            processedEdges.Add(edgeKey);
+                        }
+                    }
+                }
+            }
         }
 
-        return string.Join("\n", diagram);
+        // Add click events for navigation
+        foreach (var agent in agents)
+        {
+            var nodeId = GetNodeId(agent.Name);
+            var url = $"{hubAddress}/AgentDetails/{agent.Name}";
+            mermaid.AppendLine($"    click {nodeId} \"{url}\" \"Open {agent.Name} details\"");
+        }
+
+        // Add styling
+        mermaid.AppendLine();
+        mermaid.AppendLine("    classDef defaultAgent fill:#f8f4fd,stroke:#6f42c1,stroke-width:3px,color:#6f42c1");
+        mermaid.AppendLine("    classDef regularAgent fill:#f0fff4,stroke:#28a745,stroke-width:2px,color:#155724");
+        mermaid.AppendLine("    classDef unreachableAgent fill:#fff5f5,stroke:#dc3545,stroke-width:2px,color:#721c24");
+
+        // Apply styles to nodes
+        if (defaultAgentNodes.Any())
+        {
+            mermaid.AppendLine($"    class {string.Join(",", defaultAgentNodes)} defaultAgent");
+        }
+        if (regularAgentNodes.Any())
+        {
+            mermaid.AppendLine($"    class {string.Join(",", regularAgentNodes)} regularAgent");
+        }
+        if (unreachableAgentNodes.Any())
+        {
+            mermaid.AppendLine($"    class {string.Join(",", unreachableAgentNodes)} unreachableAgent");
+        }
+
+        return mermaid.ToString();
     }
 
     private static string GetNodeId(string agentName)
     {
-        return agentName.Replace(" ", "_").Replace("-", "_");
+        return agentName.Replace(" ", "_").Replace("-", "_").Replace(".", "_");
     }
+
     private static string EscapeForMermaid(string text)
     {
         if (string.IsNullOrEmpty(text)) return "";
 
-        // Don't truncate description - make it fully visible and left-aligned  
         return text
             .Replace("\"", "&quot;")
             .Replace("'", "&#39;")
             .Replace("<", "&lt;")
             .Replace(">", "&gt;")
             .Replace("\n", " ")
-            .Replace("\r", "");
+            .Replace("\r", "")
+            .Replace("[", "&#91;")
+            .Replace("]", "&#93;");
     }
-    private static string GetNodeStyle(IAgentDefinition agent, List<IAgentDefinition> agents, IAgentDefinition? defaultAgent)
+
+    private static string TruncateText(string? text, int maxLength)
     {
-        return agent switch
-        {
-            // Default agent - green
-            _ when agent == defaultAgent => "fill:#4CAF50,stroke:#2E7D32,color:#fff",
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+            return text ?? string.Empty;
 
-            // Directly reachable from default agent via delegation
-            _ when IsDirectlyReachableViaDelegation(agent, defaultAgent) => "fill:#2196F3,stroke:#1976D2,color:#fff",
-
-            // Directly reachable from default agent via ExposedInNavigator attribute
-            _ when IsExposedInNavigator(agent) => "fill:#FF9800,stroke:#F57C00,color:#fff",
-
-            // Indirectly reachable (through other agents)
-            _ when IsIndirectlyReachable(agent, agents, defaultAgent) => "fill:#9C27B0,stroke:#7B1FA2,color:#fff",
-
-            // Not reachable
-            _ => "fill:#757575,stroke:#424242,color:#fff"
-        };
+        return text.Substring(0, maxLength - 3) + "...";
     }
 
     private static bool IsDirectlyReachableViaDelegation(IAgentDefinition agent, IAgentDefinition? defaultAgent)
     {
-        if (defaultAgent is not IAgentWithDelegation delegatingAgent)
+        if (defaultAgent is not IAgentWithDelegations delegatingAgent)
             return false;
 
-        return delegatingAgent.Delegations.Any(d => d.AgentName == agent.AgentName);
+        return delegatingAgent.Delegations.Any(d => d.AgentName == agent.Name);
     }
 
     private static bool IsExposedInNavigator(IAgentDefinition agent)
@@ -145,23 +218,17 @@ public class AgentOverviewViewModel
         return agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any();
     }
 
-    private static bool IsIndirectlyReachable(IAgentDefinition agent, List<IAgentDefinition> agents, IAgentDefinition? defaultAgent)
+    private static bool IsDirectlyReachableFromDefault(IAgentDefinition agent, IAgentDefinition? defaultAgent)
     {
-        // Check if the agent can be reached through other agents that are directly reachable
-        var directlyReachableAgents = agents.Where(a =>
-            a != defaultAgent &&
-            (IsDirectlyReachableViaDelegation(a, defaultAgent) || IsExposedInNavigator(a))
-        );
+        if (defaultAgent == null || agent == defaultAgent)
+            return false;
 
-        foreach (var reachableAgent in directlyReachableAgents)
-        {
-            if (reachableAgent is IAgentWithDelegation delegating &&
-                delegating.Delegations.Any(d => d.AgentName == agent.AgentName))
-            {
-                return true;
-            }
-        }
+        // Check if agent is in explicit delegations
+        var isExplicitlyDelegated = IsDirectlyReachableViaDelegation(agent, defaultAgent);
 
-        return false;
+        // Check if agent is exposed in navigator
+        var isExposedInNavigator = IsExposedInNavigator(agent);
+
+        return isExplicitlyDelegated || isExposedInNavigator;
     }
 }

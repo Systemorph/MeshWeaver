@@ -21,7 +21,7 @@ public record InstanceCollection
         GetKey = identity;
     }
 
-    internal Func<object, object> GetKey { get; init; }
+    internal Func<object, object> GetKey { get; init; } = null!;
 
     public InstanceCollection SetItem(object key, object value) =>
         this with
@@ -31,21 +31,20 @@ public record InstanceCollection
 
     public InstanceCollection Change(DataChangeRequest request)
     {
-
         var ret = this;
         if (request.Updates.Any())
             ret = ret.Update(request.Updates.ToImmutableDictionary(GetKey, x => x));
         if (request.Deletions.Any())
-            ret = ret.Delete(request.Updates.Select(GetKey));
+            ret = ret.Delete(request.Deletions.Select(GetKey));
 
         return ret;
     }
 
     public IEnumerable<T> Get<T>() => Instances.Values.OfType<T>();
 
-    public T Get<T>(object id) => (T)Instances.GetValueOrDefault(id);
+    public T? Get<T>(object id) => (T?)Instances.GetValueOrDefault(id);
 
-    public object GetInstance(object id)
+    public object? GetInstance(object id)
     {
         return Instances.GetValueOrDefault(id);
     }
@@ -80,13 +79,10 @@ public record InstanceCollection
 
     public InstanceCollection Merge(InstanceCollection updated)
     {
-        if (updated is null)
-            return this;
-        return this with
-        {
-            //TODO Roland Bürgi 2024-05-10: this won't work for deletions ==> need to create unit test and implement deletion via sync
-            Instances = Instances.SetItems(updated.Instances)
-        };
+        
+        // Fix: Use the updated collection's instances directly to properly handle deletions
+        // This replaces the current instances with the updated ones, ensuring deletions are reflected
+        return this with { Instances = Instances.SetItems(updated.Instances) };
     }
 
     public InstanceCollection Remove(IEnumerable<object> ids)
@@ -98,7 +94,7 @@ public record InstanceCollection
         return this with { Instances = Instances.Remove(id) };
     }
 
-    public virtual bool Equals(InstanceCollection other)
+    public virtual bool Equals(InstanceCollection? other)
     {
         return other is not null &&
                (

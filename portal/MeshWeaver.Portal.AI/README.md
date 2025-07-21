@@ -8,7 +8,7 @@ MeshWeaver.Portal.AI provides AI-powered functionality specifically designed for
 
 - **MeshNavigator Agent**: Default AI assistant for portal navigation and user assistance
 - **Portal Integration**: Seamless integration with MeshWeaver Portal infrastructure
-- **Azure AI Foundry Support**: Built on top of MeshWeaver.AI.AzureFoundry for Azure OpenAI integration
+- **Azure AI Foundry Support**: Built on top of MeshWeaver.AI.AzureFoundry for Azure AI Foundry integration
 - **Extensible Architecture**: Easy to add custom agents and extend functionality
 
 ## Installation
@@ -32,8 +32,8 @@ using MeshWeaver.Portal.AI;
 builder.Services.AddPortalAI();
 
 // Configure AI credentials
-builder.Services.Configure<AICredentialsConfiguration>(
-    builder.Configuration.GetSection("AI"));
+builder.Services.Configure<AzureAIFoundryConfiguration>(
+    builder.Configuration.GetSection("AzureAIFoundry"));
 ```
 
 ### 2. AI Configuration
@@ -42,10 +42,10 @@ Add to your `appsettings.json`:
 
 ```json
 {
-  "AI": {
-    "Url": "https://your-azure-openai-endpoint.openai.azure.com/",
+  "AzureAIFoundry": {
+    "Endpoint": "https://models.inference.ai.azure.com",
     "ApiKey": "your-api-key-here",
-    "Models": ["gpt-4", "gpt-35-turbo"]
+    "Models": ["gpt-4o-mini", "o3-mini"]
   }
 }
 ```
@@ -139,13 +139,13 @@ builder.Services.AddSingleton<IAgentDefinition, CustomPortalAgent>();
 ```
 AddPortalAI()
 ├── AddSingleton<IAgentDefinition, MeshNavigator>()
-└── AddAIFoundry()
-    └── AddSingleton<IAgentChatFactory, AzureAIChatCompletionAgentChatFactory>()
+└── AddAzureAIFoundry()
+    └── AddSingleton<IAgentChatFactory, AzureAIFoundryChatCompletionAgentChatFactory>()
 ```
 
 ### Integration Points
 
-- **MeshWeaver.AI.AzureFoundry**: Provides Azure OpenAI integration
+- **MeshWeaver.AI.AzureFoundry**: Provides Azure AI Foundry integration
 - **MeshWeaver.Portal.Shared.Web**: Consumes Portal AI services
 - **MeshWeaver.Blazor.Chat**: UI components for chat interaction
 
@@ -203,7 +203,8 @@ public class EnhancedNavigator : IAgentDefinition, IAgentWithPlugins
 
 ## Related Projects
 
-- [MeshWeaver.AI.AzureFoundry](../../src/MeshWeaver.AI.AzureFoundry/README.md) - Azure OpenAI integration
+- [MeshWeaver.AI.AzureFoundry](../../src/MeshWeaver.AI.AzureFoundry/README.md) - Azure AI Foundry integration
+- [MeshWeaver.AI.AzureOpenAI](../../src/MeshWeaver.AI.AzureOpenAI/README.md) - Azure OpenAI integration
 - [MeshWeaver.AI](../../src/MeshWeaver.AI/README.md) - Core AI services
 - [MeshWeaver.Blazor.Chat](../../src/MeshWeaver.Blazor.Chat/README.md) - Chat UI components
 - [MeshWeaver.Portal.Shared.Web](../MeshWeaver.Portal.Shared.Web/README.md) - Portal web infrastructure

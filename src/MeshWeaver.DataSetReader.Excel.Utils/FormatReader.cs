@@ -3,7 +3,7 @@
 	public class FormatReader
 	{
 		private const char escapeChar = '\\';
-		public string FormatString { get; set; }
+		public required string FormatString { get; set; }
 
 		public bool IsDateFormatString()
 		{

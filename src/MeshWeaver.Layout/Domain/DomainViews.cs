@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.ComponentModel;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -11,7 +12,7 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class DomainViews
 {
-    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration> configuration = null)
+    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration>? configuration = null)
         => config
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
@@ -28,6 +29,7 @@ public static class DomainViews
 
     public const string Type = nameof(Type);
 
+    [Browsable(false)]
     public static UiControl Details(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string typeAndId)
@@ -47,7 +49,7 @@ public static class DomainViews
             var typeDefinition = typeSource.TypeDefinition;
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
-            var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType);
+            var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType)!;
             return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
         }
         catch (Exception e)
@@ -61,6 +63,7 @@ public static class DomainViews
 
     private static MarkdownControl Error(string message) => new($"[!CAUTION]\n{message}\n");
 
+    [Browsable(false)]
     public static UiControl Catalog(LayoutAreaHost area, RenderingContext ctx)
     {
         if (area.Reference.Id is not string collection)
@@ -147,22 +150,6 @@ public static class DomainViews
                 sb.AppendLine("}");
             }
 
-
-            // TODO V10: Need to create relationships, but they will be across the diagram.
-            //  Need to think of different diagram type. (29.01.2025, Roland Bürgi)
-            // Add relationships within the group
-            //foreach (var type in group)
-            //{
-            //    var typeName = type.Type.Name;
-            //    foreach (var prop in type.Type.GetProperties())
-            //    {
-            //        if (group.Any(t => t.Type == prop.PropertyType))
-            //        {
-            //            sb.AppendLine($"{typeName} --> {prop.PropertyType.Name}");
-            //        }
-            //    }
-            //}
-
             sb.AppendLine("```");
         }
 
@@ -176,10 +163,10 @@ public static class DomainViews
         );
     }
 
-    public static string GetDetailsUri(this IMessageHub hub, Type type, object id) =>
+    public static string? GetDetailsUri(this IMessageHub hub, Type type, object id) =>
         GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
-    public static LayoutAreaReference GetDetailsReference(this IMessageHub hub, Type type, object id)
+    public static LayoutAreaReference? GetDetailsReference(this IMessageHub hub, Type type, object id)
     {
         var collection = hub.ServiceProvider.GetRequiredService<ITypeRegistry>().GetCollectionName(type);
         if (collection == null)

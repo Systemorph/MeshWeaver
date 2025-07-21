@@ -6,7 +6,7 @@ namespace MeshWeaver.DataSetReader;
 /// Implementations of the <see cref="ReadDataSet"/> read the data from a source and returns the data
 /// in a <see cref="IDataSet"/> which then can be further processed in the import
 /// </summary>
-public delegate Task<(IDataSet DataSet, string Format)> ReadDataSet(
+public delegate Task<(IDataSet DataSet, string? Format)> ReadDataSet(
     Stream stream,
     DataSetReaderOptions options,
     CancellationToken cancellationToken
@@ -16,8 +16,8 @@ public record DataSetReaderOptions
 {
     public char Delimiter { get; init; } = ',';
     public bool IncludeHeaderRow { get; init; } = true;
-    public Type EntityType { get; init; }
-    public string ContentType { get; init; }
+    public Type? EntityType { get; init; }
+    public string? ContentType { get; init; }
 
     /// <summary>
     /// Defines delimiter for csv and strings of csv format

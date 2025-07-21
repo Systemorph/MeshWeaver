@@ -8,8 +8,8 @@ namespace MeshWeaver.Hosting;
 
 public class CsvConsoleFormatter : ConsoleFormatter, IDisposable
 {
-    private readonly IDisposable optionsReloadToken;
-    private CsvConsoleFormatterOptions formatterOptions;
+    private readonly IDisposable? optionsReloadToken;
+    private CsvConsoleFormatterOptions? formatterOptions;
 
     public CsvConsoleFormatter(IOptionsMonitor<CsvConsoleFormatterOptions> options)
         : base(nameof(CsvConsoleFormatter))
@@ -22,11 +22,11 @@ public class CsvConsoleFormatter : ConsoleFormatter, IDisposable
         formatterOptions = options;
     }
 
-    public override void Write<TState>(in LogEntry<TState> logEntry, IExternalScopeProvider scopeProvider, TextWriter textWriter)
+    public override void Write<TState>(in LogEntry<TState> logEntry, IExternalScopeProvider? scopeProvider, TextWriter textWriter)
     {
         var logBuilder = new StringBuilder();
 
-        if (formatterOptions.IncludeTimestamp)
+        if (formatterOptions!.IncludeTimestamp)
         {
             var timestamp = DateTimeOffset.Now.ToString(formatterOptions.TimestampFormat);
             logBuilder.Append(timestamp).Append(", ");
@@ -49,5 +49,5 @@ public class CsvConsoleFormatter : ConsoleFormatter, IDisposable
 public class CsvConsoleFormatterOptions
 {
     public bool IncludeTimestamp { get; set; } = true;
-    public string TimestampFormat { get; set; } = "hh:mm:ss:fff";
+    public string TimestampFormat { get; set; } = "hh:mm:ss:fff"!;
 }

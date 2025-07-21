@@ -17,7 +17,7 @@ public static class SignalRClientExtensions
     public static MessageHubConfiguration UseSignalRClient(
         this MessageHubConfiguration config, 
         string url,
-        Func<IHubConnectionBuilder,IHubConnectionBuilder> configuration = null)
+        Func<IHubConnectionBuilder,IHubConnectionBuilder>? configuration = null)
     {
         return config
             .WithServices(services =>
@@ -57,7 +57,7 @@ public static class SignalRClientExtensions
                             await hubConnection.DisposeAsync();
                         });
 
-                        async Task Connect(Exception e)
+                        async Task Connect(Exception? e)
                         {
                             try
                             {
@@ -78,7 +78,7 @@ public static class SignalRClientExtensions
 
                         logger.LogInformation("Creating SignalR connection for {AddressType}", hub.Address);
                         await hubConnection.StartAsync(ct);
-                        await Connect(null);
+                        await Connect(null!);
                         hubConnection.On<IMessageDelivery>("ReceiveMessage", message =>
                         {
                             // Handle the received message
@@ -107,16 +107,16 @@ public static class SignalRClientExtensions
         var hubConnection = routes.Hub.ServiceProvider.GetRequiredService<Lazy<HubConnection>>();
         return routes.WithHandler(async (delivery, cancellationToken) =>
         {
-            if(AnyInHierarchyEquals(routes.Hub.Address, delivery.Target))
+            if(AnyInHierarchyEquals(routes.Hub.Address, delivery.Target!))
                 return delivery;
 
             logger.LogDebug("Sending message from address {Address}", delivery.Sender);
-            await hubConnection.Value.InvokeAsync("DeliverMessage", delivery.Package(routes.Hub.JsonSerializerOptions), cancellationToken);
+            await hubConnection.Value.InvokeAsync("DeliverMessage", delivery.Package(), cancellationToken);
             return delivery.Forwarded();
         });
     }
 
-    private static bool AnyInHierarchyEquals(object hubAddress, object deliveryTarget)
+    private static bool AnyInHierarchyEquals(object hubAddress, object? deliveryTarget)
     => deliveryTarget != null && (hubAddress.Equals(deliveryTarget) || 
                                   (deliveryTarget is HostedAddress hosted && AnyInHierarchyEquals(hubAddress, hosted.Host)
                                   ));

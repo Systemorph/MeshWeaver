@@ -6,9 +6,9 @@ namespace MeshWeaver.Data.Documentation;
 
 public record DocumentationContext(IMessageHub Hub)
 {
-    public ConcurrentDictionary<(string Type, string Id), DocumentationSource> Sources { get;  } = new();
+    public ConcurrentDictionary<(string Type, string Id), DocumentationSource?> Sources { get;  } = new();
 
-    public DocumentationSource GetSource(string type, string id)
+    public DocumentationSource? GetSource(string type, string id)
     {
         var key = (type, id);
         try
@@ -23,12 +23,12 @@ public record DocumentationContext(IMessageHub Hub)
 
 
 
-    private DocumentationSource TryCreateSource(string type, string id) =>
+    private DocumentationSource? TryCreateSource(string type, string id) =>
         Factories
             .Select(x => x.Invoke(type, id))
             .FirstOrDefault(x => x != null);
 
-    private ImmutableList<Func<string, string, DocumentationSource>> Factories { get; init; }
+    private ImmutableList<Func<string, string, DocumentationSource?>> Factories { get; init; }
     = [
         (type, id) =>
             type == PdbDocumentationSource.Pdb ? new PdbDocumentationSource(id): null,
@@ -44,11 +44,11 @@ public abstract record DocumentationSource(string Id)
 {
     internal ImmutableList<string> XmlComments { get; set; } = [];
     public ImmutableDictionary<string, string> DocumentPaths { get; set; } = ImmutableDictionary<string, string>.Empty;
-    public abstract Stream GetStream(string name);
+    public abstract Stream? GetStream(string name);
 
     public abstract string Type { get; }
 
-    public abstract string GetPath(string name);
+    public abstract string? GetPath(string name);
     public abstract string GetDocumentName(string documentId);
 }
 
@@ -57,7 +57,7 @@ public abstract record DocumentationSource<TSource>(string Id) : DocumentationSo
 {
     public TSource This => (TSource)this;
 
-    public TSource WithXmlComments(string xmlCommentPath = null)
+    public TSource WithXmlComments(string? xmlCommentPath = null)
         => This with { XmlComments = XmlComments.Add(xmlCommentPath ?? $"{Id}.xml") };
 
     public TSource WithDocument(string name, string filePath)

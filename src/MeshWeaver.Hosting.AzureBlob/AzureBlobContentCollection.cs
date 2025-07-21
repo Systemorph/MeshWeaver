@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.AzureBlob;
 public class AzureBlobContentCollection : ContentCollection
 {
     private readonly BlobContainerClient containerClient;
-    private readonly ISynchronizationStream<InstanceCollection> articleStream;
+    private readonly ISynchronizationStream<InstanceCollection>? articleStream;
     private readonly ILogger<AzureBlobContentCollection> logger;
 
     public AzureBlobContentCollection(
@@ -26,7 +26,7 @@ public class AzureBlobContentCollection : ContentCollection
         containerClient = client.GetBlobContainerClient(containerName);
     }
 
-    public override async Task<Stream> GetContentAsync(string path, CancellationToken ct = default)
+    public override async Task<Stream?> GetContentAsync(string? path, CancellationToken ct = default)
     {
         if (path is null)
             return null;
@@ -38,7 +38,7 @@ public class AzureBlobContentCollection : ContentCollection
         return await blobClient.OpenReadAsync(cancellationToken: ct);
     }
 
-    protected override async Task<(Stream Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
+    protected override async Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct)
     {
         var blobClient = containerClient.GetBlobClient(path);
         if (!await blobClient.ExistsAsync(ct))
@@ -104,19 +104,29 @@ public class AzureBlobContentCollection : ContentCollection
 
     protected override async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct)
     {
-        var authorsClient = containerClient.GetBlobClient("authors.json");
-
-        if (await authorsClient.ExistsAsync(ct))
+        try
         {
-            await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
-            using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync(ct);
-            return ParseAuthors(content);
+            var authorsClient = containerClient.GetBlobClient("authors.json");
+
+            if (await authorsClient.ExistsAsync(ct))
+            {
+                await using var stream = await authorsClient.OpenReadAsync(cancellationToken: ct);
+                using var reader = new StreamReader(stream);
+                var content = await reader.ReadToEndAsync(ct);
+                return ParseAuthors(content);
+            }
+
+            return ImmutableDictionary<string, Author>.Empty;
+
         }
-        return ImmutableDictionary<string, Author>.Empty;
+        catch
+        {
+            logger.LogWarning("No authors.json file in content collection.");
+            return ImmutableDictionary<string, Author>.Empty;
+        }
     }
 
-    private async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool> filter = null, string prefix = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    private async IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetAllFromContainer(Func<string, bool>? filter = null, string? prefix = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await foreach (var blobItem in containerClient.GetBlobsAsync(prefix: prefix ?? ""))
         {
@@ -228,13 +238,13 @@ public class AzureBlobContentCollection : ContentCollection
         }
     }
 
-    public override async Task CreateFolderAsync(string path)
+    public override async Task CreateFolderAsync(string folderPath)
     {
         // In Azure Blob Storage, folders don't technically exist as discrete entities.
         // They are inferred from blob names.
         // To "create" a folder, you'd typically upload a placeholder file
 
-        var fullPath = path.TrimStart('/');
+        var fullPath = folderPath.TrimStart('/');
         if (!fullPath.EndsWith('/'))
             fullPath += '/';
 
@@ -317,7 +327,7 @@ public class AzureBlobContentCollection : ContentCollection
         OnFileRenamed(oldPath, newPath);
     }
 
-    protected override async IAsyncEnumerable<(Stream Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
+    protected override async IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
         await foreach (var article in GetAllFromContainer(filter, cancellationToken: cancellationToken))

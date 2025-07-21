@@ -4,7 +4,6 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -43,7 +42,11 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         var response = await client.AwaitResponse(
             new SayHelloRequest(),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(new HostAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(5.Seconds()).Token
+            ).Token
         );
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }
@@ -55,7 +58,8 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
 
         var response = await client.AwaitResponse(
             new SayHelloRequest(),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(new HostAddress()),
+            TestContext.Current.CancellationToken
         );
         response.Should().BeAssignableTo<IMessageDelivery<HelloEvent>>();
     }

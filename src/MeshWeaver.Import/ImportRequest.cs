@@ -19,16 +19,24 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
     public string MimeType { get; init; } =
         MimeTypes.MapFileExtension(
             Source is StreamSource stream ? Path.GetExtension(stream.Name) : ""
-        );
+        ) ?? "";
 
     public string Format { get; init; } = ImportFormat.Default;
-    public object TargetDataSource { get; init; }
+    public object? TargetDataSource { get; init; }
     public UpdateOptions UpdateOptions { get; init; } = UpdateOptions.Default;
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();
 
-    internal Type EntityType { get; init; }
+    /// <summary>
+    /// Timeout for the import operation. If not specified, no timeout is applied.
+    /// This is useful for testing scenarios where imports might hang.
+    /// </summary>
+    public TimeSpan? Timeout { get; init; }
+
+    internal Type EntityType { get; init; } = null!;
 
     public ImportRequest WithEntityType(Type entityType) => this with { EntityType = entityType };
+
+    public ImportRequest WithTimeout(TimeSpan timeout) => this with { Timeout = timeout };
 
     public bool SaveLog { get; init; }
 }

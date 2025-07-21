@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Components;
+﻿#nullable enable
+using Microsoft.AspNetCore.Components;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor.Components;
@@ -14,7 +15,7 @@ public class SkinnedView<TControl, TSkin, TView> : BlazorView<TControl, TView>
     where TView : SkinnedView<TControl, TSkin, TView>
 {
     [Parameter]
-    public TSkin Skin { get; set; }
+    public required TSkin Skin { get; set; }
 
     protected override void BindData()
     {

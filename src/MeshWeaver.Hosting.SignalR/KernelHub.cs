@@ -27,7 +27,7 @@ public class KernelHub : Hub
         return kernelService.SubmitCommandAsync(kernelAddress, kernelCommandEnvelope, GetLayoutAreaAddress());
     }
 
-    public string GetLayoutAreaAddress()
+    public string? GetLayoutAreaAddress()
     {
         var request = httpContextAccessor.HttpContext?.Request;
         if (request is null)
@@ -67,7 +67,7 @@ public class KernelHub : Hub
         return true;
     }
 
-    public override Task OnDisconnectedAsync(Exception exception)
+    public override Task OnDisconnectedAsync(Exception? exception)
     {
         if(kernelByConnection.TryRemove(Context.ConnectionId, out var id))
             connectionsByKernel.AddOrUpdate(

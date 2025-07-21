@@ -9,8 +9,8 @@ namespace MeshWeaver.Data;
 /// </summary>
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
-    public object Id { get; init; }
-    public string Layout { get; init; }
+    public object? Id { get; init; }
+    public string Layout { get; init; } = null!;
 
     public const string Data = "data";
 
@@ -25,11 +25,11 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
     /// <param name="id">The ID for the data pointer.</param>
     /// <param name="extraSegments">The extra segments for the data pointer.</param>
     /// <returns>A string representing the data pointer.</returns>
-    public static string GetDataPointer(string id, params string[] extraSegments) =>
+    public static string GetDataPointer(string id, params string?[] extraSegments) =>
         JsonPointer.Create(
             new[] { Data, Encode(id) }
             .Concat(extraSegments)
-            .Select(x => (PointerSegment)x)
+            .Select(x => (PointerSegment)x!)
             .ToArray()
         )
         .ToString();

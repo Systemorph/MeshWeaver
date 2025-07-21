@@ -25,7 +25,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
         }
 
 
-        private static readonly CreatableObjectStore<Type, CreatableObjectStore<string, Delegate>> IdentityPropertiesCopiers = new CreatableObjectStore<Type, CreatableObjectStore<string, Delegate>>(t => new CreatableObjectStore<string, Delegate>());
+        private static readonly CreatableObjectStore<Type, CreatableObjectStore<string, Delegate>> IdentityPropertiesCopiers = new(_ => new CreatableObjectStore<string, Delegate>());
 
         public static Delegate GetIdentityPropertiesCopier(this PropertyInfo[] props, Type type, string key)
         {
@@ -44,7 +44,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return (Delegate)CreateIdentityPropertiesCopierMethod.MakeGenericMethod(type).InvokeAsFunction(properties);
         }
 
-        private static readonly IGenericMethodCache CreateIdentityPropertiesCopierMethod = GenericCaches.GetMethodCacheStatic(() => CreateIdentityPropertiesCopier<object>(null));
+        private static readonly IGenericMethodCache CreateIdentityPropertiesCopierMethod = GenericCaches.GetMethodCacheStatic(() => CreateIdentityPropertiesCopier<object>(null!));
         // ReSharper disable once UnusedMethodReturnValue.Local
         private static Action<T, T> CreateIdentityPropertiesCopier<T>(PropertyInfo[] properties)
         {

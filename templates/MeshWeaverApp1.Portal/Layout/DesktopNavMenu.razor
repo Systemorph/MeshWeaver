@@ -1,0 +1,19 @@
+﻿@using MeshWeaver.ContentCollections
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
+    <FluentAppBarItem Href="/app/Todo/TodoList" Match="NavLinkMatch.All" IconRest="TodoIcon()"
+        IconActive="TodoIcon(true)" Text="Todos" />
+    <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="BlogIcon()" IconActive="BlogIcon(true)"
+        Text="Articles" />
+    <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
+        IconActive="AgentsIcon(true)" Text="Agents" />
+    <AuthorizeView Roles="@Roles.PortalAdmin">
+        <Authorized>
+            <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"
+                IconActive="CollectionsIcon(active: true)" Text="Collections" />
+        </Authorized>
+    </AuthorizeView>
+
+</FluentAppBar>

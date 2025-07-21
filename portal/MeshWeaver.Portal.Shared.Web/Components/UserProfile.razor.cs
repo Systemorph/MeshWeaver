@@ -10,7 +10,7 @@ namespace MeshWeaver.Portal.Shared.Web.Components;
 
 public partial class UserProfile : ComponentBase
 {
-    [Inject] 
+    [Inject]
     public required NavigationManager Navigation { get; init; }
 
     [Inject]
@@ -25,41 +25,37 @@ public partial class UserProfile : ComponentBase
     [Parameter]
     public string ImageSize { get; set; } = "52px";
 
-    private string name;
-    private string username;
-    private string initials;
+    private string? name;
+    private string? username;
+    private string? initials;
     private string NameClaimType { get; } = "name";
     public string UsernameClaimType { get; } = "preferred_username";
 
     protected override async Task OnParametersSetAsync()
     {
-            var authState = await AuthenticationState;
+        var authState = await AuthenticationState;
 
-            var claimsIdentity = authState.User.Identity as ClaimsIdentity;
+        var claimsIdentity = authState.User.Identity as ClaimsIdentity;
 
-            if (claimsIdentity?.IsAuthenticated == true)
-            {
-                name = claimsIdentity.FindFirst(NameClaimType)?.Value;
+        if (claimsIdentity?.IsAuthenticated == true)
+        {
+            name = claimsIdentity.FindFirst(NameClaimType)?.Value!;
 
-                username = claimsIdentity.FindFirst(UsernameClaimType)?.Value;
-                initials = GetInitials(name);
-            }
-            else
-            {
-                // If we don't have an authenticated user, don't show the user profile menu. This shouldn't happen.
-                name = null;
-                username = null;
-                initials = null;
-            }
-        
+            username = claimsIdentity.FindFirst(UsernameClaimType)?.Value;
+            initials = GetInitials(name);
+        }
+
     }
     public static string GetInitials(string name)
     {
+        if (string.IsNullOrEmpty(name))
+            return "";
+
         var s = name.AsSpan().Trim();
 
         if (s.Length == 0)
         {
-            return null;
+            return "";
         }
 
         var lastSpaceIndex = s.LastIndexOf(' ');

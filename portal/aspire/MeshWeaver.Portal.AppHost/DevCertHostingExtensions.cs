@@ -17,12 +17,12 @@ public static class DevCertHostingExtensions
     /// Use <see cref="ResourceBuilderExtensions.WithHttpsEndpoint{TResource}"/> to configure an HTTPS endpoint.
     /// </remarks>
     public static IResourceBuilder<TResource> RunWithHttpsDevCertificate<TResource>(
-        this IResourceBuilder<TResource> builder, string certFileEnv, string certKeyFileEnv, Action<string, string> onSuccessfulExport = null)
+        this IResourceBuilder<TResource> builder, string certFileEnv, string certKeyFileEnv, Action<string, string>? onSuccessfulExport = null)
         where TResource : IResourceWithEnvironment
     {
         if (builder.ApplicationBuilder.ExecutionContext.IsRunMode && builder.ApplicationBuilder.Environment.IsDevelopment())
         {
-            builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>(async (e, ct) =>
+            builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>(async (e, _) =>
             {
                 var logger = e.Services.GetRequiredService<ResourceLoggerService>().GetLogger(builder.Resource);
 
@@ -123,8 +123,8 @@ public static class DevCertHostingExtensions
 
         var exportProcess = new Process { StartInfo = exportStartInfo };
 
-        Task stdOutTask = null;
-        Task stdErrTask = null;
+        Task stdOutTask = Task.CompletedTask;
+        Task stdErrTask = Task.CompletedTask;
 
         try
         {
@@ -168,7 +168,7 @@ public static class DevCertHostingExtensions
         }
         finally
         {
-            await Task.WhenAll(stdOutTask ?? Task.CompletedTask, stdErrTask ?? Task.CompletedTask);
+            await Task.WhenAll(stdOutTask, stdErrTask );
         }
 
         static async Task ConsumeOutput(TextReader reader, Action<string> callback)

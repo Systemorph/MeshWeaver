@@ -38,17 +38,17 @@ namespace MeshWeaver.Arithmetics.MapOver
 
         private static ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)> MapOverDelegateProviders = ImmutableList<(Func<Type, bool> Filter, IMapOverFunctionProvider Provider)>.Empty;
 
-        private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverEnumerableMethod = typeof(MapOverFields).GetMethod(nameof(MapOverEnumerable), BindingFlags.Static | BindingFlags.NonPublic)!;
 
 
-        private static readonly MethodInfo MapOverArrayMethod = typeof(MapOverFields).GetMethod(nameof(MapOverArray), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverArrayMethod = typeof(MapOverFields).GetMethod(nameof(MapOverArray), BindingFlags.Static | BindingFlags.NonPublic)!;
 
-        private static readonly MethodInfo MapOverListMethod = typeof(MapOverFields).GetMethod(nameof(MapOverList), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverListMethod = typeof(MapOverFields).GetMethod(nameof(MapOverList), BindingFlags.Static | BindingFlags.NonPublic)!;
 
         //private static readonly MethodInfo MapOnNullableDoubleDelegate = typeof(MapOverFields).GetMethod(nameof(MapOnNullableDouble), BindingFlags.Static | BindingFlags.NonPublic);
 
 
-        private static readonly MethodInfo MapOverDictionaryMethod = typeof(MapOverFields).GetMethod(nameof(MapOverDictionary), BindingFlags.Static | BindingFlags.NonPublic);
+        private static readonly MethodInfo MapOverDictionaryMethod = typeof(MapOverFields).GetMethod(nameof(MapOverDictionary), BindingFlags.Static | BindingFlags.NonPublic)!;
 
         /// <summary>
         /// Applies one of the supported methods to all applicable properties of the type <typeparamref name="T"/>
@@ -154,22 +154,18 @@ namespace MeshWeaver.Arithmetics.MapOver
         {
             var factor = Expression.Parameter(typeof(double));
             var obj = Expression.Parameter(type);
-            var elementType = type.GetEnumerableElementType();
+            var elementType = type.GetEnumerableElementType() ?? throw new ArgumentException();
             var mapOverArray = MapOverEnumerableMethod.MakeGenericMethod(elementType);
             return Expression.Lambda(Expression.Call(mapOverArray, factor, obj, Expression.Constant(method)), factor, obj).Compile();
         }
 
         private static IEnumerable<T> MapOverEnumerable<T>(double factor, IEnumerable<T> value, ArithmeticOperation method)
         {
-            if (value == null)
-                return null;
             return value.Select(x => MapOver(method, factor, x));
         }
 
         private static T[] MapOverArray<T>(double factor, T[] value, ArithmeticOperation method)
         {
-            if (value == null)
-                return null;
             var res = new T[value.Length];
             for (var i = 0; i < value.Length; i++)
                 res[i] = MapOver(method, factor, value[i]);
@@ -181,7 +177,7 @@ namespace MeshWeaver.Arithmetics.MapOver
         {
             var factor = Expression.Parameter(typeof(double));
             var obj = Expression.Parameter(type);
-            var elementType = type.GetElementType();
+            var elementType = type.GetElementType() ?? throw new ArgumentException();
             var mapOverArray = MapOverArrayMethod.MakeGenericMethod(elementType);
             return Expression.Lambda(Expression.Call(mapOverArray, factor, obj, Expression.Constant(method)), factor, obj).Compile();
         }
@@ -197,7 +193,7 @@ namespace MeshWeaver.Arithmetics.MapOver
 
         private static List<T> MapOverList<T>(double factor, List<T> value, ArithmeticOperation method)
         {
-            return value?.Select(x => MapOver(method, factor, x)).ToList();
+            return value.Select(x => MapOver(method, factor, x)).ToList();
         }
 
         internal static bool ImplementEnumerable(this Type type)
@@ -292,8 +288,9 @@ namespace MeshWeaver.Arithmetics.MapOver
         }
 
         private static Dictionary<TKey, TValue> MapOverDictionary<TKey, TValue>(double factor, IDictionary<TKey, TValue> dictionary, Func<double, TValue, TValue> mapOverFunc)
+            where TKey : notnull
         {
-            return dictionary?.ToDictionary(x => x.Key, x => mapOverFunc(factor, x.Value));
+            return dictionary.ToDictionary(x => x.Key, x => mapOverFunc(factor, x.Value));
         }
     }
 }

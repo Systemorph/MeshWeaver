@@ -11,36 +11,34 @@ namespace MeshWeaver.Data.Documentation;
 public interface IDocumentationService
 {
     DocumentationContext Context { get; }
-    Stream GetStream(string type, string dataSource, string documentName);
-    DocumentationSource GetSource(string type, string id);
-    Member GetDocumentation(MemberInfo member);
+    Stream? GetStream(string type, string dataSource, string documentName);
+    DocumentationSource? GetSource(string type, string id);
+    Member? GetDocumentation(MemberInfo member);
 }
 
 public class DocumentationService(IMessageHub hub) : IDocumentationService
 {
     public DocumentationContext Context { get; } = hub.CreateDocumentationContext();
 
-    public Stream GetStream(string fullPath)
+    public Stream? GetStream(string fullPath)
         => Context.Sources.Values
-            .Select(s => s.GetStream(fullPath))
-            .FirstOrDefault(s => s != null);
+            .Select(s => s?.GetStream(fullPath))
+            .FirstOrDefault(s => s is not null);
 
-    public Stream GetStream(string type, string dataSource, string documentName) => 
+    public Stream? GetStream(string type, string dataSource, string documentName) => 
         Context.GetSource(type, dataSource)?
             .GetStream(documentName);
 
 
-    public DocumentationSource GetSource(string type, string id) =>
+    public DocumentationSource? GetSource(string type, string id) =>
         Context.GetSource(type, id);
 
-    public Member GetDocumentation(MemberInfo member)
+    public Member? GetDocumentation(MemberInfo member)
     {
         try
         {
             var assembly = (member as Type ?? member.DeclaringType)!.Assembly;
             var members = docsByAssembly.GetOrAdd(assembly, GetAssembly);
-            if (members == null)
-                return null;
             var name = member switch
             {
                 Type t => $"T:{t.FullName}",
@@ -50,10 +48,11 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
                 EventInfo e => $"E:{e.DeclaringType!.FullName}.{e.Name}",
                 _ => null
             };
-            if (name == null || !members.TryGetValue(name, out var ret))
+            if (name == null)
                 return null;
-            return ret;
-
+            if (members?.TryGetValue(name, out var ret) == false)
+                return ret;
+            return null;
         }
         catch
         {
@@ -61,16 +60,18 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
         }
     }
 
-    private IReadOnlyDictionary<string, Member> GetAssembly(Assembly assembly)
+    private IReadOnlyDictionary<string, Member>? GetAssembly(Assembly assembly)
     {
         try
         {
             if (string.IsNullOrEmpty(assembly.Location))
                 return null;
-            var assemblyName = assembly.GetName().Name;
+            var assemblyName = assembly.GetName().Name!;
             var source = GetSource(EmbeddedDocumentationSource.Embedded, assemblyName);
-            var stream = source.GetStream($"{assemblyName}.xml");
-            return Deserialize(stream)?.Members?.ToDictionary(m => m.Name) ??
+            var stream = source?.GetStream($"{assemblyName}.xml");
+            if (stream is null)
+                return null;
+            return Deserialize(stream).Members?.ToDictionary(m => m.Name!) ??
                    (IReadOnlyDictionary<string, Member>)ImmutableDictionary<string, Member>.Empty;
         }
         catch
@@ -81,12 +82,10 @@ public class DocumentationService(IMessageHub hub) : IDocumentationService
 
     private Doc Deserialize(Stream stream)
     {
-        if (stream == null)
-            return null;
 
         var serializer = new XmlSerializer(typeof(Doc));
-        return (Doc)serializer.Deserialize(stream);
+        return (Doc)serializer.Deserialize(stream)!;
     }
 
-    private readonly ConcurrentDictionary<Assembly, IReadOnlyDictionary<string, Member>> docsByAssembly = new();
+    private readonly ConcurrentDictionary<Assembly, IReadOnlyDictionary<string, Member>?> docsByAssembly = new();
 }

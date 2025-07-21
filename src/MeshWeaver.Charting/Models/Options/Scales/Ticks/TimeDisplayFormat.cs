@@ -41,22 +41,22 @@ namespace MeshWeaver.Charting.Models.Options.Scales.Ticks
             }
         }
 
-        public string Millisecond { get; init; }
+        public string Millisecond { get; init; } = null!;
 
-        public string Second { get; init; }
+        public string Second { get; init; } = null!;
 
-        public string Minute { get; init; }
+        public string Minute { get; init; } = null!;
 
-        public string Hour { get; init; }
+        public string Hour { get; init; } = null!;
 
-        public string Day { get; init; }
+        public string Day { get; init; } = null!;
 
-        public string Week { get; init; }
+        public string Week { get; init; } = null!;
 
-        public string Month { get; init; }
+        public string Month { get; init; } = null!;
 
-        public string Quarter { get; init; }
+        public string Quarter { get; init; } = null!;
 
-        public string Year { get; init; }
+        public string Year { get; init; } = null!;
     }
 }

@@ -11,7 +11,7 @@
         /// <summary>
         /// Angle line configuration.
         /// </summary>
-        public AngleLine AngleLines { get; init; }
+        public AngleLine AngleLines { get; init; } = null!;
 
         /// <summary>
         /// If true, scale will include 0 if it is not already included.
@@ -21,7 +21,7 @@
         /// <summary>
         /// Point label configuration.
         /// </summary>
-        public PointLabel PointLabels { get; init; }
+        public PointLabel PointLabels { get; init; } = null!;
 
         /// <summary>
         /// Starting angle of the scale. In degrees, 0 is at top.

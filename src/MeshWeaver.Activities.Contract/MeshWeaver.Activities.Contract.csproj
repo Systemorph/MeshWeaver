@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.ShortGuid\MeshWeaver.ShortGuid.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
   </ItemGroup>
 
 </Project>

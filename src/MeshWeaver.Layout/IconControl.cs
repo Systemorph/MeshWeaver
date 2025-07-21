@@ -14,12 +14,12 @@ public record IconControl(object Data)
     /// <summary>
     /// Gets or initializes the color of the icon.
     /// </summary>
-    public string Color { get; init; }
+    public string? Color { get; init; }
 
     /// <summary>
     /// Gets or initializes the width of the icon.
     /// </summary>
-    public object Width { get; init; }
+    public object? Width { get; init; }
 
     /// <summary>
     /// Sets the width of the icon.

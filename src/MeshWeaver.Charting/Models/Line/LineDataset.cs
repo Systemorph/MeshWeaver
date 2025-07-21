@@ -6,7 +6,7 @@ using MeshWeaver.Charting.Enums;
 namespace MeshWeaver.Charting.Models.Line
 {
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string Label = null) : 
+    public abstract record LineDataSetBase<TDataSet>(IReadOnlyCollection<object> Data, string? Label = null) : 
         DataSetBase<TDataSet>(Data, Label), IDataSetWithOrder<TDataSet>, IDataSetWithPointRadiusAndRotation<TDataSet>, IDataSetWithTension<TDataSet>, IDataSetWithPointStyle<TDataSet>, IDataSetWithFill<TDataSet>, IDataSetWithStack<TDataSet>
      where TDataSet : LineDataSetBase<TDataSet>
     {
@@ -20,7 +20,7 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// The base axis of the dataset. 'x' for horizontal lines and 'y' for vertical lines.
         /// </summary>
-        public string IndexAxis { get; init; }
+        public string IndexAxis { get; init; } = null!;
 
         /// <summary>
         /// The drawing order of dataset. Also affects order for stacking, tooltip and legend.
@@ -33,7 +33,7 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// The ID of the group to which this dataset belongs to (when stacked, each group will be a separate stack). Defaults to dataset type.
         /// </summary>
-        public string Stack { get; init; }
+        public string Stack { get; init; } = null!;
 
         public TDataSet WithStack(string stack)
         => This with { Stack = stack };
@@ -41,12 +41,12 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// The ID of the x axis to plot this dataset on.
         /// </summary>
-        public string XAxisID { get; init; }
+        public string XAxisID { get; init; } = null!;
 
         /// <summary>
         /// The ID of the y axis to plot this dataset on.
         /// </summary>
-        public string YAxisID { get; init; }
+        public string YAxisID { get; init; } = null!;
         #endregion General
 
         #region PointStyling
@@ -54,22 +54,22 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// The fill color for points.
         /// </summary>
-        public IEnumerable<ChartColor> PointBackgroundColor { get; init; }
+        public IEnumerable<ChartColor> PointBackgroundColor { get; init; } = null!;
 
         /// <summary>
         /// The border color for points.
         /// </summary>
-        public IEnumerable<ChartColor> PointBorderColor { get; init; }
+        public IEnumerable<ChartColor> PointBorderColor { get; init; } = null!;
 
         /// <summary>
         /// The width of the point border in pixels.
         /// </summary>
-        public IEnumerable<int> PointBorderWidth { get; init; }
+        public IEnumerable<int> PointBorderWidth { get; init; } = null!;
 
         /// <summary>
         /// The pixel size of the non-displayed point that reacts to mouse events.
         /// </summary>
-        public IEnumerable<int> PointHitRadius { get; init; }
+        public IEnumerable<int> PointHitRadius { get; init; } = null!;
 
         /// <summary>
         /// The radius of the point shape. If set to 0, nothing is rendered.
@@ -102,12 +102,12 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// Cap style of the line.
         /// </summary>
-        public string BorderCapStyle { get; init; }
+        public string BorderCapStyle { get; init; } = null!;
 
         /// <summary>
         /// Length and spacing of dashes.
         /// </summary>
-        public IEnumerable<int> BorderDash { get; init; }
+        public IEnumerable<int> BorderDash { get; init; } = null!;
 
         /// <summary>
         /// Offset for line dashes.
@@ -117,14 +117,14 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// Line joint style.
         /// </summary>
-        public string BorderJoinStyle { get; init; }
+        public string BorderJoinStyle { get; init; } = null!;
 
         /// <summary>
         /// If true, fill the area under the line.
         /// </summary>
-        public object Fill { get; init; }
+        public object? Fill { get; init; }
 
-        public TDataSet WithFill(object fill)
+        public TDataSet WithFill(object? fill)
             => This with { Fill = fill };
 
         /// <summary>
@@ -152,22 +152,22 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// Point background color when hovered.
         /// </summary>
-        public IEnumerable<ChartColor> PointHoverBackgroundColor { get; init; }
+        public IEnumerable<ChartColor> PointHoverBackgroundColor { get; init; } = null!;
 
         /// <summary>
         /// Point border color when hovered.
         /// </summary>
-        public IEnumerable<ChartColor> PointHoverBorderColor { get; init; }
+        public IEnumerable<ChartColor> PointHoverBorderColor { get; init; } = null!;
 
         /// <summary>
         /// Border width of point when hovered.
         /// </summary>
-        public IEnumerable<int> PointHoverBorderWidth { get; init; }
+        public IEnumerable<int> PointHoverBorderWidth { get; init; } = null!;
 
         /// <summary>
         /// The radius of the point when hovered.
         /// </summary>
-        public IEnumerable<int> PointHoverRadius { get; init; }
+        public IEnumerable<int> PointHoverRadius { get; init; } = null!;
         #endregion Interactions
 
         #region CubicInterpolationMode
@@ -175,7 +175,7 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// Algorithm used to interpolate a smooth curve from the discrete data points. Options are 'default' and 'monotone'. The 'default' algorithm uses a custom weighted cubic interpolation, which produces pleasant curves for all types of datasets. The 'monotone' algorithm is more suited to y = f(x) datasets : it preserves monotonicity (or piecewise monotonicity) of the dataset being interpolated, and ensures local extremums (if any) stay at input data points. If left untouched (undefined), the global options.elements.line.cubicInterpolationMode property is used.
         /// </summary>
-        public string CubicInterpolationMode { get; init; }
+        public string CubicInterpolationMode { get; init; } = null!;
         #endregion CubicInterpolationMode
 
         #region Segment
@@ -183,7 +183,7 @@ namespace MeshWeaver.Charting.Models.Line
         /// <summary>
         /// Line segment styles can be overridden by scriptable options in the segment object. Currently all of the border* and backgroundColor options are supported. The segment styles are resolved for each section of the line between each point. undefined fallbacks to main line styles.
         /// </summary>
-        public object Segment { get; init; }
+        public object Segment { get; init; } = null!;
         #endregion Segment
 
         #region Stepped
@@ -197,7 +197,7 @@ namespace MeshWeaver.Charting.Models.Line
         /// 'middle': Step-middle Interpolation
         /// If the stepped value is set to anything other than false, tension will be ignored.
         /// </summary>
-        public object Stepped { get; init; }
+        public object Stepped { get; init; } = null!;
 
         // https://www.chartjs.org/docs/latest/charts/line.html#stepped
         /// <summary>
@@ -246,18 +246,18 @@ namespace MeshWeaver.Charting.Models.Line
     }
 
     [SuppressMessage("ReSharper", "InconsistentNaming")]
-    public record LineDataSet(IReadOnlyCollection<object> Data, string Label = null) : LineDataSetBase<LineDataSet>(Data, Label)
+    public record LineDataSet(IReadOnlyCollection<object> Data, string? Label = null) : LineDataSetBase<LineDataSet>(Data, Label)
     {
-        public LineDataSet(IEnumerable Data, string Label = null) : this(Data.Cast<object>().ToArray(), Label) { }
+        public LineDataSet(IEnumerable Data, string? Label = null) : this(Data.Cast<object>().ToArray(), Label) { }
 
         public override ChartType? Type => ChartType.Line;
     }
 
-    public record TimeLineDataSet(IReadOnlyCollection<object> Data, string Label = null) : LineDataSetBase<TimeLineDataSet>(Data, Label)
+    public record TimeLineDataSet(IReadOnlyCollection<object> Data, string? Label = null) : LineDataSetBase<TimeLineDataSet>(Data, Label)
     {
-        public TimeLineDataSet(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string label = null) : this(ConvertTimeLine(dates, rawData), label){}
+        public TimeLineDataSet(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string? label = null) : this(ConvertTimeLine(dates, rawData)!, label){}
 
-        public TimeLineDataSet(IEnumerable<string> times, IEnumerable<double> rawData, string label) : this(ConvertTimeLine(times.Select(DateTime.Parse), rawData), label)
+        public TimeLineDataSet(IEnumerable<string> times, IEnumerable<double> rawData, string? label) : this(ConvertTimeLine(times.Select(DateTime.Parse), rawData)!, label)
         { }
 
 
@@ -265,7 +265,7 @@ namespace MeshWeaver.Charting.Models.Line
         {
             var datesArray = dates?.ToArray();
             var rawDataArray = rawData?.ToArray();
-            if (datesArray == null || rawDataArray == null) return null;
+            if (datesArray == null || rawDataArray == null) return Array.Empty<object>();
 
             if (rawDataArray.Length != datesArray.Length)
                 throw new ArgumentException($"'{nameof(dates)}' and '{nameof(rawData)}' arrays MUST have the same length");

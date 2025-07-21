@@ -20,7 +20,7 @@ public abstract class MeshCatalogBase : IMeshCatalog
     {
         Configuration = configuration;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
-        persistence = hub.GetHostedHub(new PersistenceAddress());
+        persistence = hub.GetHostedHub(new PersistenceAddress())!;
         foreach (var assemblyLocation in Configuration.InstallAtStartup)
         {
             var assembly = Assembly.LoadFrom(assemblyLocation);
@@ -32,10 +32,10 @@ public abstract class MeshCatalogBase : IMeshCatalog
 
     }
 
-    public async Task<MeshNode> GetNodeAsync(Address address)
+    public async Task<MeshNode?> GetNodeAsync(Address address)
     {
         if (cache.TryGetValue(address.ToString(), out var ret))
-            return (MeshNode)ret;
+            return (MeshNode?)ret;
         var node = Configuration.Nodes.GetValueOrDefault(address.ToString())
                ?? Configuration.Nodes.GetValueOrDefault(address.Type)
                ?? Configuration.MeshNodeFactories
@@ -52,11 +52,15 @@ public abstract class MeshCatalogBase : IMeshCatalog
     private MeshNode UpdateNode(MeshNode node)
     {
         cache.Set(node.Key, node, cacheOptions);
-        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex => logger.LogError(ex, "unable to update mesh catalog"));
+        persistence.InvokeAsync(_ => UpdateNodeAsync(node), ex =>
+        {
+            logger.LogError(ex, "unable to update mesh catalog");
+            return Task.CompletedTask;
+        });
         return node;
     }
 
-    protected abstract Task<MeshNode> LoadMeshNode(Address address);
+    protected abstract Task<MeshNode?> LoadMeshNode(Address address);
 
 
     public abstract Task UpdateAsync(MeshNode node);

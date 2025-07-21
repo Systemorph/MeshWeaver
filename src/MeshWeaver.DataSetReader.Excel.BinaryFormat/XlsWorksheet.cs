@@ -44,21 +44,21 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 			get { return _dataOffset; }
 		}
 
-		public XlsBiffSimpleValueRecord CalcMode { get; set; }
+		public XlsBiffSimpleValueRecord? CalcMode { get; set; }
 
-		public XlsBiffSimpleValueRecord CalcCount { get; set; }
+		public XlsBiffSimpleValueRecord? CalcCount { get; set; }
 
-		public XlsBiffSimpleValueRecord RefMode { get; set; }
+		public XlsBiffSimpleValueRecord? RefMode { get; set; }
 
-		public XlsBiffSimpleValueRecord Iteration { get; set; }
+		public XlsBiffSimpleValueRecord? Iteration { get; set; }
 
-		public XlsBiffRecord Delta { get; set; }
+		public XlsBiffRecord? Delta { get; set; }
 
 		/// <summary>
 		/// Dimensions of worksheet
 		/// </summary>
-		public XlsBiffDimensions Dimensions { get; set; }
+		public XlsBiffDimensions? Dimensions { get; set; }
 
-		public XlsBiffRecord Window { get; set; }
+		public XlsBiffRecord? Window { get; set; }
 	}
 }

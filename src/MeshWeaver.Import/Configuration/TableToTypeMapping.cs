@@ -49,7 +49,7 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
         return Workspace.AddInstances(store, instances);
     }
 
-    private Func<IDataSet, IDataRow, object> InstanceInitFunction { get; init; }
+    private Func<IDataSet, IDataRow, object> InstanceInitFunction { get; init; } = null!;
 
     private Func<IDataRow, object> GetInstanceInitFunction(
         Type type,
@@ -69,7 +69,7 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
         var bindings = GetBindingParameters(
             rowParameter,
             type,
-            parameters.Select(x => x.Name).ToArray(),
+            parameters.Select(x => x.Name!).ToArray(),
             columnsDict
         );
         return Expression
@@ -98,13 +98,13 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
             var listElementType = parameter.ParameterType.GetListElementType();
             if (listElementType != null)
             {
-                var matchedColumns = GetMatchedColumnsForList(parameter.Name, columns);
+                var matchedColumns = GetMatchedColumnsForList(parameter.Name!, columns);
                 foreach (var matchedColumn in matchedColumns)
                     columns.Remove(matchedColumn.Key); // kick out parameters from columns to be processed in binding expressions
 
                 if (matchedColumns.Length > 0)
                     yield return new(
-                        parameter.Name,
+                        parameter.Name!,
                         GetListPropertyExpression(
                             rowParameter,
                             matchedColumns,
@@ -113,18 +113,18 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
                         )
                     );
                 else
-                    yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
+                    yield return new(parameter.Name!, Expression.Default(parameter.ParameterType));
             }
             else
             {
                 var name = parameter.GetCustomAttribute<MapToAttribute>()?.PropertyName ?? parameter.Name;
                 if (columns.Remove(name!.ToLowerInvariant(), out var matchedIndex)) // kick out parameters from columns to be processed in binding expressions
                     yield return new(
-                        parameter.Name,
+                        parameter.Name!,
                         GetPropertyExpression(rowParameter, matchedIndex, parameter.ParameterType)
                     );
                 else
-                    yield return new(parameter.Name, Expression.Default(parameter.ParameterType));
+                    yield return new(parameter.Name!, Expression.Default(parameter.ParameterType));
             }
         }
     }
@@ -234,7 +234,7 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
                                 ),
                                 Expression.Call(
                                     listExpression,
-                                    genericListType.GetMethod("Add"),
+                                    genericListType.GetMethod("Add")!,
                                     Expression.Convert(
                                         Expression.Condition(
                                             Expression.TypeIs(itemExpression, typeof(IConvertible)),
@@ -259,7 +259,7 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
         );
 
         var returnExpression = isArray
-            ? (Expression)Expression.Call(listExpression, genericListType.GetMethod("ToArray"))
+            ? (Expression)Expression.Call(listExpression, genericListType.GetMethod("ToArray")!)
             : listExpression;
         body.Add(returnExpression);
 
@@ -327,13 +327,13 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
     }
 
     public static readonly MethodInfo ConvertValueMethod = ReflectionHelper.GetStaticMethod(
-        () => ConvertValue(null, null)
+        () => ConvertValue(null!, null!)
     );
 
     private static readonly Dictionary<Type, Func<object, Type, object>> Converters =
         new()
         {
-            { typeof(Guid), (value, type) => Guid.TryParse(value.ToString(), out var result) ? result : value.ToString().AsGuid() },
+            { typeof(Guid), (value, type) => Guid.TryParse(value.ToString(), out var result) ? result : value.ToString()!.AsGuid() },
             { typeof(double), (value, type) => double.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
             { typeof(int), (value, type) => int.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
             { typeof(float), (value, type) => float.TryParse(value.ToString(), out var result) ? result : DefaultConversion(value, type) },
@@ -363,7 +363,7 @@ public record TableToTypeMapping(string Name, Type Type, IWorkspace Workspace) :
                 : Convert.ChangeType(value, type, CultureInfo.InvariantCulture);
 
         if (type.IsEnum)
-            return Enum.Parse(type, valueStr);
+            return Enum.Parse(type, valueStr!);
 
         //TODO return null if relationship
         return Converters.TryGetValue(type, out var converter)

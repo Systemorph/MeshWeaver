@@ -49,13 +49,13 @@ public static class OrdersSummaryArea
                     .DistinctUntilChanged()
                     .Select(tuple =>
                         area.ToDataGrid(
-                            tuple.Value.GetData<Order>()
+                            tuple.Value!.GetData<Order>()
                                 .Where(x => tb.Year == 0 || x.OrderDate.Year == tb.Year)
                                 .Select(order => new OrderSummaryItem(
-                                    tuple.Value.GetData<Customer>(
+                                    tuple.Value!.GetData<Customer>(
                                         order.CustomerId
                                     )?.CompanyName,
-                                    tuple.Value.GetData<OrderDetails>()
+                                    tuple.Value!.GetData<OrderDetails>()
                                         .Where(d => d.OrderId == order.OrderId)
                                         .Sum(d => d.UnitPrice * d.Quantity),
                                     order.OrderDate

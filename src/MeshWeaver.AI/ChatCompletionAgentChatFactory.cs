@@ -26,39 +26,6 @@ public abstract class ChatCompletionAgentChatFactory(
         return agent.Name!;
     }
 
-    protected override async Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, ChatCompletionAgent? existingAgent)
-    {
-        // Since ChatCompletionAgent doesn't persist, we always create new agents
-        var name = agentDefinition.AgentName;
-        var description = agentDefinition.Description;
-        var instructions = GetAgentInstructions(agentDefinition);
-
-        // Create a new kernel for this agent using the derived class implementation
-        var agentKernel = await CreateKernelAsync(agentDefinition);
-
-        if (agentDefinition is IAgentWithPlugins agentWithPlugins)
-            foreach (var plugin in agentWithPlugins.GetPlugins())
-                agentKernel.Plugins.Add(plugin);
-
-        // Create ChatCompletionAgent
-        var agent = new ChatCompletionAgent()
-        {
-            Name = name,
-            Description = description,
-            Instructions = instructions,
-            Kernel = agentKernel,
-            Arguments = new KernelArguments(new PromptExecutionSettings() { FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() }),
-        };
-
-
-        return agent;
-    }    /// <summary>
-         /// Creates a Kernel instance for the specified agent definition.
-         /// Implementations should configure the kernel with their specific chat completion provider.
-         /// </summary>
-         /// <param name="agentDefinition">The agent definition for which to create the kernel</param>
-         /// <returns>A configured Kernel instance</returns>
-    protected abstract Task<Microsoft.SemanticKernel.Kernel> CreateKernelAsync(IAgentDefinition agentDefinition);
 
     protected override async Task UploadFileAsync(Agent assistant, AgentFileInfo file)
     {
@@ -76,4 +43,29 @@ public abstract class ChatCompletionAgentChatFactory(
         await Task.CompletedTask;
         Logger.LogInformation("Thread deletion not applicable for ChatCompletionAgent: {ThreadId}", threadId);
     }
+
+    protected override Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, ChatCompletionAgent? existingAgent)
+    {
+        // Since ChatCompletionAgent doesn't persist, we always create new agents
+        var name = agentDefinition.Name;
+        var description = agentDefinition.Description;
+        var instructions = GetAgentInstructions(agentDefinition);
+
+        // Create a new kernel for this agent using the derived class implementation
+        var agentKernel = CreateKernel(agentDefinition);
+
+        // Create ChatCompletionAgent
+        var agent = new ChatCompletionAgent()
+        {
+            Name = name,
+            Description = description,
+            Instructions = instructions,
+            Kernel = agentKernel,
+            Arguments = new KernelArguments(new PromptExecutionSettings() { FunctionChoiceBehavior = FunctionChoiceBehavior.Auto() }),
+        };
+
+
+        return Task.FromResult<Agent>(agent);
+    }
+
 }

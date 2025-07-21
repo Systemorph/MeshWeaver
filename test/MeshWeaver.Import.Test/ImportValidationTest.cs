@@ -1,5 +1,7 @@
 ﻿using System.Reactive.Linq;
+using System.Threading;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Activities;
@@ -9,7 +11,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Import.Implementation;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -92,7 +93,11 @@ SystemName,FoundationYear,ContractType
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -124,7 +129,11 @@ FR,France";
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
@@ -151,7 +160,11 @@ DoubleValue,Country
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
@@ -183,7 +196,11 @@ A,B";
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
@@ -222,7 +239,11 @@ Blue,FR";
         var importRequest = new ImportRequest(content) { Format = "Test2" };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 

@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
@@ -13,7 +12,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Documentation.Test
 {    /// <summary>
@@ -89,7 +87,7 @@ namespace MeshWeaver.Documentation.Test
         protected static string GetIdFromDataContext(UiControl articleControl)
         {
             var pattern = @"/data/\""(?<id>[^\""]+)\""";
-            var match = Regex.Match(articleControl.DataContext, pattern);
+            var match = Regex.Match(articleControl.DataContext!, pattern);
             var id = match.Groups["id"].Value;
             return id;
         }
@@ -97,9 +95,9 @@ namespace MeshWeaver.Documentation.Test
         /// <summary>
         /// Override disposal to add aggressive timeout and prevent hanging
         /// </summary>
-        public override async Task DisposeAsync()
+        public override async ValueTask DisposeAsync()
         {
-            var logger = ServiceProvider?.GetService<ILogger<DocumentationTestBase>>();
+            var logger = ServiceProvider.GetService<ILogger<DocumentationTestBase>>();
             logger?.LogInformation("Starting disposal of DocumentationTestBase");
 
             // Log debug file location
@@ -109,10 +107,8 @@ namespace MeshWeaver.Documentation.Test
 
             try
             {
-                // Add aggressive 10 second timeout to prevent hanging
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));                // Call base disposal with timeout
                 var disposeTask = base.DisposeAsync();
-                await disposeTask.WaitAsync(timeout.Token);
+                await disposeTask;
 
                 logger?.LogInformation("Finished disposal of DocumentationTestBase");
             }

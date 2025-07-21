@@ -5,7 +5,7 @@ namespace MeshWeaver.Reporting.Builder.Interfaces
     public interface IReportBuilder<out TReportBuilder>
         where TReportBuilder : IReportBuilder<TReportBuilder>
     {
-        public TReportBuilder WithOptions(Func<GridOptions, GridOptions> gridOptions);
+        public TReportBuilder WithOptions(Func<GridOptions, GridOptions>? gridOptions);
         public IObservable<GridOptions> Execute();
     }
 }

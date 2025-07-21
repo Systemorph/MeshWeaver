@@ -7,25 +7,25 @@ public record DataLabels
     /// <summary>
     /// Defines the position of the label relative to the anchor point position and orientation. Default 'center'
     /// </summary>
-    public object Align { get; set; }
+    public object Align { get; set; } = null!;
 
     /// <summary>
     /// An anchor point is defined by an orientation vector and a position on the data element (center, start, end). Default 'center'
     /// </summary>
-    public object Anchor { get; set; }
+    public object Anchor { get; set; } = null!;
 
-    public string Color { get; set; }
+    public string Color { get; set; } = null!;
 
-    public object Display { get; set; }
+    public object Display { get; set; } = null!;
     
-    public Font Font { get; set; }
+    public Font Font { get; set; } = null!;
 
     /// <summary>
     /// Data values formatter, function(value, context)
     /// </summary>
-    public object Formatter { get; set; }
+    public object Formatter { get; set; } = null!;
 
-    public string TextAlign { get; set; }
+    public string TextAlign { get; set; } = null!;
 
     public DataLabels WithAlign(DataLabelsAlign align)
     {

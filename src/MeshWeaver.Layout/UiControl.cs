@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Linq;
 using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
@@ -8,10 +7,10 @@ namespace MeshWeaver.Layout;
 
 public interface IUiControl : IDisposable
 {
-    object Id { get; init; }
-    string DataContext { get; init; }
-    object Style { get; init; }
-    object Class { get; init; }
+    object? Id { get; init; }
+    string? DataContext { get; init; }
+    object? Style { get; init; }
+    object? Class { get; init; }
 
     EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store);
 }
@@ -25,41 +24,54 @@ public interface IUiControl<out TControl> : IUiControl
 
 public abstract record UiControl : IUiControl
 {
-    public object Id { get; init; }
+    public object? Id { get; init; }
 
 
     void IDisposable.Dispose() => Dispose();
 
 
 
-    public object Style { get; init; } //depends on control, we need to give proper style here!
+    public object? Style { get; init; } //depends on control, we need to give proper style here!
 
     /// <summary>
     /// Whether the control is readonly.
     /// </summary>
-    public object Readonly { get; init; }
-    private ImmutableList<Skin> _skins = [];
+    public object? Readonly { get; init; }
+    private readonly ImmutableList<Skin> _skins = []; // updated to nullable
+    private readonly Func<UiActionContext, Task>? clickAction; // updated to nullable
 
     [JsonConverter(typeof(SkinListConverter))]
     public ImmutableList<Skin> Skins
     {
         get => _skins;
-        init => _skins = value?.Where(s => s != null).ToImmutableList() ?? ImmutableList<Skin>.Empty;
+        init
+        {
+            _skins = value.ToImmutableList();
+        }
     }
-    public object Class { get; init; }
+
+    public object? Class { get; init; }
 
 
     public abstract bool IsUpToDate(object other);
 
     // ReSharper disable once IdentifierTypo
-    public bool IsClickable => ClickAction != null;
+    public bool IsClickable { get; init; }
 
-    internal Func<UiActionContext, Task> ClickAction { get; init; }
+    internal Func<UiActionContext, Task>? ClickAction
+    {
+        get => clickAction;
+        init
+        {
+            clickAction = value;
+            IsClickable = value != null;
+        }
+    }
 
 
-    public string DataContext { get; init; }
+    public string? DataContext { get; init; }
 
-    public UiControl PopSkin(out object skin)
+    public UiControl PopSkin(out object? skin)
     {
         if (Skins.Count == 0)
         {
@@ -69,7 +81,7 @@ public abstract record UiControl : IUiControl
         skin = Skins[^1];
         return this with { Skins = Skins.Count == 0 ? Skins : Skins.RemoveAt(Skins.Count - 1) };
     }
-    public UiControl AddSkin(Skin skin)
+    public UiControl AddSkin(Skin? skin)
     {
         // Don't add null skins to prevent serialization issues
         if (skin == null)
@@ -84,13 +96,13 @@ public abstract record UiControl : IUiControl
     protected ImmutableList<Action> DisposeActions { get; init; } =
         ImmutableList<Action>.Empty;
 
-    public object PageTitle { get; init; }
-    public object Meta { get; init; }
+    public object? PageTitle { get; init; }
+    public object? Meta { get; init; }
 
     public UiControl WithMeta(object meta) => this with { Meta = meta };
     public UiControl WithPageTitle(object pageTitle) => this with { PageTitle = pageTitle };
 
-    public virtual bool Equals(UiControl other)
+    public virtual bool Equals(UiControl? other)
     {
         if (other is null)
             return false;
@@ -100,7 +112,7 @@ public abstract record UiControl : IUiControl
         return ((Id == null && other.Id == null) || (Id != null && Id.Equals(other.Id))) &&
                ((Style == null && other.Style == null) || (Style != null && Style.Equals(other.Style))) &&
                Readonly == other.Readonly &&
-               (Skins ?? []).SequenceEqual(other.Skins ?? []) &&
+               (Skins).SequenceEqual(other.Skins) &&
                ((Class == null && other.Class == null) || (Class != null && Class.Equals(other.Class))) &&
                DataContext == other.DataContext;
     }
@@ -112,7 +124,7 @@ public abstract record UiControl : IUiControl
             Id,
             Style,
             Readonly,
-            Skins == null ? 0 : Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
+            Skins.Aggregate(0, (acc, skin) => acc ^ skin.GetHashCode()),
             Class,
             DataContext
         );
@@ -190,7 +202,7 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
 
     public new TControl WithClickAction(Func<UiActionContext, Task> onClick)
     {
-        return This with { ClickAction = onClick, };
+        return This with { ClickAction = onClick };
     }
 
     public new TControl RegisterForDisposal(Action action)
@@ -205,12 +217,9 @@ public abstract record UiControl<TControl>(string ModuleName, string ApiVersion)
             return Task.CompletedTask;
         });
 
-    public new TControl AddSkin(Skin skin)
+    public new TControl AddSkin(Skin? skin)
     {
-        // Don't add null skins to prevent serialization issues
-        if (skin == null)
-            return This;
-
+        if (skin == null) return This;
         return This with { Skins = Skins.Add(skin) };
     }
 

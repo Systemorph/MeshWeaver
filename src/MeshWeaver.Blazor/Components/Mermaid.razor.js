@@ -1,12 +1,18 @@
 export function initMermaid(mode, element, diagram) {
     return ensureMermaidLoaded()
         .then(() => {
-            // Determine theme based on system preference if needed
+            // Determine theme based on DesignThemeModes enum
             let theme = 'default';
+
+            // DesignThemeModes: System = 0, Light = 1, Dark = 2
             if (mode === 2) {
+                // Dark mode
                 theme = 'dark';
+            } else if (mode === 1) {
+                // Light mode
+                theme = 'default';
             } else if (mode === 0) {
-                // Check system preference
+                // System mode - check system preference
                 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
                     theme = 'dark';
                 }

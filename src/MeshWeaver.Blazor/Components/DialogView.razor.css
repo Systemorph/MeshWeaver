@@ -1,0 +1,140 @@
+::deep .fluent-dialog-body {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    padding: 20px !important;
+    text-align: center !important;
+}
+
+::deep .dialog-content-wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center !important;
+}
+
+::deep .dialog-content-wrapper>* {
+    width: 100% !important;
+    margin: 0 auto !important;
+}
+
+/* Ensure form controls within dialog take full width */
+::deep .dialog-content-wrapper .fluent-text-field,
+::deep .dialog-content-wrapper .fluent-text-area,
+::deep .dialog-content-wrapper .fluent-select,
+::deep .dialog-content-wrapper .fluent-date-picker,
+::deep .dialog-content-wrapper input,
+::deep .dialog-content-wrapper textarea,
+::deep .dialog-content-wrapper select {
+    width: 100% !important;
+    box-sizing: border-box;
+}
+
+/* Ensure layout components take full width */
+::deep .dialog-content-wrapper .layout-stack,
+::deep .dialog-content-wrapper .layout-grid {
+    width: 100% !important;
+}
+
+/* Force MeshWeaver components to center and take full width */
+::deep .dialog-content-wrapper [data-area],
+::deep .dialog-content-wrapper .area-view,
+::deep .dialog-content-wrapper .named-area-view {
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+}
+
+/* Button container styling */
+::deep .dialog-content-wrapper .button-container {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+/* Specific styling for edit forms */
+::deep .dialog-content-wrapper .edit-form,
+::deep .dialog-content-wrapper .form-field {
+    width: 100%;
+}
+
+/* Center the form within the dialog */
+::deep .dialog-content-wrapper h3 {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+/* Ensure proper spacing and alignment for stacked controls */
+::deep .dialog-content-wrapper .fluent-stack {
+    width: 100%;
+}
+
+::deep .dialog-content-wrapper .fluent-stack>* {
+    width: 100%;
+}
+
+/* Additional comprehensive form styling */
+::deep .dialog-content-wrapper * {
+    box-sizing: border-box !important;
+}
+
+/* Force all form-related elements to take full width and center */
+::deep .dialog-content-wrapper form,
+::deep .dialog-content-wrapper .form,
+::deep .dialog-content-wrapper .edit-form,
+::deep .dialog-content-wrapper .form-container {
+    width: 100% !important;
+    display: block !important;
+    margin: 0 auto !important;
+}
+
+/* Ensure all input-like elements are properly styled */
+::deep .dialog-content-wrapper .fluent-text-field,
+::deep .dialog-content-wrapper .fluent-text-area,
+::deep .dialog-content-wrapper .fluent-select,
+::deep .dialog-content-wrapper .fluent-date-picker,
+::deep .dialog-content-wrapper .fluent-number-field,
+::deep .dialog-content-wrapper input[type="text"],
+::deep .dialog-content-wrapper input[type="email"],
+::deep .dialog-content-wrapper input[type="password"],
+::deep .dialog-content-wrapper input[type="number"],
+::deep .dialog-content-wrapper input[type="date"],
+::deep .dialog-content-wrapper textarea,
+::deep .dialog-content-wrapper select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin: 5px 0 !important;
+    display: block !important;
+}
+
+/* Force proper width on field containers */
+::deep .dialog-content-wrapper .form-field,
+::deep .dialog-content-wrapper .field-container,
+::deep .dialog-content-wrapper .fluent-field {
+    width: 100% !important;
+    display: block !important;
+    margin-bottom: 15px !important;
+}
+
+/* Ensure labels are properly aligned */
+::deep .dialog-content-wrapper label,
+::deep .dialog-content-wrapper .fluent-label {
+    display: block !important;
+    width: 100% !important;
+    text-align: left !important;
+    margin-bottom: 5px !important;
+    font-weight: 600 !important;
+}
+
+/* Override any conflicting styles */
+::deep .dialog-content-wrapper .layout-area-view,
+::deep .dialog-content-wrapper .area-content {
+    width: 100% !important;
+    display: block !important;
+}

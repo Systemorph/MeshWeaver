@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿#nullable enable
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using MeshWeaver.Utils;
@@ -43,7 +44,7 @@ namespace MeshWeaver.Reflection
         /// <exception cref="ArgumentNullException">Thrown, if the <paramref name="type"/> is <see langword="null"/></exception>
         public static bool IsClosure(this Type type)
         {
-            if (type == null) 
+            if (type == null)
                 throw new ArgumentNullException(nameof(type));
 
             var fullName = type.FullName;
@@ -166,7 +167,7 @@ namespace MeshWeaver.Reflection
             }
             else
             {
-                name = type.FullName;
+                name = type.FullName ?? type.Name;
                 // ReSharper disable ConditionIsAlwaysTrueOrFalse <-- Resharper is lying here. E.g. this is false for generic argument types
                 if (!omitTypeArgNames && name == null)
                     name = type.Name;
@@ -182,8 +183,8 @@ namespace MeshWeaver.Reflection
             if (type.IsArray)
             {
                 var elementType = type.GetElementType();
-                
-                return string.Format("{0}[{1}]", GetSpeakingName(elementType, subOptions), new string(',', type.GetArrayRank() - 1));
+
+                return string.Format("{0}[{1}]", GetSpeakingName(elementType!, subOptions), new string(',', type.GetArrayRank() - 1));
             }
 
             if (!type.IsGenericType)
@@ -237,12 +238,14 @@ namespace MeshWeaver.Reflection
         /// <returns>True, if the type represents an integer</returns>
         public static bool IsIntegerType(this Type type)
         {
-            return IntegerTypes.Contains(type) || IntegerTypes.Contains(Nullable.GetUnderlyingType(type));
+            var underlyingType = Nullable.GetUnderlyingType(type);
+            return IntegerTypes.Contains(type) || (underlyingType != null && IntegerTypes.Contains(underlyingType));
         }
 
         public static bool IsNullableIntegerType(this Type type)
         {
-            return IntegerTypes.Contains(Nullable.GetUnderlyingType(type));
+            var underlyingType = Nullable.GetUnderlyingType(type);
+            return underlyingType != null && IntegerTypes.Contains(underlyingType);
         }
 
         /// <summary>
@@ -253,12 +256,14 @@ namespace MeshWeaver.Reflection
         /// <returns>True, if the type represents a real number</returns>
         public static bool IsRealType(this Type type)
         {
-            return RealTypes.Contains(type) || RealTypes.Contains(Nullable.GetUnderlyingType(type));
+            var underlyingType = Nullable.GetUnderlyingType(type);
+            return RealTypes.Contains(type) || (underlyingType != null && RealTypes.Contains(underlyingType));
         }
 
         public static bool IsNullableRealType(this Type type)
         {
-            return RealTypes.Contains(Nullable.GetUnderlyingType(type));
+            var underlyingType = Nullable.GetUnderlyingType(type);
+            return underlyingType != null && RealTypes.Contains(underlyingType);
         }
 
 
@@ -372,7 +377,7 @@ namespace MeshWeaver.Reflection
         /// the method returns all generic argument types as "seen" by the <paramref name="genericBaseType"/>
         /// <code source = "..\..\Systemorph.Utils.Test\Reflection\TypeExtensionsTest.cs" language="cs" region="GetGenericArgumentTypesSample" />
         /// </example>
-        public static Type[] GetGenericArgumentTypes(this Type type, Type genericBaseType)
+        public static Type[]? GetGenericArgumentTypes(this Type type, Type genericBaseType)
         {
             if (type.IsGenericType && type.GetGenericTypeDefinition() == genericBaseType)
                 return type.GetGenericArguments();
@@ -382,7 +387,7 @@ namespace MeshWeaver.Reflection
                                      .FirstOrDefault(it => it.GetGenericTypeDefinition() == genericBaseType);
             if (foundInterface != null) return foundInterface.GetGenericArguments();
 
-            Type baseType = type.BaseType;
+            Type? baseType = type.BaseType;
             if (baseType == null)
                 return null;
 
@@ -406,7 +411,7 @@ namespace MeshWeaver.Reflection
         /// <example>
         /// <code source = "..\..\Systemorph.Utils.Test\Reflection\TypeExtensionsTest.cs" language="cs" region="GetListElementTypeSample" />
         /// </example>
-        public static Type GetListElementType(this Type listType)
+        public static Type? GetListElementType(this Type listType)
         {
             var elementType = listType.GetGenericArgumentTypes(typeof(IList<>));
             return elementType != null ? elementType.First() : null;
@@ -434,7 +439,7 @@ namespace MeshWeaver.Reflection
         /// <example>
         /// <code source = "..\..\Systemorph.Utils.Test\Reflection\TypeExtensionsTest.cs" language="cs" region="GetEnumerableElementTypeSample" />
         /// </example>
-        public static Type GetEnumerableElementType(this Type enumerableType)
+        public static Type? GetEnumerableElementType(this Type enumerableType)
         {
             var elementType = enumerableType.GetGenericArgumentTypes(typeof(IEnumerable<>));
             return elementType != null ? elementType.First() : null;
@@ -443,13 +448,12 @@ namespace MeshWeaver.Reflection
         //TODO: Check this
         internal static Type GetSequenceElementType(this Type seqType)
         {
-            Type type;
-            if (TryFindIEnumerable(seqType, out type))
+            if (TryFindIEnumerable(seqType, out Type? type) && type != null)
                 return type;
             return seqType;
         }
 
-        private static bool TryFindIEnumerable(Type seqType, out Type result)
+        private static bool TryFindIEnumerable(Type seqType, out Type? result)
         {
             result = null;
             if (seqType == null || seqType == typeof(string))

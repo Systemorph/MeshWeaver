@@ -5,7 +5,7 @@ namespace MeshWeaver.Messaging;
 public record PostOptions(Address Sender)
 {
     public const string RequestId = nameof(RequestId);
-    internal Address Target { get; init; }
+    internal Address Target { get; init; } = null!;
 
     public IReadOnlyDictionary<string, object> Properties
     {
@@ -20,7 +20,7 @@ public record PostOptions(Address Sender)
     public PostOptions WithTarget(Address targetAddress) => this with { Target = targetAddress };
 
     public PostOptions ResponseFor(IMessageDelivery requestDelivery) =>
-        requestDelivery == null ? this : 
+        requestDelivery == null ? this :
         this with
         {
             Target = requestDelivery.Sender,
@@ -28,10 +28,10 @@ public record PostOptions(Address Sender)
         };
 
     public PostOptions WithRequestIdFrom(IMessageDelivery requestDelivery) => this with
-                                                                              {
-                                                                                  PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary()
+    {
+        PropertiesInternal = requestDelivery.Properties.ToImmutableDictionary()
                                                                                                               .SetItem(RequestId, requestDelivery.Id)
-                                                                              };
+    };
 
 
     public PostOptions WithProperties(IReadOnlyDictionary<string, object> properties)

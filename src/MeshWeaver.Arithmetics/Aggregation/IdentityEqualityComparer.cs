@@ -138,7 +138,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return attribute?.Type ?? type;
         }
 
-        public bool Equals(T x, T y)
+        public bool Equals(T? x, T? y)
         {
             if (x == null)
                 return y == null;
@@ -150,13 +150,13 @@ namespace MeshWeaver.Arithmetics.Aggregation
 
         private bool EqualsImpl(T x, T y)
         {
-            var type1 = x.GetType();
-            var type2 = y.GetType();
+            var type1 = x!.GetType();
+            var type2 = y!.GetType();
 
             return subtypeEquality.GetInstance((type1, type2))(x, y);
         }
 
-        public int GetHashCode(T obj)
+        public int GetHashCode(T? obj)
         {
             // ReSharper disable once ConditionIsAlwaysTrueOrFalse
             if (obj == null) // This is still done on purpose, we might come with null to here and nulls must produce the same hash codes
@@ -167,7 +167,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
 
         private int GetHashCodeImpl(T obj)
         {
-            return subtypeHashCode.GetInstance(obj.GetType())(obj);
+            return subtypeHashCode.GetInstance(obj!.GetType())(obj);
         }
     }
 
@@ -182,7 +182,7 @@ namespace MeshWeaver.Arithmetics.Aggregation
             if (identityProps.Length == 0)
             {
                 equalityFunc = (x, y) => (x == null && y == null) || x != null && x.Equals(y);
-                hashCodeFunc = x => x.GetHashCode();
+                hashCodeFunc = x => x?.GetHashCode() ?? 0;
                 return (equalityFunc, hashCodeFunc);
             }
 

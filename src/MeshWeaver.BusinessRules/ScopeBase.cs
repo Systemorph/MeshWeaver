@@ -1,9 +1,10 @@
-﻿using System.Reflection;
+﻿#nullable enable
+using System.Reflection;
 
 namespace MeshWeaver.BusinessRules;
 
 public class ScopeBase<TScope, TIdentity, TState>(
-    TIdentity identity, 
+    TIdentity identity,
     ScopeRegistry<TState> registry
     ) : IScope<TIdentity, TState>
 where TScope : IScope<TIdentity, TState>

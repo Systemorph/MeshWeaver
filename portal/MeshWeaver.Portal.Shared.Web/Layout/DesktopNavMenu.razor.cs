@@ -28,6 +28,10 @@ public partial class DesktopNavMenu : ComponentBase
         => active
             ? new Icons.Filled.Size24.Bot()
             : new Icons.Regular.Size24.Bot();
+    public static Icon TodoIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.TasksApp()
+            : new Icons.Regular.Size24.TasksApp();
 
     public static Icon DocumentationLayoutAreaIcon(bool active = false)
         => active

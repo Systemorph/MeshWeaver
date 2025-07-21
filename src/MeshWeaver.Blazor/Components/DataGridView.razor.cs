@@ -19,7 +19,7 @@ public partial class DataGridView
         ItemsPerPage = 10
     };
 
-    private IQueryable<JsonObject> QueryableData;
+    private IQueryable<JsonObject> QueryableData = Enumerable.Empty<JsonObject>().AsQueryable();
 
     protected override void BindData()
     {
@@ -29,7 +29,7 @@ public partial class DataGridView
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            (o, _) => ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>().AsQueryable()
+            (o, _) => o is null ? null : ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>()?.AsQueryable() ?? Enumerable.Empty<JsonObject>().AsQueryable()
         );
     }
 
@@ -45,14 +45,16 @@ public partial class DataGridView
             typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
         builder.AddComponentParameter(1, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
-        builder.AddAttribute(2, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext));
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before rendering the DataGridView.");
+        builder.AddAttribute(2, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext ?? "/"));
         if (column.Format is not null)
             builder.AddAttribute(3, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
         if (column.Sortable is not null)
             builder.AddAttribute(4, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
         if (column.Tooltip is not null)
             builder.AddAttribute(5, nameof(PropertyColumn<object, object>.TooltipText),
-                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext)));
+                (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext ?? "/") ?? string.Empty));
         if (column.IsDefaultSortColumn is not null)
             builder.AddAttribute(6, nameof(PropertyColumn<object, object>.IsDefaultSortColumn), Stream.GetDataBoundValue<bool>(column.IsDefaultSortColumn, ViewModel.DataContext));
         if (column.InitialSortDirection is not null)
@@ -64,11 +66,10 @@ public partial class DataGridView
 
     }
 
-    private Expression<Func<JsonObject, T>> GetPropertyExpression<T>(PropertyColumnControl<T> propertyColumn)
+    private Expression<Func<JsonObject, T?>> GetPropertyExpression<T>(PropertyColumnControl<T> propertyColumn)
     {
-        return e => e.ContainsKey(propertyColumn.Property) ? e[propertyColumn.Property].Deserialize<T>(Stream.Hub.JsonSerializerOptions) : default;
+        return e => e.ContainsKey(propertyColumn.Property ?? "") ? e[propertyColumn.Property!].Deserialize<T>(Stream!.Hub.JsonSerializerOptions) : default!;
     }
 
-    private const string Details = nameof(Details);
 
 }

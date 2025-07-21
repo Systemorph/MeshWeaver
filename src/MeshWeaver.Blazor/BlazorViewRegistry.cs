@@ -24,7 +24,7 @@ public static class BlazorViewRegistry
 {
     internal static MessageHubConfiguration AddBlazor(
         this MessageHubConfiguration config,
-        Func<LayoutClientConfiguration, LayoutClientConfiguration> configuration = null
+        Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config
         .AddData()
         .AddLayoutClient(c => 
@@ -33,15 +33,14 @@ public static class BlazorViewRegistry
         .AddMeshTypes()
     ;
     #region Standard Formatting
-    private static ViewDescriptor DefaultFormatting(
+    private static ViewDescriptor? DefaultFormatting(
         IMessageHub hub,
         object instance,
-        ISynchronizationStream<JsonElement> stream,
+        ISynchronizationStream<JsonElement>? stream,
         string area
     )
     {
-        var control = instance as UiControl;
-        if (control == null)
+        if (instance is not UiControl control)
             return null;
 
         control = control.PopSkin(out var skin);
@@ -53,7 +52,7 @@ public static class BlazorViewRegistry
         return control switch
         {
             LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, null, area),
+                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
             HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
             LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
             NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
@@ -61,9 +60,10 @@ public static class BlazorViewRegistry
             MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
             DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
             IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString())), stream, area),
+            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
             TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
-            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type.ToString())), stream, area),
+            TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
+            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
             DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
             ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
             ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
@@ -87,7 +87,7 @@ public static class BlazorViewRegistry
     }
 
 
-    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement> stream, string area, object skin)
+    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement>? stream, string area, object skin)
     {
         return skin switch
         {
@@ -111,6 +111,7 @@ public static class BlazorViewRegistry
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
             ArticleCatalogSkin articleCatalog => StandardSkinnedView<ArticleCatalogView>(articleCatalog, stream, area, control),
+            MenuItemSkin menuItem => StandardSkinnedView<MenuItemView>(menuItem, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };
     }
@@ -118,15 +119,15 @@ public static class BlazorViewRegistry
 
     private static ViewDescriptor DelegateToDotnetInteractive(
         object instance,
-        ISynchronizationStream<JsonElement> stream,
+        ISynchronizationStream<JsonElement>? stream,
         string area
     )
     {
-        var mimeType = Formatter.GetPreferredMimeTypesFor(instance?.GetType()).FirstOrDefault();
+        var mimeType = Formatter.GetPreferredMimeTypesFor(instance.GetType()).FirstOrDefault() ?? "text/html";
         var output = Controls.Html(instance.ToDisplayString(mimeType));
         return new ViewDescriptor(
             typeof(HtmlView),
-            ImmutableDictionary<string, object>
+            ImmutableDictionary<string, object?>
                 .Empty.Add(ViewModel, output)
                 .Add(nameof(Stream), stream)
                 .Add(nameof(Area), area)

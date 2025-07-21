@@ -13,4 +13,4 @@ namespace MeshWeaver.Northwind.Application;
 /// <param name="Purchased">
 /// The date when the order was purchased.
 /// </param>
-public record OrderSummaryItem(string Customer, double Amount, DateTime Purchased);
+public record OrderSummaryItem(string? Customer, double Amount, DateTime Purchased);

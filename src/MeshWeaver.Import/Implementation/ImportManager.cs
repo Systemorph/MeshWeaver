@@ -6,6 +6,7 @@ using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import.Implementation;
@@ -15,22 +16,55 @@ public class ImportManager
     private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
-    private readonly IMessageHub importHub; 
+    private IMessageHub? _importHub;
+    private IMessageHub ImportHub
+    {
+        get
+        {
+            if (_importHub == null)
+            {
+                var logger = Hub.ServiceProvider.GetService<ILogger<ImportManager>>();
+                logger?.LogDebug("ImportManager lazy-initializing import hub for address {ImportAddress}", new ImportAddress());
+                _importHub = Hub.GetHostedHub(new ImportAddress());
+                logger?.LogDebug("ImportManager import hub initialized: {ImportHub}", _importHub?.Address);
+            }
+            return _importHub!;
+        }
+    }
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
     public ImportManager(IWorkspace workspace, IMessageHub hub)
     {
+        var logger = hub.ServiceProvider.GetService<ILogger<ImportManager>>();
+        logger?.LogDebug("ImportManager constructor starting for hub {HubAddress}", hub.Address);
+
         Workspace = workspace;
         Hub = hub;
-        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c,l) => l.Invoke(c));
-        importHub = hub.GetHostedHub(
-            new ImportAddress());
+        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c, l) => l.Invoke(c));
+
+        // Don't initialize the import hub in constructor - do it lazily to avoid timing issues
+        logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
     {
-        importHub.InvokeAsync(ct => DoImport(request, ct), ex => FailImport(ex, request));
+        // Create cancellation token with timeout if specified in the import request
+        var cancellationTokenSource = request.Message.Timeout.HasValue
+            ? new CancellationTokenSource(request.Message.Timeout.Value)
+            : new CancellationTokenSource();
+
+        ImportHub.InvokeAsync(ct =>
+        {
+            // Combine the provided cancellation token with our timeout token
+            using var combined = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationTokenSource.Token);
+            return DoImport(request, combined.Token);
+        }, ex =>
+        {
+            FailImport(ex, request);
+            return Task.CompletedTask;
+        });
+
         return request.Processed();
     }
 
@@ -54,27 +88,33 @@ public class ImportManager
     {
 
         var activity = new Activity(ActivityCategory.Import, Hub);
-
+        var importId = Guid.NewGuid().ToString("N")[..8];
+        activity.LogInformation("Starting import {ImportId} for request {RequestType}", importId, request.Message.GetType().Name);
 
         try
         {
             await ImportImpl(request, activity, cancellationToken);
-            await activity.Complete(log =>
+            activity.LogInformation("Import {ImportId} implementation completed, starting Activity.Complete", importId);
+
+            activity.Complete(log =>
             {
+                activity.LogInformation("Import {ImportId} Activity.Complete callback executing", importId);
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-            }, cancellationToken: cancellationToken);
+                activity.LogInformation("Import {ImportId} response posted", importId);
+            });
 
-
+            activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
         }
         catch (Exception e)
         {
-            await FinishWithException(request,  e, activity);
+            activity.LogError("Import {ImportId} failed with exception: {Exception}", importId, e.Message);
+            FinishWithException(request, e, activity);
         }
 
         return request.Processed();
     }
 
-    private async Task FinishWithException(IMessageDelivery request, Exception e,
+    private void FinishWithException(IMessageDelivery request, Exception e,
         Activity activity)
     {
         var message = new StringBuilder(e.Message);
@@ -85,7 +125,7 @@ public class ImportManager
         }
 
         activity.LogError(message.ToString());
-        await activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
 
@@ -100,10 +140,10 @@ public class ImportManager
 
             Configuration.Workspace.RequestChange(
                 DataChangeRequest.Update(
-                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(), 
-                    null, 
+                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
+                    null,
                     request.Message.UpdateOptions),
-                activity, 
+                activity,
                 request
                 );
         }
@@ -121,13 +161,13 @@ public class ImportManager
     }
 
     public async Task<EntityStore> ImportInstancesAsync(
-        ImportRequest importRequest, 
+        ImportRequest importRequest,
         Activity activity,
         CancellationToken cancellationToken)
     {
         var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
         var imported = await format.Import(importRequest, dataSet, activity);
-        return imported;
+        return imported!;
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(

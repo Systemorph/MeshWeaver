@@ -10,22 +10,22 @@ namespace MeshWeaver.Charting.Models.Options
         /// <summary>
         /// The chart legend displays data about the datasets that are appearing on the chart.
         /// </summary>
-        public Legend Legend { get; internal set; }
+        public Legend? Legend { get; internal set; }
 
         /// <summary>
         /// The chart title defines text to draw at the top of the chart.
         /// </summary>
-        public Title Title { get; internal set; }
+        public Title? Title { get; internal set; }
 
         /// <summary>
         /// Subtitle is a second title placed under the main title, by default.
         /// </summary>
-        public Title Subtitle { get; internal set; }
+        public Title? Subtitle { get; internal set; }
 
         /// <summary>
         /// The global options for the chart tooltips.
         /// </summary>
-        public ToolTip Tooltip { get; init; }
+        public ToolTip? Tooltip { get; init; }
 
         /// <summary>
         /// ColorSchemes plugin configuration.
@@ -37,9 +37,9 @@ namespace MeshWeaver.Charting.Models.Options
         /// DataLabels plugin configuration.
         /// </summary>
         [JsonPropertyName("datalabels")]
-        public DataLabels DataLabels { get; set; }
+        public DataLabels? DataLabels { get; set; }
 
-        public Plugins WithLegend(Func<Legend, Legend> builder = null)
+        public Plugins WithLegend(Func<Legend, Legend>? builder = null)
         {
             var legend = Legend ?? new Legend() { Display = true };
 
@@ -51,7 +51,7 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Legend = legend };
         }
 
-        public Plugins WithTitle(Func<Title, Title> builder = null)
+        public Plugins WithTitle(Func<Title, Title>? builder = null)
         {
             var title = Title ?? new Title();
 
@@ -63,7 +63,7 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Title = title };
         }
 
-        public Plugins WithSubtitle(Func<Title, Title> builder = null)
+        public Plugins WithSubtitle(Func<Title, Title>? builder = null)
         {
             var subtitle = Subtitle ?? new Title();
 
@@ -75,7 +75,7 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Subtitle = subtitle };
         }
 
-        public Plugins WithTooltip(Func<ToolTip, ToolTip> builder = null)
+        public Plugins WithTooltip(Func<ToolTip, ToolTip>? builder = null)
         {
             var tooltip = Tooltip ?? new ToolTip() { Enabled = true };
 
@@ -87,9 +87,9 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { Tooltip = tooltip };
         }
 
-        public Plugins WithColorSchemes(Func<ColorSchemes, ColorSchemes> builder = null)
+        public Plugins WithColorSchemes(Func<ColorSchemes, ColorSchemes>? builder = null)
         {
-            var colorSchemes = ColorSchemes ?? new ColorSchemes();
+            var colorSchemes = ColorSchemes;
 
             if (builder != null)
             {
@@ -99,7 +99,7 @@ namespace MeshWeaver.Charting.Models.Options
             return this with { ColorSchemes = colorSchemes };
         }
 
-        public Plugins WithDataLabels(Func<DataLabels, DataLabels> builder = null)
+        public Plugins WithDataLabels(Func<DataLabels, DataLabels>? builder = null)
         {
             var dataLabels = DataLabels ?? new DataLabels() { Display = true };
 

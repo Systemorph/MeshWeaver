@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -11,17 +12,26 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
 
-    public IMessageHub GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
+    public IMessageHub? GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address
     {
         lock (locker)
         {
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
+            
+            if (isDisposing)
+            {
+                logger.LogWarning("Rejecting hosted hub creation for address {Address} during disposal - collection is disposing", address);
+                return null;
+            }
+            
             if (create == HostedHubCreation.Always)
             {
                 logger.LogDebug("Creating hosted hub for address {Address}", address);
-                return messageHubs[address] = CreateHub(address, config ?? (x => x));
+                var newHub = CreateHub(address, config);
+                if (newHub != null)
+                    return messageHubs[address] = newHub;
             }
 
             return null;
@@ -34,16 +44,33 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
         hub.RegisterForDisposal(h => messageHubs.TryRemove(h.Address, out _));
     }
 
-    private IMessageHub CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-    where TAddress : Address =>
-        isDisposing
-            ? null
-            : serviceProvider.CreateMessageHub(address, config);
+    private IMessageHub? CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+    where TAddress : Address
+    {
+        if (isDisposing)
+        {
+            logger.LogWarning("Preventing hub creation for address {Address} - collection is disposing", address);
+            return null;
+        }
+        
+        try
+        {
+            logger.LogInformation("Creating new hosted hub for address {Address}", address);
+            var hub = serviceProvider.CreateMessageHub(address, config);
+            logger.LogInformation("Successfully created hosted hub for address {Address}", address);
+            return hub;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to create hosted hub for address {Address}", address);
+            return null;
+        }
+    }
 
     private bool isDisposing;
     private readonly object locker = new();
 
-    public Task Disposal { get; private set; }
+    public Task? Disposal { get; private set; }
     public void Dispose()
     {
         lock (locker)
@@ -55,55 +82,104 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     }
     private async Task DisposeHubs()
     {
+        var totalStopwatch = Stopwatch.StartNew();
         var hubs = messageHubs.Values.ToArray();
-        var disposalTasks = hubs.Select(hub => DisposeHub(hub)).ToArray();
+        logger.LogInformation("Starting disposal of {count} hosted hubs: [{hubAddresses}]", 
+            hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
+        
+        var disposalTasks = hubs.Select(DisposeHub).ToArray();
+        var hubAddresses = hubs.Select(h => h.Address.ToString()).ToArray();
 
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            logger.LogDebug("Waiting for all {count} hosted hubs to dispose with 10 second timeout", hubs.Length);
             await Task.WhenAll(disposalTasks).WaitAsync(cts.Token);
-            logger.LogDebug("All hosted hubs disposed successfully");
+            logger.LogInformation("All {count} hosted hubs disposed successfully in {elapsed}ms", 
+                hubs.Length, totalStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Hosted hubs disposal timed out after 10 seconds. Some hubs may not have disposed properly.");
+            logger.LogError("Hosted hubs disposal timed out after 10 seconds ({elapsed}ms). Some hubs may not have disposed properly.", 
+                totalStopwatch.ElapsedMilliseconds);
 
-            // Log which hubs didn't complete disposal
+            // Log detailed status of each hub
             for (int i = 0; i < disposalTasks.Length; i++)
             {
-                if (!disposalTasks[i].IsCompleted)
+                var task = disposalTasks[i];
+                var hubAddress = hubAddresses[i];
+                
+                if (task.IsCompleted)
                 {
-                    logger.LogError("Hub {address} disposal did not complete within timeout", hubs[i].Address);
+                    if (task.IsCompletedSuccessfully)
+                    {
+                        logger.LogInformation("Hub {address} disposal completed successfully", hubAddress);
+                    }
+                    else if (task.IsFaulted)
+                    {
+                        logger.LogError("Hub {address} disposal failed with exception: {exception}", 
+                            hubAddress, task.Exception?.GetBaseException());
+                    }
+                    else if (task.IsCanceled)
+                    {
+                        logger.LogWarning("Hub {address} disposal was canceled", hubAddress);
+                    }
+                }
+                else
+                {
+                    logger.LogError("Hub {address} disposal did not complete within timeout - HANGING", hubAddress);
                 }
             }
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during hosted hubs disposal");
+            logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
+            
+            // Log status of each disposal task
+            for (var i = 0; i < disposalTasks.Length; i++)
+            {
+                var task = disposalTasks[i];
+                var hubAddress = hubAddresses[i];
+                
+                logger.LogError("Hub {address} disposal task status: IsCompleted={isCompleted}, IsFaulted={isFaulted}, IsCanceled={isCanceled}", 
+                    hubAddress, task.IsCompleted, task.IsFaulted, task.IsCanceled);
+                
+                if (task.IsFaulted && task.Exception != null)
+                {
+                    logger.LogError("Hub {address} disposal exception: {exception}", hubAddress, task.Exception.GetBaseException());
+                }
+            }
         }
     }
-    private async Task DisposeHub(IMessageHub hub)
+    private Task DisposeHub(IMessageHub hub)
     {
         var address = hub.Address;
-        logger.LogDebug("Disposing hub {address}", address);
+        var hubStopwatch = Stopwatch.StartNew();
+        logger.LogInformation("Starting disposal of hub {address}", address);
+        
         try
         {
+            var disposeCallStopwatch = Stopwatch.StartNew();
+            logger.LogDebug("Calling Dispose() on hub {address}", address);
             hub.Dispose();
+            logger.LogDebug("Dispose() call completed for hub {address} in {elapsed}ms", 
+                address, disposeCallStopwatch.ElapsedMilliseconds);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await hub.Disposal.WaitAsync(cts.Token);
-            logger.LogDebug("Hub {address} disposed successfully", address);
+            logger.LogInformation("Hub {address} disposed successfully in {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Hub {address} disposal timed out after 5 seconds", address);
+            logger.LogError("Hub {address} disposal was cancelled (total elapsed: {elapsed}ms)", 
+                address, hubStopwatch.ElapsedMilliseconds);
             throw;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during disposal of hub {address}", address);
+            logger.LogError(ex, "Error during disposal of hub {address} after {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
             throw;
         }
+
+        return hub.Disposal ?? Task.CompletedTask;
     }
 
 }

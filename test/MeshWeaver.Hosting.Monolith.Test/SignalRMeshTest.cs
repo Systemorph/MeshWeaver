@@ -8,7 +8,6 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -27,7 +26,7 @@ public class SignalRMeshTest(ITestOutputHelper output) : AspNetCoreMeshBase(outp
         var address = Host.Services.GetRequiredService<IMessageHub>().Address;
         var response = await client.AwaitResponse(new PingRequest(),
             o => o.WithTarget(address)
-            //, new CancellationTokenSource(10.Seconds()).Token
+            , new CancellationTokenSource(10.Seconds()).Token
             );
         response.Message.Should().BeOfType<PingResponse>();
     }

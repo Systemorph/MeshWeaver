@@ -1,0 +1,35 @@
+@using TextAreaResize = Microsoft.FluentUI.AspNetCore.Components.TextAreaResize
+@inherits InputBase<TextAreaControl,TextAreaView, string>
+
+<FluentTextArea @bind-Value="Value" Placeholder="@Placeholder" Label="@Label" Autofocus="@AutoFocus"
+    Disabled="@Disabled" Immediate="@Immediate" ImmediateDelay="@ImmediateDelay" Style="@Style" Class="@Class"
+    Readonly="@Readonly" Required="@Required" Size="@Size" MinLength="@MinLength" MaxLength="@MaxLength" Rows="@Rows"
+    Cols="@Cols" Resize="@Resize">
+    @if (IconStart is not null)
+    {
+        <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
+    }
+    @if (IconEnd is not null)
+    {
+        <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
+    }
+</FluentTextArea>
+
+@code
+{
+    private int Rows { get; set; } = 3;
+    private int? Cols { get; set; }
+    private TextAreaResize? Resize { get; set; }
+
+    protected override void BindData()
+    {
+        base.BindData();
+
+        if (ViewModel != null)
+        {
+            DataBind(ViewModel.Rows, x => x.Rows);
+            DataBind(ViewModel.Cols, x => x.Cols);
+            DataBind(ViewModel.Resize, x => x.Resize);
+        }
+    }
+}

@@ -13,7 +13,7 @@ namespace MeshWeaver.DataCubes
             return new DataCube<T>(data);
         }
 
-        public static IDataCube<T> Aggregate<T>(this IEnumerable<IDataCube<T>> cubes)
+        public static IDataCube<T>? Aggregate<T>(this IEnumerable<IDataCube<T>> cubes)
         {
             if (cubes == null)
                 return null;
@@ -36,6 +36,6 @@ namespace MeshWeaver.DataCubes
 
         public static bool IsDataCube(this Type type) => typeof(IDataCube).IsAssignableFrom(type);
 
-        public static Type GetDataCubeElementType(this Type type) => type.GetGenericArgumentTypes(typeof(IDataCube<>))?.FirstOrDefault();
+        public static Type? GetDataCubeElementType(this Type type) => type.GetGenericArgumentTypes(typeof(IDataCube<>))?.FirstOrDefault();
     }
 }

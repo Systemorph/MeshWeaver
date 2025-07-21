@@ -57,7 +57,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
             {
                 if (parameterTypes[i].IsByRef)
                 {
-                    parameterTypes[i] = parameterTypes[i].GetElementType();
+                    parameterTypes[i] = parameterTypes[i].GetElementType() ?? typeof(object);
                 }
             }
 
@@ -84,7 +84,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
 
             // Perform the actual call.
             il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, method.DeclaringType);
+            il.Emit(OpCodes.Castclass, method.DeclaringType!);
             for (var i = 0; i < n; ++i)
             {
                 il.Emit(originalParameterTypes[i].IsByRef ? OpCodes.Ldloca : OpCodes.Ldloc, arguments[i]);
@@ -145,14 +145,13 @@ internal static class DefaultImplementationOfInterfacesExtensions
             var (declaration, proxyType) = key;
 
             var genericParameterCount = declaration.IsGenericMethod ? declaration.GetGenericArguments().Length : 0;
-            var returnType = declaration.ReturnType;
             var parameterTypes = declaration.GetParameterTypes().ToArray();
             var declaringType = declaration.DeclaringType;
 
             // If the base class has a method implementation, then by rule (2) it will be more specific
             // than any candidate method from an implemented interface:
             var baseClass = proxyType.BaseType;
-            if (baseClass != null && declaringType.IsAssignableFrom(baseClass))
+            if (baseClass != null && declaringType!.IsAssignableFrom(baseClass))
             {
                 var map = baseClass.GetInterfaceMap(declaringType);
                 var index = Array.IndexOf(map.InterfaceMethods, declaration);
@@ -162,7 +161,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
             // Otherwise, we need to look for candidates in all directly or indirectly implemented interfaces:
             var implementedInterfaces = proxyType.GetInterfaces();
             var candidateMethods = new HashSet<MethodInfo>();
-            foreach (var implementedInterface in implementedInterfaces.Where(i => declaringType.IsAssignableFrom(i)))
+            foreach (var implementedInterface in implementedInterfaces.Where(i => declaringType!.IsAssignableFrom(i)))
             {
                 // Search for an implicit override:
                 var candidateMethod = implementedInterface.GetMethod(declaration.Name, genericParameterCount, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, parameterTypes, null);
@@ -175,7 +174,7 @@ internal static class DefaultImplementationOfInterfacesExtensions
                     // It appears that the best thing we can do is to look for a non-public method having
                     // the right name and parameter types, and hope for the best:
                     var name = new StringBuilder();
-                    var isGeneratedByScript = declaringType.Module.Name == "<Unknown>";
+                    var isGeneratedByScript = declaringType!.Module?.Name == "<Unknown>";
                     name.Append(isGeneratedByScript ? declaringType.Name : declaringType.FullName);
                     name.Replace('+', '.');
                     name.Append('.');
@@ -187,11 +186,11 @@ internal static class DefaultImplementationOfInterfacesExtensions
 
                 // Now we have a candidate override. We need to check if it is less specific than any others
                 // that we have already found earlier:
-                if (candidateMethods.Any(cm => implementedInterface.IsAssignableFrom(cm.DeclaringType))) continue;
+                if (candidateMethods.Any(cm => cm.DeclaringType != null && implementedInterface.IsAssignableFrom(cm.DeclaringType))) continue;
 
                 // No, it is the most specific override so far. Add it to the list, but before doing so,
                 // remove all less specific overrides from it:
-                candidateMethods.ExceptWith(candidateMethods.Where(cm => cm.DeclaringType.IsAssignableFrom(implementedInterface)).ToArray());
+                candidateMethods.ExceptWith(candidateMethods.Where(cm => cm.DeclaringType?.IsAssignableFrom(implementedInterface) == true).ToArray());
                 candidateMethods.Add(candidateMethod);
             }
 

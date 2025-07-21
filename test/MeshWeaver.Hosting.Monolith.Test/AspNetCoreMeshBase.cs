@@ -15,18 +15,18 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test
 {
     public abstract class AspNetCoreMeshBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
     {
-        protected IHost Host;
-        protected TestServer Server;
+        protected IHost Host = null!;
+        protected TestServer Server = null!;
         public static string SignalREndPoint = SignalRConnectionHub.EndPoint;
         public static string KernelEndPoint = KernelHub.EndPoint;
         public string SignalRUrl => $"{Server.BaseAddress}{SignalREndPoint}";
-        public override async Task InitializeAsync()
+        public override async ValueTask InitializeAsync()
         {
             await base.InitializeAsync();
             var builder = (MeshHostBuilder)ConfigureMesh(
@@ -67,7 +67,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         }
 
         protected readonly ConcurrentBag<IDisposable> Disposables = new();
-        public override async Task DisposeAsync()
+        public override async ValueTask DisposeAsync()
         {
             while (Disposables.TryTake(out var d))
                 d.Dispose();

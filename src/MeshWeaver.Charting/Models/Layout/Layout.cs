@@ -3,7 +3,7 @@
     // https://www.chartjs.org/docs/3.5.1/configuration/layout.html
     public record Layout
     {
-        public object Padding { get; init; }
+        public object Padding { get; init; } = null!;
 
         public Layout WithPadding(PaddingObject padding) => new() { Padding = padding };
 

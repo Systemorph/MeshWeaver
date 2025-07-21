@@ -7,7 +7,7 @@ namespace MeshWeaver.DataSetReader.Excel
     {
         private readonly IExcelReaderFactory excelDataReaderFactory = new ExcelReaderFactory();
 
-        public Task<(IDataSet DataSet, string Format)> ReadAsync(Stream stream, DataSetReaderOptions options, CancellationToken cancellationToken)
+        public Task<(IDataSet DataSet, string? Format)> ReadAsync(Stream stream, DataSetReaderOptions _, CancellationToken _1)
         {
             return Task.FromResult(ReadDataSetFromFile(stream));
         }

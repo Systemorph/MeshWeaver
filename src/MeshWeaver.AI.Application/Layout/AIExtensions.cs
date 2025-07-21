@@ -1,3 +1,4 @@
+#nullable enable
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;

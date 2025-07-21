@@ -8,32 +8,32 @@ public static class PivotChartBuilderExtensions
 {
     public static IObservable<ChartModel> ToBarChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotBarChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotBarChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         => pivotBuilder.ToChart(b => b.ToBarChartPivotBuilder(), builder);
     public static IObservable<ChartModel> ToRadarChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotRadarChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotRadarChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         => pivotBuilder.ToChart(b => b.ToRadarChartBuilder(), builder);
     public static IObservable<ChartModel> ToWaterfallChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         => pivotBuilder.ToChart(b => b.ToWaterfallChartBuilder(), builder);
     public static IObservable<ChartModel> ToHorizontalWaterfallChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotWaterfallChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         => pivotBuilder.ToChart(b => b.ToHorizontalWaterfallChartBuilder(), builder);
 
     public static IObservable<ChartModel> ToLineChart<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotLineChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotLineChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<
             T,
@@ -52,7 +52,7 @@ public static class PivotChartBuilderExtensions
         TPivotBuilder
     >(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<
             T,
@@ -71,7 +71,7 @@ public static class PivotChartBuilderExtensions
         TPivotBuilder
     >(
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
-        Func<IPivotChartBuilder, IPivotChartBuilder> builder = null
+        Func<IPivotChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<
             T,
@@ -87,7 +87,7 @@ public static class PivotChartBuilderExtensions
         this PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder> pivotBuilder,
         Func<PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>, TPivotChartBuilder>
             pivotChartFactory,
-        Func<TPivotChartBuilder, IPivotChartBuilder> builder = null
+        Func<TPivotChartBuilder, IPivotChartBuilder>? builder = null
     )
         where TPivotBuilder : PivotBuilderBase<T, TTransformed, TIntermediate, TAggregate, TPivotBuilder>
         where TPivotChartBuilder : IPivotChartBuilder

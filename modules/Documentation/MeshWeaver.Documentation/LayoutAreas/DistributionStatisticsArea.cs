@@ -153,13 +153,13 @@ Execution Time: {tuple.Time}" );
 
 
         host.RegisterForDisposal(host.GetDataStream<BasicInput>(nameof(BasicInput))
-            .Select(x => x.DistributionType)
+            .Select(x => x!.DistributionType)
             .DistinctUntilChanged()
             .Subscribe(t => host.UpdateData(nameof(Distribution), Distributions[t])));
 
          return Controls.Stack
             .WithView(host.Edit(new BasicInput(), nameof(BasicInput)), nameof(BasicInput))
-            .WithView(host.GetDataStream<Distribution>(nameof(Distribution)).Select(x => x.GetType())
+            .WithView(host.GetDataStream<Distribution>(nameof(Distribution)).Select(x => x!.GetType())
                 .DistinctUntilChanged()
                 .Select(t => host.Edit(t, nameof(Distribution))))
             .WithView(Controls.Button("Run Simulation")

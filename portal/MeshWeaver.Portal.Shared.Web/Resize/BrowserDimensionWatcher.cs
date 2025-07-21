@@ -9,7 +9,7 @@ namespace MeshWeaver.Portal.Shared.Web.Resize;
 public class BrowserDimensionWatcher : ComponentBase
 {
     [Parameter]
-    public ViewportInformation ViewportInformation { get; set; }
+    public ViewportInformation? ViewportInformation { get; set; }
 
     [Parameter]
     public EventCallback<ViewportInformation> ViewportInformationChanged { get; set; }

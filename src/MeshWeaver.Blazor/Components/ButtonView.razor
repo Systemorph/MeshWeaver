@@ -15,13 +15,13 @@
     
 @code
 {
-    private Appearance Appearance { get; set; }
-    private string Data { get; set; }
-    private string Label { get; set; }
-    private Icon IconStart { get; set; }
-    private Icon IconEnd { get; set; }
+    private Appearance Appearance { get; set; } = Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral;
+    private string? Data { get; set; }
+    private string? Label { get; set; }
+    private Icon? IconStart { get; set; }
+    private Icon? IconEnd { get; set; }
     private bool Disabled { get; set; }
-    private string NavigateToHref { get; set; }
+    private string? NavigateToHref { get; set; }
 
     protected override void BindData()
     {
@@ -41,13 +41,13 @@
     protected override void OnClick()
     {
         if(NavigateToHref is not null)
-            NavigationManager.NavigateTo(NavigateToHref);
+            NavigationManager.NavigateTo(NavigateToHref!);
         base.OnClick();
     }
 
     private void NavigateToUrl()
     {
-        NavigationManager.NavigateTo(NavigateToHref);
+        NavigationManager.NavigateTo(NavigateToHref!);
     }
 
 }

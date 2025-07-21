@@ -1,6 +1,7 @@
+#nullable enable
 namespace MeshWeaver.DataStructures
 {
-    public static class DataSetFactory 
+    public static class DataSetFactory
     {
         public static IDataSet Create(string name)
         {
@@ -21,12 +22,12 @@ namespace MeshWeaver.DataStructures
                     t.Columns.Add(dataColumn.ColumnName, dataColumn.DataType);
 
                 foreach (System.Data.DataRow row in table.Rows)
-                    t.Rows.Add(GetValues(row));
+                    t.Rows.Add(GetValues(row)!);
             }
             return ret;
         }
 
-        private static object[] GetValues(System.Data.DataRow row)
+        private static object?[] GetValues(System.Data.DataRow row)
         {
             var ret = row.ItemArray.Select(x => x is DBNull ? null : x).ToArray();
             return ret;

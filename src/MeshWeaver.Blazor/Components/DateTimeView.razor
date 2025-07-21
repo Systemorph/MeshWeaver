@@ -1,4 +1,9 @@
+@using Microsoft.FluentUI.AspNetCore.Components
 @inherits FormComponentBase<DateTimeControl, DateTimeView, DateTime?>
 
-<FluentDatePicker bind-Value="Value" Disabled="@Disabled" Required="@Required" ReadOnly="@Readonly"></FluentDatePicker>
-
+<FluentDatePicker @bind-Value="@Value" Label="@Label" Appearance="@Appearance" Culture="@Culture" Autofocus="@AutoFocus"
+    DayFormat="@DayFormat" Disabled="@Disabled" Style="@Style" Placeholder="@Placeholder"
+    DisabledSelectable="@DisabledSelectable" Name="@Name" View="@View" DoubleClickToDate="@DoubleClickToDate"
+    DisabledCheckAllDaysOfMonthYear="@DisabledCheckAllDaysOfMonthYear" DisabledDateFunc="@DisabledDateFunc"
+    PopupHorizontalPosition="@PopupHorizontalPosition" ReadOnly="@Readonly" Required="@Required" AriaLabel="@AriaLabel"
+    Class="@Class" Id="@Id" />

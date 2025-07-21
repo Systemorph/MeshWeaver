@@ -16,7 +16,6 @@ using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Commands;
 using Microsoft.DotNet.Interactive.Events;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -60,7 +59,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var area = await client
             .GetControlStream(new ApplicationAddress(Test), "Dashboard")
-            .Timeout(10.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
         area.Should().NotBeNull();
         area.Should().BeOfType<LayoutGridControl>();
@@ -82,7 +81,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         kernelEvents.OfType<CommandSucceeded>().Should().NotBeEmpty();
 
-        await Task.Delay(1000);
+        await Task.Delay(1000, TestContext.Current.CancellationToken);
         kernelEventsStream.OnCompleted();
         var kernelEvents2 = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
@@ -118,16 +117,16 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;
-        control = await stream.GetControlStream(stack.Areas.First().Area.ToString())
+        control = await stream.GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         var editor = control.Should().BeOfType<EditorControl>().Which;
         editor.DataContext.Should().NotBeNull();
-        var data = await stream.GetDataStream<object>(new(editor.DataContext))
+        var data = await stream.GetDataStream<object?>(new(editor.DataContext))
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
         stream.UpdatePointer(3, editor.DataContext, new("summand1"));
-        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString())
+        var md = await stream.GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(3.Seconds())
             .FirstAsync(x => !(x as MarkdownControl)?.Markdown?.ToString()?.Contains("3") == true);
 

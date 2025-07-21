@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿#nullable enable
+using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.ShortGuid;
@@ -11,11 +12,11 @@ public record ActivityLog(string Category)
     public int Version { get; init; }
 
     [property: Key]
-    public string Id { get; init; } = Guid.NewGuid().AsString();
+    public string Id { get; init; } = Guid.NewGuid().AsString() ?? string.Empty;
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
-    public ActivityStatus Status { get; init; } 
+    public ActivityStatus Status { get; init; }
     public DateTime? End { get; init; }
-    public UserInfo User { get; init; }
+    public UserInfo? User { get; init; }
     public ImmutableDictionary<string, ActivityLog> SubActivities { get; init; } = ImmutableDictionary<string, ActivityLog>.Empty;
 
     public ActivityLog Fail(string error) =>

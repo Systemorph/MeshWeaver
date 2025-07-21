@@ -12,7 +12,7 @@ namespace MeshWeaver.DataSetReader.Excel
             excelDataReaderFactory = new ExcelReaderFactory();
         }
 
-        public (IDataSet DataSet, string Format) Read(Stream stream)
+        public (IDataSet DataSet, string? Format) Read(Stream stream)
         {
             return ReadDataSetFromFile(stream);
         }

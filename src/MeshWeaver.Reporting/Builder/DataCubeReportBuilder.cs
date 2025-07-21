@@ -22,7 +22,7 @@ namespace MeshWeaver.Reporting.Builder
         where TCube : IDataCube<TElement>
     {
         public IWorkspace Workspace { get; }
-        public EntityStore State { get; }
+        public EntityStore? State { get; }
         private readonly IList<Func<GridOptions, GridOptions>> postProcessors = new List<
             Func<GridOptions, GridOptions>
         >()
@@ -47,9 +47,10 @@ namespace MeshWeaver.Reporting.Builder
 
         public DataCubeReportBuilder(
             DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate> pivotBuilder,
-            Func<GridOptions, GridOptions> gridOptionsPostProcessor = null
+            Func<GridOptions, GridOptions>? gridOptionsPostProcessor = null
         )
         {
+            Workspace = pivotBuilder.Workspace;
             PivotBuilder = pivotBuilder;
             if (gridOptionsPostProcessor is not null)
                 postProcessors.Add(gridOptionsPostProcessor);
@@ -62,6 +63,7 @@ namespace MeshWeaver.Reporting.Builder
             Aggregations<DataSlice<TElement>, TIntermediate, TAggregate> aggregations
         )
         {
+            Workspace = workspace;
             State = state;
             PivotBuilder = new DataCubePivotBuilder<TCube, TElement, TIntermediate, TAggregate>(
                 workspace,
@@ -108,7 +110,7 @@ namespace MeshWeaver.Reporting.Builder
                     >
                     {
                         Aggregation = slices =>
-                            aggregations.Aggregation(slices.Select(s => s.Data)),
+                            aggregations.Aggregation!(slices.Select(s => s.Data)),
                         AggregationOfAggregates = aggregations.AggregationOfAggregates,
                         ResultTransformation = aggregations.ResultTransformation,
                         Name = aggregations.Name
@@ -151,7 +153,7 @@ namespace MeshWeaver.Reporting.Builder
                     >
                     {
                         Aggregation = slices =>
-                            aggregations.Aggregation(slices.Select(s => s.Data)),
+                            aggregations.Aggregation!(slices.Select(s => s.Data)),
                         AggregationOfAggregates = aggregations.AggregationOfAggregates,
                         ResultTransformation = aggregations.ResultTransformation,
                         Name = aggregations.Name
@@ -161,7 +163,7 @@ namespace MeshWeaver.Reporting.Builder
         }
 
         public DataCubeReportBuilder<TCube, TElement, TIntermediate, TAggregate> WithOptions(
-            Func<GridOptions, GridOptions> gridOptions
+            Func<GridOptions, GridOptions>? gridOptions
         )
         {
             if (gridOptions is not null)

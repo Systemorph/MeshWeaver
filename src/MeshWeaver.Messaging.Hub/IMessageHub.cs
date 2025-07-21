@@ -6,7 +6,7 @@ namespace MeshWeaver.Messaging;
 public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
 #if DEBUG
-    
+
     internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
 #else
     internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
@@ -14,7 +14,8 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 #endif
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
-    IMessageDelivery<TMessage> Post<TMessage>(TMessage message, Func<PostOptions, PostOptions> options = null);
+    Task Started { get; }
+    IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     Address Address { get; }
     IServiceProvider ServiceProvider { get; }
@@ -40,31 +41,64 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),
             cancellationToken);
     Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request, SyncDelivery<TResponse> callback)
-        => RegisterCallback((IMessageDelivery) request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default);
+        => RegisterCallback((IMessageDelivery)request, (r, _) => Task.FromResult(callback((IMessageDelivery<TResponse>)r)), default);
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery request, SyncDelivery callback)
         => RegisterCallback(request, (r, _) => Task.FromResult(callback(r)), default);
     Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> delivery, SyncDelivery<TResponse> callback, CancellationToken cancellationToken)
-        => RegisterCallback(delivery, (d,_) => Task.FromResult(callback(d)), cancellationToken);
+        => RegisterCallback(delivery, (d, _) => Task.FromResult(callback(d)), cancellationToken);
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
-    public void InvokeAsync(Func<CancellationToken, Task> action, Action<Exception> exceptionCallback);
+    public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback);
 
-    public void InvokeAsync(Action action, Action<Exception> exceptionCallback) => InvokeAsync(_ =>
+    public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) => InvokeAsync(_ =>
     {
         action();
         return Task.CompletedTask;
     }, exceptionCallback);
 
-    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create = default) 
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
+    /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
+    /// </summary>
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, HostedHubCreation create)
+        where TAddress : Address
+        => GetHostedHub(address, x => x, create);
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// </summary>
+    /// <typeparam name="TAddress"></typeparam>
+    /// <param name="address"></param>
+    /// <returns></returns>
+    IMessageHub GetHostedHub<TAddress>(TAddress address)
+        where TAddress : Address
+        => GetHostedHub(address, x => x);
+
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address and configuration.
+    /// </summary>
+    /// <typeparam name="TAddress"></typeparam>
+    /// <param name="address"></param>
+    /// <param name="config"></param>
+    /// <returns></returns>
+    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        where TAddress : Address
+        => GetHostedHub(address, config, HostedHubCreation.Always)!;
+
+    /// <summary>
+    /// Gets a hosted hub for the specified address.
+    /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
+    /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
+    /// </summary>
+    IMessageHub? GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address;
 
-    IMessageHub GetHostedHub<TAddress>(TAddress address, HostedHubCreation create = default)
-        where TAddress : Address
-        => GetHostedHub(address, null, create);
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
-    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_,_) => disposable.DisposeAsync().AsTask());
+    IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_, _) => disposable.DisposeAsync().AsTask());
     IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     bool IsDisposing { get; }
@@ -76,6 +110,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     );
-    Task Disposal { get; }
+    Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 }

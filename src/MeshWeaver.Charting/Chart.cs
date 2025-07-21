@@ -1,4 +1,5 @@
-﻿using System.Collections;
+#nullable enable
+using System.Collections;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
 using MeshWeaver.Charting.Models.Options.Scales;
@@ -14,7 +15,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bar chart.</returns>
-    public static ChartModel Bar(IEnumerable data, string label = null) => 
+    public static ChartModel Bar(IEnumerable data, string? label = null) =>
         new(DataSet.Bar(data, label));
 
     /// <summary>
@@ -23,7 +24,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a doughnut chart.</returns>
-    public static ChartModel Doughnut(IEnumerable data, string label = null)
+    public static ChartModel Doughnut(IEnumerable data, string? label = null)
         => new(DataSet.Doughnut(data, label));
 
     /// <summary>
@@ -32,7 +33,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a line chart.</returns>
-    public static ChartModel Line(IEnumerable data, string label = null)
+    public static ChartModel Line(IEnumerable data, string? label = null)
         => new(DataSet.Line(data, label));
     /// <summary>
     /// Creates a pie chart model.
@@ -40,7 +41,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a pie chart.</returns>
-    public static ChartModel Pie(IEnumerable data, string label = null)
+    public static ChartModel Pie(IEnumerable data, string? label = null)
         => new(DataSet.Pie(data, label));
 
     /// <summary>
@@ -49,7 +50,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a polar area chart.</returns>
-    public static ChartModel Polar(IEnumerable data, string label = null)
+    public static ChartModel Polar(IEnumerable data, string? label = null)
         => new(DataSet.Polar(data, label));
 
     /// <summary>
@@ -58,7 +59,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a radar chart.</returns>
-    public static ChartModel Radar(IEnumerable data, string label = null)
+    public static ChartModel Radar(IEnumerable data, string? label = null)
         => new(DataSet.Radar(data, label));
 
     /// <summary>
@@ -68,7 +69,7 @@ public static class Chart
     /// <param name="dataTo">The ending values of the data range.</param>
     /// <param name="label">The label for the dataset.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
-    public static ChartModel FloatingBar(IEnumerable dataFrom, IEnumerable dataTo, string label = null) =>
+    public static ChartModel FloatingBar(IEnumerable dataFrom, IEnumerable dataTo, string? label = null) =>
         new(DataSet.FloatingBar(dataFrom, dataTo, label));
 
     /// <summary>
@@ -77,7 +78,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a horizontal floating bar chart.</returns>
-    public static ChartModel HorizontalFloatingBar(IEnumerable data, string label = null)
+    public static ChartModel HorizontalFloatingBar(IEnumerable data, string? label = null)
         => new(DataSet.HorizontalFloatingBar(data, label));
 
 
@@ -88,7 +89,7 @@ public static class Chart
     /// <param name="rawData">The data values for the y-axis.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a time line chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<string> times, IEnumerable<double> rawData, string label = null) => new(DataSet.TimeLine(times.Select(DateTime.Parse), rawData, label));
+    public static ChartModel TimeLine(IEnumerable<string> times, IEnumerable<double> rawData, string? label = null) => new(DataSet.TimeLine(times.Select(DateTime.Parse), rawData, label));
 
 
     /// <summary>
@@ -98,7 +99,7 @@ public static class Chart
     /// <param name="rawData">The data values for the y-axis.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a timeline chart.</returns>
-    public static ChartModel TimeLine(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string label = null)
+    public static ChartModel TimeLine(IEnumerable<DateTime> dates, IEnumerable<double> rawData, string? label = null)
     => new(DataSet.TimeLine(dates, rawData, label));
 
 
@@ -109,7 +110,7 @@ public static class Chart
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<(double x, double y)> points, string label = null)
+    public static ChartModel Scatter(IEnumerable<(double x, double y)> points, string? label = null)
         => new(DataSet.Scatter(points, label));
     /// <summary>
     /// Creates a scatter chart model.
@@ -117,7 +118,7 @@ public static class Chart
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter(IEnumerable<PointData> points, string label = null)
+    public static ChartModel Scatter(IEnumerable<PointData> points, string? label = null)
         => new(DataSet.Scatter(points, label));
 
     /// <summary>
@@ -126,7 +127,7 @@ public static class Chart
     /// <param name="points">The points to plot, each represented as a tuple of (x, y).</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter<T1,T2>(IEnumerable<(T1 x, T2 y)> points, string label = null)
+    public static ChartModel Scatter<T1, T2>(IEnumerable<(T1 x, T2 y)> points, string? label = null)
         => new(DataSet.Scatter(points, label));
 
 
@@ -141,7 +142,7 @@ public static class Chart
 
 
     public static ChartModel Waterfall(List<double> deltas,
-        Func<WaterfallChartOptions, WaterfallChartOptions> options = null
+        Func<WaterfallChartOptions, WaterfallChartOptions>? options = null
     )
         => new ChartModel()
             .ToWaterfallChart(deltas, options)
@@ -152,7 +153,7 @@ public static class Chart
             );
 
     public static ChartModel HorizontalWaterfall(List<double> deltas,
-        Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions> options = null
+        Func<HorizontalWaterfallChartOptions, HorizontalWaterfallChartOptions>? options = null
     )
         => new ChartModel()
             .ToWaterfallChart(deltas, options)
@@ -174,7 +175,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a bar chart.</returns>
-    public static ChartModel Bar<T>(IEnumerable<T> data, string label = null) =>
+    public static ChartModel Bar<T>(IEnumerable<T> data, string? label = null) =>
         new(DataSet.Bar(data, label));
 
 
@@ -184,7 +185,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a doughnut chart.</returns>
-    public static ChartModel Doughnut<T>(IEnumerable<T> data, string label = null) => new(DataSet.Doughnut(data, label));
+    public static ChartModel Doughnut<T>(IEnumerable<T> data, string? label = null) => new(DataSet.Doughnut(data, label));
 
     /// <summary>
     /// Creates a line chart model.
@@ -192,7 +193,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a line chart.</returns>
-    public static ChartModel Line<T>(IEnumerable<T> data, string label = null) => new(DataSet.Line(data, label));
+    public static ChartModel Line<T>(IEnumerable<T> data, string? label = null) => new(DataSet.Line(data, label));
 
     /// <summary>
     /// Creates a pie chart model.
@@ -200,7 +201,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a pie chart.</returns>
-    public static ChartModel Pie<T>(IEnumerable<T> data, string label = null) => new(DataSet.Pie(data, label));
+    public static ChartModel Pie<T>(IEnumerable<T> data, string? label = null) => new(DataSet.Pie(data, label));
 
     /// <summary>
     /// Creates a polar area chart model.
@@ -208,7 +209,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a polar area chart.</returns>
-    public static ChartModel Polar<T>(IEnumerable<T> data, string label = null) => new(DataSet.Polar(data, label));
+    public static ChartModel Polar<T>(IEnumerable<T> data, string? label = null) => new(DataSet.Polar(data, label));
 
     /// <summary>
     /// Creates a radar chart model.
@@ -216,7 +217,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a radar chart.</returns>
-    public static ChartModel Radar<T>(IEnumerable<T> data, string label = null) => new(DataSet.Radar(data, label));
+    public static ChartModel Radar<T>(IEnumerable<T> data, string? label = null) => new(DataSet.Radar(data, label));
 
     /// <summary>
     /// Creates a floating bar chart model.
@@ -225,7 +226,7 @@ public static class Chart
     /// <param name="dataTo">The ending values of the data range.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a floating bar chart.</returns>
-    public static ChartModel FloatingBar<T>(IEnumerable<T> dataFrom, IEnumerable<T> dataTo, string label = null) => new(DataSet.FloatingBar((IEnumerable)dataFrom, dataTo, label));
+    public static ChartModel FloatingBar<T>(IEnumerable<T> dataFrom, IEnumerable<T> dataTo, string? label = null) => new(DataSet.FloatingBar((IEnumerable)dataFrom, dataTo, label));
 
     /// <summary>
     /// Creates a horizontal floating bar chart model.
@@ -233,7 +234,7 @@ public static class Chart
     /// <param name="data">The data to plot.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a horizontal floating bar chart.</returns>
-    public static ChartModel HorizontalFloatingBar<T>(IEnumerable<T> data, string label = null) => new(DataSet.HorizontalFloatingBar(data, label));
+    public static ChartModel HorizontalFloatingBar<T>(IEnumerable<T> data, string? label = null) => new(DataSet.HorizontalFloatingBar(data, label));
 
     /// <summary>
     /// Creates a scatter chart model.
@@ -242,7 +243,7 @@ public static class Chart
     /// <param name="y">The y values.</param>
     /// <param name="label">The label of the data set.</param>
     /// <returns>A new instance of <see cref="ChartModel"/> representing a scatter chart.</returns>
-    public static ChartModel Scatter<T1,T2>(IEnumerable<T1> x, IEnumerable<T2> y, string label = null) => new(DataSet.Scatter(x, y, label));
+    public static ChartModel Scatter<T1, T2>(IEnumerable<T1> x, IEnumerable<T2> y, string? label = null) => new(DataSet.Scatter(x, y, label));
 
 
     #endregion 

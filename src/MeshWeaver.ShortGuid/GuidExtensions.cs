@@ -1,4 +1,5 @@
-﻿namespace MeshWeaver.ShortGuid;
+﻿#nullable enable
+namespace MeshWeaver.ShortGuid;
 
 public static class GuidExtensions
 {
@@ -12,7 +13,7 @@ public static class GuidExtensions
     public static string AsString(this Guid guid)
     {
         if (guid == Guid.Empty)
-            return null;
+            return string.Empty;
 
         return new CSharpVitamins.ShortGuid(guid).ToString();
     }

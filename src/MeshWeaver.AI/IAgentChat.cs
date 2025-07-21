@@ -1,8 +1,9 @@
-﻿using Microsoft.Extensions.AI;
+﻿using MeshWeaver.AI.Persistence;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI;
 
-public interface IAgentChat 
+public interface IAgentChat
 {
     void SetContext(AgentContext applicationContext);
     Task ResumeAsync(ChatConversation conversation);
@@ -26,4 +27,13 @@ public interface IAgentChat
     IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Delegates a task to another agent.</summary>
+    /// <param name="agentName">The name of the agent to delegate to</param>
+    /// <param name="message">The message or task to send to the agent</param>
+    /// <param name="askUserFeedback">Whether to ask for user feedback before proceeding</param>
+    /// <returns>A task that represents the delegation operation</returns>
+    string Delegate(string agentName, string message, bool askUserFeedback = false);
+
+    AgentContext? Context { get; }
 }

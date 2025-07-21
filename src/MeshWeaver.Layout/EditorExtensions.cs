@@ -1,8 +1,10 @@
 ﻿using System.Collections;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.Reactive.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Json.More;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Documentation;
@@ -14,6 +16,7 @@ using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
 
@@ -51,22 +54,22 @@ public static class EditorExtensions
 
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider, T instance,
-        string id = null)
-        => serviceProvider.Edit(Observable.Return(instance), id);
+        string? id = null)
+        => serviceProvider.Edit(Observable.Return(instance), id!);
     public static UiControl Edit(
         this IMessageHub hub, Type type,
         string id)
         => hub.ServiceProvider.Edit(type, id);
     public static UiControl Edit<T>(
         this IMessageHub hub, T instance,
-        string id = null)
-        => hub.ServiceProvider.Edit(Observable.Return(instance), id);
+        string? id = null)
+        => hub.ServiceProvider.Edit(Observable.Return(instance), id!);
 
     public static UiControl Edit<T>(
         this IMessageHub hub,
         IObservable<T> observable,
-        string id = null)
-        => hub.ServiceProvider.Edit(observable, id);
+        string? id = null)
+        => hub.ServiceProvider.Edit(observable, id!);
     public static EditorControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable
@@ -151,18 +154,18 @@ public static class EditorExtensions
 
     public static UiControl Toolbar<T>(
         this IServiceProvider serviceProvider, T instance,
-        string id = null)
-        => serviceProvider.Toolbar(Observable.Return(instance), id);
+        string? id = null)
+        => serviceProvider.Toolbar(Observable.Return(instance), id!);
     public static UiControl Toolbar<T>(
         this IMessageHub hub, T instance,
-        string id = null)
-        => hub.ServiceProvider.Toolbar(Observable.Return(instance), id);
+        string? id = null)
+        => hub.ServiceProvider.Toolbar(Observable.Return(instance), id!);
 
     public static UiControl Toolbar<T>(
         this IMessageHub hub,
         IObservable<T> observable,
-        string id = null)
-        => hub.ServiceProvider.Toolbar(observable, id);
+        string? id = null)
+        => hub.ServiceProvider.Toolbar(observable, id!);
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host, 
         T instance,
@@ -172,8 +175,8 @@ public static class EditorExtensions
     public static UiControl Toolbar<T>(
         this LayoutAreaHost host,
         IObservable<T> observable,
-        string id = null)
-        => host.Hub.ServiceProvider.Toolbar(observable, id);
+        string? id = null)
+        => host.Hub.ServiceProvider.Toolbar(observable, id!);
     public static ToolbarControl Toolbar<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable, 
@@ -265,17 +268,19 @@ public static class EditorExtensions
         where T: ContainerControlWithItemSkin<T,TSkin, PropertySkin>
         where TSkin : Skin<TSkin>
     {
-        var propertySkinLabel = propertyInfo.GetCustomAttribute<DisplayAttribute>()?.Name ?? propertyInfo.Name.Wordify();
-        string label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
+        if (propertyInfo.GetCustomAttribute<BrowsableAttribute>()?.Browsable == false)
+            return editor;
+
+        var displayAttribute = propertyInfo.GetCustomAttribute<DisplayAttribute>();
+        var propertySkinLabel = displayAttribute?.Name ?? propertyInfo.Name.Wordify();
+        string? label = null; // // TODO V10: This is to avoid duplication with property skin. do consistently in future. (19.01.2025, Roland Bürgi)
 
         Func<PropertySkin, PropertySkin> skinConfiguration = skin =>
             skin with
             {
                 Name = propertyInfo.Name.ToCamelCase(),
                 Description = propertyInfo.GetCustomAttribute<DescriptionAttribute>()?.Description
-                              ?? serviceProvider
-                                  .GetRequiredService<IDocumentationService>()
-                                  .GetDocumentation(propertyInfo)?.Summary?.Text,
+                              ?? propertyInfo.GetXmlDocsSummary(),
                 Label = propertySkinLabel
             };
         var jsonPointerReference = GetJsonPointerReference(propertyInfo);
@@ -321,11 +326,11 @@ public static class EditorExtensions
         return host.Workspace
             .GetStream(
                 new CollectionReference(
-                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)))
+                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)!))
             .Select(x => 
                 ConvertToOptions(
-                    x.Value, 
-                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)));
+                    x?.Value ?? throw new InvalidOperationException("Collection reference value is null"), 
+                    host.Workspace.DataContext.TypeRegistry.GetTypeDefinition(dimensionAttribute.Type)!));
     }
 
 
@@ -334,32 +339,32 @@ public static class EditorExtensions
         var elementType = 
             collection is Array array 
                 ? array.GetType().GetElementType()
-                : collection.GetType().GetInterfaces().Select(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>) ? i.GenericTypeArguments.First() : null).FirstOrDefault();
+                : collection.GetType().GetInterfaces().Select(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(ICollection<>) ? i.GenericTypeArguments.First() : null).FirstOrDefault(x => x != null);
         if (elementType == null)
         {
             throw new ArgumentException("Collection does not have a generic type argument.");
         }
 
         var optionType = typeof(Option<>).MakeGenericType(elementType);
-        return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString().Wordify())).ToArray();
+        return collection.Cast<object>().Select(x => (Option)Activator.CreateInstance(optionType, x, x.ToString()!.Wordify())!).ToArray();
     }
 
     private static JsonPointerReference GetJsonPointerReference(PropertyInfo propertyInfo) => 
-        new(propertyInfo.Name.ToCamelCase());
+        new(propertyInfo.Name.ToCamelCase()!);
 
 
     private static UiControl RenderControl(
         LayoutAreaHost host,
         Type controlType,
         PropertyInfo propertyInfo,
-        string label,
+        string? label,
         JsonPointerReference reference,
-        object parameter = null)
+        object? parameter = null)
     {
         if (BasicControls.TryGetValue(controlType, out var factory))
-            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter)).WithLabel(label);
+            return (UiControl)((IFormControl)factory.Invoke(reference, propertyInfo, parameter!)).WithLabel(label!);
         if (ListControls.TryGetValue(controlType, out var factory2))
-            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter)).WithLabel(label);
+            return (UiControl)((IListControl)factory2.Invoke(host, propertyInfo, reference, parameter!)).WithLabel(label!);
 
         throw new ArgumentException($"Cannot convert type {controlType.FullName} to an editor field.");
     }
@@ -396,14 +401,69 @@ public static class EditorExtensions
             $"No implementation to parse dimension options of type {options.GetType().FullName}.");
     }
 
-    private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>> 
+    private static readonly Dictionary<Type, Func<JsonPointerReference, PropertyInfo, object, UiControl>>
         BasicControls = new()
-    {
-        {typeof(DateTimeControl), (reference,property,_) => new DateTimeControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
-        {typeof(TextFieldControl), (reference,property,_)=> new TextFieldControl(reference){Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false  || property.HasAttribute<KeyAttribute>()}},
-        {typeof(NumberFieldControl), (reference, property, type)=> new NumberFieldControl(reference,type) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>()}},
-        { typeof(CheckBoxControl), (reference, property, _) => new CheckBoxControl(reference) { Required = property.HasAttribute<RequiredAttribute>(), Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false || property.HasAttribute<KeyAttribute>() }},
-    };
+        {
+            {
+                typeof(DateTimeControl),
+                (reference, property, _) => new DateTimeControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(TextFieldControl),
+                (reference, property, _) => new TextFieldControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(TextAreaControl),
+                (reference, property, _) => new TextAreaControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(NumberFieldControl),
+                (reference, property, type) => new NumberFieldControl(reference, type)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly =
+                        property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                        property.HasAttribute<KeyAttribute>()
+                }
+            },
+            {
+                typeof(CheckBoxControl),
+                (reference, property, _) => new CheckBoxControl(reference)
+                {
+                    Required =
+                        property.HasAttribute<RequiredMemberAttribute>() ||
+                        property.HasAttribute<RequiredAttribute>(),
+                    Readonly = property.GetCustomAttribute<EditableAttribute>()?.AllowEdit == false ||
+                               property.HasAttribute<KeyAttribute>()
+                }
+            },
+        };
 
 
     private static IReadOnlyCollection<Option> ConvertToOptions(InstanceCollection instances, ITypeDefinition dimensionType)
@@ -411,12 +471,12 @@ public static class EditorExtensions
         var displayNameSelector =
             typeof(INamed).IsAssignableFrom(dimensionType.Type)
                 ? (Func<object, string>)(x => ((INamed)x).DisplayName)
-                : o => o.ToString();
+                : o => o.ToString()!;
 
         var keyType = dimensionType.GetKeyType();
         var optionType = typeof(Option<>).MakeGenericType(keyType);
         return instances.Instances
-            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])).ToArray();
+            .Select(kvp => (Option)Activator.CreateInstance(optionType, [kvp.Key, displayNameSelector(kvp.Value)])!).ToArray();
     }
 
 }

@@ -6,17 +6,17 @@
         /// <summary>
         /// Color of label backdrops.
         /// </summary>
-        public ChartColor BackdropColor { get; init; }
+        public ChartColor BackdropColor { get; init; } = null!;
 
         /// <summary>
         /// Padding of label backdrop.
         /// </summary>
-        public string BackdropPadding { get; init; }
+        public string BackdropPadding { get; init; } = null!;
 
         /// <summary>
         /// Returns the string representation of the tick value as it should be displayed on the chart.
         /// </summary>
-        public string Callback { get; init; }
+        public string Callback { get; init; } = null!;
 
         /// <summary>
         /// If true, show tick labels.
@@ -26,11 +26,11 @@
         /// <summary>
         /// Color of ticks.
         /// </summary>
-        public ChartColor Color { get; init; }
+        public ChartColor Color { get; init; } = null!;
 
-        public Font Font { get; init; }
+        public Font Font { get; init; } = null!;
 
-        public MajorTick Major { get; init; }
+        public MajorTick Major { get; init; } = null!;
 
         /// <summary>
         /// Sets the offset of the tick labels from the axis.
@@ -45,7 +45,7 @@
         /// <summary>
         /// The color of the stroke around the text.
         /// </summary>
-        public ChartColor TextStrokeColor { get; init; }
+        public ChartColor TextStrokeColor { get; init; } = null!;
 
         /// <summary>
         /// Stroke width around the text.
@@ -55,6 +55,6 @@
         /// <summary>
         /// z-index of tick layer. Useful when ticks are drawn on chart area. Values &lt;= 0 are drawn under datasets, &gt; 0 on top.
         /// </summary>
-        public string Z { get; init; }
+        public string Z { get; init; } = null!;
     }
 }

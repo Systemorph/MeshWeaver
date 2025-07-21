@@ -7,6 +7,7 @@ using MeshWeaver.Import.Configuration;
 using MeshWeaver.Import.Implementation;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Import;
 
@@ -21,6 +22,8 @@ public static class ImportExtensions
     )
     {
         var lambdas = configuration.GetListOfLambdas();
+        if (!lambdas.Any())
+            configuration = configuration.WithInitialization(h => h.ServiceProvider.GetRequiredService<ImportManager>());
         var ret = configuration.Set(lambdas.Add(importConfiguration));
         if (lambdas.Any())
             return ret;
@@ -29,6 +32,7 @@ public static class ImportExtensions
             .AddData()
             .WithServices(x => x.AddScoped<ImportManager>())
             .AddHandlers()
+            .WithInitialization(h => h.ServiceProvider.GetRequiredService<ImportManager>())
             ;
 
     }
@@ -37,11 +41,24 @@ public static class ImportExtensions
     {
         return configuration
             .WithHandler<ImportRequest>(
-                (h,d) =>
-                    h.ServiceProvider
-                        .GetRequiredService<ImportManager>()
-                        .HandleImportRequest(d)
-                );
+                (h, d) =>
+                {
+                    var logger = h.ServiceProvider.GetRequiredService<ILogger<ImportManager>>();
+                    logger.LogDebug("ImportRequest handler called for message {MessageId} on hub {HubAddress}", d.Id, h.Address);
+
+                    try
+                    {
+                        var importManager = h.ServiceProvider.GetRequiredService<ImportManager>();
+                        logger.LogDebug("ImportManager resolved successfully for message {MessageId}", d.Id);
+                        return importManager.HandleImportRequest(d);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to resolve or execute ImportManager for message {MessageId}", d.Id);
+                        throw;
+                    }
+                }
+            );
     }
 
     /// <summary>
@@ -55,11 +72,11 @@ public static class ImportExtensions
     public static DataContext FromEmbeddedResource<T>(
         this DataContext dataContext,
         string resource,
-        Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource> configuration = null
+        Func<ImportUnpartitionedDataSource, ImportUnpartitionedDataSource>? configuration = null
     ) where T : class
     {
         var source = new EmbeddedResource(typeof(T).Assembly, resource);
-        return dataContext.WithDataSource(_ => ConfigureDataSource(configuration, dataContext.Workspace, source).WithType<T>(), source);
+        return dataContext.WithDataSource(_ => ConfigureDataSource(configuration ?? (x => x), dataContext.Workspace, source).WithType<T>());
     }
 
     public static DataContext FromEmbeddedResource(
@@ -69,7 +86,7 @@ public static class ImportExtensions
     )
     {
         return dataContext
-            .WithDataSource(_ => ConfigureDataSource(configuration, dataContext.Workspace, resource), resource);
+            .WithDataSource(_ => ConfigureDataSource(configuration, dataContext.Workspace, resource));
     }
 
     private static ImportUnpartitionedDataSource ConfigureDataSource(
@@ -79,7 +96,7 @@ public static class ImportExtensions
     )
     {
         var ret = new ImportUnpartitionedDataSource(source, workspace);
-        if(configuration != null)
+        if (configuration != null)
             ret = configuration.Invoke(ret);
 
         var mappedTypes = ret.MappedTypes;

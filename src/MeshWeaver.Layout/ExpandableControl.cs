@@ -1,12 +1,4 @@
 ﻿namespace MeshWeaver.Layout;
-/// <summary>
-/// Represents a number control.
-/// </summary>
-/// <remarks>
-/// For more information, visit the
-/// <a href="https://www.fluentui-blazor.net/numberfield">Fluent UI Blazor NumberField documentation</a>.
-/// </remarks>
-/// <param name="Data">The data associated with the number control.</param>
 
 /// <summary>
 /// Represents a date control.
@@ -17,7 +9,7 @@
 /// </remarks>
 /// <param name="Data">The data associated with the date control.</param>
 public record DateControl(object Data)
-    : UiControl<DateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion); 
+    : UiControl<DateControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion);
 /// <summary>
 /// Represents an exception control.
 /// </summary>
@@ -30,10 +22,10 @@ public record DateControl(object Data)
 public record ExceptionControl(string Message, string Type)
     : UiControl<ExceptionControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
-/// <summary>
+    /// <summary>
     /// Gets or initializes the stack trace of the exception.
     /// </summary>
-    public string StackTrace { get; init; }
+    public string? StackTrace { get; init; }
 }
 
 public record CodeSampleControl(object Data)

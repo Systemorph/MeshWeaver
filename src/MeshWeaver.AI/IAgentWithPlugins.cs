@@ -7,7 +7,8 @@ public interface IAgentWithPlugins : IAgentDefinition
     /// <summary>
     /// Gets the plugins for the agent
     /// </summary>
-    new IEnumerable<KernelPlugin> GetPlugins();
+    /// <param name="chat">The chat for which the plugin is instantiated.</param>
+    IEnumerable<KernelPlugin> GetPlugins(IAgentChat chat);
 }
 
 /// <summary>

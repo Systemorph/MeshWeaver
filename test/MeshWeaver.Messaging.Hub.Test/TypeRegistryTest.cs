@@ -4,7 +4,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -31,6 +30,6 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
 
         canMap = typeRegistry.TryGetType(typeName, out var mappedType);
         canMap.Should().BeTrue();
-        mappedType.Type.Should().Be(typeof(GenericRequest<int>));
+        mappedType!.Type.Should().Be(typeof(GenericRequest<int>));
     }
 }

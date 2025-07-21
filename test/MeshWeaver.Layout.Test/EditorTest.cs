@@ -17,10 +17,10 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Layout.Test;
 
+[Collection("EditorTests")]
 public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
@@ -79,15 +79,19 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a => 
-                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync())
-            .ToArrayAsync();
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
+            .ToArrayAsync(
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                    ).Token
+            );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
             .AllBeOfType<NumberFieldControl>()
             ;
 
-        await Task.Delay(1000);
     }
     [Fact]
     public async Task TestEditorWithResult()
@@ -105,7 +109,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         control = await area
-            .GetControlStream(stack.Areas.First().Area.ToString())
+            .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -120,8 +124,13 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
             .SelectAwait(async a =>
-                await area.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null))
-            .ToArrayAsync();
+                await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
+            .ToArrayAsync(
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken,
+                    new CancellationTokenSource(5.Seconds()).Token
+                ).Token
+                );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -129,16 +138,16 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             ;
 
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("0");
 
         // update once ==> will issue "add", as 0 was not there
-        area.UpdatePointer(1, editor.DataContext, new("x"));
+        area.UpdatePointer(1, editor.DataContext!, new("x"));
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not MarkdownControl { Markdown: "0" });
 
@@ -147,7 +156,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         // update once ==> will issue "replace"
         area.UpdatePointer(2, editor.DataContext, new("x"));
         control = await area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
 
@@ -169,7 +178,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         control = await area
-            .GetControlStream(stack.Areas.First().Area.ToString())
+            .GetControlStream(stack.Areas.First().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x is not null);
 
@@ -177,14 +186,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         
         var controlStream = area
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .TakeUntil(x => x is MarkdownControl { Markdown: var data } && data.ToString()!.StartsWith("5"));
 
 
         // update once ==> will issue "replace"
         for (var i = 1; i <= 5; i++)
         {
-            area.UpdatePointer(i, editor.DataContext, new("x"));
+            area.UpdatePointer(i, editor.DataContext!, new("x"));
         }
 
         var controls = await controlStream.Where(x => x is not null).ToArray();
@@ -194,14 +203,14 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     private record ListForms
     {
         [Dimension<MyDimension>()]
-        public string Dimension { get; init; }
+        public string Dimension { get; init; } = null!;
         [Dimension<MyDimension>(Options = "stream")]
-        public string DimensionWithStream { get; init; }
+        public string DimensionWithStream { get; init; } = null!;
         [UiControl<RadioGroupControl>(Options = new[] { "chart", "table" })]
-        public string Display { get; init; }
+        public string Display { get; init; } = null!;
     }
 
-    private record ListPropertyBenchmark<T>(string Data, Option[] Options, string OptionPointer = null);
+    private record ListPropertyBenchmark<T>(string Data, Option[]? Options, string? OptionPointer = null);
 
     private static MyDimension[] Dimensions { get; } = [new(1, "One"), new(2, "Two")];
 
@@ -216,60 +225,144 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
     private async Task ValidateListBenchmark<TControl>(ISynchronizationStream<JsonElement> stream, TControl control, ListPropertyBenchmark<TControl> benchmark)
         where TControl : ListControlBase<TControl>
     {
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control type: {typeof(TControl).Name}");
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Control.Data type: {control.Data.GetType().Name}");
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Expected data: {benchmark.Data}");
+        
         control.Data.Should().BeOfType<JsonPointerReference>().Subject.Pointer.Should().Be(benchmark.Data);
+        Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Data validation passed");
 
         var options = control.Options as IReadOnlyCollection<Option>;
-
+        Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options type: {control.Options.GetType().Name}");
 
         if (control.Options is JsonPointerReference pointer)
         {
+            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Options is pointer: {pointer.Pointer}");
             if (benchmark.OptionPointer != null)
                 pointer.Pointer.Should().Be(benchmark.OptionPointer);
             else
                 pointer.Pointer.Should().StartWith("/data/");
+                
             if (benchmark.Options is not null)
-                options = await stream.Reduce(pointer)
-                    .Select(p =>
-                        JsonNode.Parse(p.Value.ToString())
-                            .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions))
-                    .Where(x => x is not null)
-                    .Timeout(10.Seconds())
-                    .FirstAsync();
+            {
+                Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Waiting for options from stream...");
+                try
+                {
+                    options = await stream.Reduce(pointer)!
+                        .Select(p =>
+                        {
+                            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Got stream value: {p.Value}");
+                            var valueString = p.Value.ToString();
+                            if (string.IsNullOrWhiteSpace(valueString))
+                            {
+                                Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Got empty stream value, returning null");
+                                return null;
+                            }
+                            return JsonNode.Parse(valueString)
+                                .Deserialize<IReadOnlyCollection<Option>>(stream.Hub.JsonSerializerOptions);
+                        })
+                        .Where(x => x is not null)
+                        .Timeout(10.Seconds())
+                        .FirstAsync();
+                    Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Got options from stream: {options?.Count} items");
+                }
+                catch (Exception ex)
+                {
+                    Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Failed to get options from stream: {ex.Message}");
+                    throw;
+                }
+            }
         }
 
         if (benchmark.Options is null)
+        {
+            Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Expecting null options");
             options.Should().BeNull();
+        }
         else
+        {
+            Output.WriteLine($"🔧 DEBUG: ValidateListBenchmark - Expecting {benchmark.Options.Length} options");
             options.Should().BeEquivalentTo(benchmark.Options);
+        }
+        
+        Output.WriteLine("🔧 DEBUG: ValidateListBenchmark - Validation completed successfully");
     }
 
     [Fact]
     public async Task TestEditorWithListFormProperties()
     {
-        var client = GetClient();
+        Output.WriteLine("🔧 DEBUG: Starting TestEditorWithListFormProperties");
+        
+        try
+        {
+            var client = GetClient();
+            Output.WriteLine("🔧 DEBUG: Got client");
 
-        var workspace = client.GetWorkspace();
-        var stream = workspace
-            .GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
-            new LayoutAreaReference(nameof(EditorWithListFormProperties)));
-        var control = await stream
-            .GetControlStream(nameof(EditorWithListFormProperties))
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            var workspace = client.GetWorkspace();
+            Output.WriteLine("🔧 DEBUG: Got workspace");
+            
+            var stream = workspace
+                .GetRemoteStream<JsonElement, LayoutAreaReference>(
+                new HostAddress(),
+                new LayoutAreaReference(nameof(EditorWithListFormProperties)));
+            Output.WriteLine("🔧 DEBUG: Got stream");
 
-        var editor = control.Should().BeOfType<EditorControl>().Subject;
+            Output.WriteLine("🔧 DEBUG: Waiting for control stream...");
+            var control = await stream
+                .GetControlStream(nameof(EditorWithListFormProperties))
+                .Timeout(10.Seconds())
+                .FirstAsync(x => x is not null);
+            Output.WriteLine($"🔧 DEBUG: Got control: {control?.GetType().Name}");
 
-        var controls = await editor.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a =>
-                await stream.GetControlStream(a.Area.ToString()).Timeout(5.Seconds()).FirstAsync(x => x is not null))
-            .ToArrayAsync();
+            var editor = control.Should().BeOfType<EditorControl>().Subject;
+            Output.WriteLine($"🔧 DEBUG: Editor has {editor.Areas.Count} areas");
 
-        controls.Should().HaveCount(ListPropertyBenchmarks.Length);
-        foreach (var (c, b) in controls.Zip(ListPropertyBenchmarks))
-            await ValidateListBenchmark(stream, (dynamic)c, (dynamic)b); 
+            Output.WriteLine("🔧 DEBUG: Starting to get controls for areas...");
+            var controls = await editor.Areas.ToAsyncEnumerable()
+                .SelectAwait(async a =>
+                {
+                    Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
+                    var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
+                        .FirstAsync(x => x is not null);
+                    Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
+                    return areaControl;
+                })
+                .ToArrayAsync(
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        TestContext.Current.CancellationToken,
+                        new CancellationTokenSource(5.Seconds()).Token
+                    ).Token
+                    );
+            Output.WriteLine($"🔧 DEBUG: Got {controls.Length} controls");
 
-
+            controls.Should().HaveCount(ListPropertyBenchmarks.Length);
+            Output.WriteLine("🔧 DEBUG: Starting validation...");
+            
+            for (int i = 0; i < controls.Length; i++)
+            {
+                var c = controls[i];
+                var b = ListPropertyBenchmarks[i];
+                Output.WriteLine($"🔧 DEBUG: Validating control {i}: {c?.GetType().Name}");
+                
+                try
+                {
+                    await ValidateListBenchmark(stream, (dynamic)c!, (dynamic)b);
+                    Output.WriteLine($"🔧 DEBUG: Validation {i} completed");
+                }
+                catch (Exception ex)
+                {
+                    Output.WriteLine($"🔧 DEBUG: Validation {i} failed: {ex.Message}");
+                    throw;
+                }
+            }
+            
+            Output.WriteLine("🔧 DEBUG: TestEditorWithListFormProperties completed successfully");
+        }
+        catch (Exception ex)
+        {
+            Output.WriteLine($"🔧 DEBUG: TestEditorWithListFormProperties failed with exception: {ex}");
+            throw;
+        }
     }
 
 

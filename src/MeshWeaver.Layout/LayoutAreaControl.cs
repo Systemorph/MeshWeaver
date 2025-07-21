@@ -20,11 +20,11 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// <summary>
     /// Gets or initializes the display area of the layout area control.
     /// </summary>
-    public object ProgressMessage { get; init; } 
+    public object? ProgressMessage { get; init; }
     /// <summary>
     /// Gets or initializes the progress display state of the layout area control.
     /// </summary>
-    public object ShowProgress { get; init; } = true;
+    public object? ShowProgress { get; init; } = true;
     /// <summary>
     /// Sets the display area of the layout area control.
     /// </summary>
@@ -33,19 +33,19 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
 
     public LayoutAreaControl WithProgressMessage(string progressMessage) => this with { ProgressMessage = progressMessage };
 
-    public virtual bool Equals(LayoutAreaControl other)
+    public virtual bool Equals(LayoutAreaControl? other)
     {
-        if(other is null) return false;
-        if(ReferenceEquals(this, other)) return true;
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
 
         return base.Equals(other)
                && ProgressMessage == other.ProgressMessage
-               && ShowProgress == other.ShowProgress 
+               && ShowProgress == other.ShowProgress
                && Equals(Reference, other.Reference)
                && Address.Equals(other.Address)
                 ;
     }
-/// <summary>
+    /// <summary>
     /// Returns a string that represents the current <see cref="LayoutAreaControl"/>.
     /// </summary>
     /// <returns>A string that represents the current <see cref="LayoutAreaControl"/>.</returns>
@@ -53,7 +53,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     {
         return Reference.ToHref(Address);
     }
- /// <summary>
+    /// <summary>
     /// Serves as the default hash function.
     /// </summary>
     /// <returns>A hash code for the current <see cref="LayoutAreaControl"/>.</returns>

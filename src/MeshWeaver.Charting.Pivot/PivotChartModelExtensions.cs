@@ -102,15 +102,15 @@ public static class PivotChartModelExtensions
         return descriptor.Coordinates.Count == level;
     }
 
-    public static PivotChartModel OrderByValue(this PivotChartModel model, Func<PivotChartRow, bool> dataSetSelector = null) 
+    public static PivotChartModel OrderByValue(this PivotChartModel model, Func<PivotChartRow, bool>? dataSetSelector = null)
         => OrderByValue(model, dataSetSelector, false);
 
-    public static PivotChartModel OrderByValueDescending(this PivotChartModel model, Func<PivotChartRow, bool> dataSetSelector = null) 
+    public static PivotChartModel OrderByValueDescending(this PivotChartModel model, Func<PivotChartRow, bool>? dataSetSelector = null)
         => OrderByValue(model, dataSetSelector, true);
 
     private static PivotChartModel OrderByValue(
         PivotChartModel model,
-        Func<PivotChartRow, bool> dataSetSelector,
+        Func<PivotChartRow, bool>? dataSetSelector,
         bool descending)
     {
         var dataSet = dataSetSelector != null ? model.Rows.FirstOrDefault(dataSetSelector)

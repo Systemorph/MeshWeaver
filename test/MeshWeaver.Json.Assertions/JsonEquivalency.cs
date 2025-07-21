@@ -29,11 +29,13 @@ public class JsonEquivalency : IEquivalencyStep
         if (!TryGetJToken(comparands.Subject, out var actual))
             return EquivalencyResult.ContinueWithNext;
 
-        RemoveRedundantProperties(actual);
+        if (actual != null)
+            RemoveRedundantProperties(actual);
 
         if (TryGetJToken(comparands.Expectation, out var expected))
         {
-            RemoveRedundantProperties(expected);
+            if (expected != null)
+                RemoveRedundantProperties(expected);
 
             actual
                 .Should()
@@ -65,9 +67,9 @@ public class JsonEquivalency : IEquivalencyStep
             );
         return EquivalencyResult.EquivalencyProven;
     }
-    private static readonly Dictionary<string, Type> TypeNames = new();
+    private static readonly Dictionary<string, Type?> TypeNames = new();
 
-    private static Type GetType(string typeName)
+    private static Type? GetType(string? typeName)
     {
         if (typeName == null)
             return null;
@@ -124,7 +126,7 @@ public class JsonEquivalency : IEquivalencyStep
             yield return t;
     }
 
-    bool TryGetJToken(object obj, out JToken ret)
+    bool TryGetJToken(object obj, out JToken? ret)
     {
         switch (obj)
         {
@@ -166,7 +168,7 @@ public class JsonEquivalency : IEquivalencyStep
     {
         public override void BindToName(
             Type serializedType,
-            out string assemblyName,
+            out string? assemblyName,
             out string typeName
         )
         {

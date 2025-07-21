@@ -12,7 +12,7 @@ public static class MessageHubPluginExtensions
         typeof(IMessageHandlerAsync<>)
     ];
     internal static readonly MethodInfo TaskFromResultMethod = ReflectionHelper.GetStaticMethod(
-        () => Task.FromResult<IMessageDelivery>(null)
+        () => Task.FromResult<IMessageDelivery>(null!)
     );
 
 }

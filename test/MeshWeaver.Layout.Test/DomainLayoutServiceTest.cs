@@ -16,7 +16,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
-using Xunit.Abstractions;
+using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -27,7 +27,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<ClientAddress>((_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -44,7 +44,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureClient(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<HostAddress>((_, d) => d.Package(r.Hub.JsonSerializerOptions))
+                r.RouteAddress<HostAddress>((_, d) => d.Package())
             )
             .AddLayoutClient();
     }
@@ -59,7 +59,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -69,9 +69,9 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
 
         var controlFromStream = await stream
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
         var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
         var dataContext = control.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
@@ -82,12 +82,12 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         var value = await nameStream
             .Where(x => x != null)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
         value.Should().NotBeNull();
         value.Should().Be("Hello");
 
         var objectStream = stream.DataBind<JsonElement>(new(dataContext));
-        var obj = await objectStream.Timeout(10.Seconds()).FirstAsync();
+        var obj = await objectStream.Timeout(10.Seconds()).FirstAsync()!;
         const string Universe = nameof(Universe);
 
         var jsonModel = obj.AsNode()?.ToJsonString();
@@ -98,10 +98,10 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         log.Status.Should().Be(ActivityStatus.Succeeded);
 
         value = await stream
-            .DataBind<string>(namePointer, dataContext, (x, _) => (string)x)
+            .DataBind<string>(namePointer, dataContext!, (x, _) => (string)x!)
             .Where(x => x != "Hello")
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
         value.Should().Be(Universe);
         stream.Dispose();
         await Task.Delay(10);
@@ -110,16 +110,16 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             reference
         );
         controlFromStream = await stream
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
         control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
         dataContext = control.DataContext;
         value = await stream
-            .GetDataBoundObservable<string>(namePointer, dataContext)
+            .GetDataBoundObservable<string>(namePointer, dataContext!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x != null);
+            .FirstAsync(x => x != null)!;
 
         value.Should().Be(Universe);
     }
@@ -136,7 +136,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             new HostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area)
+        var content = await stream.GetControlStream(reference.Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -145,15 +145,15 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .Which;
 
         var control = await stream
-            .GetControlStream(stack.Areas.Last().Area.ToString())
+            .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         var dataGrid = control.Should().BeOfType<DataGridControl>().Which;
         var pointer = dataGrid.Data.Should().BeAssignableTo<JsonPointerReference>().Which;
         var dataStream = await stream
             .GetDataStream<IEnumerable<object>>(pointer)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null);
+            .FirstAsync(x => x is not null)!;
         dataStream.Should().BeAssignableTo<IEnumerable<object>>().Which.Should().HaveCount(2);
 
     }

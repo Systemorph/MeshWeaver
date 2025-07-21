@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
@@ -10,21 +9,23 @@ namespace MeshWeaver.Blazor.Components;
 
 public partial class EditFormView
 {
-    private ModelParameter<JsonElement> model;
-    private ActivityLog Log { get; set; }
+    private ModelParameter<JsonElement>? model;
+    private ActivityLog? Log { get; set; }
 
     protected override void BindData()
     {
         DataBind(
-            new JsonPointerReference(ViewModel.DataContext), 
+            new JsonPointerReference(ViewModel.DataContext ?? "/"), 
             x => x.model,
-            (jsonObject,_) => jsonObject == null ? null: Convert((JsonElement)jsonObject)
+            (jsonObject,_) => jsonObject == null ? null!: Convert((JsonElement)jsonObject)
             );
     }
 
     private async void Submit(EditContext context)
     {
-        var log = await Stream.SubmitModel(model);
+        if(Stream is null)
+            throw new InvalidOperationException("Stream must be set before submitting the form.");
+        var log = await Stream.SubmitModel(model!);
         if(log.Status == ActivityStatus.Succeeded)
         {
             Log = null;
@@ -47,7 +48,7 @@ public partial class EditFormView
 
     private void Reset()
     {
-        model.Reset();
+        model?.Reset();
         InvokeAsync(StateHasChanged);
     }
 
@@ -65,12 +66,12 @@ public partial class EditFormView
 
     public override ValueTask DisposeAsync()
     {
-        if (model != null)
+        if (model is not null)
             model.ElementChanged -= OnModelChanged;
         return base.DisposeAsync();
     }
 
-    private void OnModelChanged(object sender, JsonElement e)
+    private void OnModelChanged(object? sender, JsonElement e)
     {
         InvokeAsync(StateHasChanged);
     }

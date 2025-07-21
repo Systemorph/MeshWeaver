@@ -1,13 +1,14 @@
-﻿using System.Reflection;
+﻿#nullable enable
+using System.Reflection;
 
 namespace MeshWeaver.Reflection;
 
 public sealed class Signature : IEquatable<Signature>
 {
-    public string Name { get; }
+    public string? Name { get; }
     public Type[] ParameterTypes { get; }
 
-    public Signature(string name, params Type[] parameterTypes)
+    public Signature(string? name, params Type[] parameterTypes)
     {
         Name = name;
         ParameterTypes = parameterTypes ?? Type.EmptyTypes;
@@ -18,7 +19,7 @@ public sealed class Signature : IEquatable<Signature>
     {
     }
 
-    private static string GetName(MemberInfo memberInfo)
+    private static string? GetName(MemberInfo memberInfo)
     {
         if (memberInfo == null)
             throw new ArgumentNullException(nameof(memberInfo));
@@ -46,7 +47,7 @@ public sealed class Signature : IEquatable<Signature>
 
     #region Equality
 
-    public bool Equals(Signature other)
+    public bool Equals(Signature? other)
     {
         if (ReferenceEquals(null, other))
             return false;
@@ -59,7 +60,7 @@ public sealed class Signature : IEquatable<Signature>
         return ParameterTypes.SequenceEqual(other.ParameterTypes);
     }
 
-    public override bool Equals(object obj)
+    public override bool Equals(object? obj)
     {
         if (ReferenceEquals(null, obj))
             return false;
@@ -71,7 +72,7 @@ public sealed class Signature : IEquatable<Signature>
 
     public override int GetHashCode()
     {
-        return new object[] { Name }.Concat(ParameterTypes).Aggregate(17, (x, y) => x ^ y.GetHashCode());
+        return new object?[] { Name }.Concat(ParameterTypes).Aggregate(17, (x, y) => x ^ (y?.GetHashCode() ?? 0));
     }
 
     #endregion Equality

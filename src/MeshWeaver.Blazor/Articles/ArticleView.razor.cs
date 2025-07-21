@@ -12,28 +12,28 @@ namespace MeshWeaver.Blazor.Articles;
 
 public partial class ArticleView
 {
-    private ModelParameter<Article> data;
-    private ActivityLog Log { get; set; }
-    [Inject] private IToastService ToastService { get; set; }
-    private JsonPointerReference ArticlePointer { get; set; }
+    private ModelParameter<Article> data = null!;
+    private ActivityLog Log { get; set; } = null!;
+    [Inject] private IToastService ToastService { get; set; } = null!;
+    private JsonPointerReference ArticlePointer { get; set; } = null!;
     protected override void BindData()
     {
-        ArticlePointer = new JsonPointerReference(ViewModel.DataContext);
+        ArticlePointer = new JsonPointerReference(ViewModel.DataContext ?? "/");
         DataBind(
             ArticlePointer,
             x => x.data,
-            (jsonObject,_) => Convert((Article)jsonObject)
+            (jsonObject,_) => Convert(jsonObject as Article)
         );
     }
 
     
-    private ModelParameter<Article> ArticleModel { get; set; }
-    private ModelParameter<Article> Convert(Article article)
+    private ModelParameter<Article> ArticleModel { get; set; } = null!;
+    private ModelParameter<Article>? Convert(Article? article)
     {
         if (article == null)
             return null;
         var ret = ArticleModel = new ModelParameter<Article>(article, (_,_) => throw new NotImplementedException());
-        ret.ElementChanged += OnModelChanged;
+        ret.ElementChanged += OnModelChanged!;
         return ret;
     }
 
@@ -62,7 +62,7 @@ public partial class ArticleView
         return base.DisposeAsync();
     }
 
-    private void OnModelChanged(object sender, Article e)
+    private void OnModelChanged(object? sender, Article e)
     {
         InvokeAsync(StateHasChanged);
     }
@@ -71,13 +71,13 @@ public partial class ArticleView
 
     private MarkdownControl MarkdownControl
     {
-        get => new MarkdownControl(ArticleModel?.Element.Content){Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml)};
+        get => new MarkdownControl(ArticleModel?.Element.Content ?? ""){Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml)};
     }
 
 
-    private string ConvertHtml(object arg)
+    private string? ConvertHtml(object? arg)
     {
-        return arg?.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
+        return arg?.ToString()?.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, KernelAddress.ToString());
     }
 
 

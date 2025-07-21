@@ -11,7 +11,6 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Import.Test;
 
@@ -44,21 +43,20 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
                             import
                                 .WithFormat(
                                     "Test",
-                                    format => format.WithImportFunction(customImportFunctionAsync)
+                                    format => format.WithImportFunction(customImportFunctionAsync!)
                                 )
                                 .WithFormat(
                                     "Test2",
                                     format =>
                                         format
-                                            .WithImportFunction(customImportFunctionAsync)
+                                            .WithImportFunction(customImportFunctionAsync!)
                                             .WithAutoMappings()
                                 )
                         )
             );
-            ;
     }
 
-    private ImportFormat.ImportFunctionAsync customImportFunctionAsync = null;
+    private ImportFormat.ImportFunctionAsync? customImportFunctionAsync;
 
     private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
     {
@@ -66,8 +64,11 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
         var importRequest = new ImportRequest(content) { Format = format };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress())
-            , new CancellationTokenSource(10.Seconds()).Token
+            o => o.WithTarget(new TestDomain.ImportAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
         return client;
@@ -82,9 +83,14 @@ SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsL
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         _ = await DoImport(content);
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
-        await Task.Delay(100);
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token
+        ).Token);
         var ret2 = await workspace.GetObservable<MyRecord2>()
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -118,7 +124,9 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
         var ret = await workspace
             .GetObservable<MyRecord>()
@@ -144,12 +152,12 @@ Record3SystemName,Record3DisplayName";
     {
         customImportFunctionAsync = (_, set, ws, store) =>
         {
-            var instances = set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
                 {
-                    SystemName = dsRow[nameof(MyRecord.SystemName)]
-                        .ToString()
-                        ?.Replace("Old", "New"),
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]!
+                        .ToString()!
+                        .Replace("Old", "New"),
                     DisplayName = "test"
                 }).ToArray();
             return Task.FromResult(ws.AddInstances(store, instances));
@@ -182,21 +190,23 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws,store) =>
+        customImportFunctionAsync = (_, set, ws, store) =>
         {
-            var instances = set.Tables[nameof(MyRecord)]
+            var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
                 {
-                    SystemName = dsRow[nameof(MyRecord.SystemName)]
-                        .ToString()
-                        ?.Replace("Old", "New"),
+                    SystemName = dsRow[nameof(MyRecord.SystemName)]!
+                        .ToString()!
+                        .Replace("Old", "New"),
                     DisplayName = "test"
                 }).ToArray();
             return Task.FromResult(ws.AddInstances(store, instances));
         };
 
         _ = await DoImport(ThreeTablesContent, "Test2");
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
+        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
+        await hub.Started;
+        var workspace = hub
             .GetWorkspace();
         var ret2 = await workspace
             .GetObservable<MyRecord2>()

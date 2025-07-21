@@ -8,7 +8,6 @@ using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Models.Options.Scales;
 using MeshWeaver.Fixture;
 using Xunit;
-using Xunit.Abstractions;
 using PluginsType = MeshWeaver.Charting.Models.Options.Plugins;
 
 namespace MeshWeaver.Charting.Test;

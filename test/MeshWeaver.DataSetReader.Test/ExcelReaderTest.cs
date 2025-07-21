@@ -4,7 +4,6 @@ using FluentAssertions;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.DataStructures;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.DataSetReader.Test
 {
@@ -16,7 +15,7 @@ namespace MeshWeaver.DataSetReader.Test
     public class ExcelReaderTest : DataSetReaderTestBase
     {
         private const string FilesFolder = @"FilesForTests/Excel/";
-        (IDataSet DataSet, string Format) ReadFromStream(Stream stream) => new ExcelDataSetReader().Read(stream);
+        (IDataSet DataSet, string? Format) ReadFromStream(Stream stream) => new ExcelDataSetReader().Read(stream);
         public ExcelReaderTest(ITestOutputHelper output)
             : base(output)
         {

@@ -14,7 +14,7 @@ public partial class NumberFieldView<TValue>
     /// <summary>
     /// Allows associating a <see href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element/datalist">datalist</see> to the element by <see href="https://developer.mozilla.org/en-US/docs/Web/API/Element/id">id</see>.
     /// </summary>
-    public string DataList { get; set; }
+    public string? DataList { get; set; }
 
     /// <summary>
     /// Gets or sets the maximum length.
@@ -34,17 +34,17 @@ public partial class NumberFieldView<TValue>
     /// <summary>
     /// Gets or sets the amount to increase/decrease the number with. Only use whole number when TValue is int or long. 
     /// </summary>
-    public string Step { get; set; }
+    public string? Step { get; set; }
 
     /// <summary>
     /// Gets or sets the maximum value.
     /// </summary>
-    public string Max { get; set; }
+    public string? Max { get; set; }
 
     /// <summary>
     /// Gets or sets the minimum value.
     /// </summary>
-    public string Min { get; set; }
+    public string? Min { get; set; }
 
     /// <summary>
     /// Gets or sets the <see cref="FluentInputAppearance" />.

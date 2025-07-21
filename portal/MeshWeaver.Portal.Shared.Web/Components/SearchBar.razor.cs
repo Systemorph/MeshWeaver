@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -16,8 +12,8 @@ public partial class SearchBar : IAsyncDisposable
     [Inject]
     public required IKeyCodeService KeyCodeService { get; set; }
 
-    private FluentAutocomplete<NavItem> searchAutocomplete = default!;
-    private string searchTerm = "";
+    private FluentAutocomplete<NavItem>? searchAutocomplete;
+    private string? searchTerm;
     private IEnumerable<NavItem> selectedOptions = [];
 
     protected override void OnInitialized()
@@ -25,7 +21,7 @@ public partial class SearchBar : IAsyncDisposable
         KeyCodeService.RegisterListener(OnKeyDownAsync);
     }
 
-    public Task OnKeyDownAsync(FluentKeyCodeEventArgs args)
+    public Task OnKeyDownAsync(FluentKeyCodeEventArgs? args)
     {
         if (args is not null && args.Key == KeyCode.Slash)
         {
@@ -37,7 +33,7 @@ public partial class SearchBar : IAsyncDisposable
 
     private void HandleSearchInput(OptionsSearchEventArgs<NavItem> e)
     {
-        var searchTerm = e.Text;
+        searchTerm = e.Text;
 
         if (string.IsNullOrWhiteSpace(searchTerm))
         {
@@ -54,7 +50,7 @@ public partial class SearchBar : IAsyncDisposable
     private void HandleSearchClicked()
     {
         searchTerm = null;
-        var targetHref = selectedOptions?.SingleOrDefault()?.Href;
+        var targetHref = selectedOptions.SingleOrDefault()?.Href;
         selectedOptions = [];
         InvokeAsync(StateHasChanged);
 

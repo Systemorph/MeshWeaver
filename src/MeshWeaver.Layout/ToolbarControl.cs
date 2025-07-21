@@ -22,7 +22,7 @@
         /// <summary>
         /// Gets or sets the orientation of the toolbar.
         /// </summary>
-        public object Orientation { get; set; } = Layout.Orientation.Horizontal;
+        public object? Orientation { get; set; } = Layout.Orientation.Horizontal;
 
         /// <summary>
         /// Sets the orientation of the toolbar.

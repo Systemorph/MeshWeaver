@@ -1,22 +1,27 @@
 ﻿@page "/content/{Collection}/{**Path}"
-@using MeshWeaver.Blazor.Infrastructure
-@using MeshWeaver.ContentCollections
-@inject IContentService ArticleService
 @inject NavigationManager NavigationManager
 
-@code {
-    [Parameter] public string Collection { get; set; }
-    [Parameter] public string Path { get; set; }
-
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="error-container">
+        <div style="padding: 1rem; background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 0.375rem; margin-bottom: 1rem;">
+            <div style="color: #991b1b; font-weight: 600;">Error</div>
+            <div style="color: #dc2626;">@ErrorMessage</div>
+        </div>
+        <div class="error-content">
+            <h1>Collection Not Found</h1>
+            <p>The collection <strong>@Collection</strong> does not exist.</p>
+            <p>Please check the URL or contact an administrator.</p>
+        </div>
+    </div>
 }
-
-@if(ContentType == "text/markdown")
+else if(ContentType == "text/markdown")
 {
     <LayoutArea Address="@PortalApplication.Hub.Address" Area="Content" Id="@(Collection + '/' + Path)"/>
 }
 else if (Content != null)
 {
-    if (ContentType.StartsWith("image/"))
+    if (ContentType?.StartsWith("image/") == true)
     {
         <img src="data:@ContentType;base64,@Convert.ToBase64String(ReadStream(Content))" />
     }

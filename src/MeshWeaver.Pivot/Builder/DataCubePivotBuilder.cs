@@ -98,8 +98,8 @@ namespace MeshWeaver.Pivot.Builder
             builder = builder with
             {
                 SliceColumns = new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                    SliceColumns
-                        ?.Dimensions.Select(d => d.Dim)
+                    SliceColumns?
+                        .Dimensions.Select(d => d.Dim)
                         .Union(dimensionDescriptors)
                         .ToArray() ?? dimensionDescriptors,
                     HierarchicalDimensionOptions
@@ -203,7 +203,7 @@ namespace MeshWeaver.Pivot.Builder
 
             Aggregations = Aggregations with
             {
-                Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                 AggregationOfAggregates = aggregations.AggregationOfAggregates,
                 ResultTransformation = aggregations.ResultTransformation,
                 Name = aggregations.Name
@@ -241,7 +241,7 @@ namespace MeshWeaver.Pivot.Builder
                     TNewAggregate
                 >
                 {
-                    Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                    Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                     AggregationOfAggregates = aggregations.AggregationOfAggregates,
                     ResultTransformation = aggregations.ResultTransformation,
                     Name = aggregations.Name
@@ -275,7 +275,7 @@ namespace MeshWeaver.Pivot.Builder
                 PropertiesToHide = PropertiesToHide,
                 Aggregations = new Aggregations<DataSlice<TElement>, TNewAggregate, TNewAggregate>
                 {
-                    Aggregation = slices => aggregations.Aggregation(slices.Select(s => s.Data)),
+                    Aggregation = slices => aggregations.Aggregation!(slices.Select(s => s.Data)),
                     AggregationOfAggregates = aggregations.AggregationOfAggregates,
                     ResultTransformation = aggregations.ResultTransformation,
                     Name = aggregations.Name
@@ -301,18 +301,8 @@ namespace MeshWeaver.Pivot.Builder
                     : null,
                 this with
                 {
-                    SliceRows =
-                    SliceRows
-                    ?? new SlicePivotGroupingConfigItem<TElement, RowGroup>(
-                        GetAggregateBySliceRowsDimensionDescriptors(this),
-                        HierarchicalDimensionOptions
-                    ),
-                    SliceColumns =
-                    SliceColumns
-                    ?? new SlicePivotGroupingConfigItem<TElement, ColumnGroup>(
-                        Array.Empty<DimensionDescriptor>(),
-                        HierarchicalDimensionOptions
-                    )
+                    SliceRows = SliceRows,
+                    SliceColumns = SliceColumns
                 },
                 Workspace
             );

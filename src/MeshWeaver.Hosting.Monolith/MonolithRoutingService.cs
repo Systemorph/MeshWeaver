@@ -14,7 +14,7 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
     private Task UnregisterStreamAsync(Address address)
     {
         streams.TryRemove(address, out _);
-        return Task.FromResult<Address>(null);
+        return Task.FromResult<Address>(null!);
     }
 
 
@@ -29,7 +29,7 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
 
     protected override async Task<IMessageDelivery> RouteImplAsync(
         IMessageDelivery delivery, 
-        MeshNode node, 
+        MeshNode? node, 
         Address address,
         CancellationToken cancellationToken)
     {
@@ -57,8 +57,8 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
             var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
             if(hub is not null)
                 hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
-            return hub;
+            return hub!;
         }
-        return null;
+        return null!;
     }
 }

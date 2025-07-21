@@ -9,9 +9,9 @@ public abstract class NavItemView<TViewModel, TView> : BlazorView<TViewModel, TV
     where TView : NavItemView<TViewModel, TView>
 
 {
-    protected string Href { get; set; }
-    protected string Title { get; set; }
-    protected Icon Icon { get; set; }
+    protected string? Href { get; set; }
+    protected string? Title { get; set; }
+    protected Icon? Icon { get; set; }
 
     protected override void BindData()
     {

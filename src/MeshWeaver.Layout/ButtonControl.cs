@@ -14,33 +14,33 @@
         /// <summary>
         /// Gets or initializes the icon displayed at the start of the button.
         /// </summary>
-        public object IconStart { get; init; }
+        public object? IconStart { get; init; }
 
         /// <summary>
         /// Gets or initializes the icon displayed at the end of the button.
         /// </summary>
-        public object IconEnd { get; init; }
+        public object? IconEnd { get; init; }
 
         /// <summary>
         /// Gets or initializes the disabled state of the button.
         /// </summary>
-        public object Disabled { get; init; }
+        public object? Disabled { get; init; }
 
         /// <summary>
         /// Gets or sets the appearance of the button.
         /// </summary>
-        public object Appearance { get; set; }
+        public object? Appearance { get; set; }
 
 
         /// <summary>
         /// Label coming as aria-label on tooltip
         /// </summary>
-        public object Label { get; set; }
+        public object? Label { get; set; }
 
         /// <summary>
         /// Navigates to this href when set
         /// </summary>
-        public object NavigateToHref { get; set; }
+        public object? NavigateToHref { get; set; }
 
         public ButtonControl WithNavigateToHref(object navigateToHref)
             => this with { NavigateToHref = navigateToHref };

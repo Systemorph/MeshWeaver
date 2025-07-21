@@ -38,12 +38,12 @@
     private int? Min;
     private int? Max;
     private bool? Paused;
-    private ProgressStroke Stroke;
-    private string Width;
-    string Color;
-    bool HideNumber;
-    private string Message;
-    private MessagePosition MessagePosition;
+    private ProgressStroke Stroke { get; set; } = ProgressStroke.Normal;
+    private string? Width { get; set; }
+    private string? Color { get; set; }
+    private bool HideNumber { get; set; }
+    private string? Message { get; set; }
+    private MessagePosition MessagePosition { get; set; } = MessagePosition.Bottom;
 
     protected override void BindData()
     {

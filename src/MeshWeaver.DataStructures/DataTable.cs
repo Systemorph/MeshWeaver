@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿#nullable enable
+using System.Collections;
 using System.Globalization;
 
 namespace MeshWeaver.DataStructures
@@ -6,9 +7,9 @@ namespace MeshWeaver.DataStructures
     [Serializable]
     public class DataTable : IDataTable
     {
-        private string tableName;
+        private string? tableName;
 
-        public DataTable(string name = null, IDataColumnCollection columns = null)
+        public DataTable(string? name = null, IDataColumnCollection? columns = null)
         {
             tableName = name;
             Columns = new DataColumnCollection();
@@ -17,7 +18,7 @@ namespace MeshWeaver.DataStructures
             Rows = new DataRowCollection(this);
         }
 
-        public string TableName
+        public string? TableName
         {
             get { return tableName; }
             set
@@ -26,7 +27,7 @@ namespace MeshWeaver.DataStructures
                     return;
 
                 foreach (var dataTableCollection in DataTableCollections)
-                    dataTableCollection.RenameTable(tableName, value);
+                    dataTableCollection.RenameTable(tableName ?? string.Empty, value ?? string.Empty);
 
                 tableName = value;
             }
@@ -52,7 +53,7 @@ namespace MeshWeaver.DataStructures
             return GetEnumerator();
         }
 
-        public override string ToString()
+        public override string? ToString()
         {
             if (!string.IsNullOrEmpty(TableName))
                 return TableName;
@@ -87,17 +88,22 @@ namespace MeshWeaver.DataStructures
             return string.Join(",", ItemArray.Select(x => x == null ? "null" : x.ToString()));
         }
 
-        public object this[int i]
+        public object? this[int i]
         {
             get
             {
-                return i < ItemArray.Length ? ItemArray[i] : null;
+                return i < ItemArray.Length ? RemoveDbNull(ItemArray[i]) : null;
             }
             set
             {
                 ReallocateRowItems(i);
-                ItemArray[i] = value;
+                ItemArray[i] = value ?? DBNull.Value;
             }
+        }
+
+        private object? RemoveDbNull(object item)
+        {
+            return item is DBNull ? null : item;
         }
 
         private void ReallocateRowItems(int i)
@@ -113,7 +119,7 @@ namespace MeshWeaver.DataStructures
             }
         }
 
-        public object this[string name]
+        public object? this[string name]
         {
             get { return this[GetColumnIndex(name)]; }
             set { this[GetColumnIndex(name)] = value; }
@@ -129,7 +135,7 @@ namespace MeshWeaver.DataStructures
 
         public T Field<T>(string name) => Field<T>(name, null);
 
-        public T Field<T>(string name, Func<object, T> converter)
+        public T Field<T>(string name, Func<object?, T>? converter)
         {
             var value = this[name];
 
@@ -142,7 +148,7 @@ namespace MeshWeaver.DataStructures
             var valueStr = value?.ToString() ?? string.Empty;
 
             if (string.IsNullOrEmpty(valueStr))
-                return default;
+                return default(T)!;
 
             if (typeof(T) == typeof(DateTime))
                 return (T)(object)(double.TryParse(valueStr, out var result) ? DateTime.FromOADate(result) : DateTime.Parse(valueStr, CultureInfo.InvariantCulture));
@@ -153,7 +159,7 @@ namespace MeshWeaver.DataStructures
             if (typeof(T) == typeof(Guid))
                 return (T)(object)Guid.Parse(valueStr);
 
-            return (T)Convert.ChangeType(value, typeof(T), CultureInfo.InvariantCulture);
+            return (T)Convert.ChangeType(value, typeof(T), CultureInfo.InvariantCulture)!;
         }
     }
 
@@ -208,7 +214,7 @@ namespace MeshWeaver.DataStructures
     [Serializable]
     public class DataColumn : IDataColumn
     {
-        private string columnName;
+        private string columnName = string.Empty;
 
         internal DataColumn(string columnName, int index, Type type, DataColumnCollection columns)
             : this(columnName, type)
@@ -239,14 +245,14 @@ namespace MeshWeaver.DataStructures
         public Type DataType { get; set; }
         public DataColumnFormat ColumnFormat { get; set; }
 
-        public override string ToString()
+        public override string? ToString()
         {
             if (!string.IsNullOrEmpty(ColumnName))
                 return ColumnName;
             return base.ToString();
         }
 
-        internal DataColumnCollection Columns { get; set; }
+        internal DataColumnCollection? Columns { get; set; }
     }
 
     [Serializable]
@@ -256,7 +262,7 @@ namespace MeshWeaver.DataStructures
         private readonly List<IDataColumn> columns = new List<IDataColumn>();
         private readonly IDictionary<string, int> columnNames = new Dictionary<string, int>();
 
-        public IDataColumn this[int i]
+        public IDataColumn? this[int i]
         {
             get
             {
@@ -266,7 +272,7 @@ namespace MeshWeaver.DataStructures
             }
         }
 
-        public IDataColumn this[string name]
+        public IDataColumn? this[string name]
         {
             get
             {

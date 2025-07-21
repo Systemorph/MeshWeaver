@@ -6,9 +6,9 @@ namespace MeshWeaver.Data.Documentation.Model;
 public class Doc
 {
     [XmlElement("assembly", typeof(Assembly))]
-    public Assembly Assembly { get; init; }
+    public Assembly? Assembly { get; init; }
 
     [XmlArray("members")]
     [XmlArrayItem("member")]
-    public List<Member> Members { get; init; }
+    public List<Member>? Members { get; init; }
 }

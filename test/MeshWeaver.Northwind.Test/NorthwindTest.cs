@@ -19,7 +19,6 @@ using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Northwind.Model;
 using MeshWeaver.Reporting.Models;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace MeshWeaver.Northwind.Test;
 
@@ -141,7 +140,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var gridArea =  stack.Areas.Last().Area;
-        control = await stream.GetControlStream(gridArea.ToString())
+        control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = control.Should().BeOfType<GridControl>().Subject;
@@ -154,7 +153,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .And.Subject.First()
             .Should()
             .BeOfType<GridRow>()
-            .Which.RowGroup.DisplayName.Should()
+            .Which.RowGroup!.DisplayName.Should()
             .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
     }
 
@@ -169,11 +168,9 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             {
                 // Read the resource stream and process it as needed
                 // For example, you can use StreamReader to read the content
-                using (var reader = new StreamReader(stream))
-                {
-                    XmlSerializer serializer = new XmlSerializer(typeof(Doc));
-                    Doc doc = serializer.Deserialize(reader) as Doc;
-                }
+                using var reader = new StreamReader(stream);
+                var serializer = new XmlSerializer(typeof(Doc));
+                var doc = serializer.Deserialize(reader) as Doc;
             }
             else
             {
@@ -197,7 +194,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
         var stack = control.Should().BeOfType<StackControl>().Subject;
         var gridArea = stack.Areas.Last().Area;
-        control = await stream.GetControlStream(gridArea.ToString())
+        control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = control.Should().BeOfType<GridControl>().Subject;
@@ -210,7 +207,8 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .And.Subject.First()
             .Should()
             .BeOfType<GridRow>()
-            .Which.RowGroup.DisplayName.Should()
+            .Which.RowGroup!.DisplayName.Should()
             .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
     }
+
 }

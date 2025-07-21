@@ -18,9 +18,9 @@ namespace MeshWeaver.DataSetReader.Excel.BinaryFormat
 		public const int Length = 0x80;
 
 		private readonly byte[] _bytes;
-		private XlsDirectoryEntry _child;
-		private XlsDirectoryEntry _leftSibling;
-		private XlsDirectoryEntry _rightSibling;
+		private XlsDirectoryEntry _child = null!;
+		private XlsDirectoryEntry _leftSibling = null!;
+		private XlsDirectoryEntry _rightSibling = null!;
 		private readonly XlsHeader _header;
 
 		/// <summary>

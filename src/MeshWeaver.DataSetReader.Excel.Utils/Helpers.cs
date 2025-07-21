@@ -45,7 +45,7 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
 
         private static readonly Regex Re = new Regex("_x([0-9A-F]{4,4})_", RegexOptions.Compiled);
 
-        public static string ConvertEscapeChars(string input)
+        public static string? ConvertEscapeChars(string? input)
         {
             return input == null ? null : Re.Replace(input, m => (((char)UInt32.Parse(m.Groups[1].Value, NumberStyles.HexNumber))).ToString());
         }
@@ -75,10 +75,10 @@ namespace MeshWeaver.DataSetReader.Excel.Utils
                     tables.Add(table);
                     continue;
                 }
-                DataTable newTable = null;
+                DataTable? newTable = null;
                 for (int i = 0; i < table.Columns.Count; i++)
                 {
-                    Type type = null;
+                    Type? type = null;
                     foreach (DataRow row in table.Rows)
                     {
                         if (row.IsNull(i))

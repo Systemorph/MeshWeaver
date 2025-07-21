@@ -8,7 +8,7 @@ public interface ILayoutClient
 {
     IMessageHub Hub { get; }
     public LayoutClientConfiguration Configuration { get; }
-    ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area);
+    ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement>? stream, string area);
 }
 
 public class LayoutClient(IMessageHub hub) : ILayoutClient
@@ -18,6 +18,6 @@ public class LayoutClient(IMessageHub hub) : ILayoutClient
         .GetConfigurationFunctions()
         .Aggregate(new LayoutClientConfiguration(hub), (c,f) => f(c));
 
-    public ViewDescriptor GetViewDescriptor(object instance, ISynchronizationStream<JsonElement> stream, string area)
+    public ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement>? stream, string area)
         => Configuration.GetViewDescriptor(instance, stream, area);
 }

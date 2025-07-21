@@ -116,15 +116,15 @@ public static class SupplierSummaryArea
             .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
             .DistinctUntilChanged()
             .Select(x =>
-                x.Value.GetData<Order>()
+                x.Value!.GetData<Order>()
                     .Join(
-                        x.Value.GetData<OrderDetails>(),
+                        x.Value!.GetData<OrderDetails>(),
                         o => o.OrderId,
                         d => d.OrderId,
                         (order, detail) => (order, detail)
                     )
                     .Join(
-                        x.Value.GetData<Product>(),
+                        x.Value!.GetData<Product>(),
                         od => od.detail.ProductId,
                         p => p.ProductId,
                         (od, product) => (od.order, od.detail, product)
@@ -132,7 +132,7 @@ public static class SupplierSummaryArea
                     .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
                     .ToDataCube()
             )
-    );
+    )!;
 
     // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
     private static IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube(
@@ -140,7 +140,7 @@ public static class SupplierSummaryArea
     ) => GetDataCube(area)
         .CombineLatest(
             area.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
-            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter, dataCube)) // todo apply DataCubeFilter from stream
+            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter!, dataCube)) // todo apply DataCubeFilter from stream
         );
 
     private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)
@@ -156,10 +156,10 @@ public static class SupplierSummaryArea
             var sliceTemplateValue = dataCube.GetSlices(filterDimension.Key)
                 .SelectMany(x => x.Tuple.Select(t => t.Value))
                 .First();
-            var dimensionType = sliceTemplateValue.GetType();
+            var dimensionType = sliceTemplateValue!.GetType();
 
             var filterValues = filterDimension.Value.Where(f => f.Selected)
-                .Select(fi => ConvertValue(fi.Id, dimensionType)).ToArray();
+                .Select(fi => ConvertValue(fi.Id!, dimensionType)).ToArray();
 
             if (filterValues.Length == 0)
                 continue;

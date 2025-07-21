@@ -4,31 +4,33 @@ namespace MeshWeaver.Data;
 
 public interface IChangeItem
 {
-    string ChangedBy { get; }
+    string? ChangedBy { get; }
     ChangeType ChangeType { get; }
-    object Value { get; }
+    object? Value { get; }
 
 }
 
 
 public record ChangeItem<TStream>(
-    TStream Value,
-    string ChangedBy,
+    TStream? Value,
+    string? ChangedBy,
+    string? StreamId,
     ChangeType ChangeType,
     long Version,
-    IReadOnlyCollection<EntityUpdate> Updates
+    IReadOnlyCollection<EntityUpdate>? Updates
 ) : IChangeItem
 {
-    object IChangeItem.Value => Value;
+    object? IChangeItem.Value => Value;
 
-    public ActivityLog Log { get; init; }
+    public ActivityLog? Log { get; init; }
     public IReadOnlyCollection<EntityUpdate> Updates { get; init; } = Updates ?? [];
 
     public ChangeItem(
-        TStream Value,
+        TStream? Value,
+        string? StreamId,
         long Version
     )
-        :this(Value, null, ChangeType.Full, Version, null)
+        : this(Value, null, StreamId, ChangeType.Full, Version, null)
     { }
 
 }

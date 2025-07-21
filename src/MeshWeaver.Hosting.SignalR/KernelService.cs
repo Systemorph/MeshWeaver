@@ -19,15 +19,17 @@ public class KernelService(IMessageHub hub, IMemoryCache memoryCache) : IKernelS
                     new PostEvictionCallbackRegistration { EvictionCallback = DisposeKernel }
                 }
             });
-        return client;
+        return client!;
     }
 
-    private void DisposeKernel(object key, object value, EvictionReason reason, object state)
+    private void DisposeKernel(object key, object? value, EvictionReason reason, object? state)
     {
+        if (value is null)
+            return;
         ((KernelClient)value).Dispose();
     }
 
-    public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope, string layoutAreaUrl) => 
+    public Task SubmitCommandAsync(KernelAddress kernelAddress, string kernelCommandEnvelope, string? layoutAreaUrl) => 
         PostToKernel(new KernelCommandEnvelope(kernelCommandEnvelope){IFrameUrl = layoutAreaUrl}, kernelAddress);
 
     public Task SubmitEventAsync(KernelAddress kernelAddress, string commandEnvelope) => 
@@ -61,7 +63,7 @@ public class KernelClient : IDisposable
         KernelAddress = kernelAddress;
     }
 
-    public void SendHeartBeat(object _)
+    public void SendHeartBeat(object? _)
     {
         hub.Post(new HeartbeatEvent(), o => o.WithTarget(KernelAddress));
     }

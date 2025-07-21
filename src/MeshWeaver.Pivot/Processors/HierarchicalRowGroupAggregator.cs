@@ -6,23 +6,17 @@ namespace MeshWeaver.Pivot.Processors
     public class HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
         where TGroup : IGroup, new()
     {
-        private readonly IDictionary<
-            object,
-            HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
-        > subAggregates;
+        private readonly IDictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>? subAggregates;
         public ICollection<PivotGrouping<TGroup, TIntermediate>> AggregatedGroupings { get; }
 
         // TODO V10: add aggregated grouping here as a property Agg of agg (2022/06/14, Ekaterina Mishina)
 
         public HierarchicalRowGroupAggregator(
             ICollection<PivotGrouping<TGroup, TIntermediate>> aggregatedGroupings,
-            IDictionary<
-                TGroup,
-                HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>
-            > subAggregates
+            IDictionary<TGroup, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>? subAggregates
         )
         {
-            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id, x => x.Value);
+            this.subAggregates = subAggregates?.ToDictionary(x => x.Key.Id!, x => x.Value) ?? new Dictionary<object, HierarchicalRowGroupAggregator<TIntermediate, TAggregate, TGroup>>();
             //this.subAggregates.Add("Agg",);
             AggregatedGroupings = aggregatedGroupings;
             foreach (var agg in AggregatedGroupings)
@@ -38,15 +32,15 @@ namespace MeshWeaver.Pivot.Processors
             }
         }
 
-        public PivotGrouping<TGroup, TIntermediate> Total { get; set; }
+        public PivotGrouping<TGroup, TIntermediate>? Total { get; set; }
 
-        public IList<object> Transform<TValue>(
+        public IReadOnlyList<object> Transform<TValue>(
             ICollection<Func<TAggregate, TValue>> valueSelectors,
             Func<TIntermediate, TAggregate> resultTransformation
         )
         {
             if (AggregatedGroupings.Count == 0)
-                return null;
+                return [];
             // TODO V10: get rid of null subAggregates and simplify this if (2022/03/31, Ekaterina Mishina)
             if (subAggregates == null || subAggregates.Count == 0) // lowest level
             {
@@ -58,7 +52,7 @@ namespace MeshWeaver.Pivot.Processors
                 )
                     return valueSelectors
                         .Select(s =>
-                            (object)s(resultTransformation(AggregatedGroupings.First().Object))
+                            (object)s(resultTransformation(AggregatedGroupings.First().Object))!
                         )
                         .ToArray();
 
@@ -77,7 +71,7 @@ namespace MeshWeaver.Pivot.Processors
                             var total = Equals(Total.Object, default(TAggregate))
                                 ? default
                                 : vs(resultTransformation(Total.Object));
-                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id, total);
+                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id!, total);
                         }
                         return dictionary;
                     })
@@ -85,7 +79,7 @@ namespace MeshWeaver.Pivot.Processors
                     .ToArray();
             }
 
-            var subAggregatesByValueSelector = subAggregates?.ToDictionary(
+            var subAggregatesByValueSelector = subAggregates.ToDictionary(
                 x => x.Key,
                 x => x.Value.Transform(valueSelectors, resultTransformation)
             );
@@ -97,7 +91,7 @@ namespace MeshWeaver.Pivot.Processors
                         var dictionary = AggregatedGroupings
                             .Select(a =>
                             {
-                                object subObject;
+                                object? subObject;
 
                                 if (
                                     subAggregatesByValueSelector.TryGetValue(
@@ -119,7 +113,7 @@ namespace MeshWeaver.Pivot.Processors
                             var total = Equals(Total.Object, default(TAggregate))
                                 ? default
                                 : vs(resultTransformation(Total.Object));
-                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id, total);
+                            dictionary.Add(IPivotGrouper<TValue, TGroup>.TotalGroup.Id!, total);
                         }
 
                         return dictionary;

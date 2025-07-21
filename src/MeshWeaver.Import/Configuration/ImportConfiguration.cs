@@ -56,7 +56,7 @@ public record ImportConfiguration
     > ImportFormatBuilders { get; init; } =
         ImmutableDictionary<string, ImmutableList<Func<ImportFormat, ImportFormat>>>.Empty;
 
-    public ImportFormat GetFormat(string format)
+    public ImportFormat? GetFormat(string format)
     {
         if (ImportFormats.TryGetValue(format, out var ret))
             return ret;
@@ -172,7 +172,7 @@ public record ImportConfiguration
                     .Where(x => x.Attr != null)
                     .Select(x =>
                         (
-                            x.Attr.Type,
+                            x.Attr!.Type,
                             x.Name,
                             CreateGetter(type, x.Name)
                         )

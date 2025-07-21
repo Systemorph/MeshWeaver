@@ -10,7 +10,7 @@ public class InMemoryMeshCatalog(IMessageHub hub, MeshConfiguration configuratio
 {
     private readonly ILogger<InMemoryMeshCatalog> logger = hub.ServiceProvider.GetRequiredService<ILogger<InMemoryMeshCatalog>>();
     private readonly ConcurrentDictionary<Address, MeshNode> meshNodes = new();
-    protected override Task<MeshNode> LoadMeshNode(Address address) => 
+    protected override Task<MeshNode?> LoadMeshNode(Address address) => 
         Task.FromResult(meshNodes.GetValueOrDefault(address));
 
     public override Task UpdateAsync(MeshNode node)

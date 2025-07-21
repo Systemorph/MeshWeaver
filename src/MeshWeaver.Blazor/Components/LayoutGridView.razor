@@ -12,9 +12,9 @@
 
 @code{
 
-    private JustifyContent JustifyContent { get; set; }
-    private bool AdaptiveRendering { get; set; }
-    private int Spacing { get; set; }
+    private JustifyContent JustifyContent { get; set; } = JustifyContent.FlexStart;
+    private bool AdaptiveRendering;
+    private int Spacing;
     protected override void BindData()
     {
         base.BindData();

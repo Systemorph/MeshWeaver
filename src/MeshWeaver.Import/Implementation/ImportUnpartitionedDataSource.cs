@@ -8,7 +8,7 @@ namespace MeshWeaver.Import.Implementation;
 public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     : GenericUnpartitionedDataSource<ImportUnpartitionedDataSource>(Source, Workspace)
 {
-    private ImportRequest ImportRequest { get; init; } = new(Source);
+    private ImportRequest ImportRequest { get; init; } = new(Source) { TargetDataSource = null! };
 
     public ImportUnpartitionedDataSource WithRequest(Func<ImportRequest, ImportRequest> config) =>
         this with
@@ -17,7 +17,7 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
         };
 
 
-    protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
+    protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore>? stream, CancellationToken cancellationToken)
     {
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
         var store = await importManager.ImportInstancesAsync(

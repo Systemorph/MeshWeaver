@@ -14,9 +14,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     : Grain, IMessageHubGrain
 {
 
-    private ModulesAssemblyLoadContext loadContext;
+    private ModulesAssemblyLoadContext? loadContext;
     private readonly IMeshCatalog meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-    private IMessageHub Hub { get; set; }
+    private IMessageHub? Hub { get; set; }
 
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
@@ -59,7 +59,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"No hub configuration is specified for {node.Key}."
             );
 
-        return meshHub.GetHostedHub(address, node.HubConfiguration);
+        return meshHub.GetHostedHub(address, node.HubConfiguration)!;
     }
 
 
@@ -74,10 +74,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             return Task.FromResult(delivery.Failed($"Hub not started for {address}"));
         }
 
-        Hub.RegisterForDisposal(_ => DeactivateOnIdle());
+        Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
         // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
-        var ret = Hub.DeliverMessage(delivery);
+        var ret = Hub!.DeliverMessage(delivery);
         return Task.FromResult(ret);
     }
 
@@ -88,7 +88,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (Hub != null)
         {
             Hub.Dispose();
-            await Hub.Disposal;
+            await Hub.Disposal!;
         }
         Hub = null;
         if (loadContext != null)
@@ -106,7 +106,7 @@ public record StreamActivity
 {
     public ImmutableDictionary<string, int> EventCounter { get; init; } = ImmutableDictionary<string, int>.Empty;
     public int ErrorCounter { get; init; }
-    public StreamSequenceToken Token { get; init; }
+    public StreamSequenceToken? Token { get; init; }
     public bool IsDeactivated { get; init; }
 }
 

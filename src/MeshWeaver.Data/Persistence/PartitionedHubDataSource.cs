@@ -5,7 +5,7 @@ namespace MeshWeaver.Data.Persistence
     public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
         : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
     {
-        public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource> config = null)
+        public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null)
 =>            WithTypeSource(
                 typeof(T),
                 (config ?? (x => x)).Invoke(
@@ -24,9 +24,10 @@ namespace MeshWeaver.Data.Persistence
         private object[] InitializePartitions { get; init; } = Array.Empty<object>();
 
 
-        protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+        protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
         {
-            var partition = (Address)identity.Partition;
+            if (identity.Partition is not Address partition)
+                return null;
             var reference = GetReference();
             var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
                 partition,
