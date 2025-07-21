@@ -24,6 +24,7 @@ public record MessageHubConfiguration
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
     public IServiceProvider ServiceProvider { get; set; } = null!;
+    private readonly Lock serviceProviderLock = new();
 
     internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> DisposeActions { get; init; } = [];
 
@@ -121,9 +122,14 @@ public record MessageHubConfiguration
 
     protected void CreateServiceProvider(IMessageHub? parent)
     {
-
-        ServiceProvider = ConfigureServices(parent)
-            .SetupModules(ParentServiceProvider);
+        lock (serviceProviderLock)
+        {
+            if (ServiceProvider != null!)
+                return; // Already created
+                
+            ServiceProvider = ConfigureServices(parent)
+                .SetupModules(ParentServiceProvider);
+        }
     }
 
     public virtual IMessageHub Build<TAddress>(IServiceProvider serviceProvider, TAddress address)
