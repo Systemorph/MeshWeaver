@@ -19,7 +19,6 @@ public class DataPlugin(
     IReadOnlyDictionary<string, TypeDescription>? typeDefinitions = null, 
     Func<string, Address?>? addressMap = null)
 {
-    private readonly IWorkspace workspace = hub.GetWorkspace();
 
     [KernelFunction, Description($"Get data by type name from a specific address. Valid types can be found using the {nameof(GetDataTypes)} function.")]
     public async Task<string> GetData(
@@ -37,7 +36,7 @@ public class DataPlugin(
             : new CollectionReference(type);
 
         var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(address));
-        return response.Message.Data.Content;
+        return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
     }
 
     [KernelFunction, Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
@@ -109,7 +108,7 @@ public class DataPlugin(
             return $"Unknown type: {type}." + (typeDefinitions is not null ? $" Valid types are: {string.Join(", ", typeDefinitions.Keys)}" : string.Empty);
 
         var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address));
-        return response.Message.Schema ?? $"No schema defined for type '{type}'";
+        return response.Message.Schema;
     }
 
     private Address? GetAddress(string type)
@@ -147,10 +146,4 @@ public class DataPlugin(
         return description;
     }
 
-    private string GetDescription(MemberInfo methodInfo)
-    {
-        var desc = methodInfo.GetCustomAttribute<DescriptionAttribute>();
-        var ret = desc?.Description ?? "";
-        return ret;
-    }
 }

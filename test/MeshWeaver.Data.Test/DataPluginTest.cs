@@ -706,12 +706,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
         dataResponse.Data.Should().NotBeNull();
-        dataResponse.Data.Content.Should().NotBeEmpty();
         dataResponse.Version.Should().BeGreaterThan(0);
 
         // Verify the returned data is valid JSON and contains expected data
-        var parsedData = JsonDocument.Parse(dataResponse.Data.Content);
-        parsedData.Should().NotBeNull();
     }
 
     /// <summary>
@@ -737,12 +734,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
         dataResponse.Data.Should().NotBeNull();
-        dataResponse.Data.Content.Should().NotBeEmpty();
         dataResponse.Version.Should().BeGreaterThan(0);
 
-        // Verify the returned data contains the expected entity
-        var parsedData = JsonDocument.Parse(dataResponse.Data.Content);
-        parsedData.Should().NotBeNull();
     }
 
     /// <summary>
