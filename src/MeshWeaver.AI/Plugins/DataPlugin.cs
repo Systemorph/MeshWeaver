@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel;
-using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using MeshWeaver.Activities;
@@ -33,17 +32,12 @@ public class DataPlugin(
         if (address == null)
             return $"No address defined for type: {type}";
 
-        if (!string.IsNullOrWhiteSpace(entityId))
-        {
-            using var stream = workspace.GetRemoteStream<JsonElement, EntityReference>(address, new EntityReference(type, entityId));
-            return await stream.Select(x => x.Value.ToString())
-                               .FirstAsync();
-        }
-        else
-        {
-            using var stream = workspace.GetRemoteStream<JsonElement, CollectionReference>(address, new CollectionReference(type));
-            return await stream.Select(x => x.Value.ToString()).FirstAsync();
-        }
+        WorkspaceReference reference = !string.IsNullOrWhiteSpace(entityId) 
+            ? new EntityReference(type, entityId)
+            : new CollectionReference(type);
+
+        var response = await hub.AwaitResponse(new GetDataRequest(reference), o => o.WithTarget(address));
+        return response.Message.Data.Content;
     }
 
     [KernelFunction, Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]

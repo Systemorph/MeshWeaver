@@ -1,4 +1,6 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
@@ -84,7 +86,9 @@ public static class DataExtensions
                     typeof(GetDomainTypesRequest),
                     typeof(DomainTypesResponse),
                     typeof(TypeDescription),
-                    typeof(PatchDataChangeRequest)
+                    typeof(PatchDataChangeRequest),
+                    typeof(GetDataRequest),
+                    typeof(GetDataResponse)
                 )
                 //.WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
                 .RegisterDataEvents()
@@ -154,7 +158,8 @@ public static class DataExtensions
             .WithHandler<DataChangeRequest>(HandleDataChangeRequest)
             .WithHandler<SubscribeRequest>(HandleSubscribeRequest)
             .WithHandler<GetSchemaRequest>(HandleGetSchemaRequest)
-            .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest);
+            .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
+            .WithHandler<GetDataRequest>(HandleGetDataRequest);
 
     private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request) 
     {
@@ -188,6 +193,69 @@ public static class DataExtensions
         activity.Complete(log =>
                 hub.Post(new DataChangeResponse(hub.Version, log),
                     o => o.ResponseFor(request)));
+        return request.Processed();
+    }
+
+    private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
+    {
+        var workspace = hub.GetWorkspace();
+        var reference = request.Message.Reference;
+        
+        // Get the data asynchronously using the workspace stream with timeout and error handling
+        void HandleStream<T>(ISynchronizationStream<T> stream)
+        {
+            stream.Take(1)
+                  .Timeout(TimeSpan.FromSeconds(5)) // Add timeout to prevent hanging
+                  .Subscribe(
+                      data =>
+                      {
+                          if (data.Value != null)
+                          {
+                              var jsonContent = System.Text.Json.JsonSerializer.Serialize(data.Value, hub.JsonSerializerOptions);
+                              hub.Post(new GetDataResponse(new RawJson(jsonContent), data.Version), o => o.ResponseFor(request));
+                          }
+                          else
+                          {
+                              hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                          }
+                      },
+                      error =>
+                      {
+                          // Handle errors (including timeout)
+                          hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                      },
+                      () =>
+                      {
+                          // Handle stream completion without data
+                          hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+                      });
+        }
+        
+        try
+        {
+            if (reference is CollectionReference collectionRef)
+            {
+                var stream = workspace.GetStream<InstanceCollection>(collectionRef);
+                HandleStream(stream);
+            }
+            else if (reference is EntityReference entityRef)
+            {
+                var stream = workspace.GetStream<object>(entityRef);
+                HandleStream(stream);
+            }
+            else
+            {
+                // Generic case - try to get as EntityStore
+                var stream = workspace.GetStream<EntityStore>(reference as WorkspaceReference<EntityStore> ?? throw new ArgumentException("Unsupported reference type"));
+                HandleStream(stream);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Handle any immediate exceptions
+            hub.Post(new GetDataResponse(new RawJson("null"), 0), o => o.ResponseFor(request));
+        }
+        
         return request.Processed();
     }
 

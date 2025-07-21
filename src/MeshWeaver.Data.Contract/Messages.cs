@@ -89,3 +89,16 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : 
 /// Ids of the synchronization requests to be stopped (generated with request)
 /// </summary>
 public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
+
+/// <summary>
+/// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval
+/// </summary>
+/// <param name="Reference">The workspace reference to retrieve data for</param>
+public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>;
+
+/// <summary>
+/// Response containing the requested data
+/// </summary>
+/// <param name="Data">The JSON data retrieved from the workspace reference</param>
+/// <param name="Version">The version of the data at the time of retrieval</param>
+public record GetDataResponse(RawJson Data, long Version);
