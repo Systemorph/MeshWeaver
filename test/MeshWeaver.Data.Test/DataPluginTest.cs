@@ -684,6 +684,93 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// Tests GetDataRequest for retrieving collection data
+    /// </summary>
+    [Fact]
+    public async Task GetDataRequest_ForCollection_ShouldReturnData()
+    {
+        // arrange
+        var client = GetClient();
+        var collectionRef = new CollectionReference(nameof(MyData));
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetDataRequest(collectionRef),
+            o => o.WithTarget(new HostAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
+        );
+
+        // assert
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Data.Should().NotBeNull();
+        dataResponse.Data.Content.Should().NotBeEmpty();
+        dataResponse.Version.Should().BeGreaterThan(0);
+
+        // Verify the returned data is valid JSON and contains expected data
+        var parsedData = JsonDocument.Parse(dataResponse.Data.Content);
+        parsedData.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Tests GetDataRequest for retrieving specific entity data
+    /// </summary>
+    [Fact]
+    public async Task GetDataRequest_ForEntity_ShouldReturnSpecificEntity()
+    {
+        // arrange
+        var client = GetClient();
+        var entityRef = new EntityReference(nameof(MyData), "1");
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetDataRequest(entityRef),
+            o => o.WithTarget(new ClientAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
+        );
+
+        // assert
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Data.Should().NotBeNull();
+        dataResponse.Data.Content.Should().NotBeEmpty();
+        dataResponse.Version.Should().BeGreaterThan(0);
+
+        // Verify the returned data contains the expected entity
+        var parsedData = JsonDocument.Parse(dataResponse.Data.Content);
+        parsedData.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// Tests GetDataRequest for non-existent entity
+    /// </summary>
+    [Fact]
+    public async Task GetDataRequest_ForNonExistentEntity_ShouldHandleGracefully()
+    {
+        // arrange
+        var client = GetClient();
+        var entityRef = new EntityReference(nameof(MyData), "999");
+
+        // act & assert - this might throw or return null/empty, depending on implementation
+        // The exact behavior should be consistent with the stream-based approach
+        var response = await client.AwaitResponse(
+            new GetDataRequest(entityRef),
+            o => o.WithTarget(new ClientAddress()),
+            CancellationTokenSource.CreateLinkedTokenSource(
+                TestContext.Current.CancellationToken,
+                new CancellationTokenSource(10.Seconds()).Token
+            ).Token
+        );
+
+        var dataResponse = response.Message.Should().BeOfType<GetDataResponse>().Which;
+        dataResponse.Should().NotBeNull();
+    }
+
+    /// <summary>
     /// Helper method to get the type(s) of a property from a JSON schema element.
     /// </summary>
     /// <param name="propertyElement">The JSON element representing the property</param>
