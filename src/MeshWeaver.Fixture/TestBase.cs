@@ -19,7 +19,7 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         SetOutputHelper(Output);
         
         // Log test start marker to debug logs
-        var logger = Services?.GetService<ILogger<TestBase>>();
+        var logger = ServiceProvider?.GetService<ILogger<TestBase>>();
         if (logger != null)
         {
             var testMethod = GetCurrentTestMethodName();
@@ -32,7 +32,7 @@ public class TestBase : ServiceSetup, IAsyncLifetime
     public virtual ValueTask DisposeAsync()
     {
         // Log test end marker to debug logs
-        var logger = Services?.GetService<ILogger<TestBase>>();
+        var logger = ServiceProvider?.GetService<ILogger<TestBase>>();
         if (logger != null)
         {
             var testMethod = GetCurrentTestMethodName();
