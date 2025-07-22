@@ -28,8 +28,6 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
-    - name: Copy test appsettings for logging
-      run: cp test/appsettings.json ./appsettings.json
     - name: Run Tests
       continue-on-error: true
       env:

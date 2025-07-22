@@ -84,7 +84,9 @@ public class HubTestBase : TestBase
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
             // Log which hubs exist before disposal
-            Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, Router.GetType().GetProperty("HostedHubs")?.GetValue(Router)?.ToString() ?? "unknown");
+            var hostedHubsProperty = Router.GetType().GetProperty("HostedHubs");
+            var hostedHubsValue = hostedHubsProperty?.GetValue(Router)?.ToString() ?? "unknown";
+            Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
             if (Router.Disposal is not null)
                 await Router.Disposal.WaitAsync(timeout.Token);
@@ -100,10 +102,10 @@ public class HubTestBase : TestBase
         {
             Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
             Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
-            Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, 
-                Router.Disposal?.IsCompleted == true ? "Completed" : 
+            var disposalState = Router.Disposal?.IsCompleted == true ? "Completed" : 
                 Router.Disposal?.IsFaulted == true ? "Faulted" : 
-                Router.Disposal == null ? "Null" : "Pending");
+                Router.Disposal == null ? "Null" : "Pending";
+            Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, disposalState);
             
             // Don't fight symptoms - let it timeout and provide diagnostic info
             throw;
