@@ -28,25 +28,22 @@ jobs:
       run: dotnet restore
     - name: Build
       run: dotnet build --no-restore -p:CIRun=true
-    - name: Setup logging directory
-      run: mkdir -p logs
     - name: Copy test appsettings for logging
       run: cp test/appsettings.json ./appsettings.json
     - name: Run Tests
       continue-on-error: true
       env:
         DOTNET_ENVIRONMENT: Development
+        Logging__LogLevel__Default: Debug
+        Logging__LogLevel__MeshWeaver.Messaging: Debug
       run: |
         dotnet test --no-build --verbosity detailed -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
-    - name: List generated log files
+    - name: Collect logs for artifact
       if: always()
       run: |
-        echo "Contents of logs directory:"
-        ls -la logs/ || echo "No logs directory found"
-        echo "Looking for meshweaver log files:"
-        find . -name "*meshweaver*.log" -type f || echo "No meshweaver log files found"
-        echo "Contents of test project bin directories:"
-        find test/*/bin -name "logs" -type d -exec ls -la {} \; 2>/dev/null || echo "No test bin/logs directories found"
+        mkdir -p collected-logs
+        find . -name "*meshweaver*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
+        find . -path "*/bin/*/logs/*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
     - name: Publish Test Results
 #      uses: EnricoMi/publish-unit-test-result-action/composite@v2
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
@@ -64,8 +61,6 @@ jobs:
         path: |
           test/**/*.trx
           test/test-results.log
-          logs/**/*.log
-          **/meshweaver*.log
-          test/**/bin/**/logs/*.log
+          collected-logs/
         compression-level: 9
         retention-days: 15
