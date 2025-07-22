@@ -42,8 +42,30 @@ jobs:
       if: always()
       run: |
         mkdir -p collected-logs
-        find . -name "*meshweaver*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
-        find . -path "*/bin/*/logs/*.log" -type f -exec cp {} collected-logs/ \; 2>/dev/null || true
+        # Find all meshweaver log files and rename them based on their test project path
+        find . -name "*meshweaver*.log" -type f | while read logfile; do
+          # Extract test project name from path (e.g., test/MeshWeaver.Data.Test/bin/... -> MeshWeaver.Data.Test)
+          testproject=$(echo "$logfile" | sed -n 's|.*test/\([^/]*\)/.*|\1|p')
+          if [ -n "$testproject" ]; then
+            # Get the original filename without path
+            filename=$(basename "$logfile")
+            # Create new name: TestProject.original-filename
+            newname="${testproject}.${filename}"
+            cp "$logfile" "collected-logs/${newname}" 2>/dev/null || true
+          else
+            # If we can't extract test project name, just copy as-is
+            cp "$logfile" "collected-logs/" 2>/dev/null || true
+          fi
+        done
+        # Also collect any other logs from test bin directories
+        find . -path "*/bin/*/logs/*.log" -type f | while read logfile; do
+          testproject=$(echo "$logfile" | sed -n 's|.*test/\([^/]*\)/.*|\1|p')
+          if [ -n "$testproject" ]; then
+            filename=$(basename "$logfile")
+            newname="${testproject}.${filename}"
+            cp "$logfile" "collected-logs/${newname}" 2>/dev/null || true
+          fi
+        done
     - name: Publish Test Results
 #      uses: EnricoMi/publish-unit-test-result-action/composite@v2
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
