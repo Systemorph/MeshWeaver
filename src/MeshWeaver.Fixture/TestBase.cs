@@ -1,4 +1,6 @@
-﻿using Xunit;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Xunit;
 
 namespace MeshWeaver.Fixture;
 
@@ -15,13 +17,50 @@ public class TestBase : ServiceSetup, IAsyncLifetime
     {
         Initialize();
         SetOutputHelper(Output);
+        
+        // Log test start marker to debug logs
+        var logger = Services?.GetService<ILogger<TestBase>>();
+        if (logger != null)
+        {
+            var testMethod = GetCurrentTestMethodName();
+            logger.LogInformation("=== TEST START: {TestMethod} ===", testMethod);
+        }
+        
         return ValueTask.CompletedTask;
     }
 
     public virtual ValueTask DisposeAsync()
     {
+        // Log test end marker to debug logs
+        var logger = Services?.GetService<ILogger<TestBase>>();
+        if (logger != null)
+        {
+            var testMethod = GetCurrentTestMethodName();
+            logger.LogInformation("=== TEST END: {TestMethod} ===", testMethod);
+        }
+        
         SetOutputHelper(null);
         return ValueTask.CompletedTask;
+    }
+    
+    private string GetCurrentTestMethodName()
+    {
+        // Get the test method name from the call stack
+        var stackTrace = new System.Diagnostics.StackTrace();
+        for (int i = 0; i < stackTrace.FrameCount; i++)
+        {
+            var frame = stackTrace.GetFrame(i);
+            var method = frame?.GetMethod();
+            if (method != null && method.GetCustomAttributes(typeof(Xunit.FactAttribute), false).Length > 0)
+            {
+                return $"{method.DeclaringType?.Name}.{method.Name}";
+            }
+            if (method != null && method.GetCustomAttributes(typeof(Xunit.TheoryAttribute), false).Length > 0)
+            {
+                return $"{method.DeclaringType?.Name}.{method.Name}";
+            }
+        }
+        return "Unknown Test";
     }
 }
 
