@@ -1,12 +1,34 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Fixture;
 
+/// <summary>
+/// Base class for tests that automatically logs test method boundaries.
+/// All test classes inheriting from this will have their test methods logged.
+/// </summary>
+[AutoTestLogging]
 public class TestBase : ServiceSetup, IAsyncLifetime
 {
     protected readonly ITestOutputHelper Output;
+    private static ILogger? _logger;
+
+    static TestBase()
+    {
+        try
+        {
+            var loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder.AddProvider(new DebugFileLoggerProvider());
+                builder.SetMinimumLevel(LogLevel.Debug);
+            });
+            _logger = loggerFactory.CreateLogger("TestBase");
+        }
+        catch
+        {
+            _logger = null;
+        }
+    }
 
     protected TestBase(ITestOutputHelper output)
     {
@@ -18,49 +40,21 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         Initialize();
         SetOutputHelper(Output);
         
-        // Log test start marker to debug logs
-        var logger = ServiceProvider?.GetService<ILogger<TestBase>>();
-        if (logger != null)
-        {
-            var testMethod = GetCurrentTestMethodName();
-            logger.LogInformation("=== TEST START: {TestMethod} ===", testMethod);
-        }
+        // Log test start with class info (individual test methods will be logged by AutoTestLoggingAttribute)
+        var className = GetType().Name;
+        _logger?.LogInformation("=== TEST CLASS INIT: {TestClass} ===", className);
         
         return ValueTask.CompletedTask;
     }
 
     public virtual ValueTask DisposeAsync()
     {
-        // Log test end marker to debug logs
-        var logger = ServiceProvider?.GetService<ILogger<TestBase>>();
-        if (logger != null)
-        {
-            var testMethod = GetCurrentTestMethodName();
-            logger.LogInformation("=== TEST END: {TestMethod} ===", testMethod);
-        }
+        // Log test end with class info
+        var className = GetType().Name;
+        _logger?.LogInformation("=== TEST CLASS DISPOSE: {TestClass} ===", className);
         
         SetOutputHelper(null);
         return ValueTask.CompletedTask;
-    }
-    
-    private string GetCurrentTestMethodName()
-    {
-        // Get the test method name from the call stack
-        var stackTrace = new System.Diagnostics.StackTrace();
-        for (int i = 0; i < stackTrace.FrameCount; i++)
-        {
-            var frame = stackTrace.GetFrame(i);
-            var method = frame?.GetMethod();
-            if (method != null && method.GetCustomAttributes(typeof(Xunit.FactAttribute), false).Length > 0)
-            {
-                return $"{method.DeclaringType?.Name}.{method.Name}";
-            }
-            if (method != null && method.GetCustomAttributes(typeof(Xunit.TheoryAttribute), false).Length > 0)
-            {
-                return $"{method.DeclaringType?.Name}.{method.Name}";
-            }
-        }
-        return "Unknown Test";
     }
 }
 
