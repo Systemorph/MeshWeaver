@@ -67,6 +67,19 @@ foreach ($project in $projects) {
             "Test" {
                 $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\test\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" Version="' + $Version + '" />'
                 $content = $content -replace '<ProjectReference Include="\.\.\\MeshWeaverApp1\.Todo\\MeshWeaverApp1\.Todo\.csproj" />', '<ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />'
+                
+                # Add ItemGroup for appsettings.json if not already present
+                if ($content -notmatch '<None Update="appsettings\.json">') {
+                    $itemGroupToAdd = @"
+  
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+"@
+                    $content = $content -replace '</Project>', ($itemGroupToAdd + "`n</Project>")
+                }
             }
         }
         
