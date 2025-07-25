@@ -71,7 +71,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             }, _ => Task.CompletedTask);
             return true;
         }).ToArray();
-        await Task.Delay(10, CancellationTokenSource.CreateLinkedTokenSource(
+        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
