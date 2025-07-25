@@ -84,14 +84,14 @@ public class HubTestBase : TestBase
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
             // Log which hubs exist before disposal
-            var hostedHubsProperty = Router.GetType().GetProperty("HostedHubs");
+            var hostedHubsProperty = Router?.GetType().GetProperty("HostedHubs");
             var hostedHubsValue = hostedHubsProperty?.GetValue(Router)?.ToString() ?? "unknown";
             Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
-            if (Router.Disposal is not null)
+            if (Router?.Disposal is not null)
                 await Router.Disposal.WaitAsync(timeout.Token);
 
-            if (Router.Disposal is not null)
+            if (Router?.Disposal is not null)
             {
                 Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
                 await Router.Disposal.WaitAsync(timeout.Token);
@@ -101,10 +101,10 @@ public class HubTestBase : TestBase
         catch (OperationCanceledException)
         {
             Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
-            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
-            var disposalState = Router.Disposal?.IsCompleted == true ? "Completed" : 
-                Router.Disposal?.IsFaulted == true ? "Faulted" : 
-                Router.Disposal == null ? "Null" : "Pending";
+            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router?.Address);
+            var disposalState = Router?.Disposal?.IsCompleted == true ? "Completed" : 
+                Router?.Disposal?.IsFaulted == true ? "Faulted" : 
+                Router?.Disposal == null ? "Null" : "Pending";
             Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, disposalState);
             
             // Don't fight symptoms - let it timeout and provide diagnostic info
