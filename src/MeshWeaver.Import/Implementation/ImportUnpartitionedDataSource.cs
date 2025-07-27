@@ -22,7 +22,6 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
         var store = await importManager.ImportInstancesAsync(
             ImportRequest,
-            new(Data.Serialization.ActivityCategory.Import, Workspace.Hub),
             cancellationToken
         );
         return store;

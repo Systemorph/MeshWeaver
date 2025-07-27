@@ -13,12 +13,6 @@ public delegate ChangeItem<TReduced> ReduceFunction<TStream, in TReference, TRed
 )
     where TReference : WorkspaceReference;
 
-public delegate ChangeItem<TStream> PatchFunction<TStream, TReduced>(
-    TStream current,
-    ISynchronizationStream<TStream> stream,
-    ChangeItem<TReduced> change
-);
-public delegate bool PatchFunctionFilter(ISynchronizationStream stream, object reference);
 
 public record ReduceManager<TStream>
 {

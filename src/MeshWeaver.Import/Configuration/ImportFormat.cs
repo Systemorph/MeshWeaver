@@ -3,8 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Implementation;
-using Microsoft.Extensions.Logging;
-using Activity = MeshWeaver.Activities.Activity;
+using Activity = MeshWeaver.Data.Activity;
 
 namespace MeshWeaver.Import.Configuration;
 
@@ -33,8 +32,7 @@ public record ImportFormat(
 
     public async Task<EntityStore?> Import(
         ImportRequest importRequest,
-        IDataSet dataSet,
-        Activity activity
+        IDataSet dataSet
     )
     {
         var store = new EntityStore();
@@ -43,9 +41,11 @@ public record ImportFormat(
             store = await importFunction.Invoke(importRequest, dataSet, Workspace, store);
         }
 
+        var activity = new Activity(ActivityCategory.Import, Workspace.Hub, importRequest.ActivityId);
 
         Validate(store, activity);
-        if (activity.HasErrors())
+        var log = await activity.GetLogAsync();
+        if (log.HasErrors())
             return null;
         return store;
     }
