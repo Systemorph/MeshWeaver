@@ -1,18 +1,17 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using Json.Patch;
-using MeshWeaver.Activities;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
 public static class WorkspaceOperations
 {
-    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery? request)
+    public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         var allValid = true;
-
         if (change.Creations.Any())
         {
             var (isValid, results) = workspace.ValidateCreation(change.Creations);
@@ -23,12 +22,14 @@ public static class WorkspaceOperations
                 {
                     var scopes = new List<KeyValuePair<string, object>>
                     {
-                        new("members", validationResult.MemberNames.ToArray())
+                        new("members", validationResult.MemberNames.ToArray()),
+                        new("error", validationResult.ErrorMessage!)
                     };
+                    activity?.LogError($"{validationResult.ErrorMessage}", scopes);
                     var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
                     
-                    // Use ILogger.Log method with scoped state
-                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                    // Log validation errors (activityId: {activityId})
+                    workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogError("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
                 }
             }
 
@@ -46,10 +47,11 @@ public static class WorkspaceOperations
                     {
                         new("members", validationResult.MemberNames.ToArray())
                     };
-                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                    var message =
+                        $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
                     
-                    // Use ILogger.Log method with scoped state
-                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                    // Log validation errors (activityId: {activityId})
+                    activity?.LogError($"Validation error in {message}", scopes);
                 }
             }
 
@@ -69,8 +71,8 @@ public static class WorkspaceOperations
                     };
                     var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
                     
-                    // Use ILogger.Log method with scoped state
-                    ((ILogger)activity).Log(LogLevel.Error, new EventId(), scopes, null, (state, exception) => message);
+                    // Log validation errors (activityId: {activityId})
+                    activity?.LogError($"Validation error in activityId {message}", scopes);
                 }
             }
         }
@@ -92,13 +94,13 @@ public static class WorkspaceOperations
         return Task.CompletedTask;
     }
 
-    private static void Update(Activity activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
+    private static void Update(Activity? activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
     {
-        PostLogRequest(activity, workspace, LogLevel.Information, "Starting Update");
+        activity?.LogInformation("Starting Update");
         workspace.UpdateStreams(change, activity, request);
     }
 
-    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity activity, IMessageDelivery? request)
+    private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         foreach (var group in
                  change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
@@ -115,22 +117,24 @@ public static class WorkspaceOperations
         {
             if (group.Key.DataSource is null)
             {
-                PostLogRequest(activity, workspace, LogLevel.Warning, "Types {0} could not be mapped to data source", string.Join(", ", group.Select(i => i.Instance.GetType().Name).Distinct()));
+                activity?.LogWarning("Types {types} could not be mapped to data source", string.Join(", ", group.Select(i => i.Instance.GetType().Name).Distinct()));
                 continue;
             }
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
             // Start sub-activity for data update
-            PostStartSubActivityRequest(activity, workspace, "DataUpdate");
+            var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
+
             
             stream!.Update(store =>
             {
                 // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
-                PostLogRequest(activity, workspace, LogLevel.Information, "Updating Data Stream {0}", stream.StreamIdentity);
+                subActivity?.LogInformation("Updating Data Stream {Stream}", stream.StreamIdentity);
                 try
                 {
 
-                    var updates = group.GroupBy(x => (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
+                    var updates = group.GroupBy(x =>
+                            (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
                         .Aggregate(new EntityStoreAndUpdates(store!, [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
@@ -145,7 +149,7 @@ public static class WorkspaceOperations
                                     var updated = change.Options?.Snapshot == true
                                         ? instances
                                         : storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName)
-                                            !.Merge(instances) ?? instances;
+                                            !.Merge(instances);
                                     var updates =
                                         storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
                                             .ToArray();
@@ -171,47 +175,26 @@ public static class WorkspaceOperations
 
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                             });
-                    PostLogRequest(activity, workspace, LogLevel.Information, "Update of Data Stream {0} succeeded.", stream.StreamIdentity);
+                    subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
                     // Complete sub-activity - this would need proper sub-activity tracking to work correctly
                     return stream.ApplyChanges(updates);
                 }
                 catch (Exception ex)
                 {
-                    PostLogRequest(activity, workspace, LogLevel.Error, "Error updating Stream {0}: {1}", stream.StreamIdentity,
+                    subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
                         ex.Message);
                     return null;
                 }
-
+                finally
+                {
+                    subActivity?.Complete();
+                }
             },
             ex => UpdateFailed(request, ex)
                 );
         }
     }
 
-    // Helper methods for message-based activity operations
-    private static void PostLogRequest(Activity activity, IWorkspace workspace, LogLevel logLevel, string message, params object[] args)
-    {
-        var formattedMessage = args.Length > 0 ? string.Format(message, args) : message;
-        var logMessage = new LogMessage(formattedMessage, logLevel);
-        workspace.Hub.Post(new LogRequest(activity.ActivityAddress, logMessage), o => o.WithTarget(activity.ActivityAddress));
-    }
-
-    private static void PostLogRequest(Activity activity, IWorkspace workspace, LogLevel logLevel, string message, string[] memberNames, params object[] args)
-    {
-        var formattedMessage = args.Length > 0 ? string.Format(message, args) : message;
-        var scopes = new List<KeyValuePair<string, object>>
-        {
-            new("members", memberNames)
-        };
-        var logMessage = new LogMessage(formattedMessage, logLevel) { Scopes = scopes };
-        workspace.Hub.Post(new LogRequest(activity.ActivityAddress, logMessage), o => o.WithTarget(activity.ActivityAddress));
-    }
-
-    private static void PostStartSubActivityRequest(Activity activity, IWorkspace workspace, string category)
-    {
-        workspace.Hub.Post(new StartSubActivityRequest(category), 
-            options => options.WithTarget(activity.ActivityAddress));
-    }
 
 
     public static EntityStore Merge(this EntityStore store, EntityStore updated) =>

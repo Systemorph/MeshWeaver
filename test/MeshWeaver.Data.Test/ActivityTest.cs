@@ -1,6 +1,6 @@
 ﻿using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Activities;
+using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -18,11 +18,11 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task TestActivity()
     {
-        var activity = new Activity("MyActivity", GetClient());
+        var client = GetClient();
+        var activity = new Activity("MyActivity", client);
         
         // Start sub-activity using message-based approach
-        GetClient().Post(new StartSubActivityRequest("gugus"), 
-            options => options.WithTarget(activity.ActivityAddress));
+        var subActivity = activity.StartSubActivity("gugus");
 
         // Log information using message-based approach
         PostLogRequest(activity, LogLevel.Information, nameof(activity));
@@ -31,11 +31,12 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         
         // Complete activity using message-based approach
 
-        GetClient().Post(new CompleteActivityRequest(null), 
-            options => options.WithTarget(activity.ActivityAddress));
+        subActivity.Complete();
         
         
-        var log = await closeTask;
+        var log = await closeTask
+            .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken)
+            ;
         log.Should().NotBeNull();
         log.Status.Should().Be(ActivityStatus.Succeeded);
     }
@@ -49,8 +50,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         var activity = new Activity("MyActivity", GetClient());
         
         // Start sub-activity using message-based approach
-        GetClient().Post(new StartSubActivityRequest("gugus"), 
-            options => options.WithTarget(activity.ActivityAddress));
+        var subActivity = activity.StartSubActivity("gugus");
         
         var taskComplete = activity.Completion;
         ActivityLog? activityLog = null;
@@ -60,11 +60,12 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activityLog.Should().BeNull();
         
         // Complete activity using message-based approach
-        GetClient().Post(new CompleteActivityRequest(null), 
-            options => options.WithTarget(activity.ActivityAddress));
+        subActivity.Complete();
         
         // Wait for the main activity to complete before disposal
-        activityLog = await taskComplete;
+        activityLog = await taskComplete
+            .WaitAsync(3.Seconds(), TestContext.Current.CancellationToken)
+            ;
         
         await DisposeAsync();
         taskComplete.Status.Should().Be(TaskStatus.RanToCompletion);
@@ -80,6 +81,6 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var formattedMessage = args.Length > 0 ? string.Format(message, args) : message;
         var logMessage = new LogMessage(formattedMessage, logLevel);
-        GetClient().Post(new LogRequest(activity.ActivityAddress, logMessage));
+        GetClient().Post(new LogRequest(logMessage), o => o.WithTarget(activity.Address));
     }
 }

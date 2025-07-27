@@ -2,7 +2,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
-using MeshWeaver.Activities;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
@@ -21,7 +20,7 @@ public class Workspace : IWorkspace
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.GetDataConfiguration();
 
-        //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.Hub.Version));
+        //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.ParentHub.Version));
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
     }
@@ -87,19 +86,19 @@ public class Workspace : IWorkspace
 
 
 
-    public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity activity, IMessageDelivery request) =>
+    public void Update(IReadOnlyCollection<object> instances, UpdateOptions updateOptions, Activity? activity, IMessageDelivery request) =>
         RequestChange(
             new DataChangeRequest()
             {
                 Updates = instances.ToImmutableList(),
                 Options = updateOptions,
                 ChangedBy = null
-            }, activity,request
+            }, activity, request
         );
 
 
 
-    public void Delete(IReadOnlyCollection<object> instances, Activity activity, IMessageDelivery request) =>
+    public void Delete(IReadOnlyCollection<object> instances, Activity? activity, IMessageDelivery request) =>
         RequestChange(
             new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }, activity, request
         );
@@ -138,7 +137,7 @@ public class Workspace : IWorkspace
 
     public DataContext DataContext { get; }
 
-    public void RequestChange(DataChangeRequest change, Activity activity, IMessageDelivery? request)
+    public void RequestChange(DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         this.Change(change, activity, request);
     }

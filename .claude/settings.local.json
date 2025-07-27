@@ -21,7 +21,10 @@
       "Bash(dotnet add:*)",
       "Bash(dotnet search:*)",
       "Bash(dotnet list package:*)",
-      "Bash(dotnet remove:*)"
+      "Bash(dotnet remove:*)",
+      "Bash(dotnet run:*)",
+      "Bash(cp:*)",
+      "Bash(sed:*)"
     ],
     "deny": []
   }

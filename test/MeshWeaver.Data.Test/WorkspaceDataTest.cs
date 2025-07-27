@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Activities;
+using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;

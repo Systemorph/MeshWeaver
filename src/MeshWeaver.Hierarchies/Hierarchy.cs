@@ -1,8 +1,4 @@
-﻿using System.Collections.Immutable;
-using AngleSharp.Common;
-using AngleSharp.Dom;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Domain;
 
 namespace MeshWeaver.Hierarchies;
 
@@ -14,12 +10,12 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public Hierarchy(IReadOnlyDictionary<object, object> elementsById)
     {
-        this.elementsById = elementsById ?? ImmutableDictionary<object, object>.Empty;
+        this.elementsById = elementsById;
         hierarchy = this.elementsById
             .Select(kvp => new KeyValuePair<object, T>(kvp.Key, (T)kvp.Value))
             .Select(dim => new HierarchyNode<T>(
                 dim.Key,
-                (T)dim.Value,
+                dim.Value,
                 dim.Value.Parent,
                 dim.Value.Parent == null
                     ? null
@@ -59,7 +55,6 @@ public class Hierarchy<T> : IHierarchy<T>
 
     public T[] Children(object id)
     {
-        var targetKey = id ?? "<null>";
         return elementsById.Values.Cast<T>().Where(x => x.Parent == id).ToArray();
     }
 

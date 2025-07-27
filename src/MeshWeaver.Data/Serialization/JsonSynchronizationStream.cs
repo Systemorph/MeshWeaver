@@ -2,7 +2,6 @@
 using System.Text.Json;
 using Json.Patch;
 using Json.Pointer;
-using MeshWeaver.Activities;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
@@ -22,7 +21,7 @@ public static class JsonSynchronizationStream
     {
         var hub = workspace.Hub;
         if (hub.IsDisposing)
-            throw new ObjectDisposedException($"Hub {hub.Address} is disposing, cannot create stream.");
+            throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream.");
 
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(JsonSynchronizationStream));
@@ -162,6 +161,7 @@ public static class JsonSynchronizationStream
                     reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
                     activity.Complete(_ =>
                     {
+                        activity.Dispose();
                         /*TODO: Where to save?*/
                     });
                 })

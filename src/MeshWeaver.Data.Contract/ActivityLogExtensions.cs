@@ -1,7 +1,7 @@
 ﻿#nullable enable
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Activities;
+namespace MeshWeaver.Data;
 
 public static class ActivityLogExtensions
 {

@@ -87,7 +87,7 @@ public class DataSynchronizationTest(ITestOutputHelper output) : HubTestBase(out
         loadedInstance = await hostWorkspace
             .GetObservable<BusinessUnit>(businessUnit.SystemName)
             .Timeout(3.Seconds())
-            .FirstAsync(); // we query directly the host to see that data sync worked
+            .FirstAsync(x => x!.DisplayName != oldName);
         loadedInstance.Should().Be(businessUnit);
     }
     /// <summary>
