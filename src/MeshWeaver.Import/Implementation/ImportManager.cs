@@ -1,7 +1,5 @@
 ﻿using System.Text;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
@@ -16,19 +14,19 @@ public class ImportManager
     private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
-    private IMessageHub? _importHub;
+    private IMessageHub? importHub;
     private IMessageHub ImportHub
     {
         get
         {
-            if (_importHub == null)
+            if (importHub == null)
             {
                 var logger = Hub.ServiceProvider.GetService<ILogger<ImportManager>>();
                 logger?.LogDebug("ImportManager lazy-initializing import hub for address {ImportAddress}", new ImportAddress());
-                _importHub = Hub.GetHostedHub(new ImportAddress());
-                logger?.LogDebug("ImportManager import hub initialized: {ImportHub}", _importHub?.Address);
+                importHub = Hub.GetHostedHub(new ImportAddress());
+                logger?.LogDebug("ImportManager import hub initialized: {ImportHub}", importHub?.Address);
             }
-            return _importHub!;
+            return importHub!;
         }
     }
     public IWorkspace Workspace { get; }
@@ -76,9 +74,13 @@ public class ImportManager
             message.AppendLine(exception.InnerException.Message);
             exception = exception.InnerException;
         }
+
         var activity = new Activity(ActivityCategory.Import, Hub);
-        activity.LogError(message.ToString());
-        activity.Complete(log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
+        Hub.Post(new LogRequest(new LogMessage(message.ToString(), LogLevel.Error)),
+            o => o.WithTarget(activity.Address));
+
+        
+        activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
     private async Task<IMessageDelivery> DoImport(
@@ -89,7 +91,7 @@ public class ImportManager
 
         var activity = new Activity(ActivityCategory.Import, Hub);
         var importId = Guid.NewGuid().ToString("N")[..8];
-        activity.LogInformation("Starting import {ImportId} for request {RequestType}", importId, request.Message.GetType().Name);
+        activity.LogInformation($"Starting import {importId} for request {request.Message.GetType().Name}");
 
         try
         {
@@ -98,9 +100,8 @@ public class ImportManager
 
             activity.Complete(log =>
             {
-                activity.LogInformation("Import {ImportId} Activity.Complete callback executing", importId);
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-                activity.LogInformation("Import {ImportId} response posted", importId);
+                activity.Dispose();
             });
 
             activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
@@ -134,8 +135,9 @@ public class ImportManager
         try
 
         {
-            var imported = await ImportInstancesAsync(request.Message, activity, cancellationToken);
-            if (activity.HasErrors())
+            var imported = await ImportInstancesAsync(request.Message, cancellationToken);
+            var log = await activity.GetLogAsync();
+            if (log.HasErrors())
                 return;
 
             Configuration.Workspace.RequestChange(
@@ -162,11 +164,10 @@ public class ImportManager
 
     public async Task<EntityStore> ImportInstancesAsync(
         ImportRequest importRequest,
-        Activity activity,
         CancellationToken cancellationToken)
     {
         var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-        var imported = await format.Import(importRequest, dataSet, activity);
+        var imported = await format.Import(importRequest, dataSet);
         return imported!;
     }
 

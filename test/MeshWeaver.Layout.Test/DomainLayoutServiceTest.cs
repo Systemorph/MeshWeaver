@@ -9,7 +9,6 @@ using FluentAssertions.Extensions;
 using Json.More;
 using Json.Patch;
 using Json.Pointer;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;

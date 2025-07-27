@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Data;
 using System.Reflection;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Import.Implementation;
@@ -28,7 +27,6 @@ public static class ImportExtensions
         if (lambdas.Any())
             return ret;
         return ret
-            .AddActivities()
             .AddData()
             .WithServices(x => x.AddScoped<ImportManager>())
             .AddHandlers()

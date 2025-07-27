@@ -2,7 +2,7 @@
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Activities;
+namespace MeshWeaver.Data;
 
 public record LogMessage(string Message, LogLevel LogLevel)
 {
@@ -11,6 +11,3 @@ public record LogMessage(string Message, LogLevel LogLevel)
     public IReadOnlyCollection<KeyValuePair<string, object>>? Scopes { get; init; } = [];
 }
 
-public record LogRequest(ActivityAddress ActivityAddress, params IReadOnlyCollection<LogMessage> LogMessages) : IRequest;
-
-public record StartSubActivityRequest(string Category) : IRequest;
