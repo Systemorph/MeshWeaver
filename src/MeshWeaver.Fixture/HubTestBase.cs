@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,7 +40,6 @@ public class HubTestBase : TestBase
         { new ClientAddress().Type, typeof(ClientAddress) },
         { new HostAddress().Type, typeof(HostAddress) },
         { new RouterAddress().Type, typeof(RouterAddress) },
-        { new ActivityAddress().Type, typeof(ActivityAddress) }
     };
     protected virtual MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
     {
@@ -62,12 +60,12 @@ public class HubTestBase : TestBase
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router!.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
+        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router!.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
+        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
     }
     public override async ValueTask DisposeAsync()
     {
