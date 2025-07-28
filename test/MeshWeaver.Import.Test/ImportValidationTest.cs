@@ -94,8 +94,8 @@ SystemName,FoundationYear,ContractType
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
+                TestContext.Current.CancellationToken
+                , new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
@@ -221,7 +221,7 @@ A,B";
         //log.Status.Should().Be(ActivityLogStatus.Failed);
     }
 
-    [Fact(Skip = "Currently not implemented funcitonality")]
+    [Fact(Skip = "Currently not implemented functionality")]
     public async Task ImportWithCategoryValidationTest()
     {
         const string content =

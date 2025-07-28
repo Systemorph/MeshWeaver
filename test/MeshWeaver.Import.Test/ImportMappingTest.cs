@@ -149,7 +149,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task SingleTableMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws, store) =>
+        customImportFunctionAsync = (_, set, ws, store, _) =>
         {
             var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
@@ -189,7 +189,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws, store) =>
+        customImportFunctionAsync = (_, set, ws, store, _) =>
         {
             var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
