@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Messaging.Serialization;
@@ -195,7 +196,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
     public ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction)
     {
-        var typeDefinition = typeByName.GetValueOrDefault(collection);
+        var typeDefinition = typeByName.GetValueOrDefault(collection) ?? (TypeDefinition?)parent?.GetTypeDefinition(collection);
         if (typeDefinition == null)
             throw new ArgumentException($"Type {collection} not found");
         return typeByName[collection] = typeDefinition with { Key = new(() => keyFunction) };
