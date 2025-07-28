@@ -25,28 +25,28 @@ public record ImportFormat(
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with
         {
-            ImportFunctions = ImportFunctions.Add((req,ds,ws,esu)=>Task.FromResult(importFunction.Invoke(req,ds,ws,esu)))
+            ImportFunctions = ImportFunctions.Add((req,ds,ws,esu,ct)=>Task.FromResult(importFunction.Invoke(req, ds, ws, esu, ct)))
         };
 
 
 
     public async Task<EntityStore?> Import(
         ImportRequest importRequest,
-        IDataSet dataSet
+        IDataSet dataSet,
+        Activity activity, 
+        CancellationToken cancellationToken
     )
     {
         var store = new EntityStore();
         foreach (var importFunction in ImportFunctions)
         {
-            store = await importFunction.Invoke(importRequest, dataSet, Workspace, store);
+            if(cancellationToken.IsCancellationRequested)
+                return null;
+            store = await importFunction.Invoke(importRequest, dataSet, Workspace, store, cancellationToken);
         }
 
-        var activity = new Activity(ActivityCategory.Import, Workspace.Hub, importRequest.ActivityId);
 
         Validate(store, activity);
-        var log = await activity.GetLogAsync();
-        if (log.HasErrors())
-            return null;
         return store;
     }
 
@@ -77,17 +77,19 @@ public record ImportFormat(
         ImportRequest importRequest,
         IDataSet dataSet,
         IWorkspace workspace,
-        EntityStore storeAndUpdates
+        EntityStore storeAndUpdates,
+        CancellationToken cancellationToken
     );
     public delegate EntityStore ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
         IWorkspace workspace,
-        EntityStore storeAndUpdates
+        EntityStore storeAndUpdates,
+        CancellationToken cancellationToken
     );
 
     public ImportFormat WithMappings(Func<ImportMapContainer, ImportMapContainer> config) =>
-        WithImportFunction((_, dataSet, _, store) =>
+        WithImportFunction((_, dataSet, _, store, _) =>
             config(new(Workspace)).ImportAsync(dataSet, store)
         );
 

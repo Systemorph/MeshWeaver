@@ -9,12 +9,12 @@ namespace MeshWeaver.Fixture;
 public class HubTestBase : TestBase
 {
 
-    protected record RouterAddress(string? Id = default) : Address("router", Id ?? "1");
+    protected record RouterAddress(string? Id = null) : Address("router", Id ?? "1");
 
-    protected record HostAddress(string? Id = default) : Address("host", Id ?? "1");
+    protected record HostAddress(string? Id = null) : Address("host", Id ?? "1");
 
 
-    protected record ClientAddress(string? Id = default) : Address("client", Id ?? "1");
+    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
 
     [Inject]
     protected IMessageHub Router = null!;
@@ -60,20 +60,21 @@ public class HubTestBase : TestBase
 
     protected virtual IMessageHub GetHost(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost)!;
+        return Router.GetHostedHub(new HostAddress(), configuration ?? ConfigureHost);
     }
 
     protected virtual IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? configuration = default)
     {
-        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient)!;
+        return Router.GetHostedHub(new ClientAddress(), configuration ?? ConfigureClient);
     }
     public override async ValueTask DisposeAsync()
     {
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
         if (Router is null)
             return;
         var disposalId = Guid.NewGuid().ToString("N")[..8];
 
-        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router?.Address);
+        Logger.LogInformation("[{DisposalId}] Starting disposal of router {RouterAddress}", disposalId, Router.Address);
 
         try
         {
@@ -82,14 +83,14 @@ public class HubTestBase : TestBase
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
 
             // Log which hubs exist before disposal
-            var hostedHubsProperty = Router?.GetType().GetProperty("HostedHubs");
+            var hostedHubsProperty = Router.GetType().GetProperty("HostedHubs");
             var hostedHubsValue = hostedHubsProperty?.GetValue(Router)?.ToString() ?? "unknown";
             Logger.LogInformation("[{DisposalId}] Router has {HubCount} hosted hubs", disposalId, hostedHubsValue);
 
-            if (Router?.Disposal is not null)
+            if (Router.Disposal is not null)
                 await Router.Disposal.WaitAsync(timeout.Token);
 
-            if (Router?.Disposal is not null)
+            if (Router.Disposal is not null)
             {
                 Logger.LogInformation("[{DisposalId}] Router.Disposal exists, waiting for completion", disposalId);
                 await Router.Disposal.WaitAsync(timeout.Token);
@@ -99,10 +100,10 @@ public class HubTestBase : TestBase
         catch (OperationCanceledException)
         {
             Logger.LogError("[{DisposalId}] HANG DETECTED: Router disposal timed out after {TimeoutSeconds}s", disposalId, 10);
-            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router?.Address);
-            var disposalState = Router?.Disposal?.IsCompleted == true ? "Completed" : 
-                Router?.Disposal?.IsFaulted == true ? "Faulted" : 
-                Router?.Disposal == null ? "Null" : "Pending";
+            Logger.LogError("[{DisposalId}] Router address: {Address}", disposalId, Router.Address);
+            var disposalState = Router.Disposal?.IsCompleted == true ? "Completed" : 
+                Router.Disposal?.IsFaulted == true ? "Faulted" : 
+                Router.Disposal == null ? "Null" : "Pending";
             Logger.LogError("[{DisposalId}] Router.Disposal state: {State}", disposalId, disposalState);
             
             // Don't fight symptoms - let it timeout and provide diagnostic info

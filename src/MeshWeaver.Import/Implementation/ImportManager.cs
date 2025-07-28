@@ -90,7 +90,7 @@ public class ImportManager
     {
 
         var activity = new Activity(ActivityCategory.Import, Hub);
-        var importId = Guid.NewGuid().ToString("N")[..8];
+        var importId = Guid.NewGuid().AsString();
         activity.LogInformation($"Starting import {importId} for request {request.Message.GetType().Name}");
 
         try
@@ -135,7 +135,7 @@ public class ImportManager
         try
 
         {
-            var imported = await ImportInstancesAsync(request.Message, cancellationToken);
+            var imported = await ImportInstancesAsync(request.Message, activity, cancellationToken);
             var log = await activity.GetLogAsync();
             if (log.HasErrors())
                 return;
@@ -151,30 +151,23 @@ public class ImportManager
         }
         catch (Exception e)
         {
-            var message = new StringBuilder(e.Message);
-            while (e.InnerException != null)
-            {
-                message.AppendLine(e.InnerException.Message);
-                e = e.InnerException;
-            }
-
-            activity.LogError(message.ToString());
+            activity.LogError(e.ToString());
         }
     }
 
     public async Task<EntityStore> ImportInstancesAsync(
         ImportRequest importRequest,
+        Activity activity,
         CancellationToken cancellationToken)
     {
-        var (dataSet, format) = await ReadDataSetAsync(importRequest, cancellationToken);
-        var imported = await format.Import(importRequest, dataSet);
+        var (dataSet, format) = await ReadDataSetAsync(importRequest, activity, cancellationToken);
+        var imported = await format.Import(importRequest, dataSet, activity, cancellationToken);
         return imported!;
     }
 
-    private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(
-        ImportRequest importRequest,
-        CancellationToken cancellationToken
-    )
+    private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
+        Activity activity,
+        CancellationToken cancellationToken)
     {
         var sourceType = importRequest.Source.GetType();
         if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
