@@ -1238,11 +1238,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         var typeNames = new[]
         {
             nameof(PolymorphicContainer),
-            typeof(PolymorphicContainer).Name,
-            "PolymorphicContainer",
-            nameof(BaseShape),
-            typeof(BaseShape).Name,
-            "BaseShape"
+            nameof(BaseShape)
         };
 
         foreach (var typeName in typeNames)
