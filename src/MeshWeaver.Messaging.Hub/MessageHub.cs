@@ -76,8 +76,9 @@ public sealed class MessageHub : IMessageHub
                     messageHandler.MessageType,
                     (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
                 );
-        } Register(HandleCallbacks);
+        } 
         Register(ExecuteRequest);
+        Register(HandleCallbacks);
 
         messageService.Start();
 
@@ -533,9 +534,8 @@ public sealed class MessageHub : IMessageHub
             return delivery;
         }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogDebug("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
-        
         foreach (var callback in myCallbacks)
         {
             logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
@@ -937,7 +937,7 @@ public sealed class MessageHub : IMessageHub
     public IDisposable Register(AsyncDelivery delivery)
     {
         var node = new LinkedListNode<AsyncDelivery>(delivery);
-        Rules.AddLast(node);
+        Rules.AddFirst(node);
         return new AnonymousDisposable(() => Rules.Remove(node));
     }
 
