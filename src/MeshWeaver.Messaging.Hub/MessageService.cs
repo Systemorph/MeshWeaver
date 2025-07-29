@@ -67,7 +67,7 @@ public class MessageService : IMessageService
 
               logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
               startupDeferral.Dispose();
-              logger.LogDebug("MessageService startup completed for {Address}", Address);
+              logger.LogInformation("MessageService startup completed for {Address}", Address);
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
           {
@@ -113,7 +113,8 @@ public class MessageService : IMessageService
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
-        logger.LogWarning("An exception occurred processing {@Delivery} in {Address}", delivery, Address);
+        logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}", 
+            delivery.Message.GetType().Name, delivery.Id, Address);
 
         // Prevent recursive failure reporting - don't report failures for DeliveryFailure messages
         if (delivery.Message is not DeliveryFailure)
@@ -124,12 +125,14 @@ public class MessageService : IMessageService
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to post DeliveryFailure message for {@Delivery} in {Address} - breaking error cascade", delivery, Address);
+                logger.LogError(ex, "Failed to post DeliveryFailure message for {MessageType} (ID: {MessageId}) in {Address} - breaking error cascade", 
+                    delivery.Message.GetType().Name, delivery.Id, Address);
             }
         }
         else
         {
-            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {@Delivery} in {Address}", delivery, Address);
+            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {MessageType} (ID: {MessageId}) in {Address}", 
+                delivery.Message.GetType().Name, delivery.Id, Address);
         }
 
         return delivery;
@@ -149,7 +152,8 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
         
-        logger.LogDebug("Buffering message {Delivery} in {Address}", delivery, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
+        logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}", 
+            delivery.Message.GetType().Name, delivery.Id, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
         if (isDisposing)
         {
@@ -274,8 +278,8 @@ public class MessageService : IMessageService
             }
 
             if (delivery.Message is not ExecutionRequest)
-                logger.LogInformation("Finished processing {@Delivery} in {Address} after {Duration}ms", 
-                    delivery, Address, executionStopwatch.ElapsedMilliseconds);
+                logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms", 
+                    delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
 
         });
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded", 
@@ -294,7 +298,9 @@ public class MessageService : IMessageService
             var ret = PostImpl(message, opt);
             logger.LogTrace("MESSAGE_FLOW: POST_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
                 typeof(TMessage).Name, Address, ret.Id, opt.Target);
-            logger.LogDebug("Posting message {@Delivery} in {Address}", ret, Address);
+            var messageJson = JsonSerializer.Serialize(ret, hub.JsonSerializerOptions);
+            logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+                messageJson, ret.Id, Address);
             return ret;
         }
     }
@@ -306,7 +312,8 @@ public class MessageService : IMessageService
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to deserialize delivery {@Delivery} in {Address} - marking as failed to prevent endless propagation", delivery, Address);
+            logger.LogWarning(ex, "Failed to deserialize delivery {MessageType} (ID: {MessageId}) in {Address} - marking as failed to prevent endless propagation", 
+                delivery.Message.GetType().Name, delivery.Id, Address);
             // Return a failed delivery instead of continuing with malformed data
             return delivery.Failed($"Deserialization failed: {ex.Message}");
         }
@@ -394,7 +401,7 @@ public class MessageService : IMessageService
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
             using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogInformation("Deliveries completed successfully in {elapsed}ms for {Address}", 
+            logger.LogDebug("Deliveries completed successfully in {elapsed}ms for {Address}", 
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
@@ -416,7 +423,7 @@ public class MessageService : IMessageService
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
             await deferralContainer.DisposeAsync();
-            logger.LogInformation("Deferrals completed successfully in {elapsed}ms for {Address}", 
+            logger.LogDebug("Deferrals completed successfully in {elapsed}ms for {Address}", 
                 deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)

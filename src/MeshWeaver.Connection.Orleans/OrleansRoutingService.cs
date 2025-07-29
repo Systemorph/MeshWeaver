@@ -33,7 +33,8 @@ public class OrleansRoutingService(
                 return delivery.Forwarded();
 
             default:
-                logger.LogError("No stream info found for {Delivery}", delivery);
+                logger.LogError("No stream info found for {MessageType} (ID: {MessageId})", 
+                    delivery.Message.GetType().Name, delivery.Id);
                 return delivery.Failed($"No route found for {delivery.Target}");
         }
 

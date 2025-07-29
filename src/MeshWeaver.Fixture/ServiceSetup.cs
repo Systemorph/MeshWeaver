@@ -1,8 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.ServiceProvider;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Serilog;
 using Xunit;
 
 namespace MeshWeaver.Fixture;
@@ -15,22 +13,14 @@ public class ServiceSetup
 
     protected static ServiceCollection CreateServiceCollection()
     {
-        // Build configuration
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .Build();
 
-        // Configure Serilog
-        Log.Logger = new LoggerConfiguration()
-            .ReadFrom.Configuration(configuration)
-            .CreateLogger();
 
         var services = new ServiceCollection();
         services.AddSingleton<TestOutputHelperAccessor>();
         services.AddLogging(logging =>
         {
             logging.ClearProviders();
-            logging.AddSerilog(Log.Logger, dispose: true);
+            logging.AddXUnitLogger(); // Add xUnit logger for test output
         });
         services.AddOptions();
         return services;

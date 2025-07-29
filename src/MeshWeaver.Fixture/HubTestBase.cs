@@ -24,12 +24,6 @@ public class HubTestBase : TestBase
     protected HubTestBase(ITestOutputHelper output)
         : base(output)
     {
-        // Add debug file logging for message flow tracking
-        Services.AddLogging(logging =>
-        {
-            logging.AddProvider(new DebugFileLoggerProvider());
-            logging.SetMinimumLevel(LogLevel.Debug);
-        });
 
         Services.AddSingleton(
             sp => sp.CreateMessageHub(new RouterAddress(), ConfigureRouter)
