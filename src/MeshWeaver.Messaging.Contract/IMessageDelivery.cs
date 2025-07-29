@@ -37,6 +37,10 @@ public interface IMessageDelivery
     internal IMessageDelivery WithTarget(Address address);
     IMessageDelivery Forwarded(params IEnumerable<Address> addresses);
     AccessContext? AccessContext { get; }
+    
+    IMessageDelivery AddToRoutingPath(Address address);
+    bool HasRoutingCycle(Address currentAddress);
+    IReadOnlyList<Address> GetRoutingPath();
 
 }
 
