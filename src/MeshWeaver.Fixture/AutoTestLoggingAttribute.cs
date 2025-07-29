@@ -1,5 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
-using System.Reflection;
+﻿using System.Reflection;
+using Xunit;
 using Xunit.v3;
 
 namespace MeshWeaver.Fixture;
@@ -10,34 +10,35 @@ namespace MeshWeaver.Fixture;
 /// </summary>
 public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
 {
-    private static ILogger? _logger;
-
-    static AutoTestLoggingAttribute()
-    {
-        try
-        {
-            var loggerFactory = LoggerFactory.Create(builder =>
-            {
-                builder.AddProvider(new DebugFileLoggerProvider());
-                builder.SetMinimumLevel(LogLevel.Debug);
-            });
-            _logger = loggerFactory.CreateLogger("AutoTestLogging");
-        }
-        catch
-        {
-            _logger = null;
-        }
-    }
+   
     
     public override void Before(MethodInfo methodUnderTest, IXunitTest test)
     {
         var testName = $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name}";
-        _logger?.LogInformation("=== TEST START: {TestMethod} ===", testName);
+        var logMessage = $"=== TEST START: {testName} ===";
+        
+        
+        // Also log to file output if available
+        var fileOutput = XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+        fileOutput?.WriteLine(logMessage);
     }
 
     public override void After(MethodInfo methodUnderTest, IXunitTest test)
     {
+        // Also log to file output if available
+        var fileOutput = XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+
+
+        if (TestContext.Current.TestState?.Result == TestResult.Failed)
+        {
+            var message = $"""=== TEST FAILED: {string.Join("\n", TestContext.Current.TestState.ExceptionMessages ?? [])}""";
+            fileOutput?.WriteLine(message);
+        }
+
         var testName = $"{methodUnderTest.DeclaringType?.Name}.{methodUnderTest.Name}";
-        _logger?.LogInformation("=== TEST END: {TestMethod} ===", testName);
+        var logMessage = $"=== TEST END: {testName} ===";
+        
+        
+        fileOutput?.WriteLine(logMessage);
     }
 }

@@ -36,12 +36,12 @@ jobs:
         Logging__LogLevel__MeshWeaver.Messaging: Debug
       run: |
         dotnet test --no-build --verbosity detailed -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
-    - name: Collect logs for artifact
+    - name: Collect test logs for artifact
       if: always()
       run: |
         mkdir -p collected-logs
-        # Find all meshweaver log files and rename them based on their test project path
-        find . -name "*meshweaver*.log" -type f | while read logfile; do
+        # Find all test-logs directories and collect their contents
+        find . -path "*/bin/*/test-logs/*.log" -type f | while read logfile; do
           # Extract test project name from path (e.g., test/MeshWeaver.Data.Test/bin/... -> MeshWeaver.Data.Test)
           testproject=$(echo "$logfile" | sed -n 's|.*test/\([^/]*\)/.*|\1|p')
           if [ -n "$testproject" ]; then
@@ -53,15 +53,6 @@ jobs:
           else
             # If we can't extract test project name, just copy as-is
             cp "$logfile" "collected-logs/" 2>/dev/null || true
-          fi
-        done
-        # Also collect any other logs from test bin directories
-        find . -path "*/bin/*/logs/*.log" -type f | while read logfile; do
-          testproject=$(echo "$logfile" | sed -n 's|.*test/\([^/]*\)/.*|\1|p')
-          if [ -n "$testproject" ]; then
-            filename=$(basename "$logfile")
-            newname="${testproject}.${filename}"
-            cp "$logfile" "collected-logs/${newname}" 2>/dev/null || true
           fi
         done
     - name: Publish Test Results
@@ -82,5 +73,6 @@ jobs:
           test/**/*.trx
           test/test-results.log
           collected-logs/
+          test/**/bin/**/test-logs/
         compression-level: 9
         retention-days: 15
