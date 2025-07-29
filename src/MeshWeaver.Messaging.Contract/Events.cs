@@ -45,7 +45,8 @@ public enum ErrorType
     Ignored,
     Failed,
     CompilationFailed,
-    StartupScriptFailed
+    StartupScriptFailed,
+    RoutingLoop
 }
 
 

@@ -187,6 +187,35 @@ public class MessageService : IMessageService
                 delivery = delivery.WithTarget(ha.Address);
         }
 
+        // Check for routing cycles before proceeding
+        if (delivery.HasRoutingCycle(hub.Address))
+        {
+            logger.LogWarning("MESSAGE_FLOW: ROUTING_CYCLE_DETECTED | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RoutingPath: [{RoutingPath}]",
+                delivery.Message.GetType().Name, Address, delivery.Id, string.Join(" -> ", delivery.GetRoutingPath()));
+
+            // Don't send failure if sender is our own address (self-routing is allowed)
+            if (!delivery.Sender.Equals(hub.Address))
+            {
+                try
+                {
+                    Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.RoutingLoop,
+                        Message = $"Routing cycle detected. Path: {string.Join(" -> ", delivery.GetRoutingPath())} -> {hub.Address}"
+                    }, new PostOptions(Address).ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to post DeliveryFailure for routing cycle in {Address}", Address);
+                }
+            }
+
+            return delivery.Failed("Routing cycle detected");
+        }
+
+        // Add current address to routing path
+        delivery = delivery.AddToRoutingPath(hub.Address);
+
         var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
         if (isOnTarget)
         {
