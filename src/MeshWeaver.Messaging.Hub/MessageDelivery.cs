@@ -52,7 +52,7 @@ public abstract record MessageDelivery : IMessageDelivery
 
 
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
-    private ImmutableList<Address> RoutingPath { get; init; } = ImmutableList<Address>.Empty;
+    public ImmutableList<Address> RoutingPath { get; init; } = ImmutableList<Address>.Empty;
     public Address Sender { get; init; }
     public Address Target { get; init; }
 
@@ -61,16 +61,6 @@ public abstract record MessageDelivery : IMessageDelivery
     public IMessageDelivery AddToRoutingPath(Address address)
     {
         return this with { RoutingPath = RoutingPath.Add(address) };
-    }
-
-    public bool HasRoutingCycle(Address currentAddress)
-    {
-        return RoutingPath.Contains(currentAddress);
-    }
-
-    public IReadOnlyList<Address> GetRoutingPath()
-    {
-        return RoutingPath;
     }
 
 
