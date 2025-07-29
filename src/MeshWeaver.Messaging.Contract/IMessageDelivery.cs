@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Messaging.Hub")]
@@ -39,8 +40,7 @@ public interface IMessageDelivery
     AccessContext? AccessContext { get; }
     
     IMessageDelivery AddToRoutingPath(Address address);
-    bool HasRoutingCycle(Address currentAddress);
-    IReadOnlyList<Address> GetRoutingPath();
+    ImmutableList<Address> RoutingPath { get; }
 
 }
 

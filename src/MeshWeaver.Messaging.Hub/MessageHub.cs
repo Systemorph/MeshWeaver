@@ -536,7 +536,7 @@ public sealed class MessageHub : IMessageHub
             return delivery;
         }
 
-        logger.LogDebug("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogInformation("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
         foreach (var callback in myCallbacks)
         {
