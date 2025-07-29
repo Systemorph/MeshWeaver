@@ -3,8 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Implementation;
-using Microsoft.Extensions.Logging;
-using Activity = MeshWeaver.Activities.Activity;
+using Activity = MeshWeaver.Data.Activity;
 
 namespace MeshWeaver.Import.Configuration;
 
@@ -26,7 +25,7 @@ public record ImportFormat(
     public ImportFormat WithImportFunction(ImportFunction importFunction) =>
         this with
         {
-            ImportFunctions = ImportFunctions.Add((req,ds,ws,esu)=>Task.FromResult(importFunction.Invoke(req,ds,ws,esu)))
+            ImportFunctions = ImportFunctions.Add((req,ds,ws,esu,ct)=>Task.FromResult(importFunction.Invoke(req, ds, ws, esu, ct)))
         };
 
 
@@ -34,19 +33,20 @@ public record ImportFormat(
     public async Task<EntityStore?> Import(
         ImportRequest importRequest,
         IDataSet dataSet,
-        Activity activity
+        Activity activity, 
+        CancellationToken cancellationToken
     )
     {
         var store = new EntityStore();
         foreach (var importFunction in ImportFunctions)
         {
-            store = await importFunction.Invoke(importRequest, dataSet, Workspace, store);
+            if(cancellationToken.IsCancellationRequested)
+                return null;
+            store = await importFunction.Invoke(importRequest, dataSet, Workspace, store, cancellationToken);
         }
 
 
         Validate(store, activity);
-        if (activity.HasErrors())
-            return null;
         return store;
     }
 
@@ -77,17 +77,19 @@ public record ImportFormat(
         ImportRequest importRequest,
         IDataSet dataSet,
         IWorkspace workspace,
-        EntityStore storeAndUpdates
+        EntityStore storeAndUpdates,
+        CancellationToken cancellationToken
     );
     public delegate EntityStore ImportFunction(
         ImportRequest importRequest,
         IDataSet dataSet,
         IWorkspace workspace,
-        EntityStore storeAndUpdates
+        EntityStore storeAndUpdates,
+        CancellationToken cancellationToken
     );
 
     public ImportFormat WithMappings(Func<ImportMapContainer, ImportMapContainer> config) =>
-        WithImportFunction((_, dataSet, _, store) =>
+        WithImportFunction((_, dataSet, _, store, _) =>
             config(new(Workspace)).ImportAsync(dataSet, store)
         );
 

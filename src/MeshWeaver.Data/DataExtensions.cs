@@ -1,10 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
-using MeshWeaver.Activities;
 using MeshWeaver.Data.Documentation;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
@@ -34,8 +32,8 @@ public static class DataExtensions
 
         if (existingLambdas.Any())
             return ret;
-        return ret.AddActivities()
-                .AddDocumentation()
+        return ret.AddDocumentation()
+                .WithRoutes(route => route.RouteAddressToHostedHub<ActivityAddress>(ActivityImpl.ConfigureActivityHub))
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
@@ -90,6 +88,7 @@ public static class DataExtensions
                     typeof(GetDataRequest),
                     typeof(GetDataResponse)
                 )
+                .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
                 //.WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
                 .RegisterDataEvents()
             ;
@@ -109,11 +108,6 @@ public static class DataExtensions
             return Task.FromResult(request.Ignored());
         syncHub.DeliverMessage(request);
         return Task.FromResult(request.Forwarded());
-    }
-
-    private static MessageHubConfiguration ConfigureSynchronizationStream(MessageHubConfiguration arg)
-    {
-        throw new NotImplementedException();
     }
 
     internal static ImmutableList<Func<DataContext, DataContext>> GetListOfLambdas(
@@ -187,12 +181,21 @@ public static class DataExtensions
     private static IMessageDelivery HandleDataChangeRequest(IMessageHub hub,
         IMessageDelivery<DataChangeRequest> request)
     {
-        var activity = new Activity(ActivityCategory.DataUpdate, hub);
+        var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
         hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
             request);
-        activity.Complete(log =>
+        if (activity is not null)
+        {
+            activity.Complete(log =>
+            {
                 hub.Post(new DataChangeResponse(hub.Version, log),
-                    o => o.ResponseFor(request)));
+                    o => o.ResponseFor(request));
+                activity.Dispose();
+            });
+        }
+        else
+            hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate){Status = ActivityStatus.Succeeded}),
+                o => o.ResponseFor(request));
         return request.Processed();
     }
 
@@ -234,18 +237,18 @@ public static class DataExtensions
         {
             if (reference is CollectionReference collectionRef)
             {
-                var stream = workspace.GetStream<InstanceCollection>(collectionRef);
+                var stream = workspace.GetStream(collectionRef);
                 HandleStream(stream);
             }
             else if (reference is EntityReference entityRef)
             {
-                var stream = workspace.GetStream<object>(entityRef);
+                var stream = workspace.GetStream(entityRef);
                 HandleStream(stream);
             }
             else
             {
                 // Generic case - try to get as EntityStore
-                var stream = workspace.GetStream<EntityStore>(reference as WorkspaceReference<EntityStore> ?? throw new ArgumentException("Unsupported reference type"));
+                var stream = workspace.GetStream(reference as WorkspaceReference<EntityStore> ?? throw new ArgumentException("Unsupported reference type"));
                 HandleStream(stream);
             }
         }

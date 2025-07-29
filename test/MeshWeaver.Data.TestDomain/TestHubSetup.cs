@@ -1,5 +1,6 @@
 ﻿using System.Linq;
-using MeshWeaver.Activities;
+using System.Threading;
+using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;
 using MeshWeaver.Messaging;
@@ -87,7 +88,8 @@ public static class TestHubSetup
         ImportRequest request,
         IDataSet dataSet,
         IWorkspace workspace,
-        EntityStore store
+        EntityStore store,
+        CancellationToken ct
     )
     {
         var transactionalData = store.GetData<TransactionalData>();

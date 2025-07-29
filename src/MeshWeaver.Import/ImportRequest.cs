@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Activities;
-using MeshWeaver.Data;
+﻿using MeshWeaver.Data;
 using MeshWeaver.DataSetReader;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
@@ -39,6 +38,11 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
     public ImportRequest WithTimeout(TimeSpan timeout) => this with { Timeout = timeout };
 
     public bool SaveLog { get; init; }
+
+    /// <summary>
+    /// Activity ID for this import operation.
+    /// </summary>
+    public string ActivityId { get; init; } = Guid.NewGuid().ToString();
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

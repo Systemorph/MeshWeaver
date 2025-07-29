@@ -76,8 +76,9 @@ public sealed class MessageHub : IMessageHub
                     messageHandler.MessageType,
                     (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
                 );
-        } Register(HandleCallbacks);
+        } 
         Register(ExecuteRequest);
+        Register(HandleCallbacks);
 
         messageService.Start();
 
@@ -475,24 +476,26 @@ public sealed class MessageHub : IMessageHub
         {
             try
             {
-                if (d.Message is DeliveryFailure failure)
-                {
-                    tcs.SetException(new DeliveryFailureException(failure));
-                    return d.Failed(failure.Message ?? "Delivery failed");
-                }
-
-                var ret = await callback(d, ct);
-                tcs.SetResult(ret);
-                return ret;
-            }
-            finally
-            {
                 // Clean up disposal cancellation token
                 lock (locker)
                 {
                     pendingCallbackCancellations.Remove(disposalCts);
                 }
                 disposalCts.Dispose();
+                combinedCts.Dispose();
+                if (d.Message is DeliveryFailure failure)
+                {
+                    tcs.SetException(new DeliveryFailureException(failure));
+                    return d.Failed(failure.Message ?? "Delivery failed");
+                }
+
+                combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
+                var ret = await callback(d, combinedCts.Token);
+                tcs.SetResult(ret);
+                return ret;
+            }
+            finally
+            {
                 combinedCts.Dispose();
             }
         }
@@ -533,9 +536,8 @@ public sealed class MessageHub : IMessageHub
             return delivery;
         }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogDebug("MESSAGE_FLOW: HUB_PROCESSING_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
-        
         foreach (var callback in myCallbacks)
         {
             logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
@@ -937,7 +939,7 @@ public sealed class MessageHub : IMessageHub
     public IDisposable Register(AsyncDelivery delivery)
     {
         var node = new LinkedListNode<AsyncDelivery>(delivery);
-        Rules.AddLast(node);
+        Rules.AddFirst(node);
         return new AnonymousDisposable(() => Rules.Remove(node));
     }
 

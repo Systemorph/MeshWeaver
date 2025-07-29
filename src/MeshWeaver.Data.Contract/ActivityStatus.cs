@@ -1,5 +1,5 @@
 ﻿#nullable enable
-namespace MeshWeaver.Activities;
+namespace MeshWeaver.Data;
 
 /// <summary>
 /// The <see cref="ActivityStatus"/> enumeration defines the possible result values of an Activity

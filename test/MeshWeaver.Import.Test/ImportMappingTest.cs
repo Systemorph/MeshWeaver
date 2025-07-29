@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Activities;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
@@ -150,7 +149,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task SingleTableMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws, store) =>
+        customImportFunctionAsync = (_, set, ws, store, _) =>
         {
             var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()
@@ -190,7 +189,7 @@ Record3SystemName,Record3DisplayName";
     [Fact]
     public async Task TwoTablesMappingTest()
     {
-        customImportFunctionAsync = (_, set, ws, store) =>
+        customImportFunctionAsync = (_, set, ws, store, _) =>
         {
             var instances = set.Tables[nameof(MyRecord)]!
                 .Rows.Select(dsRow => new MyRecord()

@@ -9,7 +9,6 @@ using MeshWeaver.DataSetReader;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.Domain;
-using MeshWeaver.Activities;
 
 namespace MeshWeaver.Import.Configuration;
 

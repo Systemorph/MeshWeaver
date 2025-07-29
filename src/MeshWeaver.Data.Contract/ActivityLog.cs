@@ -1,10 +1,9 @@
-﻿#nullable enable
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Activities;
+namespace MeshWeaver.Data;
 
 public record ActivityLog(string Category)
 {
@@ -12,7 +11,7 @@ public record ActivityLog(string Category)
     public int Version { get; init; }
 
     [property: Key]
-    public string Id { get; init; } = Guid.NewGuid().AsString() ?? string.Empty;
+    public string Id { get; init; } = Guid.NewGuid().AsString();
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
     public ActivityStatus Status { get; init; }
     public DateTime? End { get; init; }
@@ -27,14 +26,17 @@ public record ActivityLog(string Category)
             End = DateTime.UtcNow,
         };
 
-    public ActivityLog Finish() =>
+    public ActivityLog Finish(int version, ActivityStatus? status) =>
         this with
         {
             Status = Messages.Any(x => x.LogLevel == LogLevel.Error)
                 ? ActivityStatus.Failed
-                : ActivityStatus.Succeeded,
+                : Messages.Any(m => m.LogLevel == LogLevel.Warning) ? ActivityStatus.Warning 
+                    : status ?? ActivityStatus.Succeeded,
             End = DateTime.UtcNow,
+            Version = version
         };
 
+    public bool HasErrors() => Messages.Any(m => m.LogLevel == LogLevel.Error);
 }
 

@@ -7,7 +7,6 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
-using Activity = MeshWeaver.Activities.Activity;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -182,7 +181,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration)
     {
         if (Host.IsDisposing)
-            throw new ObjectDisposedException($"Hub {Host.Address} is disposing. Cannot create synchronization stream.");
+            throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream.");
         this.Host = Host;
 
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
@@ -222,8 +221,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
             ).WithHandler<DataChangeRequest>((hub, delivery) =>
                 {
-                    hub.GetWorkspace().RequestChange(delivery.Message, new Activity(ActivityCategory.DataUpdate, Host),
-                        delivery);
+                    hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
                     return delivery.Processed();
                 }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>

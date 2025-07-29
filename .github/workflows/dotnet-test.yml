@@ -30,8 +30,31 @@ jobs:
       run: dotnet build --no-restore -p:CIRun=true
     - name: Run Tests
       continue-on-error: true
+      env:
+        DOTNET_ENVIRONMENT: Development
+        Logging__LogLevel__Default: Debug
+        Logging__LogLevel__MeshWeaver.Messaging: Debug
       run: |
         dotnet test --no-build --verbosity detailed -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
+    - name: Collect test logs for artifact
+      if: always()
+      run: |
+        mkdir -p collected-logs
+        # Find all test-logs directories and collect their contents
+        find . -path "*/bin/*/test-logs/*.log" -type f | while read logfile; do
+          # Extract test project name from path (e.g., test/MeshWeaver.Data.Test/bin/... -> MeshWeaver.Data.Test)
+          testproject=$(echo "$logfile" | sed -n 's|.*test/\([^/]*\)/.*|\1|p')
+          if [ -n "$testproject" ]; then
+            # Get the original filename without path
+            filename=$(basename "$logfile")
+            # Create new name: TestProject.original-filename
+            newname="${testproject}.${filename}"
+            cp "$logfile" "collected-logs/${newname}" 2>/dev/null || true
+          else
+            # If we can't extract test project name, just copy as-is
+            cp "$logfile" "collected-logs/" 2>/dev/null || true
+          fi
+        done
     - name: Publish Test Results
 #      uses: EnricoMi/publish-unit-test-result-action/composite@v2
       uses: EnricoMi/publish-unit-test-result-action@v2.12.0
@@ -49,5 +72,7 @@ jobs:
         path: |
           test/**/*.trx
           test/test-results.log
+          collected-logs/
+          test/**/bin/**/test-logs/
         compression-level: 9
         retention-days: 15

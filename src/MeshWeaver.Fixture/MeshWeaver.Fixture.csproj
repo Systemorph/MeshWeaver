@@ -8,19 +8,11 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Configuration" />
-    <PackageReference Include="Serilog.AspNetCore" />
     <PackageReference Include="xunit.v3.extensibility.core" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\MeshWeaver.Activities\MeshWeaver.Activities.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="Microsoft.Extensions.Logging.Configuration">
-      <HintPath>..\..\..\..\Program Files\dotnet\packs\Microsoft.AspNetCore.App.Ref\8.0.11\ref\net8.0\Microsoft.Extensions.Logging.Configuration.dll</HintPath>
-    </Reference>
   </ItemGroup>
 
 </Project>

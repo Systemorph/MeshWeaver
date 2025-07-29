@@ -20,9 +20,10 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore>? stream, CancellationToken cancellationToken)
     {
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
+        using var activity = new Activity(ActivityCategory.Import, Workspace.Hub);
         var store = await importManager.ImportInstancesAsync(
             ImportRequest,
-            new(Data.Serialization.ActivityCategory.Import, Workspace.Hub),
+            activity,
             cancellationToken
         );
         return store;
