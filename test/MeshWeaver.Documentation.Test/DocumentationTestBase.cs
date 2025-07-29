@@ -25,12 +25,6 @@ namespace MeshWeaver.Documentation.Test
         /// <param name="output"></param>
         protected DocumentationTestBase(ITestOutputHelper output) : base(output)
         {
-            // Add debug file logging for message flow tracking
-            Services.AddLogging(logging =>
-            {
-                logging.AddProvider(new DebugFileLoggerProvider());
-                logging.SetMinimumLevel(LogLevel.Debug);
-            });
         }
 
         /// <summary>

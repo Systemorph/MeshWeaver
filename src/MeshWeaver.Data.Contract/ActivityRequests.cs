@@ -1,11 +1,12 @@
-﻿using MeshWeaver.Messaging;
+﻿using System.Text.Json.Serialization;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
 public record CompleteActivityRequest(ActivityStatus? Status) : IRequest
 {
-    public Action<ActivityLog>? CompleteAction { get; init; }
+    [JsonIgnore]public Action<ActivityLog>? CompleteAction { get; init; }
 }
 
 public record LogRequest(LogMessage LogMessage) : IRequest;

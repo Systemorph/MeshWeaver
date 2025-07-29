@@ -1,73 +1,76 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Fixture;
 
 /// <summary>
-/// Base class for tests that automatically logs test method boundaries.
-/// All test classes inheriting from this will have their test methods logged.
+/// Base class for tests that uses xUnit output capturing with file logging.
+/// All test output is captured to both xUnit test output and log files.
 /// </summary>
 [AutoTestLogging]
 public class TestBase : ServiceSetup, IAsyncLifetime
 {
     protected readonly ITestOutputHelper Output;
-    private static ILogger? _logger;
-
-    static TestBase()
-    {
-        try
-        {
-            var loggerFactory = LoggerFactory.Create(builder =>
-            {
-                builder.AddProvider(new DebugFileLoggerProvider());
-                builder.SetMinimumLevel(LogLevel.Debug);
-            });
-            _logger = loggerFactory.CreateLogger("TestBase");
-            
-            // Set up global exception handlers to ensure all exceptions are logged
-            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
-            {
-                _logger?.LogCritical((Exception)e.ExceptionObject, "=== UNHANDLED EXCEPTION IN TEST DOMAIN ===");
-            };
-            
-            TaskScheduler.UnobservedTaskException += (sender, e) =>
-            {
-                _logger?.LogError(e.Exception, "=== UNOBSERVED TASK EXCEPTION IN TEST ===");
-                e.SetObserved(); // Mark as observed to prevent application termination
-            };
-        }
-        catch
-        {
-            _logger = null;
-        }
-    }
+    protected readonly XUnitFileOutputHelper FileOutput;
+    private ILogger? _logger;
 
     protected TestBase(ITestOutputHelper output)
     {
         Output = output;
+        FileOutput = new XUnitFileOutputHelper(output, GetType().Name);
+        
+        // Configure file logging integration
+        Services.AddSingleton(FileOutput);
+        Services.AddLogging(logging =>
+        {
+            logging.ClearProviders(); // Remove console and other default providers
+            logging.AddProvider(new XUnitFileLoggerProvider(() => FileOutput));
+        });
+        
     }
 
     public virtual ValueTask InitializeAsync()
     {
         Initialize();
-        SetOutputHelper(Output);
+        SetOutputHelper(FileOutput);
         
-        // Log test start with class info (individual test methods will be logged by AutoTestLoggingAttribute)
+        // Register this test instance for cross-class access
+        XUnitFileOutputRegistry.Register(this, FileOutput);
+        
+        // Get logger after service provider is built
+        _logger = ServiceProvider.GetService(typeof(ILogger<TestBase>)) as ILogger<TestBase>;
+        
+        
+        // Log test start with class info
         var className = GetType().Name;
+        FileOutput.WriteLine($"=== TEST CLASS INIT: {className} ===");
         _logger?.LogInformation("=== TEST CLASS INIT: {TestClass} ===", className);
         
         return ValueTask.CompletedTask;
     }
 
+
+
+
     public virtual ValueTask DisposeAsync()
     {
         // Log test end with class info
         var className = GetType().Name;
+        FileOutput.WriteLine($"=== TEST CLASS DISPOSE: {className} ===");
         _logger?.LogInformation("=== TEST CLASS DISPOSE: {TestClass} ===", className);
         
+        
+        // Unregister this test instance
+        XUnitFileOutputRegistry.Unregister(this);
+        
         SetOutputHelper(null);
+        FileOutput.Dispose();
         return ValueTask.CompletedTask;
     }
+
+    
+
 }
 
 public class TestBase<TFixture> : IDisposable
