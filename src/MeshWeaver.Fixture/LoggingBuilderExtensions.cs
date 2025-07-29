@@ -98,15 +98,7 @@ public class XUnitLogger(
             sb.Append('\n').Append(exception);
         }
 
-        // Append scopes
-        scopeProvider.ForEachScope(
-            (scope, s) =>
-            {
-                s.Append("\n => ");
-                s.Append(scope);
-            },
-            sb
-        );
+        // Scopes are not logged in tests - only the inlined message is shown
 
 #pragma warning disable RCS1075 // Avoid empty catch clause that catches System.Exception
         try

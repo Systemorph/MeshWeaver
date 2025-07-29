@@ -23,6 +23,18 @@ public class TestBase : ServiceSetup, IAsyncLifetime
                 builder.SetMinimumLevel(LogLevel.Debug);
             });
             _logger = loggerFactory.CreateLogger("TestBase");
+            
+            // Set up global exception handlers to ensure all exceptions are logged
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+            {
+                _logger?.LogCritical((Exception)e.ExceptionObject, "=== UNHANDLED EXCEPTION IN TEST DOMAIN ===");
+            };
+            
+            TaskScheduler.UnobservedTaskException += (sender, e) =>
+            {
+                _logger?.LogError(e.Exception, "=== UNOBSERVED TASK EXCEPTION IN TEST ===");
+                e.SetObserved(); // Mark as observed to prevent application termination
+            };
         }
         catch
         {
