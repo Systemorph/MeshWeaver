@@ -52,10 +52,26 @@ public abstract record MessageDelivery : IMessageDelivery
 
 
     private ImmutableHashSet<object> ForwardedTo { get; init; } = ImmutableHashSet<object>.Empty;
+    private ImmutableList<Address> RoutingPath { get; init; } = ImmutableList<Address>.Empty;
     public Address Sender { get; init; }
     public Address Target { get; init; }
 
     IMessageDelivery IMessageDelivery.Forwarded(IEnumerable<Address> addresses) => this with { ForwardedTo = ForwardedTo.Union(addresses), State = MessageDeliveryState.Forwarded };
+
+    public IMessageDelivery AddToRoutingPath(Address address)
+    {
+        return this with { RoutingPath = RoutingPath.Add(address) };
+    }
+
+    public bool HasRoutingCycle(Address currentAddress)
+    {
+        return RoutingPath.Contains(currentAddress);
+    }
+
+    public IReadOnlyList<Address> GetRoutingPath()
+    {
+        return RoutingPath;
+    }
 
 
 
@@ -86,6 +102,7 @@ public abstract record MessageDelivery : IMessageDelivery
             Properties = Properties,
             Id = Id,
             ForwardedTo = ForwardedTo,
+            RoutingPath = RoutingPath,
         };
     }
 
