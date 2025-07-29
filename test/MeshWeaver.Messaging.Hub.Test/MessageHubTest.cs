@@ -84,17 +84,16 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         deliveryWithPath = (MessageDelivery<SayHelloRequest>)deliveryWithPath.AddToRoutingPath(hostAddress);
         
         // Verify that a cycle is detected when we try to route to an address already in the path
-        deliveryWithPath.HasRoutingCycle(routerAddress).Should().BeTrue();
-        deliveryWithPath.HasRoutingCycle(hostAddress).Should().BeTrue();
+        deliveryWithPath.RoutingPath.Contains(routerAddress).Should().BeTrue();
+        deliveryWithPath.RoutingPath.Contains(hostAddress).Should().BeTrue();
         
         // Verify that no cycle is detected for a new address
-        deliveryWithPath.HasRoutingCycle(new ClientAddress("different")).Should().BeFalse();
+        deliveryWithPath.RoutingPath.Contains(new ClientAddress("different")).Should().BeFalse();
         
         // Verify the routing path contains the expected addresses
-        var routingPath = deliveryWithPath.GetRoutingPath();
-        routingPath.Should().Contain(routerAddress);
-        routingPath.Should().Contain(hostAddress);
-        routingPath.Should().HaveCount(2);
+        deliveryWithPath.RoutingPath.Should().Contain(routerAddress);
+        deliveryWithPath.RoutingPath.Should().Contain(hostAddress);
+        deliveryWithPath.RoutingPath.Should().HaveCount(2);
     }
 
     [Fact]
@@ -116,17 +115,16 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var deliveryWithCycle = (MessageDelivery<SayHelloRequest>)delivery.AddToRoutingPath(host.Address);
 
         // Verify that the cycle detection logic works correctly
-        deliveryWithCycle.HasRoutingCycle(host.Address).Should().BeTrue("because host address is already in routing path");
+        deliveryWithCycle.RoutingPath.Contains(host.Address).Should().BeTrue("because host address is already in routing path");
         
         // Verify that the routing path is correctly maintained
-        var routingPath = deliveryWithCycle.GetRoutingPath();
-        routingPath.Should().Contain(host.Address);
-        routingPath.Should().HaveCount(1);
+        deliveryWithCycle.RoutingPath.Should().Contain(host.Address);
+        deliveryWithCycle.RoutingPath.Should().HaveCount(1);
 
         // Test that the message would be failed due to routing cycle
         // Since we're testing the core logic rather than the full message flow,
         // we verify that the cycle detection correctly identifies the problem
-        var shouldFail = deliveryWithCycle.HasRoutingCycle(host.Address);
+        var shouldFail = deliveryWithCycle.RoutingPath.Contains(host.Address);
         shouldFail.Should().BeTrue("because routing to the same address again would create a cycle");
     }
 
@@ -148,16 +146,15 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         var deliveryWithCycle = (MessageDelivery<SayHelloRequest>)delivery.AddToRoutingPath(host.Address);
 
         // Verify cycle is detected even for self-routing
-        deliveryWithCycle.HasRoutingCycle(host.Address).Should().BeTrue("because routing path contains the current address");
+        deliveryWithCycle.RoutingPath.Contains(host.Address).Should().BeTrue("because routing path contains the current address");
 
         // Verify that routing path contains the expected address
-        var routingPath = deliveryWithCycle.GetRoutingPath();
-        routingPath.Should().Contain(host.Address);
-        routingPath.Should().HaveCount(1);
+        deliveryWithCycle.RoutingPath.Should().Contain(host.Address);
+        deliveryWithCycle.RoutingPath.Should().HaveCount(1);
 
         // In self-routing scenarios, the cycle detection still works,
         // but the logic in MessageService prevents sending DeliveryFailure
-        var selfRoutingCycle = deliveryWithCycle.Sender.Equals(host.Address) && deliveryWithCycle.HasRoutingCycle(host.Address);
+        var selfRoutingCycle = deliveryWithCycle.Sender.Equals(host.Address) && deliveryWithCycle.RoutingPath.Contains(host.Address);
         selfRoutingCycle.Should().BeTrue("because this represents a self-routing cycle scenario");
     }
 
@@ -178,14 +175,13 @@ public class MessageHubTest(ITestOutputHelper output) : HubTestBase(output)
         delivery.Should().NotBeNull();
         
         // Verify that we can access routing path functionality on posted messages
-        var routingPath = delivery!.GetRoutingPath();
-        routingPath.Should().NotBeNull();
+        delivery!.RoutingPath.Should().NotBeNull();
         
         // Initially, routing path should be empty since message hasn't been routed yet
-        routingPath.Should().BeEmpty();
+        delivery.RoutingPath.Should().BeEmpty();
         
         // Verify that cycle detection would work correctly
-        var hasCycle = delivery.HasRoutingCycle(client.Address);
+        var hasCycle = delivery.RoutingPath.Contains(client.Address);
         hasCycle.Should().BeFalse("because client address is not in routing path yet");
     }
 

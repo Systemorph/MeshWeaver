@@ -192,10 +192,10 @@ public class MessageService : IMessageService
         }
 
         // Check for routing cycles before proceeding
-        if (delivery.HasRoutingCycle(hub.Address))
+        if (delivery.RoutingPath.Contains(hub.Address))
         {
             logger.LogWarning("MESSAGE_FLOW: ROUTING_CYCLE_DETECTED | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RoutingPath: [{RoutingPath}]",
-                delivery.Message.GetType().Name, Address, delivery.Id, string.Join(" -> ", delivery.GetRoutingPath()));
+                delivery.Message.GetType().Name, Address, delivery.Id, string.Join(" -> ", delivery.RoutingPath));
 
             // Don't send failure if sender is our own address (self-routing is allowed)
             if (!delivery.Sender.Equals(hub.Address))
@@ -205,7 +205,7 @@ public class MessageService : IMessageService
                     Post(new DeliveryFailure(delivery)
                     {
                         ErrorType = ErrorType.RoutingLoop,
-                        Message = $"Routing cycle detected. Path: {string.Join(" -> ", delivery.GetRoutingPath())} -> {hub.Address}"
+                        Message = $"Routing cycle detected. Path: {string.Join(" -> ", delivery.RoutingPath)} -> {hub.Address}"
                     }, new PostOptions(Address).ResponseFor(delivery));
                 }
                 catch (Exception ex)
