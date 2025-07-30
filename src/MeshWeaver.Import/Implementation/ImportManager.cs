@@ -148,6 +148,8 @@ public class ImportManager
                 activity,
                 request
                 );
+
+            activity.Complete(ActivityStatus.Succeeded, l => Hub.Post(new ImportResponse(Hub.Version, l), o => o.ResponseFor(request)));
         }
         catch (Exception e)
         {
