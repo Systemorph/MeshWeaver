@@ -5,9 +5,10 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
-public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposable
+public class HostedHubsCollection(IServiceProvider serviceProvider, Address address) : IDisposable
 {
     public IEnumerable<IMessageHub> Hubs => messageHubs.Values;
+    public Address Host { get; } = address;
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>();
 
     private readonly ConcurrentDictionary<object, IMessageHub> messageHubs = new();
@@ -22,13 +23,13 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
             
             if (isDisposing)
             {
-                logger.LogWarning("Rejecting hosted hub creation for address {Address} during disposal - collection is disposing", address);
+                logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", address, Host);
                 return null;
             }
             
             if (create == HostedHubCreation.Always)
             {
-                logger.LogDebug("Creating hosted hub for address {Address}", address);
+                logger.LogDebug("Creating hosted hub for address {Address} in Host {Host}", address, Host);
                 var newHub = CreateHub(address, config);
                 if (newHub != null)
                     return messageHubs[address] = newHub;
@@ -49,15 +50,14 @@ public class HostedHubsCollection(IServiceProvider serviceProvider) : IDisposabl
     {
         if (isDisposing)
         {
-            logger.LogWarning("Preventing hub creation for address {Address} - collection is disposing", address);
+            logger.LogWarning("Preventing hub creation for address {Address} in host {Host} - collection is disposing", address, Host);
             return null;
         }
         
         try
         {
-            logger.LogInformation("Creating new hosted hub for address {Address}", address);
+            logger.LogDebug("Creating new hosted hub for address {Address} in host {Host} ", address, Host);
             var hub = serviceProvider.CreateMessageHub(address, config);
-            logger.LogInformation("Successfully created hosted hub for address {Address}", address);
             return hub;
         }
         catch (Exception ex)

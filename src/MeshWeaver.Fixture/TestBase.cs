@@ -25,7 +25,8 @@ public class TestBase : ServiceSetup, IAsyncLifetime
         Services.AddLogging(logging =>
         {
             logging.ClearProviders(); // Remove console and other default providers
-            logging.AddProvider(new XUnitFileLoggerProvider(() => FileOutput));
+            logging.Services.AddSingleton<ILoggerProvider>(serviceProvider => 
+                new XUnitFileLoggerProvider(() => FileOutput, serviceProvider));
         });
         
     }

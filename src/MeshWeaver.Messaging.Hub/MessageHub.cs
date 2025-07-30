@@ -296,7 +296,7 @@ public sealed class MessageHub : IMessageHub
     
     async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Message hub {address} initializing", Address);
+        logger.LogDebug("Message hub {address} initializing", Address);
 
         var actions = Configuration.BuildupActions;
         foreach (var buildup in actions)
