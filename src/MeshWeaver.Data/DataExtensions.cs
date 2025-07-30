@@ -190,7 +190,7 @@ public static class DataExtensions
             {
                 hub.Post(new DataChangeResponse(hub.Version, log),
                     o => o.ResponseFor(request));
-                activity.Dispose();
+                
             });
         }
         else

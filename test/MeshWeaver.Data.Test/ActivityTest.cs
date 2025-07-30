@@ -81,6 +81,6 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var formattedMessage = args.Length > 0 ? string.Format(message, args) : message;
         var logMessage = new LogMessage(formattedMessage, logLevel);
-        GetClient().Post(new LogRequest(logMessage), o => o.WithTarget(activity.Address));
+        GetClient().Post(new LogMessageRequest(logMessage), o => o.WithTarget(activity.Address));
     }
 }
