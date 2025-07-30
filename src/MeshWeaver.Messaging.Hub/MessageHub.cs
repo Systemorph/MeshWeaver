@@ -48,7 +48,7 @@ public sealed class MessageHub : IMessageHub
         serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(GetType());
         logger = serviceProvider.GetRequiredService<ILogger<MessageHub>>();
 
-        logger.LogDebug("Starting MessageHub construction for address {Address}", configuration.Address);
+        logger.LogDebug("Starting MessageHub construction for address {Address} with parent {Parent}", configuration.Address, parentHub?.Address);
 
         TypeRegistry = serviceProvider.GetRequiredService<ITypeRegistry>();
         InitializeTypes(this);
@@ -263,7 +263,7 @@ public sealed class MessageHub : IMessageHub
         // Log only important messages during disposal
         if (IsDisposing && delivery.Message is ShutdownRequest shutdownReq)
         {
-            logger.LogInformation("Processing ShutdownRequest in {Address}: RunLevel={RunLevel}, Version={RequestVersion}, Expected={ExpectedVersion}",
+            logger.LogDebug("Processing ShutdownRequest in {Address} : RunLevel={RunLevel}, Version={RequestVersion}, Expected={ExpectedVersion}",
                 Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
         }
 
@@ -635,8 +635,8 @@ public sealed class MessageHub : IMessageHub
                 logger.LogWarning("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
                 return;
             }
-            logger.LogInformation("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
-                Address, Version, hostedHubs.Hubs.Count());
+            logger.LogInformation("STARTING DISPOSAL of hub {address} with parent {parent}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
+                Address, Configuration.ParentHub?.Address, Version, hostedHubs.Hubs.Count());
             
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
@@ -647,8 +647,8 @@ public sealed class MessageHub : IMessageHub
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
         {
-            logger.LogInformation("Hub {address} has {count} hosted hubs to dispose: [{hubAddresses}]", 
-                Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
+            logger.LogInformation("Hub {address} with parent {parent} has {count} hosted hubs to dispose: [{hubAddresses}]", 
+                Address, Configuration.ParentHub?.Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
         }
         else
         {
@@ -707,17 +707,9 @@ public sealed class MessageHub : IMessageHub
             logger.LogInformation("Version mismatch for hub {Address}: received {RequestVersion}, expected {ExpectedVersion}, IsDisposing={IsDisposing}",
                 Address, request.Message.Version, Version - 1, IsDisposing);
 
-            // During disposal, proceed regardless of version mismatch to avoid loops
-            if (IsDisposing)
-            {
-                logger.LogInformation("Proceeding with shutdown despite version mismatch during disposal for hub {address}", Address);
-            }
-            else
-            {
-                logger.LogDebug("Reposting ShutdownRequest with corrected version {NewVersion} for hub {Address}", Version, Address);
-                Post(request.Message with { Version = Version });
-                return request.Ignored();
-            }
+            logger.LogDebug("Reposting ShutdownRequest with corrected version {NewVersion} for hub {Address}", Version, Address);
+            Post(request.Message with { Version = Version });
+            return request.Ignored();
         }
 
         switch (request.Message.RunLevel)
@@ -777,8 +769,8 @@ public sealed class MessageHub : IMessageHub
                             return request.Ignored();
                         }
 
-                        logger.LogInformation("STARTING ShutDown for hub {address} (total disposal time so far: {totalElapsed}ms)", 
-                            Address, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogInformation("STARTING ShutDown for hub {address} with parent {parent} (total disposal time so far: {totalElapsed}ms)", 
+                            Address, Configuration.ParentHub?.Address, disposalStopwatch.ElapsedMilliseconds);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
 
@@ -788,14 +780,14 @@ public sealed class MessageHub : IMessageHub
                     var messageServiceStopwatch = Stopwatch.StartNew();
                     logger.LogDebug("Disposing message service for hub {address}", Address);
                     await messageService.DisposeAsync();
-                    logger.LogInformation("Message service disposed successfully for hub {address} in {elapsed}ms", 
+                    logger.LogDebug("Message service disposed successfully for hub {address} in {elapsed}ms", 
                         Address, messageServiceStopwatch.ElapsedMilliseconds);
 
                     try
                     {
                         disposingTaskCompletionSource.TrySetResult();
-                        logger.LogInformation("Disposal completed successfully for hub {address} in {elapsed}ms (total disposal time: {totalElapsed}ms)", 
-                            Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogInformation("Disposal completed successfully for hub {address} with parent {parent} in {elapsed}ms (total disposal time: {totalElapsed}ms)", 
+                            Address, Configuration.ParentHub?.Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                     }
                     catch (InvalidOperationException)
                     {
@@ -823,8 +815,8 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.Dead;
                     disposalStopwatch.Stop();
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
-                    logger.LogInformation("Finished shutdown of hub {address} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms", 
-                        Address, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
+                    logger.LogInformation("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms", 
+                        Address, Configuration.ParentHub?.Address, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                 }
 
                 break;
