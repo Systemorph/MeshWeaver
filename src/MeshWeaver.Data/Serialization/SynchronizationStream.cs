@@ -204,7 +204,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
-        Hub.RegisterForDisposal(_ => Store.Dispose());
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
     }
 
@@ -318,7 +317,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return;
             isDisposed = true;
         }
-        Hub.Dispose();
+        Store.OnCompleted();
+        Store.Dispose();
+        if(!Hub.IsDisposing)
+            Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
     public T? Get<T>(string key) => (T?)Properties.GetValueOrDefault(key);

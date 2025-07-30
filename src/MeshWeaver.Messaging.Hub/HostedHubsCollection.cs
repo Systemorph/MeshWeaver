@@ -21,7 +21,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             if (messageHubs.TryGetValue(address, out var hub))
                 return hub;
             
-            if (isDisposing)
+            if (IsDisposing)
             {
                 logger.LogWarning("Rejecting hosted hub creation for address {Address} in Host {Host} during disposal - collection is disposing", address, Host);
                 return null;
@@ -48,7 +48,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     private IMessageHub? CreateHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
     where TAddress : Address
     {
-        if (isDisposing)
+        if (IsDisposing)
         {
             logger.LogWarning("Preventing hub creation for address {Address} in host {Host} - collection is disposing", address, Host);
             return null;
@@ -67,16 +67,14 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         }
     }
 
-    private bool isDisposing;
     private readonly object locker = new();
-
+    private bool IsDisposing => Disposal is not null;
     public Task? Disposal { get; private set; }
     public void Dispose()
     {
         lock (locker)
         {
-            if (Disposal is not null) return;
-            isDisposing = true; // Set this before starting disposal to prevent new hub creation
+            if (IsDisposing) return;
             Disposal = DisposeHubs();
         }
     }

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
-internal class ActivityImpl : IDisposable
+internal class ActivityImpl
 {
 
     internal static MessageHubConfiguration ConfigureActivityHub(MessageHubConfiguration configuration)
@@ -48,7 +48,6 @@ internal class ActivityImpl : IDisposable
     internal ActivityImpl(string id, IMessageHub parentHub) 
     {
         Id = id;
-        this.parentHub = parentHub;
         ActivityAddress = new ActivityAddress(Id);
             
         this.Logger = parentHub.ServiceProvider.GetRequiredService<ILogger<ActivityImpl>>();
@@ -252,21 +251,8 @@ internal class ActivityImpl : IDisposable
     /// </summary>
 
 
-    private bool isDisposed;
-    private readonly object disposeLock = new();
     private IMessageHub Hub { get; set; } = null!; // Initialized in Initialize method
-    private readonly IMessageHub parentHub;
     private ActivityLog activityLog;
 
-    public void Dispose()
-    {
-        lock (disposeLock)
-        {
-            if (isDisposed)
-                return;
-            isDisposed = true;
-        }
-
-    }
 
 }
