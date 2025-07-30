@@ -7,6 +7,8 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -84,7 +86,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private bool isDisposed;
     private readonly object disposeLock = new();
-
+    private readonly ILogger<SynchronizationStream<TStream>> logger;
 
     public ChangeItem<TStream>? Current
     {
@@ -118,8 +120,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (current is not null && Equals(current.Value, value.Value))
             return;
         current = value;
-        if (!isDisposed)
+        try
+        {
             Store.OnNext(value);
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning("Exception setting current value for {Address}: {Exception}", Hub.Address, e);
+        }
     }
 
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
@@ -197,6 +205,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
 
         Hub.RegisterForDisposal(_ => Store.Dispose());
+        logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
     }
 
     private IDisposable? startupDeferrable;

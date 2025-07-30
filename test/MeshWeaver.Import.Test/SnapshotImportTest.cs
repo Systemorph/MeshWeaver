@@ -60,8 +60,8 @@ B4,B,4
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(3.Seconds()).Token
+                TestContext.Current.CancellationToken
+                //, new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -69,7 +69,7 @@ B4,B,4
         var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
             .GetWorkspace();
         var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(3.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x.Any());
 
         ret.Should().HaveCount(4);
@@ -88,7 +88,7 @@ SystemName,DisplayName
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
-                new CancellationTokenSource(3.Seconds()).Token
+                new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);

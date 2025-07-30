@@ -641,26 +641,6 @@ public sealed class MessageHub : IMessageHub
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
 
-            while (disposeActions.TryTake(out var disposeAction))
-                disposeAction.Invoke(this);
-
-            // Cancel all pending callbacks to prevent them from waiting indefinitely
-            var pendingCallbacks = pendingCallbackCancellations.ToArray();
-            logger.LogDebug("Cancelling {callbackCount} pending callbacks during disposal for hub {address}", 
-                pendingCallbacks.Length, Address);
-            
-            foreach (var cts in pendingCallbacks)
-            {
-                try
-                {
-                    cts.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Ignore - callback already completed and disposed
-                }
-            }
-            pendingCallbackCancellations.Clear();
         }
 
         // Log all hosted hubs that will be disposed
@@ -679,6 +659,31 @@ public sealed class MessageHub : IMessageHub
             Address, Version, totalStopwatch.ElapsedMilliseconds);
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
+
+    private void DisposeImpl()
+    {
+        while (disposeActions.TryTake(out var disposeAction))
+            disposeAction.Invoke(this);
+
+        // Cancel all pending callbacks to prevent them from waiting indefinitely
+        var pendingCallbacks = pendingCallbackCancellations.ToArray();
+        logger.LogDebug("Cancelling {callbackCount} pending callbacks during disposal for hub {address}",
+            pendingCallbacks.Length, Address);
+
+        foreach (var cts in pendingCallbacks)
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Ignore - callback already completed and disposed
+            }
+        }
+        pendingCallbackCancellations.Clear();
+        hostedHubs.Dispose();
+    }
     private async Task<IMessageDelivery> HandleShutdown(
         IMessageDelivery<ShutdownRequest> request,
         CancellationToken ct
@@ -687,6 +692,8 @@ public sealed class MessageHub : IMessageHub
         var phaseStopwatch = Stopwatch.StartNew();
         logger.LogInformation("STARTING HandleShutdown for hub {Address}, RunLevel={RunLevel}, RequestVersion={RequestVersion}, total disposal time so far: {totalElapsed}ms",
             Address, request.Message.RunLevel, request.Message.Version, disposalStopwatch.ElapsedMilliseconds);
+
+        DisposeImpl();
 
         // Process dispose actions first
         var disposeActionsStopwatch = Stopwatch.StartNew();
@@ -755,10 +762,6 @@ public sealed class MessageHub : IMessageHub
                         Address, currentHostedHubs.Length, 
                         string.Join(", ", currentHostedHubs.Select(h => h.Address.ToString())));
                     
-                    var disposeCallStopwatch = Stopwatch.StartNew();
-                    hostedHubs.Dispose();
-                    logger.LogDebug("HostedHubs.Dispose() call completed for hub {address} in {elapsed}ms", 
-                        Address, disposeCallStopwatch.ElapsedMilliseconds);
                     
                     // Instead of waiting for hosted hubs disposal to complete (which can cause deadlocks),
                     // we simply initiate disposal and continue. The hosted hubs will dispose asynchronously.

@@ -89,7 +89,7 @@ public static class DataExtensions
                     typeof(GetDataResponse)
                 )
                 .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
-                //.WithInitialization(h => h.ServiceProvider.GetRequiredService<IWorkspace>())
+                .WithType(typeof(ActivityLog), nameof(ActivityLog))
                 .RegisterDataEvents()
             ;
 
