@@ -76,7 +76,7 @@ public class ImportManager
         }
 
         var activity = new Activity(ActivityCategory.Import, Hub);
-        Hub.Post(new LogRequest(new LogMessage(message.ToString(), LogLevel.Error)),
+        Hub.Post(new LogMessageRequest(new LogMessage(message.ToString(), LogLevel.Error)),
             o => o.WithTarget(activity.Address));
 
         
@@ -101,7 +101,6 @@ public class ImportManager
             activity.Complete(log =>
             {
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-                activity.Dispose();
             });
 
             activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
@@ -149,7 +148,9 @@ public class ImportManager
                 request
                 );
 
-            activity.Complete(ActivityStatus.Succeeded, l => Hub.Post(new ImportResponse(Hub.Version, l), o => o.ResponseFor(request)));
+            activity.Complete(ActivityStatus.Succeeded, l =>
+                Hub.Post(new ImportResponse(Hub.Version, l), o => o.ResponseFor(request))
+            );
         }
         catch (Exception e)
         {
@@ -193,7 +194,7 @@ public class ImportManager
             dataSetReaderOptions,
             cancellationToken
         );
-
+        activity?.LogInformation("Read data set with {Tables} tables. Will import in format {Format}", dataSet.Tables.Count, format);
         format ??= importRequest.Format;
         if (format == null)
             throw new ImportException("Format not specified.");

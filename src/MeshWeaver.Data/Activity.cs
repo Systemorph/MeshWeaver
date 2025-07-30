@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,7 +60,7 @@ public class Activity : ILogger, IDisposable
 
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes)
     {
-        Hub.Post(new LogRequest(new LogMessage(message, logLevel) { Scopes = scopes }));
+        Hub.Post(new LogMessageRequest(new LogMessage(message, logLevel) { Scopes = scopes }));
     }
 
     public async Task<ActivityLog> GetLogAsync()
@@ -86,8 +87,8 @@ public class Activity : ILogger, IDisposable
 
     protected void LogMessage(LogMessage item)
     {
-        // Send LogRequest to handle logging
-        Hub.Post(new LogRequest(item));
+        // Send LogMessageRequest to handle logging
+        Hub.Post(new LogMessageRequest(item));
     }
 
     public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
@@ -97,9 +98,40 @@ public class Activity : ILogger, IDisposable
     public Activity StartSubActivity(string category)
     {
         var subActivity = new Activity(category, ParentHub);
-        Hub.Post(new StartSubActivityRequest(category) {  SubActivityId = subActivity.Id });
+        Hub.RegisterForDisposal(subActivity);
         SubActivities.Add(subActivity);
+        // Monitor sub-activity completion using simple stream subscription with timeout
+        var subscription = subActivity.Hub
+            .GetWorkspace()
+            .GetStream(new EntityReference(nameof(ActivityLog), subActivity.Id))
+            .Select(x => x.Value!)
+            .OfType<ActivityLog>()
+            .Subscribe(
+                UpdateSubActivity,
+                ex => logger.LogWarning("Error monitoring sub-activity completion for parent {Activity} and sub-activity {SubActivity}: {Exception}", Id, subActivity.Id, ex)
+            );
+        // Register subscription for cleanup
+        Hub.RegisterForDisposal(subscription);
+        subActivity.Completion.ContinueWith(t => UpdateSubActivity(t.Result));
         return subActivity;
+    }
+
+    private void UpdateSubActivity(ActivityLog subLog)
+    {
+        Hub.Post(new UpdateActivityLogRequest(activityLog =>
+        {
+            if (activityLog.SubActivities.TryGetValue(subLog.Id, out var existing) && subLog.Equals(existing))
+                return activityLog;
+            activityLog = activityLog with
+            {
+                SubActivities = activityLog.SubActivities.SetItem(subLog.Id, subLog),
+                Version = (int)Hub.Version
+            };
+            // Check if all sub-activities are complete
+            if (activityLog.SubActivities.Values.All(subAct => subAct.Status != ActivityStatus.Running))
+                Hub.Post(new CompleteActivityRequest(null), options => options.WithTarget(Hub.Address));
+            return activityLog;
+        }));
     }
 
     public void Dispose()
