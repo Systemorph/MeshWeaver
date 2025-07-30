@@ -158,7 +158,7 @@ public static class JsonSynchronizationStream
                 {
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
                     var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
-                    reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
+                    reduced.Host.GetWorkspace().RequestChange(e, activity, null);
                     activity.Complete(_ =>
                     {
                         
