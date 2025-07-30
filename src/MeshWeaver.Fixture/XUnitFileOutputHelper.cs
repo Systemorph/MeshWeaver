@@ -42,10 +42,12 @@ public static class XUnitFileOutputRegistry
 public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
 {
     private readonly ITestOutputHelper _xunitOutput;
-    private readonly string _logFilePath;
+    private string _logFilePath;
     private readonly object _fileLock = new();
     private static readonly string LogDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "test-logs");
     private bool _disposed = false;
+    private readonly string _baseFileName;
+    private string? _currentTestMethod;
 
     static XUnitFileOutputHelper()
     {
@@ -57,22 +59,54 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     {
         _xunitOutput = xunitOutput;
         
-        // Create a unique log file for this test instance
+        // Create base file name for this test instance
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         var processId = Environment.ProcessId;
         var instanceId = Guid.NewGuid().ToString("N")[..8];
-        var fileName = testName != null 
-            ? $"test_{testName}_{timestamp}_{processId}_{instanceId}.log" 
-            : $"test_{timestamp}_{processId}_{instanceId}.log";
+        _baseFileName = testName != null 
+            ? $"test_{testName}_{timestamp}_{processId}_{instanceId}" 
+            : $"test_{timestamp}_{processId}_{instanceId}";
         
-        _logFilePath = Path.Combine(LogDirectory, fileName);
+        // Start with class-level log file
+        _logFilePath = Path.Combine(LogDirectory, $"{_baseFileName}.log");
         
         // Write initial header
         WriteToFile($"=== TEST LOG STARTED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
         WriteToFile($"Process ID: {processId}");
-        WriteToFile($"Test: {testName ?? "Unknown"}");
+        WriteToFile($"Test Class: {testName ?? "Unknown"}");
         WriteToFile($"Log File: {_logFilePath}");
         WriteToFile(new string('=', 60));
+    }
+
+    public void SetCurrentTestMethod(string methodName)
+    {
+        if (_disposed) return;
+        
+        _currentTestMethod = methodName;
+        
+        // Create new log file with method name
+        var newLogPath = Path.Combine(LogDirectory, $"{_baseFileName}_{methodName}.log");
+        
+        lock (_fileLock)
+        {
+            // Copy existing content to new file if needed
+            if (File.Exists(_logFilePath) && _logFilePath != newLogPath)
+            {
+                try
+                {
+                    var existingContent = File.ReadAllText(_logFilePath);
+                    File.WriteAllText(newLogPath, existingContent);
+                }
+                catch
+                {
+                    // If copy fails, just start fresh
+                }
+            }
+            
+            _logFilePath = newLogPath;
+        }
+        
+        WriteToFile($"=== TEST METHOD STARTED: {methodName} at {DateTime.Now:HH:mm:ss.fff} ===");
     }
 
     public void WriteLine(string message)

@@ -136,6 +136,7 @@ public class Activity : ILogger, IDisposable
 
     public void Dispose()
     {
-        Hub.Dispose();
+        if(!Hub.IsDisposing)    
+            Hub.Dispose();
     }
 }

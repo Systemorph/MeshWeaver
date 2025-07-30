@@ -20,6 +20,7 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
         
         // Also log to file output if available
         var fileOutput = XUnitFileOutputRegistry.GetAnyActiveOutputHelper();
+        fileOutput?.SetCurrentTestMethod(methodUnderTest.Name);
         fileOutput?.WriteLine(logMessage);
     }
 
