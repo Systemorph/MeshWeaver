@@ -157,7 +157,7 @@ public class ImportManager
 
     public async Task<EntityStore> ImportInstancesAsync(
         ImportRequest importRequest,
-        Activity activity,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         var (dataSet, format) = await ReadDataSetAsync(importRequest, activity, cancellationToken);
@@ -166,7 +166,7 @@ public class ImportManager
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
-        Activity activity,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         var sourceType = importRequest.Source.GetType();

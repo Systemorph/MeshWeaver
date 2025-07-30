@@ -3,7 +3,6 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
-using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.DataSetReader;
 using MeshWeaver.DataSetReader.Csv;
@@ -146,8 +145,6 @@ public record ImportConfiguration
         return ret;
     }
 
-    public static string UnknownValueErrorMessage =
-        "Property {0} of type {1} has unknown value {2}.";
     public static string MissingCategoryErrorMessage = "Category with name {0} was not found.";
 
     private static readonly ConcurrentDictionary<
