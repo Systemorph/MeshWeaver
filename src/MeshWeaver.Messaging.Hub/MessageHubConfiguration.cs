@@ -74,7 +74,7 @@ public record MessageHubConfiguration
     {
         var services = new ServiceCollection();
         services.Replace(ServiceDescriptor.Singleton<IMessageHub>(sp => new MessageHub(sp, sp.GetRequiredService<HostedHubsCollection>(), this, parent)));
-        services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>());
+        services.Replace(ServiceDescriptor.Singleton<HostedHubsCollection, HostedHubsCollection>(sp => new(sp, Address)));
         services.Replace(ServiceDescriptor.Singleton(typeof(ITypeRegistry), _ => TypeRegistry));
         services.Replace(ServiceDescriptor.Singleton(sp => new ParentMessageHub(sp.GetRequiredService<IMessageHub>())));
         // Check if AccessService is registered in the parent service provider

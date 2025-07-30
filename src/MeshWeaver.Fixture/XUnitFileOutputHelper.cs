@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using System.Text;
 using Xunit;
@@ -160,11 +162,13 @@ public class XUnitFileLoggerProvider : ILoggerProvider
 {
     private readonly ConcurrentDictionary<string, XUnitFileLogger> _loggers = new();
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
+    private readonly IServiceProvider? _serviceProvider;
     private bool _disposed = false;
 
-    public XUnitFileLoggerProvider(Func<XUnitFileOutputHelper?> outputHelperFactory)
+    public XUnitFileLoggerProvider(Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _outputHelperFactory = outputHelperFactory;
+        _serviceProvider = serviceProvider;
     }
 
     public ILogger CreateLogger(string categoryName)
@@ -172,7 +176,7 @@ public class XUnitFileLoggerProvider : ILoggerProvider
         if (_disposed)
             throw new ObjectDisposedException(nameof(XUnitFileLoggerProvider));
             
-        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory));
+        return _loggers.GetOrAdd(categoryName, name => new XUnitFileLogger(name, _outputHelperFactory, _serviceProvider));
     }
 
     public void Dispose()
@@ -193,17 +197,50 @@ public class XUnitFileLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly Func<XUnitFileOutputHelper?> _outputHelperFactory;
+    private readonly IServiceProvider? _serviceProvider;
+    private readonly Lazy<LogLevel> _minLogLevel;
 
-    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory)
+    public XUnitFileLogger(string categoryName, Func<XUnitFileOutputHelper?> outputHelperFactory, IServiceProvider? serviceProvider = null)
     {
         _categoryName = categoryName;
         _outputHelperFactory = outputHelperFactory;
+        _serviceProvider = serviceProvider;
+        _minLogLevel = new Lazy<LogLevel>(GetMinLogLevel);
     }
 
     public IDisposable BeginScope<TState>(TState state) where TState : notnull 
         => new NoOpDisposable();
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLogLevel.Value;
+
+    private LogLevel GetMinLogLevel()
+    {
+        if (_serviceProvider == null)
+            return LogLevel.Information;
+
+        try
+        {
+            var configuration = _serviceProvider.GetService<IConfiguration>();
+            if (configuration == null)
+                return LogLevel.Information;
+
+            // Check for specific category configuration first
+            var categoryLevel = configuration[$"Logging:LogLevel:{_categoryName}"];
+            if (!string.IsNullOrEmpty(categoryLevel) && Enum.TryParse<LogLevel>(categoryLevel, out var specificLevel))
+                return specificLevel;
+
+            // Check for default configuration
+            var defaultLevel = configuration["Logging:LogLevel:Default"];
+            if (!string.IsNullOrEmpty(defaultLevel) && Enum.TryParse<LogLevel>(defaultLevel, out var defaultLogLevel))
+                return defaultLogLevel;
+
+            return LogLevel.Information;
+        }
+        catch
+        {
+            return LogLevel.Information;
+        }
+    }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {

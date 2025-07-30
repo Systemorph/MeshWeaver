@@ -61,7 +61,7 @@ B4,B,4
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
-                //, new CancellationTokenSource(10.Seconds()).Token
+                , new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
