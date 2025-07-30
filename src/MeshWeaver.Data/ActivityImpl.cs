@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,10 +21,17 @@ internal class ActivityImpl : IDisposable
                 )
             )
             .WithHandler<CompleteActivityRequest>((_, request) => activity.HandleCompleteRequest(request))
-            .WithHandler<LogRequest>((_, request) => activity.HandleLogRequest(request))
-            .WithHandler<StartSubActivityRequest>((_, request) => activity.HandleStartSubActivityRequest(request))
+            .WithHandler<LogMessageRequest>((_, request) => activity.HandleLogRequest(request))
+            .WithHandler<UpdateActivityLogRequest>((_, request) => activity.HandleUpdateActivityLogRequest(request))
             .WithHandler<ChangeActivityCategoryRequest>((_,request) => activity.HandlerChangeActivityCategoryRequest(request))
             .WithInitialization(hub => activity.Initialize(hub));
+    }
+
+    private IMessageDelivery HandleUpdateActivityLogRequest(IMessageDelivery<UpdateActivityLogRequest> request)
+    {
+        activityLog = request.Message.Update.Invoke(activityLog) with {Version = (int)Hub.Version};
+        RequestChange();
+        return request.Processed();
     }
 
     private IMessageDelivery HandlerChangeActivityCategoryRequest(IMessageDelivery<ChangeActivityCategoryRequest> request)
@@ -64,14 +70,14 @@ internal class ActivityImpl : IDisposable
             {
                 log = log.Finish((int)Hub.Version, status);
                 // Signal completion with updated log
-                _completionSource.TrySetResult(log);
+                completionSource.TrySetResult(log);
             }
             else
             {
                 // Signal completion with current log
-                _completionSource.TrySetResult(log);
+                completionSource.TrySetResult(log);
             }
-                
+
             while (completedActions.TryTake(out var completedAction))
             {
                 try
@@ -81,7 +87,8 @@ internal class ActivityImpl : IDisposable
                 catch (Exception ex)
                 {
                     // Silently handle completion action errors
-                    Logger.LogWarning("Exception during completion of Activity {activityId}:\n{exception}", Hub.Address.Id, ex);
+                    Logger.LogWarning("Exception during completion of Activity {activityId}:\n{exception}",
+                        Hub.Address.Id, ex);
                 }
             }
         }
@@ -89,19 +96,18 @@ internal class ActivityImpl : IDisposable
         {
             Logger.LogError("Error in CompleteMyself: {Exception}", ex);
             log = log.Fail(ex.ToString());
-            _completionSource.TrySetException(ex);
+            completionSource.TrySetException(ex);
         }
-
         return log;
     }
 
     private readonly ConcurrentBag<Action<ActivityLog>> completedActions = new();
-    private readonly TaskCompletionSource<ActivityLog> _completionSource = new();
+    private readonly TaskCompletionSource<ActivityLog> completionSource = new();
 
     /// <summary>
     /// Task that completes when the activity is finished, returning the final ActivityLog
     /// </summary>
-    public Task<ActivityLog> Completion => _completionSource.Task;
+    public Task<ActivityLog> Completion => completionSource.Task;
 
     public void Complete(Action<ActivityLog>? completedAction = null, ActivityStatus? status = null)
     {
@@ -118,6 +124,8 @@ internal class ActivityImpl : IDisposable
             completedActions.Add(request.CompleteAction);
         activityLog = ProcessActivityCompletion(activityLog, request.Status);
         RequestChange();
+        if (activityLog.Status > ActivityStatus.Running) 
+            Hub.Dispose();
         return delivery.Processed();
     }
 
@@ -152,13 +160,13 @@ internal class ActivityImpl : IDisposable
         catch (Exception ex)
         {
             Logger.LogError("Error in ProcessActivityCompletion: {Exception}", ex);
-            _completionSource.TrySetException(ex);
+            completionSource.TrySetException(ex);
             log = log.Fail(ex.ToString());
             return log;
         }
     }
 
-    public IMessageDelivery HandleLogRequest(IMessageDelivery<LogRequest> request)
+    public IMessageDelivery HandleLogRequest(IMessageDelivery<LogMessageRequest> request)
     {
         try
         {
@@ -230,56 +238,6 @@ internal class ActivityImpl : IDisposable
 
 
 
-    private IMessageDelivery HandleStartSubActivityRequest(IMessageDelivery<StartSubActivityRequest> request)
-    {
-        try
-        {
-
-            var subActivity = new Activity(request.Message.Category, parentHub, request.Message.SubActivityId);
-            Hub.RegisterForDisposal(subActivity);
-
-            // Monitor sub-activity completion using simple stream subscription with timeout
-            var subscription = subActivity.Hub
-                .GetWorkspace()
-                .GetStream(new EntityReference(nameof(ActivityLog),subActivity.Id))
-                .Select(x => x.Value!)
-                .OfType<ActivityLog>()
-                .Subscribe(
-                    subLog =>
-                    {
-                        try
-                        {
-                            activityLog = activityLog with
-                            {
-                                SubActivities = activityLog.SubActivities.SetItem(subActivity.Id, subLog),
-                                Version = (int)Hub.Version
-                            };
-                            // Update ActivityLog as data
-                            RequestChange();
-                            // Check if all sub-activities are complete
-                            if (activityLog.SubActivities.Values.All(subAct => subAct.Status != ActivityStatus.Running))
-                                Hub.Post(new CompleteActivityRequest(null), options => options.WithTarget(Hub.Address));
-
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning("Error updating parent activity: {Exception}", ex);
-                        }
-                    },
-                    ex => Logger.LogWarning("Error monitoring sub-activity completion: {Exception}", ex)
-                );
-                
-            // Register subscription for cleanup
-            Hub.RegisterForDisposal(_ => subscription.Dispose());
-                
-            return request.Processed();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError("Error in HandleStartSubActivityRequest: {Exception}", ex);
-            return request.Failed(ex.ToString());
-        }
-    }
 
     protected readonly ILogger Logger;
 

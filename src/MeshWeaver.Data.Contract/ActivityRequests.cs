@@ -9,9 +9,6 @@ public record CompleteActivityRequest(ActivityStatus? Status) : IRequest
     [JsonIgnore]public Action<ActivityLog>? CompleteAction { get; init; }
 }
 
-public record LogRequest(LogMessage LogMessage) : IRequest;
+public record LogMessageRequest(LogMessage LogMessage) : IRequest;
 
-public record StartSubActivityRequest(string Category) : IRequest
-{
-    public string SubActivityId { get; init; } = Guid.NewGuid().AsString();
-}
+public record UpdateActivityLogRequest([property: JsonIgnore] Func<ActivityLog, ActivityLog> Update) : IRequest;

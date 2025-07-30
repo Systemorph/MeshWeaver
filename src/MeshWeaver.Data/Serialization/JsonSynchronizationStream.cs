@@ -161,7 +161,7 @@ public static class JsonSynchronizationStream
                     reduced.Hub.GetWorkspace().RequestChange(e, activity, null);
                     activity.Complete(_ =>
                     {
-                        activity.Dispose();
+                        
                         /*TODO: Where to save?*/
                     });
                 })
