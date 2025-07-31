@@ -320,7 +320,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act - update from client1
         await client1.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updateItem }),
+            DataChangeRequest.Update([updateItem]),
             o => o.WithTarget(new ClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,

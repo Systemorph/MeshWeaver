@@ -3,6 +3,8 @@ using System.Text.Json;
 using Json.Patch;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
@@ -14,9 +16,9 @@ public delegate ChangeItem<TReduced> ReduceFunction<TStream, in TReference, TRed
     where TReference : WorkspaceReference;
 
 
-public record ReduceManager<TStream>
+public record ReduceManager<TStream>(IMessageHub hub)
 {
-    private readonly IMessageHub hub;
+    private readonly ILogger logger = hub.ServiceProvider.GetRequiredService<ILogger<ReduceManager<TStream>>>();
     internal readonly LinkedList<ReduceDelegate> Reducers = new();
     internal ImmutableList<object> ReduceStreams { get; init; } = ImmutableList<object>.Empty;
 
@@ -24,10 +26,6 @@ public record ReduceManager<TStream>
         ImmutableDictionary<Type, object>.Empty;
 
 
-    public ReduceManager(IMessageHub hub)
-    {
-        this.hub = hub;
-    }
 
 
     public ReduceManager<TStream> ForReducedStream<TReducedStream>(
