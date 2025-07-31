@@ -41,5 +41,6 @@ public class AutoTestLoggingAttribute : BeforeAfterTestAttribute
         
         
         fileOutput?.WriteLine(logMessage);
+        fileOutput?.ClearCurrentTestMethod();
     }
 }

@@ -59,23 +59,11 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     {
         _xunitOutput = xunitOutput;
         
-        // Create base file name for this test instance
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        var processId = Environment.ProcessId;
-        var instanceId = Guid.NewGuid().ToString("N")[..8];
-        _baseFileName = testName != null 
-            ? $"test_{testName}_{timestamp}_{processId}_{instanceId}" 
-            : $"test_{timestamp}_{processId}_{instanceId}";
+        // Store just the test class name for simple naming
+        _baseFileName = testName ?? "UnknownTest";
         
-        // Start with class-level log file
-        _logFilePath = Path.Combine(LogDirectory, $"{_baseFileName}.log");
-        
-        // Write initial header
-        WriteToFile($"=== TEST LOG STARTED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
-        WriteToFile($"Process ID: {processId}");
-        WriteToFile($"Test Class: {testName ?? "Unknown"}");
-        WriteToFile($"Log File: {_logFilePath}");
-        WriteToFile(new string('=', 60));
+        // Don't create log file yet - wait for first test method
+        _logFilePath = string.Empty;
     }
 
     public void SetCurrentTestMethod(string methodName)
@@ -84,29 +72,30 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         
         _currentTestMethod = methodName;
         
-        // Create new log file with method name
+        // Create simple log file name: TestClass_TestMethod.log
         var newLogPath = Path.Combine(LogDirectory, $"{_baseFileName}_{methodName}.log");
         
         lock (_fileLock)
         {
-            // Copy existing content to new file if needed
-            if (File.Exists(_logFilePath) && _logFilePath != newLogPath)
-            {
-                try
-                {
-                    var existingContent = File.ReadAllText(_logFilePath);
-                    File.WriteAllText(newLogPath, existingContent);
-                }
-                catch
-                {
-                    // If copy fails, just start fresh
-                }
-            }
-            
             _logFilePath = newLogPath;
         }
         
-        WriteToFile($"=== TEST METHOD STARTED: {methodName} at {DateTime.Now:HH:mm:ss.fff} ===");
+        // Write initial header now that we have a log file
+        WriteToFile($"=== TEST LOG STARTED: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
+        WriteToFile($"Test Method: {_baseFileName}.{methodName}");
+        WriteToFile($"Log File: {_logFilePath}");
+        WriteToFile(new string('=', 60));
+    }
+
+    public void ClearCurrentTestMethod()
+    {
+        if (_disposed) return;
+        _currentTestMethod = null;
+    }
+
+    public bool IsInTestMethod()
+    {
+        return !string.IsNullOrEmpty(_currentTestMethod);
     }
 
     public void WriteLine(string message)
@@ -152,6 +141,9 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
     private void WriteToFile(string message)
     {
         if (_disposed) return;
+        
+        // Don't write to file if no log file has been created yet (no test method active)
+        if (string.IsNullOrEmpty(_logFilePath)) return;
 
         // Use retry logic for file access to handle temporary conflicts
         for (int attempt = 0; attempt < 3; attempt++)
@@ -283,6 +275,10 @@ public class XUnitFileLogger : ILogger
 
         var outputHelper = _outputHelperFactory();
         if (outputHelper == null)
+            return;
+
+        // Only log if we're inside a test method
+        if (!outputHelper.IsInTestMethod())
             return;
 
         var message = formatter(state, exception);
