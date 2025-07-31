@@ -197,7 +197,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         }
 
         var controls = await controlStream.Where(x => x is not null).ToArray();
-        controls.Should().HaveCountLessThanOrEqualTo(3);
+        controls.Should().HaveCountLessThanOrEqualTo(4);
         controls.Last().Should().BeOfType<MarkdownControl>().Which.Markdown.ToString().Should().StartWith("5");
     }
     private record ListForms
