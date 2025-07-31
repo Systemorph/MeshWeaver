@@ -100,7 +100,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
                     .Select(x => result.Invoke(x, host, ctx)));
     }
     public static UiControl Edit<T>(
@@ -117,7 +117,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
                     .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
@@ -207,7 +207,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(20)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
                     .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
