@@ -500,6 +500,7 @@ public sealed class MessageHub : IMessageHub
             }
         }
 
+        logger.LogInformation("Adding callback for {Id}", delivery.Id);
         callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
 
         return tcs.Task;
@@ -528,11 +529,16 @@ public sealed class MessageHub : IMessageHub
         if (
             !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
             || requestId.ToString() is not { } requestIdString
-            || !callbacks.TryRemove(requestIdString, out var myCallbacks)
         )
         {
             logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
                 delivery.Message.GetType().Name, Address, delivery.Id);
+            return delivery;
+        }
+
+        if (!callbacks.TryRemove(requestIdString, out var myCallbacks))
+        {
+            logger.LogInformation("No callbacks found for {Id}", requestIdString);
             return delivery;
         }
 
