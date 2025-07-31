@@ -13,7 +13,7 @@ public partial class DateTimeView
     private CultureInfo Culture { get; set; } = CultureInfo.CurrentCulture;
     private DayFormat? DayFormat { get; set; }
     private DateTime? DoubleClickToDate { get; set; }
-    private bool DisabledSelectable { get; set; } = true;
+    private bool DisabledSelectable { get; set; } = false;
     private bool DisabledCheckAllDaysOfMonthYear { get; set; }
     private Func<DateTime, bool>? DisabledDateFunc { get; set; }
     private HorizontalPosition? PopupHorizontalPosition { get; set; }
@@ -36,7 +36,7 @@ public partial class DateTimeView
             DataBind(ViewModel.Culture, x => x.Culture, defaultValue: CultureInfo.CurrentCulture);
             DataBind(ViewModel.DayFormat, x => x.DayFormat);
             DataBind(ViewModel.DoubleClickToDate, x => x.DoubleClickToDate);
-            DataBind(ViewModel.DisabledSelectable, x => x.DisabledSelectable, defaultValue: true);
+            DataBind(ViewModel.DisabledSelectable, x => x.DisabledSelectable, defaultValue: false);
             DataBind(ViewModel.DisabledCheckAllDaysOfMonthYear, x => x.DisabledCheckAllDaysOfMonthYear);
             DataBind(ViewModel.PopupHorizontalPosition, x => x.PopupHorizontalPosition);
             DataBind(ViewModel.Name, x => x.Name);
