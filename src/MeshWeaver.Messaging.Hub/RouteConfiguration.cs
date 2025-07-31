@@ -16,7 +16,7 @@ public record RouteConfiguration(IMessageHub Hub)
         RouteAddress<TAddress>((routedAddress, d) =>
         {
             // Check if the parent hub is disposing before attempting to create/route to hosted hubs
-            if (Hub.IsDisposing)
+            if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
             {
                 // During disposal, reject messages to hosted hubs to prevent deadlocks
                 Hub.Post(
@@ -68,7 +68,7 @@ public record RouteConfiguration(IMessageHub Hub)
         => RouteAddressToHub<TAddress>(a => 
         {
             // During disposal, only try to get existing hubs, don't create new ones
-            var creation = Hub.IsDisposing ? HostedHubCreation.Never : HostedHubCreation.Always;
+            var creation = Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs ? HostedHubCreation.Never : HostedHubCreation.Always;
             return Hub.GetHostedHub(a, configuration, creation);
         });
 

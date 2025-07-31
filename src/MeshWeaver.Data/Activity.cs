@@ -136,7 +136,7 @@ public class Activity : ILogger, IDisposable
 
     public void Dispose()
     {
-        if(!Hub.IsDisposing)    
+        if(Hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)    
             Hub.Dispose();
     }
 }

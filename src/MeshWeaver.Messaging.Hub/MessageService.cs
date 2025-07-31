@@ -11,7 +11,6 @@ public class MessageService : IMessageService
 {
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
-    private bool isDisposing; 
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
@@ -155,13 +154,6 @@ public class MessageService : IMessageService
         logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}", 
             delivery.Message.GetType().Name, delivery.Id, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
-        if (isDisposing)
-        {
-            logger.LogTrace("MESSAGE_FLOW: REJECTING_MESSAGE_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
-            return delivery.Failed("Hub disposing");
-        }
-
         logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
         buffer.Post(() => NotifyAsync(delivery, cancellationToken));
@@ -174,14 +166,14 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
-
-        // Double-check disposal state to prevent processing during shutdown
-        if (isDisposing && delivery.Message is not ShutdownRequest)
-        {
-            logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
-            return delivery.Failed("Hub disposing - message rejected");
-        }
+        //var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
+        //// Double-check disposal state to prevent processing during shutdown
+        //if (isDisposing && delivery.Message is not ShutdownRequest)
+        //{
+        //    logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+        //        delivery.Message.GetType().Name, Address, delivery.Id);
+        //    return delivery.Failed("Hub disposing - message rejected");
+        //}
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
         if (ParentHub is MessageHub parentMessageHub)
@@ -260,20 +252,20 @@ public class MessageService : IMessageService
         logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
             
             var executionStopwatch = Stopwatch.StartNew();
+            var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
             try
             {
+
                 // Add timeout for disposal-related messages to prevent hangs
-                if (isDisposing || delivery.Message is ShutdownRequest)
+                if (!isDisposing || delivery.Message is ShutdownRequest)
                 {
-                    
-                    logger.LogDebug("Executing {MessageType} with 30-second timeout during disposal for hub {Address}", 
-                        delivery.Message.GetType().Name, Address);
                     
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                 }
                 else
                 {
-                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
+                    var jsonMessage = JsonSerializer.Serialize(delivery, hub.JsonSerializerOptions);
+                    logger.LogWarning("Hub {Address} is disposing. Not processing message {Message}", hub.Address, jsonMessage);
                 }
 
                 logger.LogTrace("MESSAGE_FLOW: EXECUTION_COMPLETED | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
@@ -320,8 +312,6 @@ public class MessageService : IMessageService
     {
         lock (locker)
         {
-            if (isDisposing)
-                return null;
             if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
@@ -389,16 +379,6 @@ public class MessageService : IMessageService
     public async ValueTask DisposeAsync()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        lock (locker)
-        {
-            if (isDisposing)
-            {
-                logger.LogWarning("DisposeAsync called multiple times for message service in {Address}", Address);
-                return;
-            }
-            isDisposing = true;
-        }
-
         logger.LogInformation("Starting disposal of message service in {Address}", Address);
 
         // Dispose hang detection timer first

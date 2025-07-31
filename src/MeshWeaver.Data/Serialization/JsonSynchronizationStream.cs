@@ -20,8 +20,8 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
-        if (hub.IsDisposing)
-            throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream.");
+        if (hub.RunLevel > MessageHubRunLevel.Started)
+            throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream for {reference}.");
 
         var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger(typeof(JsonSynchronizationStream));
