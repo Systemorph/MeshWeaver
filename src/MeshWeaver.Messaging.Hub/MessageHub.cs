@@ -20,7 +20,7 @@ public sealed class MessageHub : IMessageHub
         Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
-    private readonly ConcurrentDictionary<string, List<AsyncDelivery>> callbacks = new();
+    private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
 
     private readonly ILogger logger;
@@ -500,8 +500,11 @@ public sealed class MessageHub : IMessageHub
             }
         }
 
-        logger.LogInformation("Adding callback for {Id}", delivery.Id);
-        callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
+        lock (callbacks)
+        {
+            logger.LogInformation("Adding callback for {Id}", delivery.Id);
+            callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
+        }
 
         return tcs.Task;
     }
@@ -536,10 +539,14 @@ public sealed class MessageHub : IMessageHub
             return delivery;
         }
 
-        if (!callbacks.TryRemove(requestIdString, out var myCallbacks))
+        List<AsyncDelivery>? myCallbacks;
+        lock (callbacks)
         {
-            logger.LogInformation("No callbacks found for {Id}", requestIdString);
-            return delivery;
+            if (!callbacks.Remove(requestIdString, out myCallbacks))
+            {
+                logger.LogInformation("No callbacks found for {Id}", requestIdString);
+                return delivery;
+            }
         }
 
         logger.LogInformation("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
