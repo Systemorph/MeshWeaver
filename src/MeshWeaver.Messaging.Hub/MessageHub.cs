@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
+using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,7 @@ namespace MeshWeaver.Messaging;
 public sealed class MessageHub : IMessageHub
 {
     public Address Address => Configuration.Address;
+
 
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback) =>
         Post(new ExecutionRequest(action, exceptionCallback));
@@ -314,7 +316,7 @@ public sealed class MessageHub : IMessageHub
     {
         var tcs = new TaskCompletionSource<IMessageDelivery<TResponse>>(cancellationToken);
         var callbackTask = RegisterCallback(
-            request,
+            request.Id,
             d =>
             {
                 tcs.SetResult((IMessageDelivery<TResponse>)d);
@@ -352,14 +354,15 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        var delivery = Post(request, options);
-        return delivery is null ?
-                Task.FromException<TResult>(new ObjectDisposedException("hub is disposed"))
-            : AwaitResponse(
-            delivery,
+        var id = Guid.NewGuid().AsString();
+        var ret = AwaitResponse(
+            id,
             selector,
             cancellationToken
         );
+
+        Post(request, o => options.Invoke(o).WithMessageId(id));
+        return ret;
     }
 
     public Task<TResult> AwaitResponse<TResponse, TResult>(
@@ -369,20 +372,38 @@ public sealed class MessageHub : IMessageHub
     )
     {
         var response = RegisterCallback(
-            request,
+            request.Id,
             d => d,
             cancellationToken
         );
         var task = response
             .ContinueWith(t =>
-                    InnerCallback(request, t.Result, selector),
+                    InnerCallback(request.Id, t.Result, selector),
+                cancellationToken
+            );
+        return task;
+    }
+    public Task<TResult> AwaitResponse<TResponse, TResult>(
+        string id,
+        Func<IMessageDelivery<TResponse>, TResult> selector,
+        CancellationToken cancellationToken
+    )
+    {
+        var response = RegisterCallback(
+            id,
+            d => d,
+            cancellationToken
+        );
+        var task = response
+            .ContinueWith(t =>
+                    InnerCallback(id, t.Result, selector),
                 cancellationToken
             );
         return task;
     }
 
     private TResult InnerCallback<TResponse, TResult>(
-        IMessageDelivery request,
+        string id,
         IMessageDelivery response,
         Func<IMessageDelivery<TResponse>, TResult> selector)
     {
@@ -390,7 +411,7 @@ public sealed class MessageHub : IMessageHub
         {
             if (response is IMessageDelivery<TResponse> tResponse)
                 return selector.Invoke(tResponse);
-            throw new DeliveryFailureException($"Response for {request} was of unexpected type: {response}");
+            throw new DeliveryFailureException($"Response for {id} was of unexpected type: {response}");
         }
         catch (DeliveryFailureException)
         {
@@ -398,51 +419,53 @@ public sealed class MessageHub : IMessageHub
         }
         catch (Exception e)
         {
-            throw new DeliveryFailureException($"Error while awaiting response for {request}", e);
+            throw new DeliveryFailureException($"Error while awaiting response for {id}", e);
         }
     }
 
-    public IMessageDelivery RegisterCallback<TMessage, TResponse>(
-        IMessageDelivery<TMessage> request,
+    public void RegisterCallback<TMessage, TResponse>(
+        string messageId,
         SyncDelivery<TResponse> callback,
         CancellationToken cancellationToken
     )
         where TMessage : IRequest<TResponse> =>
-        RegisterCallback<TMessage, TResponse>(
-            request,
+        RegisterCallback<TResponse>(
+            messageId,
             (d, _) => Task.FromResult(callback(d)),
             cancellationToken
         );
 
-    public IMessageDelivery RegisterCallback<TMessage, TResponse>(
-        IMessageDelivery<TMessage> request,
+    public void RegisterCallback<TResponse>(
+        string messageId,
         AsyncDelivery<TResponse> callback,
         CancellationToken cancellationToken
     )
-        where TMessage : IRequest<TResponse>
     {
         RegisterCallback(
-            request,
+            messageId,
             (d, c) => callback.Invoke((IMessageDelivery<TResponse>)d, c),
             cancellationToken
         );
-        return request.Forwarded();
     }
 
     public Task<IMessageDelivery> RegisterCallback(
-        IMessageDelivery delivery,
+        string messageId,
         SyncDelivery callback,
         CancellationToken cancellationToken
-    ) => RegisterCallback(delivery, (d, _) => Task.FromResult(callback(d)), cancellationToken);
+    ) => RegisterCallback(messageId, (d, _) => Task.FromResult(callback(d)), cancellationToken);
 
     // ReSharper disable once UnusedMethodReturnValue.Local
     public Task<IMessageDelivery> RegisterCallback(
-        IMessageDelivery delivery,
+        string messageId,
         AsyncDelivery callback
-    ) => RegisterCallback(delivery, callback, default);
+    ) => RegisterCallback(messageId, callback, CancellationToken.None);
+
+    public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback,
+        CancellationToken cancellationToken)
+        => RegisterCallback(delivery.Id, callback, cancellationToken);
 
     public Task<IMessageDelivery> RegisterCallback(
-        IMessageDelivery delivery,
+        string messageId,
         AsyncDelivery callback,
         CancellationToken cancellationToken
     )
@@ -459,7 +482,7 @@ public sealed class MessageHub : IMessageHub
         // Register for disposal cancellation
         lock (locker)
         {
-            if (IsDisposing)
+            if (RunLevel >= MessageHubRunLevel.ShutDown)
             {
                 // If already disposing, immediately cancel the callback
                 tcs.SetCanceled(combinedCts.Token);
@@ -502,8 +525,8 @@ public sealed class MessageHub : IMessageHub
 
         lock (callbacks)
         {
-            logger.LogInformation("Adding callback for {Id}", delivery.Id);
-            callbacks.GetOrAdd(delivery.Id, _ => new()).Add(ResolveCallback);
+            logger.LogInformation("Adding callback for {Id}", messageId);
+            callbacks.GetOrAdd(messageId, _ => new()).Add(ResolveCallback);
         }
 
         return tcs.Task;
@@ -743,7 +766,9 @@ public sealed class MessageHub : IMessageHub
                 }
 
                 hostedHubs.Dispose();
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 Task.Run(async () =>
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 {
                     try
                     {

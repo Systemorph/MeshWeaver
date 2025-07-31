@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Messaging;
 
@@ -20,7 +21,6 @@ public record PostOptions(Address Sender)
     public PostOptions WithTarget(Address targetAddress) => this with { Target = targetAddress };
 
     public PostOptions ResponseFor(IMessageDelivery requestDelivery) =>
-        requestDelivery == null ? this :
         this with
         {
             Target = requestDelivery.Sender,
@@ -38,4 +38,8 @@ public record PostOptions(Address Sender)
     {
         return this with { PropertiesInternal = PropertiesInternal.AddRange(properties) };
     }
+
+    internal string MessageId { get; init; } = Guid.NewGuid().AsString();
+    public PostOptions WithMessageId(string messageId)
+        => this with { MessageId = messageId ?? throw new ArgumentNullException(nameof(messageId)) };
 }
