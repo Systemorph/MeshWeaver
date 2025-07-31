@@ -13,6 +13,7 @@ public static class WorkspaceStreams
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration)
         where TReference : WorkspaceReference<TReduced>
     {
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         var collections = reference.GetCollections();
         var groups = collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
@@ -23,16 +24,22 @@ public static class WorkspaceStreams
             return null;
         var unmapped = groups.Where(x => x.Key == null).ToArray();
         if (unmapped.Any())
-            throw new ArgumentException($"Collections {string.Join(", ", unmapped.SelectMany(u => u.Select(uu => uu.Collection)))} are not mapped to any source.");
+        {
+            var c = string.Join(", ", unmapped.SelectMany(u => u.Select(uu => uu.Collection)));
+            logger.LogWarning("There were unmapped collections: {Collections}", c);
+            throw new ArgumentException($"Collections {c} are not mapped to any source.");
+        }
         var partition = reference is IPartitionedWorkspaceReference part ? part.Partition : null;
         if (groups.Length == 1)
         {
             var dataSource = groups[0].Key;
             if (dataSource == null)
                 throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-            return dataSource
+            var reduced = dataSource
                 .GetStreamForPartition(partition)
                 ?.Reduce(reference, configuration);
+            logger.LogDebug("Having single collection {Collection}. Returning reduced stream {StreamId}", groups[0].Key, reduced?.StreamId);
+            return reduced;
         }
 
         var streams = groups.Select(g =>
@@ -51,14 +58,13 @@ public static class WorkspaceStreams
 c => c
             );
 
-        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
         ret.Initialize(async ct => await streams
             .ToAsyncEnumerable()
             .SelectAwait(async x => await x!.FirstAsync())
             .AggregateAsync(new EntityStore(), (x, y) =>
             y.Value is null ? x : x.Merge(y.Value), cancellationToken: ct), ex =>
         {
-            logger.LogError(ex, "cannot initialize stream for {Address}", workspace.Hub.Address);
+            logger.LogError(ex, "cannot initialize stream for {Address} with reference {Reference}", workspace.Hub.Address, reference);
             return Task.CompletedTask;
         });
 
@@ -68,8 +74,8 @@ c => c
                     current => ret.ApplyChanges(current!.MergeWithUpdates(s.Value!, s.ChangedBy ?? string.Empty)),
                     ex =>
                     {
-                        logger.LogError(ex, "cannot apply changes to stream for {Address}",
-                            workspace.Hub.Address);
+                        logger.LogError(ex, "cannot apply changes to stream for {Address} with reference {Reference}",
+                            workspace.Hub.Address, reference);
                         return Task.CompletedTask;
 
                     })
@@ -124,12 +130,9 @@ c => c
 
         stream.RegisterForDisposal(reducedStream);
 
+        var i = 0;
         var selectedInitial = stream
-            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, true))
-            .Take(1)
-            .Concat(stream
-                .Skip(1)
-                .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, false)));
+            .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, i++ == 0));
 
         if (!reducedStream.Configuration.NullReturn)
         {

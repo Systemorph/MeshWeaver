@@ -112,16 +112,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (startupDeferrable is not null)
         {
+            logger.LogDebug("Disposing startup deferrable");
             startupDeferrable.Dispose();
             startupDeferrable = null;
         }
+
         if (isDisposed || value == null)
+        {
+            logger.LogWarning("Not setting {StreamId} to {Value} because the stream is disposed or value is null.", StreamId, value);
             return;
+        }
         if (current is not null && Equals(current.Value, value.Value))
             return;
         current = value;
         try
         {
+            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, value);
             Store.OnNext(value);
         }
         catch (Exception e)
@@ -190,8 +196,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (Host.RunLevel > MessageHubRunLevel.Started)
             throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream for {Reference}.");
-        this.Host = Host;
 
+        
+        this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
 
@@ -205,6 +212,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
 
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
+
+        logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {Reference}", StreamId, Host.Address, Reference);
     }
 
     private IDisposable? startupDeferrable;
