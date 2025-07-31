@@ -525,7 +525,7 @@ public sealed class MessageHub : IMessageHub
 
         lock (callbacks)
         {
-            logger.LogInformation("Adding callback for {Id}", messageId);
+            logger.LogDebug("Adding callback for {Id}", messageId);
             callbacks.GetOrAdd(messageId, _ => new()).Add(ResolveCallback);
         }
 
@@ -567,12 +567,12 @@ public sealed class MessageHub : IMessageHub
         {
             if (!callbacks.Remove(requestIdString, out myCallbacks))
             {
-                logger.LogInformation("No callbacks found for {Id}", requestIdString);
+                logger.LogDebug("No callbacks found for {Id}", requestIdString);
                 return delivery;
             }
         }
 
-        logger.LogInformation("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogDebug("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
         foreach (var callback in myCallbacks)
         {
