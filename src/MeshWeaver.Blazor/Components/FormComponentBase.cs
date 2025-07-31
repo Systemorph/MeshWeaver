@@ -64,7 +64,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataPointer = ViewModel.Data as JsonPointerReference;
         valueUpdateSubject = new();
         AddBinding(valueUpdateSubject
-            .Debounce(TimeSpan.FromMilliseconds(20))
+            .Debounce(TimeSpan.FromMilliseconds(30))
             .DistinctUntilChanged()
             .Skip(1)
             .Subscribe(x => { if (Pointer is not null) UpdatePointer(ConvertToData(x)!, Pointer); })
