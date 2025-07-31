@@ -188,8 +188,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         ReduceManager<TStream> ReduceManager,
         Func<StreamConfiguration<TStream>, StreamConfiguration<TStream>>? configuration)
     {
-        if (Host.IsDisposing)
-            throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream.");
+        if (Host.RunLevel > MessageHubRunLevel.Started)
+            throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream for {Reference}.");
         this.Host = Host;
 
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
@@ -319,7 +319,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         Store.OnCompleted();
         Store.Dispose();
-        if(!Hub.IsDisposing)
+        if(Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();

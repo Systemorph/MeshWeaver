@@ -5,13 +5,6 @@ namespace MeshWeaver.Messaging;
 
 public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
-#if DEBUG
-
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
-#else
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
-
-#endif
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
     Task Started { get; }
@@ -101,7 +94,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IMessageHub RegisterForDisposal(IAsyncDisposable disposable) => RegisterForDisposal((_, _) => disposable.DisposeAsync().AsTask());
     IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
-    bool IsDisposing { get; }
+    MessageHubRunLevel RunLevel { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
     internal Task StartAsync(CancellationToken cancellationToken);
@@ -112,4 +105,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     );
     Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
+
+#if DEBUG
+
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
+#else
+    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
+
+#endif
+
 }

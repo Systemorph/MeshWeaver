@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
@@ -24,10 +25,15 @@ public static class WorkspaceExtensions
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
         var stream = workspace.GetStream(typeof(T));
-
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<IWorkspace>>();
         return stream.Select(ws => ws.Value?.GetData<T>().ToArray())
             .Where(x => x != null)
-            .Select(x => x!.ToArray());
+            .Select(x =>
+            {
+                var ret = (IReadOnlyCollection<T>)x!;
+                logger.LogInformation("***Observable Value: {val}", string.Join(", ", ret.Select(y => y!.ToString())));
+                return ret;
+            });
     }
 
     public static IWorkspace GetWorkspace(this IMessageHub messageHub) =>
