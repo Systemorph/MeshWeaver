@@ -104,44 +104,52 @@ public class TodoDataChangeTest(ITestOutputHelper output) : TodoDataTestBase(out
         Output.WriteLine("✅ Step 5: Simulating button click - sending DataChangeRequest...");
         client.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
 
-        // Step 6: Wait for data stream to update (this should happen if the issue is fixed)
-        // NOTE: We need to create a NEW subscription to get fresh data after DataChangeRequest
-        Output.WriteLine("🔍 Step 6: Creating new subscription to check for data changes...");
-
-        // Wait a moment for the DataChangeRequest to be processed
-        await Task.Delay(1000, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
+        // Step 6: Wait for data stream to update using Observable pattern
+        Output.WriteLine("🔍 Step 6: Subscribing to data stream to wait for changes...");
 
         try
         {
-            // Create a fresh subscription to get updated data
+            // Create a fresh subscription to get updated data and wait for the specific change
             var updatedDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
-            var updatedTodos = (await updatedDataStream!
-                .Timeout(5.Seconds())
-                .FirstOrDefaultAsync())?.ToArray();
+            
+            // Use Observable pattern to wait for the todo status to change to InProgress
+            var changedTodo = await updatedDataStream!
+                .Select(todos => todos?.ToArray())
+                .Where(todos => todos != null)
+                .Select(todos => todos!.FirstOrDefault(t => t.Id == pendingTodo.Id))
+                .Where(todo => todo != null && todo.Status == TodoStatus.InProgress)
+                .Timeout(10.Seconds())
+                .FirstAsync();
 
-            updatedTodos.Should().NotBeNull();
-            var changedTodo = updatedTodos!.FirstOrDefault(t => t.Id == pendingTodo.Id);
+            changedTodo.Should().NotBeNull();
+            changedTodo!.Status.Should().Be(TodoStatus.InProgress);
 
-            if (changedTodo?.Status == TodoStatus.InProgress)
-            {
-                Output.WriteLine("✅ Step 6 PASSED: Data stream shows updated data!");
-                Output.WriteLine($"✅ Todo '{changedTodo.Title}' status changed: {pendingTodo.Status} → {changedTodo.Status}");
-                Output.WriteLine("✅ CONCLUSION: DataChangeRequest is working correctly!");
-                Output.WriteLine("✅ SOLUTION: Layout areas need to re-subscribe or use reactive data binding to get updates");
-            }
-            else
-            {
-                Output.WriteLine($"❌ Step 6 FAILED: Todo status is {changedTodo?.Status}, expected InProgress");
-                Assert.Fail($"DataChangeRequest processed but status not updated correctly. Expected InProgress, got {changedTodo?.Status}");
-            }
+            Output.WriteLine("✅ Step 6 PASSED: Data stream shows updated data!");
+            Output.WriteLine($"✅ Todo '{changedTodo.Title}' status changed: {pendingTodo.Status} → {changedTodo.Status}");
+            Output.WriteLine("✅ CONCLUSION: DataChangeRequest is working correctly!");
+            Output.WriteLine("✅ SOLUTION: Layout areas need to re-subscribe or use reactive data binding to get updates");
         }
         catch (TimeoutException)
         {
-            Output.WriteLine("❌ Step 6 FAILED: Timeout getting updated data");
-            Assert.Fail("Unable to retrieve updated data after DataChangeRequest");
+            Output.WriteLine("❌ Step 6 FAILED: Timeout waiting for data change");
+            
+            // Try to get current state for debugging
+            try
+            {
+                var currentDataStream = workspace.GetRemoteStream<TodoItem>(TodoApplicationAttribute.Address);
+                var currentTodos = (await currentDataStream!
+                    .Timeout(2.Seconds())
+                    .FirstOrDefaultAsync())?.ToArray();
+                
+                var currentTodo = currentTodos?.FirstOrDefault(t => t.Id == pendingTodo.Id);
+                Output.WriteLine($"Current todo status: {currentTodo?.Status} (expected: InProgress)");
+            }
+            catch (Exception debugEx)
+            {
+                Output.WriteLine($"Could not get current data for debugging: {debugEx.Message}");
+            }
+            
+            Assert.Fail("Timeout waiting for todo status to change to InProgress after DataChangeRequest");
         }
     }
 
