@@ -11,7 +11,7 @@ public record MessageHubConfiguration
 {
     public Address Address { get; }
     protected readonly IServiceProvider? ParentServiceProvider;
-    public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
+    public MessageHubConfiguration(IServiceProvider? parentServiceProvider,  Address address)
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
@@ -20,7 +20,21 @@ public record MessageHubConfiguration
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
 
-    public IMessageHub? ParentHub => ParentServiceProvider?.GetService<IMessageHub>();
+    public IMessageHub? ParentHub
+    {
+        get
+        {
+            try
+            {
+                return ParentServiceProvider?.GetService<IMessageHub>();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
     internal Func<IServiceCollection, IServiceCollection> Services { get; init; } = x => x;
 
     public IServiceProvider ServiceProvider { get; set; } = null!;

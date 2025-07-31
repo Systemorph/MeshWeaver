@@ -26,7 +26,8 @@ public static class WorkspaceOperations
                         new("error", validationResult.ErrorMessage!)
                     };
                     activity?.LogError($"{validationResult.ErrorMessage}", scopes);
-                    var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
+                    var message =
+                        $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
                     
                     // Log validation errors (activityId: {activityId})
                     workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogError("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
