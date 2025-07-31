@@ -85,7 +85,7 @@ public static class EditorExtensions
                         serviceProvider.MapToControl<EditorControl, EditorSkin>) with{DataContext = LayoutAreaReference.GetDataPointer(id)};
 
 
-
+    private static readonly int DebounceWindow = 100; // milliseconds
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
@@ -100,7 +100,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(DebounceWindow)) // Throttle the stream to take snapshots every 100ms
                     .Select(x => result.Invoke(x, host, ctx)));
     }
     public static UiControl Edit<T>(
@@ -117,7 +117,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(DebounceWindow)) // Throttle the stream to take snapshots every 100ms
                     .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
@@ -207,7 +207,7 @@ public static class EditorExtensions
             .WithView(editor)
             .WithView((host, ctx) =>
                 host.Stream.GetDataStream<T>(id)
-                    .Debounce(TimeSpan.FromMilliseconds(30)) // Throttle the stream to take snapshots every 100ms
+                    .Debounce(TimeSpan.FromMilliseconds(DebounceWindow)) // Throttle the stream to take snapshots every 100ms
                     .SelectMany(x => result.Invoke(x, host, ctx)));
     }
 
