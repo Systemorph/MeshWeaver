@@ -118,7 +118,6 @@ public class Workspace : IWorkspace
 
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
         => (ISynchronizationStream<EntityStore>?)
-            
             ReduceManager.ReduceStream<EntityStore>(
     this,
     new CollectionsReference(types

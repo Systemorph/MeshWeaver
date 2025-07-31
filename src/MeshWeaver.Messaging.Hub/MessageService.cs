@@ -308,6 +308,8 @@ public class MessageService : IMessageService
         return delivery.Forwarded(hub.Address);
     }
 
+
+    private static readonly HashSet<Type> ExcludedFromLogging = [typeof(ShutdownRequest)];
     public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
@@ -315,11 +317,9 @@ public class MessageService : IMessageService
             if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
-            logger.LogTrace("MESSAGE_FLOW: POST_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
-                typeof(TMessage).Name, Address, ret.Id, opt.Target);
-            var messageJson = JsonSerializer.Serialize(ret, hub.JsonSerializerOptions);
-            logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
-                messageJson, ret.Id, Address);
+            if(!ExcludedFromLogging.Contains(message.GetType()))
+                logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+                    JsonSerializer.Serialize(ret, hub.JsonSerializerOptions), ret.Id, Address);
             return ret;
         }
     }
