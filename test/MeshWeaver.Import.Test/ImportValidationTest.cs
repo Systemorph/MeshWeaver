@@ -100,7 +100,9 @@ SystemName,FoundationYear,ContractType
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
-            .Message.Log.Messages
+            .Message.Log.SubActivities.Should()
+            .ContainSingle()
+            .Which.Messages
             .Where(x => x.LogLevel == LogLevel.Error)
             .Select(x => x.Message)
             .Should()
@@ -130,14 +132,16 @@ FR,France";
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
+                TestContext.Current.CancellationToken
+                , new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
-        importResponse
-            .Message.Log.Messages.Should()
+       importResponse
+            .Message.Log.SubActivities.Should()
+            .ContainSingle()
+            .Which.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
             .Be(ImportManager.ImportFailed);
@@ -167,7 +171,9 @@ DoubleValue,Country
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         importResponse
-            .Message.Log.Messages
+            .Message.Log.SubActivities.Should()
+            .ContainSingle()
+            .Which.Messages
             .Where(x => x.LogLevel == LogLevel.Error)
             .Select(x => x.Message)
             .Should()
@@ -204,21 +210,13 @@ A,B";
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
 
         importResponse
-            .Message.Log.Messages.Should()
+            .Message.Log.SubActivities.Should()
+            .ContainSingle()
+            .Which.Messages.Should()
             .ContainSingle(x => x.LogLevel == LogLevel.Error)
             .Which.Message.Should()
             .Be(ImportManager.ImportFailed);
 
-        //await Task.Delay(300);
-
-        //var workspace = GetHost().ServiceProvider.GetRequiredService<IWorkspace>();
-        //var ret = await workspace.GetObservable<ActivityLog>()
-        //    .Timeout(10.Seconds())
-        //    .FirstAsync(x => x.Any());
-
-        //ret.Should().HaveCount(1);
-        //var log = ret.Message.Items.First();
-        //log.Status.Should().Be(ActivityLogStatus.Failed);
     }
 
     [Fact(Skip = "Currently not implemented functionality")]

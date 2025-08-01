@@ -201,6 +201,10 @@ public class Activity : ILogger, IDisposable
             log = log.Fail(ex.ToString());
             completionSource.TrySetException(ex);
         }
+        finally
+        {
+            Hub.Dispose();
+        }
         return log;
     }
 

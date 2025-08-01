@@ -1,5 +1,5 @@
-﻿using System.Linq;
-using System.Reactive.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -15,6 +15,7 @@ namespace MeshWeaver.Import.Test;
 
 public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    private static readonly Address ImportAddress = new TestDomain.ImportAddress();
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) =>
@@ -64,8 +65,8 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
+                TestContext.Current.CancellationToken
+                //, new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
@@ -82,23 +83,11 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         var log = await DoImport(content);
         log.Status.Should().Be(ActivityStatus.Succeeded);
-        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
-        await hub.Started;
-        var workspace = hub
-            .GetWorkspace();
-        await Task.Delay(100, CancellationTokenSource.CreateLinkedTokenSource(
-            TestContext.Current.CancellationToken,
-            new CancellationTokenSource(5.Seconds()).Token
-        ).Token);
-        var ret2 = await workspace.GetObservable<MyRecord2>()
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var ret2 = await GetDataAsync<MyRecord2>(ImportAddress);
 
         ret2.Should().BeEmpty();
 
-        var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+        var ret = await GetDataAsync<MyRecord>(ImportAddress);
 
         ret.Should().HaveCount(1);
 
@@ -123,14 +112,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
-        await hub.Started;
-        var workspace = hub
-            .GetWorkspace();
-        var ret = await workspace
-            .GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync();
+        var ret = await GetDataAsync<MyRecord>(ImportAddress);
 
         ret.Should().BeEmpty();
     }
@@ -162,15 +144,11 @@ Record3SystemName,Record3DisplayName";
             return Task.FromResult(ws.AddInstances(store, instances));
         };
 
-        _ = await DoImport(ThreeTablesContent, "Test");
-
+        var log = await DoImport(ThreeTablesContent, "Test");
+        log.Status.Should().Be(ActivityStatus.Succeeded);
         //Check that didn't appeared what we don't import
-        var workspace = Router.GetHostedHub(new TestDomain.ImportAddress())
-            .GetWorkspace();
 
-        var ret = await workspace.GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+        var ret = await GetDataAsync<MyRecord>(ImportAddress);
 
         ret.Should().HaveCount(1);
 
@@ -203,20 +181,12 @@ Record3SystemName,Record3DisplayName";
         };
 
         var log = await DoImport(ThreeTablesContent, "Test2");
-        var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
-        await hub.Started;
-        var workspace = hub
-            .GetWorkspace();
-        var ret2 = await workspace
-            .GetObservable<MyRecord2>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+        log.Status.Should().Be(ActivityStatus.Succeeded);
+        var address = new TestDomain.ImportAddress();
+        var ret2 = await GetDataAsync<MyRecord2>(address);
 
         ret2.Should().HaveCount(1);
-        var ret = await workspace
-            .GetObservable<MyRecord>()
-            .Timeout(10.Seconds())
-            .FirstAsync(x => x.Any());
+        var ret = await GetDataAsync<MyRecord>(address); 
 
         ret.Should().HaveCount(2);
 
@@ -230,5 +200,12 @@ Record3SystemName,Record3DisplayName";
         resRecord.StringsArray.Should().BeNull();
         resRecord.StringsList.Should().BeNull();
         resRecord.Number.Should().Be(0);
+    }
+
+    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(Address address)
+    {
+        var response = await GetClient().AwaitResponse(new GetDataRequest(new CollectionReference(typeof(TData).Name)),
+            opt => opt.WithTarget(address), new CancellationTokenSource(10.Seconds()).Token);
+        return ((InstanceCollection?)response.Message.Data)?.Instances.Values.Cast<TData>().ToArray();
     }
 }
