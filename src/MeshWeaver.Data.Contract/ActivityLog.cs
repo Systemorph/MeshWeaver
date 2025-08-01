@@ -16,7 +16,7 @@ public record ActivityLog(string Category)
     public ActivityStatus Status { get; init; }
     public DateTime? End { get; init; }
     public UserInfo? User { get; init; }
-    public ImmutableDictionary<string, ActivityLog> SubActivities { get; init; } = ImmutableDictionary<string, ActivityLog>.Empty;
+    public ImmutableList<ActivityLog> SubActivities { get; init; } = [];
 
     public ActivityLog Fail(string error) =>
         this with
@@ -29,13 +29,30 @@ public record ActivityLog(string Category)
     public ActivityLog Finish(int version, ActivityStatus? status) =>
         this with
         {
-            Status = Messages.Any(x => x.LogLevel == LogLevel.Error)
-                ? ActivityStatus.Failed
-                : Messages.Any(m => m.LogLevel == LogLevel.Warning) ? ActivityStatus.Warning 
-                    : status ?? ActivityStatus.Succeeded,
+            Status = GetFinalStatus(),
             End = DateTime.UtcNow,
             Version = version
         };
+
+    private ActivityStatus GetFinalStatus()
+    {
+        var subActivityStatus = SubActivities
+            .Select(s => s.Status)
+            .DefaultIfEmpty(ActivityStatus.Succeeded)
+            .Max();
+
+        var maxLevel = Messages.Select(m => m.LogLevel).DefaultIfEmpty(LogLevel.Information).Max();
+        var mapToStatus = maxLevel switch
+        {
+            LogLevel.Critical or LogLevel.Error => ActivityStatus.Failed,
+            LogLevel.Warning => ActivityStatus.Warning, 
+            _ => ActivityStatus.Succeeded
+        };
+
+        return subActivityStatus > mapToStatus
+            ? subActivityStatus
+            : mapToStatus;
+    }
 
     public bool HasErrors() => Messages.Any(m => m.LogLevel == LogLevel.Error);
 }

@@ -130,14 +130,13 @@ Id,Year,LoB,BusinessUnit,Value
     public async Task TestVanilla()
     {
         var client = GetClient();
-        var importRequest = new ImportRequest(VanillaCsv)
-            .WithTimeout(10.Seconds()); // Add timeout for bulk test scenarios
+        var importRequest = new ImportRequest(VanillaCsv); // Add timeout for bulk test scenarios
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new ImportAddress(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
+                TestContext.Current.CancellationToken
+                , new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);

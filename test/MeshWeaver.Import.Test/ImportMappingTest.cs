@@ -57,11 +57,10 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 
     private ImportFormat.ImportFunctionAsync? customImportFunctionAsync;
 
-    private async Task<IMessageHub> DoImport(string content, string format = ImportFormat.Default)
+    private async Task<ActivityLog> DoImport(string content, string format = ImportFormat.Default)
     {
-        var client = GetClient();
         var importRequest = new ImportRequest(content) { Format = format };
-        var importResponse = await client.AwaitResponse(
+        var importResponse = await GetClient().AwaitResponse(
             importRequest,
             o => o.WithTarget(new TestDomain.ImportAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
@@ -70,7 +69,7 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        return client;
+        return importResponse.Message.Log;
     }
 
     [Fact]
@@ -81,7 +80,8 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
 SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
-        _ = await DoImport(content);
+        var log = await DoImport(content);
+        log.Status.Should().Be(ActivityStatus.Succeeded);
         var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
         await hub.Started;
         var workspace = hub
@@ -202,7 +202,7 @@ Record3SystemName,Record3DisplayName";
             return Task.FromResult(ws.AddInstances(store, instances));
         };
 
-        _ = await DoImport(ThreeTablesContent, "Test2");
+        var log = await DoImport(ThreeTablesContent, "Test2");
         var hub = Router.GetHostedHub(new TestDomain.ImportAddress());
         await hub.Started;
         var workspace = hub

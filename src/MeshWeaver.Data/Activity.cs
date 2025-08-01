@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Reactive.Linq;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,25 +9,18 @@ namespace MeshWeaver.Data;
 public class Activity : ILogger, IDisposable
 {
     private readonly ILogger logger;
-    private readonly TaskCompletionSource<ActivityLog> completionTaskCompletionSource = new();
+    private bool autoClose;
 
-    public Activity(string category, IMessageHub parentHub, string? activityId = null)
+    public Activity(string category, IMessageHub parentHub, bool autoClose = true)
     {
         Category = category;
         ParentHub = parentHub ?? throw new ArgumentNullException(nameof(parentHub));
-        Id = activityId ?? Guid.NewGuid().AsString();
+        Id = Guid.NewGuid().AsString();
         Address = new ActivityAddress(Id);
-        Hub = parentHub.GetHostedHub(Address, ActivityImpl.ConfigureActivityHub);
-        Hub.Post(new ChangeActivityCategoryRequest(category));
+        Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this,conf));
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
-        Hub.RegisterForDisposal(Hub.GetWorkspace().GetObservable<ActivityLog>()
-            .Subscribe(coll =>
-            {
-                var activity = coll.SingleOrDefault();
-                if (activity?.Status > ActivityStatus.Running)
-                    completionTaskCompletionSource.TrySetResult(activity);
-            })
-        );
+        this.autoClose = autoClose;
+        activityLog = new(category);
     }
 
     public IMessageHub Hub { get; }
@@ -38,7 +30,6 @@ public class Activity : ILogger, IDisposable
 
     public string Id { get; } 
     public ActivityAddress Address { get; }
-    public Task<ActivityLog> Completion => completionTaskCompletionSource.Task;
 
     public ConcurrentBag<Activity> SubActivities { get; } = new();
 
@@ -58,37 +49,22 @@ public class Activity : ILogger, IDisposable
     public void LogInformation(string message, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
         => LogMessage(message, LogLevel.Information, scopes);
 
-    public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes)
+    public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
     {
-        Hub.Post(new LogMessageRequest(new LogMessage(message, logLevel) { Scopes = scopes }));
+        Hub.Post(new UpdateActivityLogRequest(log => log with{Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) }));
     }
 
-    public async Task<ActivityLog> GetLogAsync()
+    public Task<ActivityLog> GetLogAsync()
     {
-        var response =
-            await Hub.AwaitResponse(new GetDataRequest(new EntityReference(nameof(ActivityLog), Address.Id)));
-        return (ActivityLog)response.Message.Data!;
-    }
-
-    void ILogger.Log<TState>(
-        LogLevel logLevel,
-        EventId eventId,
-        TState state,
-        Exception? exception,
-        Func<TState, Exception?, string> formatter
-    )
-    {
-        var item = new LogMessage(state?.ToString() ?? "", logLevel);
-        if (state is IReadOnlyCollection<KeyValuePair<string, object>> list)
-            item = item with { Scopes = list };
-        LogMessage(item);
+        var tcs = new TaskCompletionSource<ActivityLog>();
+        Hub.InvokeAsync(() => tcs.SetResult(activityLog));
+        return tcs.Task;
     }
 
 
-    protected void LogMessage(LogMessage item)
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        // Send LogMessageRequest to handle logging
-        Hub.Post(new LogMessageRequest(item));
+        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state,exception), logLevel) ) }));
     }
 
     public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
@@ -100,37 +76,27 @@ public class Activity : ILogger, IDisposable
         var subActivity = new Activity(category, ParentHub);
         Hub.RegisterForDisposal(subActivity);
         SubActivities.Add(subActivity);
+        UpdateSubActivity(subActivity, subActivity.activityLog);
         // Monitor sub-activity completion using simple stream subscription with timeout
-        var subscription = subActivity.Hub
-            .GetWorkspace()
-            .GetStream(new EntityReference(nameof(ActivityLog), subActivity.Id))
-            .Select(x => x.Value!)
-            .OfType<ActivityLog>()
-            .Subscribe(
-                UpdateSubActivity,
-                ex => logger.LogWarning("Error monitoring sub-activity completion for parent {Activity} and sub-activity {SubActivity}: {Exception}", Id, subActivity.Id, ex)
-            );
-        // Register subscription for cleanup
-        Hub.RegisterForDisposal(subscription);
-        subActivity.Completion.ContinueWith(t => UpdateSubActivity(t.Result));
+        subActivity.LogChanged += UpdateSubActivity;
         return subActivity;
     }
 
-    private void UpdateSubActivity(ActivityLog subLog)
+    private void UpdateSubActivity(object? sender, ActivityLog subLog)
     {
-        Hub.Post(new UpdateActivityLogRequest(activityLog =>
+        Hub.Post(new UpdateActivityLogRequest(log =>
         {
-            if (activityLog.SubActivities.TryGetValue(subLog.Id, out var existing) && subLog.Equals(existing))
-                return activityLog;
-            activityLog = activityLog with
+            var existing = log.SubActivities.FirstOrDefault(l => l.Id == subLog.Id);
+            log = log with
             {
-                SubActivities = activityLog.SubActivities.SetItem(subLog.Id, subLog),
+                SubActivities = existing is not null ? log.SubActivities.Replace(existing, subLog) : log.SubActivities.Add(subLog),
                 Version = (int)Hub.Version
             };
+
             // Check if all sub-activities are complete
-            if (activityLog.SubActivities.Values.All(subAct => subAct.Status != ActivityStatus.Running))
+            if (autoClose && log.SubActivities.All(subAct => subAct.Status != ActivityStatus.Running))
                 Hub.Post(new CompleteActivityRequest(null), options => options.WithTarget(Hub.Address));
-            return activityLog;
+            return log;
         }));
     }
 
@@ -139,4 +105,132 @@ public class Activity : ILogger, IDisposable
         if(Hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)    
             Hub.Dispose();
     }
+
+    #region HubImplementation
+
+    private ActivityLog activityLog;
+    private event EventHandler<ActivityLog>? LogChanged;
+    internal static MessageHubConfiguration ConfigureActivityHub(Activity activity, MessageHubConfiguration configuration)
+    {
+        return configuration
+                .WithHandler<CompleteActivityRequest>((_, request) => activity.HandleCompleteRequest(request))
+                .WithHandler<UpdateActivityLogRequest>((_, request) => activity.HandleUpdateActivityLogRequest(request))
+            ;
+    }
+
+    private IMessageDelivery HandleUpdateActivityLogRequest(IMessageDelivery<UpdateActivityLogRequest> request)
+    {
+        activityLog = request.Message.Update.Invoke(activityLog) with { Version = (int)Hub.Version };
+        LogChanged?.Invoke(this, activityLog);
+        return request.Processed();
+    }
+
+    private void RequestChange(Func<ActivityLog, ActivityLog> logAction)
+        => Hub.Post(new UpdateActivityLogRequest(logAction));
+
+
+    private ActivityLog ProcessActivityCompletion(ActivityLog log, ActivityStatus? status)
+    {
+        try
+        {
+
+            // Check if we should complete immediately (no sub-activities or all sub-activities finished)
+            if (log.SubActivities.Count == 0)
+                return log.Status == ActivityStatus.Running ? CompleteMyself(log, status) : log;
+
+            if (log.SubActivities.Any(sa => sa.Status == ActivityStatus.Running))
+            {
+                autoClose = true;
+                return log;
+            }
+
+            // If we have sub-activities, check if all are finished
+            if (log.Status != ActivityStatus.Running)
+                return log;
+
+            // Note: Sub-activity completion monitoring is now handled through data change events
+            // rather than direct stream subscriptions to avoid hanging
+            // Complete immediately if ready
+            return CompleteMyself(log, status);
+
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("Error in ProcessActivityCompletion: {Exception}", ex);
+            completionSource.TrySetException(ex);
+            log = log.Fail(ex.ToString());
+            return log;
+        }
+    }
+
+
+
+    private ActivityLog CompleteMyself(ActivityLog log, ActivityStatus? status)
+    {
+        try
+        {
+            if (log.Status == ActivityStatus.Running)
+            {
+                log = log.Finish((int)Hub.Version, status);
+                // Signal completion with updated log
+                completionSource.TrySetResult(log);
+            }
+            else
+            {
+                // Signal completion with current log
+                completionSource.TrySetResult(log);
+            }
+
+            while (completedActions.TryTake(out var completedAction))
+            {
+                try
+                {
+                    completedAction.Invoke(log);
+                }
+                catch (Exception ex)
+                {
+                    // Silently handle completion action errors
+                    logger.LogWarning("Exception during completion of Activity {activityId}:\n{exception}",
+                        Hub.Address.Id, ex);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("Error in CompleteMyself: {Exception}", ex);
+            log = log.Fail(ex.ToString());
+            completionSource.TrySetException(ex);
+        }
+        return log;
+    }
+
+    private readonly ConcurrentBag<Action<ActivityLog>> completedActions = new();
+    private readonly TaskCompletionSource<ActivityLog> completionSource = new();
+
+    /// <summary>
+    /// Task that completes when the activity is finished, returning the final ActivityLog
+    /// </summary>
+    public Task<ActivityLog> Completion => completionSource.Task;
+
+
+    public IMessageDelivery HandleCompleteRequest(IMessageDelivery<CompleteActivityRequest> delivery)
+    {
+        var request = delivery.Message;
+        if (request.CompleteAction != null)
+            completedActions.Add(request.CompleteAction);
+        RequestChange(log =>
+        {
+            var ret = ProcessActivityCompletion(log, request.Status);
+            if (activityLog.Status > ActivityStatus.Running)
+                Hub.Dispose();
+            return ret;
+        });
+        return delivery.Processed();
+    }
+
+
+
+
+
+    #endregion
 }
