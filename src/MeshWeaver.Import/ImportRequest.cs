@@ -39,10 +39,6 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
 
     public bool SaveLog { get; init; }
 
-    /// <summary>
-    /// Activity ID for this import operation.
-    /// </summary>
-    public string ActivityId { get; init; } = Guid.NewGuid().ToString();
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

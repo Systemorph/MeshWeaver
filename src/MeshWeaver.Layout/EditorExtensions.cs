@@ -85,7 +85,7 @@ public static class EditorExtensions
                         serviceProvider.MapToControl<EditorControl, EditorSkin>) with{DataContext = LayoutAreaReference.GetDataPointer(id)};
 
 
-    private static readonly int DebounceWindow = 100; // milliseconds
+    private static readonly int DebounceWindow = 20; // milliseconds
     public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,

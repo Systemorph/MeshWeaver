@@ -25,7 +25,7 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         var subActivity = activity.StartSubActivity("gugus");
 
         // Log information using message-based approach
-        PostLogRequest(activity, LogLevel.Information, nameof(activity));
+        activity.LogInformation("Starting Sub-activity {Activity}", subActivity.Id);
         
         var closeTask = activity.Completion;
         
@@ -74,13 +74,4 @@ public class ActivityTest(ITestOutputHelper output) : HubTestBase(output)
         activityLog.Status.Should().Be(ActivityStatus.Succeeded);
     }
 
-    /// <summary>
-    /// Helper method to post log requests to activity
-    /// </summary>
-    private void PostLogRequest(Activity activity, LogLevel logLevel, string message, params object[] args)
-    {
-        var formattedMessage = args.Length > 0 ? string.Format(message, args) : message;
-        var logMessage = new LogMessage(formattedMessage, logLevel);
-        GetClient().Post(new LogMessageRequest(logMessage), o => o.WithTarget(activity.Address));
-    }
 }

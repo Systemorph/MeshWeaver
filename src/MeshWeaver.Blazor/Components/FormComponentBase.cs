@@ -47,7 +47,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     protected void SetValue(TValue? v)
         => this.data = v;
 
-    private static readonly int DebounceWindow = 100;
+    private static readonly int DebounceWindow = 20;
     protected override void BindData()
     {
         base.BindData();

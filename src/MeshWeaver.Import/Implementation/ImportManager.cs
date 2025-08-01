@@ -46,7 +46,7 @@ public class ImportManager
     }
 
     public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
-    {
+   {
         // Create cancellation token with timeout if specified in the import request
         var cancellationTokenSource = request.Message.Timeout.HasValue
             ? new CancellationTokenSource(request.Message.Timeout.Value)
@@ -76,9 +76,7 @@ public class ImportManager
         }
 
         var activity = new Activity(ActivityCategory.Import, Hub);
-        Hub.Post(new LogMessageRequest(new LogMessage(message.ToString(), LogLevel.Error)),
-            o => o.WithTarget(activity.Address));
-
+        activity.LogError(message.ToString());
         
         activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
@@ -89,28 +87,7 @@ public class ImportManager
     )
     {
 
-        var activity = new Activity(ActivityCategory.Import, Hub);
-        var importId = Guid.NewGuid().AsString();
-        activity.LogInformation($"Starting import {importId} for request {request.Message.GetType().Name}");
-
-        try
-        {
-            await ImportImpl(request, activity, cancellationToken);
-            activity.LogInformation("Import {ImportId} implementation completed, starting Activity.Complete", importId);
-
-            activity.Complete(log =>
-            {
-                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-            });
-
-            activity.LogInformation("Import {ImportId} Activity.Complete finished successfully", importId);
-        }
-        catch (Exception e)
-        {
-            activity.LogError("Import {ImportId} failed with exception: {Exception}", importId, e.Message);
-            FinishWithException(request, e, activity);
-        }
-
+        await ImportImpl(request, cancellationToken);
         return request.Processed();
     }
 
@@ -129,32 +106,40 @@ public class ImportManager
     }
 
 
-    private async Task ImportImpl(IMessageDelivery<ImportRequest> request, Activity activity, CancellationToken cancellationToken)
+    private async Task ImportImpl(IMessageDelivery<ImportRequest> request,  CancellationToken cancellationToken)
     {
+        var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
         try
-
         {
-            var imported = await ImportInstancesAsync(request.Message, activity, cancellationToken);
-            var log = await activity.GetLogAsync();
-            if (log.HasErrors())
-                return;
 
-            Configuration.Workspace.RequestChange(
-                DataChangeRequest.Update(
-                    imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
-                    null,
-                    request.Message.UpdateOptions),
-                activity,
-                request
+            activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+
+            var importActivity = activity.StartSubActivity(ActivityCategory.Import);
+            var imported = await ImportInstancesAsync(request.Message, importActivity, cancellationToken);
+            importActivity.Complete(log =>
+            {
+                if (log.HasErrors())
+                    return;
+                Configuration.Workspace.RequestChange(
+                    DataChangeRequest.Update(
+                        imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
+                        null,
+                        request.Message.UpdateOptions),
+                    activity,
+                    request
                 );
+                activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-            activity.Complete(ActivityStatus.Succeeded, l =>
+            });
+
+            activity.Complete(l =>
                 Hub.Post(new ImportResponse(Hub.Version, l), o => o.ResponseFor(request))
             );
         }
         catch (Exception e)
         {
-            activity.LogError(e.ToString());
+            activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
+            FinishWithException(request, e, activity);
         }
     }
 
