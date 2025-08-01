@@ -82,7 +82,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     {
         var totalStopwatch = Stopwatch.StartNew();
         var hubs = messageHubs.Values.ToArray();
-        logger.LogInformation("Starting disposal of {count} hosted hubs: [{hubAddresses}]", 
+        logger.LogDebug("Starting disposal of {count} hosted hubs: [{hubAddresses}]", 
             hubs.Length, string.Join(", ", hubs.Select(h => h.Address.ToString())));
         
         var disposalTasks = hubs.Select(DisposeHub).ToArray();
@@ -93,7 +93,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             logger.LogDebug("Waiting for all {count} hosted hubs to dispose with 10 second timeout", hubs.Length);
             await Task.WhenAll(disposalTasks).WaitAsync(cts.Token);
-            logger.LogInformation("All {count} hosted hubs disposed successfully in {elapsed}ms", 
+            logger.LogDebug("All {count} hosted hubs disposed successfully in {elapsed}ms", 
                 hubs.Length, totalStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
@@ -111,7 +111,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 {
                     if (task.IsCompletedSuccessfully)
                     {
-                        logger.LogInformation("Hub {address} disposal completed successfully", hubAddress);
+                        logger.LogDebug("Hub {address} disposal completed successfully", hubAddress);
                     }
                     else if (task.IsFaulted)
                     {
@@ -153,7 +153,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     {
         var address = hub.Address;
         var hubStopwatch = Stopwatch.StartNew();
-        logger.LogInformation("Starting disposal of hub {address}", address);
+        logger.LogDebug("Starting disposal of hub {address}", address);
         
         try
         {
@@ -163,7 +163,7 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             logger.LogDebug("Dispose() call completed for hub {address} in {elapsed}ms", 
                 address, disposeCallStopwatch.ElapsedMilliseconds);
 
-            logger.LogInformation("Hub {address} disposed successfully in {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
+            logger.LogDebug("Hub {address} disposed successfully in {elapsed}ms", address, hubStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {

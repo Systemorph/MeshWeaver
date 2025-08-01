@@ -9,6 +9,5 @@ public record CompleteActivityRequest(ActivityStatus? Status) : IRequest
     [JsonIgnore]public Action<ActivityLog>? CompleteAction { get; init; }
 }
 
-public record LogMessageRequest(LogMessage LogMessage) : IRequest;
 
 public record UpdateActivityLogRequest([property: JsonIgnore] Func<ActivityLog, ActivityLog> Update) : IRequest;

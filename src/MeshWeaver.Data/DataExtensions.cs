@@ -33,7 +33,6 @@ public static class DataExtensions
         if (existingLambdas.Any())
             return ret;
         return ret.AddDocumentation()
-                .WithRoutes(route => route.RouteAddressToHostedHub<ActivityAddress>(ActivityImpl.ConfigureActivityHub))
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>

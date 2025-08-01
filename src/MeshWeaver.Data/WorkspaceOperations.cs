@@ -30,7 +30,7 @@ public static class WorkspaceOperations
                         $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
                     
                     // Log validation errors (activityId: {activityId})
-                    workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogError("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
+                    workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogWarning("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
                 }
             }
 

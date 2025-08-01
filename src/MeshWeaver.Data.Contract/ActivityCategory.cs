@@ -7,4 +7,3 @@ public static class ActivityCategory
     public const string Unknown = nameof(Unknown);
 }
 
-public record ChangeActivityCategoryRequest(string Category);
