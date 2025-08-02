@@ -9,6 +9,8 @@ using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Import.Test;
@@ -76,6 +78,9 @@ public class ImportMappingTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task DefaultMappingsTest()
     {
+        // Test debug message for MeshWeaver.Import namespace 
+        Logger.LogDebug("This is a debug message from MeshWeaver.Import.Test - should appear if Debug config works");
+        
         const string content =
             @"@@MyRecord
 SystemName,DisplayName,Number,StringsArray0,StringsArray1,StringsArray2,StringsList0,StringsList1,StringsList2,IntArray0,IntArray1,IntArray2,IntList0,IntList1,IntList2
@@ -83,6 +88,8 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
 
         var log = await DoImport(content);
         log.Status.Should().Be(ActivityStatus.Succeeded);
+        Logger.LogInformation("*** Import Finished ***");
+
         var ret2 = await GetDataAsync<MyRecord2>(ImportAddress);
 
         ret2.Should().BeEmpty();
@@ -148,6 +155,8 @@ Record3SystemName,Record3DisplayName";
         log.Status.Should().Be(ActivityStatus.Succeeded);
         //Check that didn't appeared what we don't import
 
+        Logger.LogInformation("*** Import Finished ***");
+
         var ret = await GetDataAsync<MyRecord>(ImportAddress);
 
         ret.Should().HaveCount(1);
@@ -182,6 +191,8 @@ Record3SystemName,Record3DisplayName";
 
         var log = await DoImport(ThreeTablesContent, "Test2");
         log.Status.Should().Be(ActivityStatus.Succeeded);
+        
+        Logger.LogInformation("*** Import Finished ***");
         var address = new TestDomain.ImportAddress();
         var ret2 = await GetDataAsync<MyRecord2>(address);
 
@@ -204,8 +215,12 @@ Record3SystemName,Record3DisplayName";
 
     private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(Address address)
     {
-        var response = await GetClient().AwaitResponse(new GetDataRequest(new CollectionReference(typeof(TData).Name)),
-            opt => opt.WithTarget(address), new CancellationTokenSource(10.Seconds()).Token);
+        var response = 
+            await GetClient()
+            .AwaitResponse(new GetDataRequest(new CollectionReference(typeof(TData).Name)),
+            opt => opt.WithTarget(address)
+            //, new CancellationTokenSource(10.Seconds()).Token
+            );
         return ((InstanceCollection?)response.Message.Data)?.Instances.Values.Cast<TData>().ToArray();
     }
 }

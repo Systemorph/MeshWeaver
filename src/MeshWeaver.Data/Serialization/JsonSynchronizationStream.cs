@@ -157,13 +157,7 @@ public static class JsonSynchronizationStream
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
-                    var activity = new Activity(ActivityCategory.DataUpdate, reduced.Hub);
-                    reduced.Host.GetWorkspace().RequestChange(e, activity, null);
-                    activity.Complete(_ =>
-                    {
-                        
-                        /*TODO: Where to save?*/
-                    });
+                    reduced.Host.GetWorkspace().RequestChange(e, null, null);
                 })
         );
 
@@ -214,7 +208,13 @@ public static class JsonSynchronizationStream
                     stream.Set(currentJson);
                     return (TChange?)Activator.CreateInstance
                     (
-                        typeof(TChange), stream.ClientId, x.Version, new RawJson(JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions)), x.ChangeType, x.ChangedBy ?? string.Empty);
+                        typeof(TChange),
+                        stream.ClientId,
+                        x.Version,
+                        new RawJson(JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions)),
+                        x.ChangeType,
+                        x.ChangedBy ?? string.Empty
+                    );
                 }
 
 

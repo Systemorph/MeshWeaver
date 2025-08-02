@@ -29,7 +29,6 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             
             if (create == HostedHubCreation.Always)
             {
-                logger.LogDebug("Creating hosted hub for address {Address} in Host {Host}", address, Host);
                 var newHub = CreateHub(address, config);
                 if (newHub != null)
                     return messageHubs[address] = newHub;

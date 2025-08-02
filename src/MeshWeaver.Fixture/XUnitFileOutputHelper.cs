@@ -78,6 +78,19 @@ public class XUnitFileOutputHelper : ITestOutputHelper, IDisposable
         lock (_fileLock)
         {
             _logFilePath = newLogPath;
+            
+            // Delete the existing log file if it exists to start fresh
+            if (File.Exists(_logFilePath))
+            {
+                try
+                {
+                    File.Delete(_logFilePath);
+                }
+                catch
+                {
+                    // If we can't delete it, we'll just overwrite it
+                }
+            }
         }
         
         // Write initial header now that we have a log file
@@ -250,17 +263,46 @@ public class XUnitFileLogger : ILogger
             if (configuration == null)
                 return LogLevel.Information;
 
-            // Check for specific category configuration first
-            var categoryLevel = configuration[$"Logging:LogLevel:{_categoryName}"];
-            if (!string.IsNullOrEmpty(categoryLevel) && Enum.TryParse<LogLevel>(categoryLevel, out var specificLevel))
-                return specificLevel;
+            // Get all logging configuration
+            var loggingSection = configuration.GetSection("Logging:LogLevel");
+            if (!loggingSection.Exists())
+                return LogLevel.Information;
 
-            // Check for default configuration
-            var defaultLevel = configuration["Logging:LogLevel:Default"];
-            if (!string.IsNullOrEmpty(defaultLevel) && Enum.TryParse<LogLevel>(defaultLevel, out var defaultLogLevel))
-                return defaultLogLevel;
+            // Find the most specific rule that matches the category name
+            // Rules are checked in order of specificity (longest match first)
+            LogLevel? specificLevel = null;
+            var longestMatch = -1;
 
-            return LogLevel.Information;
+            foreach (var child in loggingSection.GetChildren())
+            {
+                var ruleName = child.Key;
+                var ruleValue = child.Value;
+                
+                if (string.IsNullOrEmpty(ruleValue) || !Enum.TryParse<LogLevel>(ruleValue, out var ruleLogLevel))
+                    continue;
+
+                // Check if this rule matches our category
+                if (ruleName == "Default")
+                {
+                    // Default rule - use it if no more specific rule is found
+                    if (longestMatch < 0)
+                    {
+                        specificLevel = ruleLogLevel;
+                        longestMatch = 0;
+                    }
+                }
+                else if (_categoryName.StartsWith(ruleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // This rule matches our category, check if it's more specific
+                    if (ruleName.Length > longestMatch)
+                    {
+                        specificLevel = ruleLogLevel;
+                        longestMatch = ruleName.Length;
+                    }
+                }
+            }
+
+            return specificLevel ?? LogLevel.Information;
         }
         catch
         {
