@@ -127,7 +127,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         current = value;
         try
         {
-            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, value);
+            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
             Store.OnNext(value);
         }
         catch (Exception e)
@@ -213,7 +213,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
 
-        logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {Reference}", StreamId, Host.Address, Reference);
+        logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
     }
 
     private IDisposable? startupDeferrable;

@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace MeshWeaver.Fixture;
@@ -23,7 +24,7 @@ public static class LoggingBuilderExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILoggerProvider, XUnitLoggerProvider>()
         );
-        builder.SetMinimumLevel(LogLevel.Debug);
+        // Don't set a global minimum level - let configuration handle it
         if (outputHelperAccessor == null)
             builder.Services.AddSingleton<TestOutputHelperAccessor>();
         else
@@ -38,7 +39,7 @@ public class TestOutputHelperAccessor
 }
 
 [ProviderAlias("XUnitLogger")]
-public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor)
+public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccessor, IOptionsMonitor<LoggerFilterOptions> filterOptions)
     : ILoggerProvider, ISupportExternalScope
 {
     private readonly ConcurrentDictionary<string, XUnitLogger> loggers = new();
@@ -56,7 +57,7 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
     {
         return loggers.GetOrAdd(
             categoryName,
-            _ => new(categoryName, testOutputHelperAccessor, scopeProvider)
+            _ => new(categoryName, testOutputHelperAccessor, scopeProvider, filterOptions)
         );
     }
 }
@@ -64,10 +65,56 @@ public class XUnitLoggerProvider(TestOutputHelperAccessor testOutputHelperAccess
 public class XUnitLogger(
     string categoryName,
     TestOutputHelperAccessor testOutputHelperAccessor,
-    IExternalScopeProvider scopeProvider)
+    IExternalScopeProvider scopeProvider,
+    IOptionsMonitor<LoggerFilterOptions> filterOptions)
     : ILogger
 {
-    public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+    public bool IsEnabled(LogLevel logLevel)
+    {
+        if (logLevel == LogLevel.None)
+            return false;
+
+        var options = filterOptions.CurrentValue;
+        var effectiveLogLevel = GetEffectiveLogLevel(categoryName, options);
+        
+        return logLevel >= effectiveLogLevel;
+    }
+
+    private static LogLevel GetEffectiveLogLevel(string categoryName, LoggerFilterOptions options)
+    {
+        // Find the most specific rule that matches
+        LogLevel? specificLevel = null;
+        var longestMatch = -1;
+
+        foreach (var rule in options.Rules)
+        {
+            // Skip rules that have a specific provider name that's not our provider
+            // but allow rules with no provider name (global rules)
+            if (rule.ProviderName != null && rule.ProviderName != "XUnitLogger" && rule.ProviderName != typeof(XUnitLoggerProvider).FullName)
+                continue;
+
+            if (rule.CategoryName == null)
+            {
+                // This is a catch-all rule, use it if no more specific rule is found
+                if (longestMatch < 0)
+                {
+                    specificLevel = rule.LogLevel;
+                    longestMatch = 0;
+                }
+            }
+            else if (categoryName.StartsWith(rule.CategoryName, StringComparison.OrdinalIgnoreCase))
+            {
+                // This rule matches our category, check if it's more specific
+                if (rule.CategoryName.Length > longestMatch)
+                {
+                    specificLevel = rule.LogLevel;
+                    longestMatch = rule.CategoryName.Length;
+                }
+            }
+        }
+
+        return specificLevel ?? options.MinLevel;
+    }
 
     public IDisposable BeginScope<TState>(TState state) where TState: notnull => scopeProvider.Push(state);
 

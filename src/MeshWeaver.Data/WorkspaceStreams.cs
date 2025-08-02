@@ -58,29 +58,74 @@ public static class WorkspaceStreams
 c => c
             );
 
-        ret.Initialize(async ct => await streams
-            .ToAsyncEnumerable()
-            .SelectAwait(async x => await x!.FirstAsync())
-            .AggregateAsync(new EntityStore(), (x, y) =>
-            y.Value is null ? x : x.Merge(y.Value), cancellationToken: ct), ex =>
+        // Use CombineLatest to wait for the first element from each stream, then merge all subsequent updates
+        var combinedStream = streams.Length == 1 
+            ? streams[0]!.Select(s => new[] { s })
+            : streams.Cast<IObservable<ChangeItem<EntityStore>>>().CombineLatest();
+
+        var processedChangeItems = new HashSet<object>();
+        var isInitialized = false;
+
+        ret.RegisterForDisposal(combinedStream.Subscribe(changes => 
         {
-            logger.LogError(ex, "cannot initialize stream for {Address} with reference {Reference}", workspace.Hub.Address, reference);
-            return Task.CompletedTask;
-        });
-
-        foreach (var stream in streams)
-            ret.RegisterForDisposal(stream!.Skip(1).Subscribe(s => 
-                ret.Update(
-                    current => ret.ApplyChanges(current!.MergeWithUpdates(s.Value!, s.ChangedBy ?? string.Empty)),
-                    ex =>
+            try 
+            {
+                if (!isInitialized)
+                {
+                    // First emission: create initial merged store from all streams
+                    var initialStore = changes
+                        .Where(c => c.Value != null)
+                        .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value));
+                    
+                    var initialChange = new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version);
+                    
+                    ret.OnNext(initialChange);
+                    
+                    // Track all initial ChangeItems as processed
+                    foreach (var change in changes)
                     {
-                        logger.LogError(ex, "cannot apply changes to stream for {Address} with reference {Reference}",
-                            workspace.Hub.Address, reference);
-                        return Task.CompletedTask;
-
-                    })
-                )
-            );
+                        processedChangeItems.Add(change);
+                    }
+                    
+                    isInitialized = true;
+                }
+                else
+                {
+                    // Subsequent emissions: only process new ChangeItems we haven't seen before
+                    var newChanges = changes.Where(c => !processedChangeItems.Contains(c)).ToArray();
+                    
+                    if (newChanges.Any())
+                    {
+                        var updatedStore = newChanges
+                            .Where(c => c.Value != null)
+                            .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value));
+                        
+                        var updateChange = new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
+                        {
+                            ChangedBy = string.Join(", ", newChanges.Select(c => c.ChangedBy).Where(cb => !string.IsNullOrEmpty(cb))),
+                            Updates = newChanges.SelectMany(c => c.Updates).ToArray(),
+                        };
+                        
+                        ret.OnNext(updateChange);
+                        
+                        // Track new ChangeItems as processed
+                        foreach (var change in newChanges)
+                        {
+                            processedChangeItems.Add(change);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error processing combined stream for {Address} with reference {Reference}", 
+                    workspace.Hub.Address, reference);
+            }
+        }, ex =>
+        {
+            logger.LogError(ex, "Error in combined stream for {Address} with reference {Reference}", 
+                workspace.Hub.Address, reference);
+        }));
 
         return ret.Reduce(reference, configuration ?? (c => c));
     }
