@@ -119,7 +119,7 @@ public sealed class MessageHub : IMessageHub
 
         lock (typeRegistryLock)
         {
-            logger.LogDebug("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
+            logger.LogTrace("Registering type {TypeName} and related types in hub {Address}", typeToRegister.Name, Address);
 
             TypeRegistry.WithType(typeToRegister);
 
@@ -139,7 +139,7 @@ public sealed class MessageHub : IMessageHub
                     TypeRegistry.WithType(genericType);
             }
 
-            logger.LogDebug("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
+            logger.LogTrace("Completed type registration for {TypeName} in hub {Address}", typeToRegister.Name, Address);
         }
     }
 
