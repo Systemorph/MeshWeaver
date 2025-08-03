@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,7 @@ public static class WorkspaceStreams
         where TReference : WorkspaceReference<TReduced>
     {
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<Workspace>>();
+        logger.LogDebug("Retrieving workspace stream for {Address} and {Reference}", workspace.Hub.Address, reference);
         var collections = reference.GetCollections();
         var groups = collections.Select(c => (Collection: c,
                 DataSource: workspace.DataContext.DataSourcesByCollection.GetValueOrDefault(c)))
@@ -49,6 +51,7 @@ public static class WorkspaceStreams
 
 
         var combinedReference = new CombinedStreamReference(streams.Select(s => s!.StreamIdentity).ToArray());
+        logger.LogDebug("Combining references {References} to represent {Reference}", combinedReference, reference);
 
         var ret = new SynchronizationStream<EntityStore>(
             new StreamIdentity(workspace.Hub.Address, partition),
@@ -59,9 +62,9 @@ c => c
             );
 
         // Use CombineLatest to wait for the first element from each stream, then merge all subsequent updates
-        var combinedStream = streams.Length == 1 
-            ? streams[0]!.Select(s => new[] { s })
-            : streams.Cast<IObservable<ChangeItem<EntityStore>>>().CombineLatest();
+        var combinedStream = streams
+            .Cast<IObservable<ChangeItem<EntityStore>>>()
+            .CombineLatest();
 
         var processedChangeItems = new HashSet<object>();
         var isInitialized = false;
@@ -70,12 +73,13 @@ c => c
         {
             try 
             {
+                logger.LogDebug("Retrieved values {Changes}", changes.Select(c => JsonSerializer.Serialize(c, ret.Host.JsonSerializerOptions)));
                 if (!isInitialized)
                 {
                     // First emission: create initial merged store from all streams
                     var initialStore = changes
                         .Where(c => c.Value != null)
-                        .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value));
+                        .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
                     
                     var initialChange = new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version);
                     
@@ -98,7 +102,7 @@ c => c
                     {
                         var updatedStore = newChanges
                             .Where(c => c.Value != null)
-                            .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value));
+                            .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
                         
                         var updateChange = new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
                         {
@@ -165,6 +169,8 @@ c => c
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>> configuration)
         where TReference : WorkspaceReference<TReduced>
     {
+        stream.Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>()
+            .LogDebug("Reducing parent stream {ParentIdentity} {ParentReference} tp {Reference}", stream.StreamIdentity, stream.Reference, reference);
         var reducedStream = new SynchronizationStream<TReduced>(
             stream.StreamIdentity,
             stream.Host,
@@ -183,7 +189,6 @@ c => c
         {
             selectedInitial = selectedInitial
                 .Where(x => x is { Value: not null });
-
         }
 
 
