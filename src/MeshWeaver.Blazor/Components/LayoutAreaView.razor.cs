@@ -88,7 +88,7 @@ public partial class LayoutAreaView
             //AreaStream.Dispose();
             Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
             AreaStream = Address!.Equals(Workspace.Hub.Address)
-                ? Workspace.GetStream(ViewModel.Reference).Reduce(new JsonPointerReference("/"))
+                ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));

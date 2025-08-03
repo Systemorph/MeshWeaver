@@ -394,7 +394,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items?.Any(x => x.Name == "Serialization Test") == true);
+            .FirstOrDefaultAsync(items => items.Any(x => x.Name == "Serialization Test") == true);
 
         var item = retrievedData.First(x => x.Name == "Serialization Test");
         item.NullableNumber.Should().BeNull();

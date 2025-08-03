@@ -41,7 +41,7 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         var articleControl = control.Should().BeOfType<ArticleControl>().Which;
         var articleReference = articleControl.Article.Should().BeOfType<JsonPointerReference>().Which;
         var id = GetIdFromDataContext(articleControl);
-        var entity = await articleStream.GetDataAsync(id).Timeout(5.Seconds());
+        var entity = await articleStream!.GetDataAsync(id).Timeout(5.Seconds());
         var article = entity.Should().BeOfType<Article>().Which;
         article.Name.Should().Be("Calculator");
         article.Content.Should().NotBeNull();

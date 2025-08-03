@@ -326,7 +326,7 @@ public static class EditorExtensions
         return host.Workspace
             .GetStream(
                 new CollectionReference(
-                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)!))
+                    host.Workspace.DataContext.GetCollectionName(dimensionAttribute.Type)!))!
             .Select(x => 
                 ConvertToOptions(
                     x?.Value ?? throw new InvalidOperationException("Collection reference value is null"), 

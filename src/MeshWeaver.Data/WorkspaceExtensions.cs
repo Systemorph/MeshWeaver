@@ -20,6 +20,7 @@ public static class WorkspaceExtensions
 
     public static IObservable<T?> GetObservable<T>(this IWorkspace workspace, object id) =>
         workspace.GetStream(typeof(T))
+            .Synchronize()
             .Select(ws => ws.Value!.GetData<T>(id));
 
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
@@ -28,7 +29,9 @@ public static class WorkspaceExtensions
         var stream = workspace.GetStream(typeof(T));
         logger.LogDebug("Retrieved stream {StreamId} for type {Type}: {Identity}, {Reference}", stream.StreamId, typeof(T).Name, stream.StreamIdentity, stream.Reference);
 
-        return stream.Select(ws => ws.Value?.GetData<T>().ToArray())
+        return stream
+            .Synchronize()
+            .Select(ws => ws.Value?.GetData<T>().ToArray())
             .Where(x => x != null)
             .Select(x =>
             {
