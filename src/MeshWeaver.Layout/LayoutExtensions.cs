@@ -178,9 +178,15 @@ public static class LayoutExtensions
         string id
     ) => await synchronizationItems.GetDataStream(id).FirstAsync(x => x != null);
     public static async Task<TData> GetDataAsync<TData>(
-        this ISynchronizationStream<EntityStore> synchronizationItems,
+        this ISynchronizationStream<EntityStore>? synchronizationItems,
         string id
-    ) => await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
+    ) 
+    {
+        if (synchronizationItems == null)
+            throw new ArgumentNullException(nameof(synchronizationItems));
+        
+        return await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
+    }
 
     public static IObservable<object?> GetDataStream(
         this ISynchronizationStream<EntityStore> stream,

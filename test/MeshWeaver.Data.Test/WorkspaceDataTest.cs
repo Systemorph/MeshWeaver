@@ -277,7 +277,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(collectionRef);
-        var collection = await stream
+        stream.Should().NotBeNull();
+        var collection = await stream!
+            .Where(c => c.Value != null)
             .Select(c => c.Value!.Instances.Values.Cast<WorkspaceTestData>().ToArray())
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -299,7 +301,9 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = workspace.GetStream(entityRef);
-        var item = await stream
+        stream.Should().NotBeNull();
+        var item = await stream!
+            .Where(c => c.Value != null)
             .Select(c => c.Value as WorkspaceTestData)
             .Timeout(10.Seconds())
             .FirstAsync();

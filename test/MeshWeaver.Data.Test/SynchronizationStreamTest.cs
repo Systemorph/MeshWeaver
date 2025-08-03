@@ -158,7 +158,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                 // Small delay between updates to create more race condition opportunities
                 await Task.Delay(5, TestContext.Current.CancellationToken);
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Concurrently create multiple workspace streams while updates are happening
         var clientTasks = Enumerable.Range(1, 5).Select(clientId =>
@@ -195,7 +195,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
                     // Keep the client alive for a while to observe updates
                     await Task.Delay(200, TestContext.Current.CancellationToken);
                 }
-            })
+            }, TestContext.Current.CancellationToken)
         ).ToArray();
 
         // Wait for updates and clients to finish

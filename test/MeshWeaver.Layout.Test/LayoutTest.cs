@@ -116,7 +116,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var progress = Controls.Progress("Processing", percentage);
         for (var i = 0; i < 10; i++)
         {
-            await Task.Delay(30);
+            await Task.Delay(30, ct); // Use the cancellation token
             area.UpdateProgress(
                 new(nameof(ViewWithProgress)),
                 progress = progress with { Progress = percentage += 10 }
