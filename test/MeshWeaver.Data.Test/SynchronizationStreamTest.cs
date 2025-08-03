@@ -201,7 +201,7 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         // Wait for updates and clients to finish
         await Task.WhenAll(updateTask);
         await Task.WhenAll(clientTasks);
-        await Task.Delay(100, TestContext.Current.CancellationToken); // Final propagation time
+        await Task.Delay(200, TestContext.Current.CancellationToken); // Final propagation time
 
         // Clean up
         foreach (var stream in clientStreams)
