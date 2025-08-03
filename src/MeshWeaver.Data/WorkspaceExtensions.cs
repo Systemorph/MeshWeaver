@@ -24,14 +24,16 @@ public static class WorkspaceExtensions
 
     public static IObservable<IReadOnlyCollection<T>> GetObservable<T>(this IWorkspace workspace)
     {
-        var stream = workspace.GetStream(typeof(T));
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<IWorkspace>>();
+        var stream = workspace.GetStream(typeof(T));
+        logger.LogDebug("Retrieved stream {StreamId} for type {Type}: {Identity}, {Reference}", stream.StreamId, typeof(T).Name, stream.StreamIdentity, stream.Reference);
+
         return stream.Select(ws => ws.Value?.GetData<T>().ToArray())
             .Where(x => x != null)
             .Select(x =>
             {
                 var ret = (IReadOnlyCollection<T>)x!;
-                logger.LogInformation("***Observable Value: {val}", string.Join(", ", ret.Select(y => y!.ToString())));
+                logger.LogDebug("Stream {StreamId}: Observable Value for {Type}: {val}", stream.StreamId,typeof(T).Name, string.Join(", ", ret.Select(y => y!.ToString())));
                 return ret;
             });
     }

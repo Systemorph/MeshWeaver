@@ -56,7 +56,11 @@ public record CollectionsReference(params IReadOnlyCollection<string> Collection
     public override int GetHashCode() => Collections.Aggregate(17, (a, b) => a ^ b.GetHashCode());
 }
 
-public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>;
+public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>
+{
+    public override string ToString() => 
+        string.Join(", ", References.Select(r => r.ToString()));
+}
 
 public record StreamIdentity(Address Owner, object? Partition) : WorkspaceReference<EntityStore>
 {
