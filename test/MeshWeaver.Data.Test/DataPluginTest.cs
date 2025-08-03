@@ -754,8 +754,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             new GetDataRequest(entityRef),
             o => o.WithTarget(new ClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
-                TestContext.Current.CancellationToken,
-                new CancellationTokenSource(10.Seconds()).Token
+                TestContext.Current.CancellationToken
+                , new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
 

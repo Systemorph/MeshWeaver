@@ -69,7 +69,9 @@ c => c
         var processedChangeItems = new HashSet<object>();
         var isInitialized = false;
 
-        ret.RegisterForDisposal(combinedStream.Subscribe(changes => 
+        ret.RegisterForDisposal(combinedStream
+            .Synchronize()
+            .Subscribe(changes => 
         {
             try 
             {
@@ -195,6 +197,7 @@ c => c
         reducedStream.RegisterForDisposal(
             selectedInitial
                 .DistinctUntilChanged()
+                .Synchronize()
                 .Subscribe(reducedStream)
         );
 
