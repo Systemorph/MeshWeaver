@@ -215,9 +215,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
             typeSource.Update(item);
     }
 
-    protected virtual async Task<EntityStore>
-        GetInitialValue(ISynchronizationStream<EntityStore> stream,
-            CancellationToken cancellationToken)
+    protected virtual async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
         var initial = await TypeSources
             .Values.ToAsyncEnumerable()
@@ -255,17 +253,35 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         return SetupDataSourceStream(identity);
     }
 
+
     protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity)
     {
         var stream = base.SetupDataSourceStream(identity);
         if (stream == null) return null;
+
+        // Use thread-safe subscription with isFirst flag instead of Skip(1)
+        var isFirst = true;
+        stream.RegisterForDisposal(
+            stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+                .Synchronize()
+                .Subscribe(change =>
+                {
+                    if (isFirst)
+                    {
+                        isFirst = false;
+                        return; // Skip processing on first emission (initialization)
+                    }
+                    Synchronize(change);
+                })
+        );
+        // Always use async initialization to call GetInitialValue properly
         stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
             ex =>
             {
                 Logger.LogWarning(ex, "An error occurred initializing data source {DataSource}", Id);
                 return Task.CompletedTask;
             });
-        stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
+            
         return stream;
     }
 }
@@ -331,14 +347,30 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     {
         var stream = base.SetupDataSourceStream(identity);
         if (stream == null) return null;
-        stream.Initialize(
-            cancellationToken => GetInitialValue(stream, cancellationToken),
+        
+        // Always use async initialization to call GetInitialValue properly
+        stream.Initialize(cancellationToken => GetInitialValue(stream, cancellationToken),
             ex =>
             {
                 Logger.LogWarning(ex, "An error occurred updating data source {DataSource}", Id);
                 return Task.CompletedTask;
             });
-        stream.RegisterForDisposal(stream.Skip(1).Where(x => x.ChangedBy is not null && !x.ChangedBy.Equals(Id)).Subscribe(Synchronize));
+            
+        // Use thread-safe subscription with isFirst flag instead of Skip(1)
+        var isFirst = true;
+        stream.RegisterForDisposal(
+            stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+            .Synchronize()
+            .Subscribe(change =>
+            {
+                if (isFirst)
+                {
+                    isFirst = false;
+                    return; // Skip processing on first emission (initialization)
+                }
+                Synchronize(change);
+            })
+        );
         return stream;
     }
 }

@@ -162,12 +162,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnCompleted()
     {
-        Store.OnCompleted();
+        if(!Store.IsDisposed)
+            Store.OnCompleted();
     }
 
     public void OnError(Exception error)
     {
-        Store.OnError(error);
+        if (!Store.IsDisposed)
+            Store.OnError(error);
     }
 
     public void RegisterForDisposal(IDisposable disposable) => Hub

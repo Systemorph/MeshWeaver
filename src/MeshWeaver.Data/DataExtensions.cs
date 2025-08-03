@@ -198,69 +198,31 @@ public static class DataExtensions
         return request.Processed();
     }
 
-    private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
+    private static Task<IMessageDelivery> HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
     {
-        var workspace = hub.GetWorkspace();
-        var reference = request.Message.Reference;
-        
-        // Get the data asynchronously using the workspace stream with timeout and error handling
-        void HandleStream<T>(ISynchronizationStream<T> stream)
-        {
-            stream.Take(1)
-                  .Timeout(TimeSpan.FromSeconds(5)) // Add timeout to prevent hanging
-                  .Subscribe(
-                      data =>
-                      {
-                          if (data.Value != null)
-                          {
-                              hub.Post(new GetDataResponse(data.Value, data.Version), o => o.ResponseFor(request));
-                          }
-                          else
-                          {
-                              hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(request));
-                          }
-                      },
-                      error =>
-                      {
-                          // Handle errors (including timeout)
-                          hub.Post(new GetDataResponse(null, 0){Error = error.ToString()}, o => o.ResponseFor(request));
-                      },
-                      () =>
-                      {
-                          // Handle stream completion without data
-                          hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(request));
-                      });
-        }
-        
+        return HandleGetDataRequest(hub, (dynamic)request.Message.Reference, request, ct);
+    }
+
+    private static async Task<IMessageDelivery> HandleGetDataRequest<TReference>(IMessageHub hub,
+        WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
+    {
         try
         {
-            if (reference is CollectionReference collectionRef)
-            {
-                var stream = workspace.GetStream(collectionRef);
-                HandleStream(stream);
-            }
-            else if (reference is EntityReference entityRef)
-            {
-                var stream = workspace.GetStream(entityRef);
-                HandleStream(stream);
-            }
-            else
-            {
-                // Generic case - try to get as EntityStore
-                var stream = workspace.GetStream(reference as WorkspaceReference<EntityStore> ?? throw new ArgumentException("Unsupported reference type"));
-                HandleStream(stream);
-            }
+            var workspace = hub.GetWorkspace();
+            var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
+
+            var val = stream == null ? null : await stream.FirstAsync();
+            hub.Post(new GetDataResponse(val, hub.Version), o => o.ResponseFor(request));
         }
         catch (Exception ex)
         {
             // Handle any immediate exceptions
-            hub.Post(new GetDataResponse(null, 0){Error = ex.ToString()}, o => o.ResponseFor(request));
+            hub.Post(new GetDataResponse(null, 0) { Error = ex.ToString() }, o => o.ResponseFor(request));
         }
-        
+
         return request.Processed();
+
     }
-
-
     private static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
