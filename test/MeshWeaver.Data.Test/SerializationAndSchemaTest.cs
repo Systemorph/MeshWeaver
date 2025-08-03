@@ -10,6 +10,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -388,7 +389,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // assert
         response.Message.Should().BeOfType<DataChangeResponse>();
-
+        Logger.LogInformation("*** Data Change Finished...");
         var retrievedData = await client
             .GetWorkspace()
             .GetObservable<SerializationTestData>()

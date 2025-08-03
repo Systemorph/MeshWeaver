@@ -11,6 +11,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Data.Test;
@@ -319,7 +320,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         var updateItem = new WorkspaceTestData("1", "Multi-Client Update", DateTime.UtcNow);
 
         // act - update from client1
-        await client1.AwaitResponse(
+        var response = await client1.AwaitResponse(
             DataChangeRequest.Update([updateItem]),
             o => o.WithTarget(new ClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
@@ -328,6 +329,8 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
             ).Token
         );
 
+        response.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
+        Logger.LogInformation("*** Data Change Finished");
         // assert - client2 should see the change
         var client2Data = await client2
             .GetWorkspace()
