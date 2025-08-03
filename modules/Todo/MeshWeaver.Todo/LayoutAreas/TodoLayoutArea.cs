@@ -471,7 +471,7 @@ public static class TodoLayoutArea
     private static void DeleteAllTodosInGroup(LayoutAreaHost host, IEnumerable<TodoItem> todos)
     {
         var changeRequest = new DataChangeRequest()
-            .WithDeletions(todos);
+            .WithDeletions(todos.ToArray());
 
         host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
     }
