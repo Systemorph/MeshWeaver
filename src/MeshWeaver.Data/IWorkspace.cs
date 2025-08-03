@@ -16,7 +16,6 @@ public interface IWorkspace : IAsyncDisposable
     void Delete(object instance, Activity? activity, IMessageDelivery request) => Delete([instance], activity, request);
 
     public void RequestChange(DataChangeRequest change, Activity? activity, IMessageDelivery? request);
-
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
 
@@ -24,7 +23,7 @@ public interface IWorkspace : IAsyncDisposable
         Address owner,
         WorkspaceReference<TReduced> reference
     );
-    ISynchronizationStream<TReduced> GetStream<TReduced>(
+    ISynchronizationStream<TReduced>? GetStream<TReduced>(
         WorkspaceReference<TReduced> reference,  
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration = null);
 

@@ -115,7 +115,6 @@ public class Workspace : IWorkspace
         ) ?? throw new InvalidOperationException("Failed to create stream"); 
     }
 
-
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
         => (ISynchronizationStream<EntityStore>?)
             ReduceManager.ReduceStream<EntityStore>(
