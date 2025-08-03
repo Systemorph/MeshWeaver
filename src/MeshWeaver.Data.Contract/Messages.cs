@@ -14,14 +14,12 @@ public record DataChangeRequest
     public ImmutableList<object> Deletions { get; init; } = [];
     public UpdateOptions? Options { get; init; } 
     public string? ClientId { get; init; } 
-    public DataChangeRequest WithCreations(params object[] creations)
+    public DataChangeRequest WithCreations(params IEnumerable<object> creations)
         => this with { Creations = Creations.AddRange(creations) };
 
-    public DataChangeRequest WithUpdates(params object[] updates)
+    public DataChangeRequest WithUpdates(params IEnumerable<object> updates)
         => this with { Updates = Updates.AddRange(updates) };
-    public DataChangeRequest WithUpdates(IEnumerable<object> updates)
-        => this with { Updates = Updates.AddRange(updates) };
-    public DataChangeRequest WithDeletions(params object[] deletions)
+    public DataChangeRequest WithDeletions(params IEnumerable<object> deletions)
     => this with { Deletions = Deletions.AddRange(deletions) };
 
     public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
