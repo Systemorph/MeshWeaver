@@ -43,6 +43,7 @@ public static class JsonSynchronizationStream
                 reduced
                     .ToDataChanged < TReduced, PatchDataChangeRequest > (c => reduced.ClientId.Equals(c.ChangedBy))
                     .Where(x => x is not null)
+                    .Synchronize()
                     .Subscribe(e =>
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -56,6 +57,7 @@ public static class JsonSynchronizationStream
                 reduced
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
                     .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
+                    .Synchronize()
                     .Subscribe(e =>
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -143,6 +145,7 @@ public static class JsonSynchronizationStream
                 .ToDataChanged<TReduced,DataChangedEvent>(c => !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
                 .Select(x => x!)
+                .Synchronize()
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
@@ -154,6 +157,7 @@ public static class JsonSynchronizationStream
         reduced.RegisterForDisposal(
             reduced
                 .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
+                .Synchronize()
                 .Subscribe(e =>
                 {
                     logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
