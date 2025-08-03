@@ -3,7 +3,7 @@
     <PropertyGroup>
     <ProjectGuid>{162356d3-bf35-49c7-96ee-053fdde0a891}</ProjectGuid>
         <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
-        <NoWarn>NU1604;AD0001</NoWarn>
+        <NoWarn>NU1604;AD0001;NU5104</NoWarn>
     </PropertyGroup>
 
   <ItemGroup>
