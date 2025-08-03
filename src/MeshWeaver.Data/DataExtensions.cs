@@ -204,7 +204,7 @@ public static class DataExtensions
     }
 
     private static async Task<IMessageDelivery> HandleGetDataRequest<TReference>(IMessageHub hub,
-        WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken ct)
+        WorkspaceReference<TReference> reference, IMessageDelivery<GetDataRequest> request, CancellationToken _)
     {
         try
         {
