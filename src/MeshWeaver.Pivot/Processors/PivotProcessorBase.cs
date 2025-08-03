@@ -187,7 +187,7 @@ public abstract class PivotProcessorBase<
             .Select(x => x!.CollectionName)
             .ToArray();
         var stream = reference.Any()
-            ? Workspace.GetStream(new CollectionsReference(reference))
+            ? Workspace.GetStream(new CollectionsReference(reference))!
                 .Select(x => x.Value)
             : Observable.Return<EntityStore>(new());
 

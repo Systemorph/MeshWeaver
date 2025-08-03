@@ -123,32 +123,25 @@ public static class JsonSynchronizationStream
             );
 
 
-        // Send initial data as response to subscribe request
-        var initialData = reduced.Current;
-        if (initialData != null)
-        {
-            var initialJson = JsonSerializer.SerializeToElement(initialData.Value, initialData.Value?.GetType() ?? typeof(object), hub.JsonSerializerOptions);
-            var initialEvent = new DataChangedEvent(
-                request.StreamId,
-                initialData.Version,
-                new RawJson(initialJson.ToString()),
-                ChangeType.Full,
-                initialData.ChangedBy ?? string.Empty);
-            
-            logger.LogDebug("Owner {owner} sending initial data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
-            hub.Post(initialEvent, o => o.WithTarget(request.Subscriber));
-        }
-
-        // outgoing data changed
+        // Use single synchronized subscription for both initial data and ongoing changes
+        var isFirst = true;
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged<TReduced,DataChangedEvent>(c => !reduced.ClientId.Equals(c.ChangedBy))
+                .ToDataChanged<TReduced,DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Synchronize()
                 .Subscribe(e =>
                 {
-                    logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+                    if (isFirst)
+                    {
+                        isFirst = false;
+                        logger.LogDebug("Owner {owner} sending initial data to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+                    }
+                    else
+                    {
+                        logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
+                    }
                     hub.Post(e, o => o.WithTarget(request.Subscriber));
                 })
         );

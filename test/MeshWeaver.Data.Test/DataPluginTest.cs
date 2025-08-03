@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -180,7 +179,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
                 new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
-
+        deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
         // asserts
         data = await GetClient()
@@ -319,7 +318,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task ReduceCollectionReference()
     {
         var host = GetHost();
-        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))
+        var collection = await host.GetWorkspace().GetStream(new CollectionReference(nameof(MyData)))!
             .Select(c => c.Value!.Instances.Values)
             .FirstAsync();
 
@@ -442,7 +441,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // Verify types are sorted by display name
         var sortedTypes = types.OrderBy(t => t.DisplayName).ToArray();
-        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName).Equals(t2.DisplayName ?? t2.Name));
+        types.Should().Equal(sortedTypes, (t1, t2) => (t1.DisplayName).Equals(t2.DisplayName));
     }
 
     /// <summary>
@@ -636,7 +635,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act - update from client
         await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { updateItem }),
+            DataChangeRequest.Update([updateItem]),
             o => o.WithTarget(new ClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
@@ -673,8 +672,8 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var stream = host.GetWorkspace().GetStream(collectionRef);
-        var collection = await stream
-            .Select(c => c.Value!.Instances.Values.Cast<MyData>())
+        var collection = await stream!
+            .Select(c => c.Value!.Instances.Values.Cast<MyData>().ToArray())
             .Timeout(10.Seconds())
             .FirstAsync();
 

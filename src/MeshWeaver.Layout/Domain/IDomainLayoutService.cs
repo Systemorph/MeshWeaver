@@ -71,7 +71,7 @@ public record DomainViewConfiguration
             .GetStream(new CollectionReference(typeDefinition.CollectionName));
 
         var id = Guid.NewGuid().AsString();
-        host.RegisterForDisposal(stream
+        host.RegisterForDisposal(stream!
             .Select(i => i?.Value?.Instances.Values.Select(o =>
             {
                 var serialized = typeDefinition.SerializeEntityAndId(o,
@@ -128,7 +128,7 @@ public record DomainViewConfiguration
             .GetStream(new EntityReference(context.TypeDefinition.CollectionName, context.Id!));
 
         var typeDefinition = context.TypeDefinition;
-        host.RegisterForDisposal(stream
+        host.RegisterForDisposal(stream!
             .Select(e => typeDefinition.SerializeEntityAndId(e?.Value ?? throw new InvalidOperationException("Entity value is null"), context.Host.Hub.JsonSerializerOptions))
             .Subscribe(e => host.UpdateData(id,e))
         );
