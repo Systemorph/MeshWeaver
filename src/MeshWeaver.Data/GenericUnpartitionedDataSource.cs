@@ -259,7 +259,6 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         var stream = base.SetupDataSourceStream(identity);
         if (stream == null) return null;
 
-        // Use thread-safe subscription with isFirst flag instead of Skip(1)
         var isFirst = true;
         stream.RegisterForDisposal(
             stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
@@ -356,7 +355,6 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
                 return Task.CompletedTask;
             });
             
-        // Use thread-safe subscription with isFirst flag instead of Skip(1)
         var isFirst = true;
         stream.RegisterForDisposal(
             stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
