@@ -212,7 +212,8 @@ public static class DataExtensions
             var stream = workspace.GetStream(reference, x => x.ReturnNullWhenNotPresent());
 
             var val = stream == null ? null : await stream.FirstAsync();
-            hub.Post(new GetDataResponse(val, hub.Version), o => o.ResponseFor(request));
+            object? result = val == null ? null : val.Value;
+            hub.Post(new GetDataResponse(result, hub.Version), o => o.ResponseFor(request));
         }
         catch (Exception ex)
         {
