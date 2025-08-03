@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
@@ -76,7 +77,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         try
         {
-            return Store.Subscribe(observer);
+            return Store.Synchronize().Subscribe(observer);
         }
         catch (ObjectDisposedException)
         {
