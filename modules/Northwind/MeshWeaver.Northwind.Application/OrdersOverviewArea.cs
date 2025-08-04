@@ -20,8 +20,8 @@ public static class OrdersOverviewArea
     /// <param name="layout">The layout definition to which the orders overview area will be added.</param>
     /// <returns>The updated layout definition with the orders overview area added.</returns>
     public static LayoutDefinition AddOrdersOverview(this LayoutDefinition layout)
-        => layout.WithView(nameof(OrdersCount), Controls.Stack.WithView(OrdersCount))
-            .WithView(nameof(AvgOrderValue), Controls.Stack.WithView(AvgOrderValue));
+        => layout.WithView(nameof(OrdersCount), OrdersCount)
+            .WithView(nameof(AvgOrderValue), AvgOrderValue);
 
     /// <summary>
     /// Gets the orders count for the specified layout area and rendering context.

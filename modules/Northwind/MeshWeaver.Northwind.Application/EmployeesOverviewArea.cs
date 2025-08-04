@@ -20,7 +20,7 @@ public static class EmployeesOverviewArea
     /// <param name="layout">The layout definition to which the Employees Overview area will be added.</param>
     /// <returns>The updated layout definition with the Employees Overview area added.</returns>
     public static LayoutDefinition AddEmployeesOverview(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopEmployees), Controls.Stack.WithView(TopEmployees));
+        => layout.WithView(nameof(TopEmployees), TopEmployees);
 
     /// <summary>
     /// Generates a bar chart of the top 5 employees based on the provided data cube.
