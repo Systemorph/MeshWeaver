@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
+using Humanizer;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -105,9 +106,16 @@ public class DataPlugin(
         var address = GetAddress(type);
         if (address is null)
             return $"Unknown type: {type}." + (typeDefinitions is not null ? $" Valid types are: {string.Join(", ", typeDefinitions.Keys)}" : string.Empty);
-
-        var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address));
-        return response.Message.Schema;
+        try
+        {
+            var response = await hub.AwaitResponse(new GetSchemaRequest(type), o => o.WithTarget(address),
+                new CancellationTokenSource(10.Seconds()).Token);
+            return response.Message.Schema;
+        }
+        catch 
+        {
+            return $"Type {type} was not found in Address {address}";
+        }
     }
 
     private Address? GetAddress(string type)
