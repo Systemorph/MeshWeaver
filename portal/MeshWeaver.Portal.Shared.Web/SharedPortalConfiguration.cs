@@ -3,6 +3,7 @@ using System.Security.Claims;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
+using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
@@ -114,7 +115,7 @@ public static class SharedPortalConfiguration
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
-                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs())
+                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddChat())
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
                             c.AddArticles()
@@ -158,7 +159,7 @@ public static class SharedPortalConfiguration
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly)
+            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(MeshWeaver.Blazor.Chat.AgentChatView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();
