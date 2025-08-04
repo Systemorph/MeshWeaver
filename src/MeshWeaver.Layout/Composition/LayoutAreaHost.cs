@@ -404,5 +404,5 @@ public record LayoutAreaHost : IDisposable
     }
 
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
-        => LayoutDefinition.AreaDefinitions;
+        => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible() );
 }

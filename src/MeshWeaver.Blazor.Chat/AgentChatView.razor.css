@@ -15,8 +15,8 @@ body {
 .chat-app-container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    max-height: 100vh;
+    height: 100%;
+    min-height: calc(100vh - 120px);
     overflow: hidden;
     background-color: var(--neutral-layer-1);
     color: var(--neutral-foreground-rest);
@@ -46,7 +46,8 @@ body {
     padding-left: 1.5rem;
     padding-right: 1.5rem;
     padding-top: 0.75rem;
-    padding-bottom: 1.5rem;
+    padding-bottom: 2rem;
+    margin-bottom: 1rem;
     border-top: 1px solid var(--neutral-stroke-divider);
     background-color: var(--neutral-layer-1);
     border-color: var(--neutral-stroke-rest);

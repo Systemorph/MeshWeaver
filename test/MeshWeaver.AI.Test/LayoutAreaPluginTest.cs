@@ -139,7 +139,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>
-    /// Tests the LayoutAreaPlugin GetLayoutArea function for existing area
+    /// Tests the LayoutAreaPlugin DisplayLayoutArea function for existing area
     /// </summary>
     [Fact]
     public void LayoutAreaPlugin_GetLayoutArea_ForExistingArea_ShouldReturnUrl()
@@ -151,7 +151,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         var areaName = "TestArea1";
 
         // act
-        var result = plugin.GetLayoutArea(areaName);
+        var result = plugin.DisplayLayoutArea(areaName);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -161,7 +161,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>
-    /// Tests the LayoutAreaPlugin GetLayoutArea function with id parameter
+    /// Tests the LayoutAreaPlugin DisplayLayoutArea function with id parameter
     /// </summary>
     [Fact]
     public void LayoutAreaPlugin_GetLayoutArea_WithId_ShouldReturnUrlWithId()
@@ -174,7 +174,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         var id = "testId";
 
         // act
-        var result = plugin.GetLayoutArea(areaName, id);
+        var result = plugin.DisplayLayoutArea(areaName, id);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -185,7 +185,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>
-    /// Tests the LayoutAreaPlugin GetLayoutArea function for area without address
+    /// Tests the LayoutAreaPlugin DisplayLayoutArea function for area without address
     /// </summary>
     [Fact]
     public void LayoutAreaPlugin_GetLayoutArea_WithoutAddress_ShouldReturnErrorMessage()
@@ -197,7 +197,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         var areaName = "TestArea1";
 
         // act
-        var result = plugin.GetLayoutArea(areaName);
+        var result = plugin.DisplayLayoutArea(areaName);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -286,7 +286,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         kernelPlugin.Name.Should().Be(nameof(LayoutAreaPlugin));
         kernelPlugin.FunctionCount.Should().Be(2);
         kernelPlugin.GetFunctionsMetadata().Should().Contain(f => f.Name == nameof(LayoutAreaPlugin.GetLayoutAreas));
-        kernelPlugin.GetFunctionsMetadata().Should().Contain(f => f.Name == nameof(LayoutAreaPlugin.GetLayoutArea));
+        kernelPlugin.GetFunctionsMetadata().Should().Contain(f => f.Name == nameof(LayoutAreaPlugin.DisplayLayoutArea));
     }
 
     /// <summary>

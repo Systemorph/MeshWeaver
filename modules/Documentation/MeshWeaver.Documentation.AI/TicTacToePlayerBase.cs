@@ -48,7 +48,7 @@ namespace MeshWeaver.Documentation.AI
              2. Make your move ({PlayerSymbol}) by choosing an empty position. 
              No need to output the board, it will be handled by the delegation.
              Remember you want to win, so you try to create three of your symbols in a row, column, or diagonal.
-             3. If game is not finished, delegate to {OtherPlayer} using the {nameof(DelegationPlugin.Delegate)} kernel function of the {nameof(DelegationPlugin)}. 
+             3. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
              issuing the following message to agent {OtherPlayer}:
              "Current board:
              

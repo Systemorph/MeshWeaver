@@ -19,6 +19,9 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
+    /// <summary>
+    /// Tests that the DataPlugin can create a valid Semantic Kernel plugin instance.
+    /// </summary>
     [Fact]
     public void CreateKernelPlugin_ShouldReturnValidPlugin()
     {
@@ -35,6 +38,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         kernelPlugin.Name.Should().Be(nameof(DataPlugin));
     }
 
+    /// <summary>
+    /// Tests that GetDataTypes returns an appropriate message when no context is available.
+    /// </summary>
     [Fact]
     public async Task GetDataTypes_WithoutContext_ShouldReturnMessage()
     {
@@ -51,6 +57,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         result.Should().Contain("navigate to a context");
     }
 
+    /// <summary>
+    /// Tests that GetSchema returns a non-empty schema for a known type.
+    /// </summary>
     [Fact]
     public async Task GetSchema_KnownType_ShouldReturnNonEmptySchema()
     {
@@ -66,6 +75,10 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         result.Should().NotBeNullOrEmpty();
         result.Should().NotBe("{}");
     }
+
+    /// <summary>
+    /// Tests that GetSchema returns an empty schema object for unknown types.
+    /// </summary>
     [Fact]
     public async Task GetSchema_ForUnknownType_ShouldReturnEmptySchema()
     {
