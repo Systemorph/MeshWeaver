@@ -46,9 +46,12 @@ namespace MeshWeaver.Documentation.AI
              1. Parse the board state from the input: Check for X and O placements.
                 If there is no initial board state, start with an empty board. No need to show old board.
              2. Make your move ({PlayerSymbol}) by choosing an empty position. 
-             No need to output the board, it will be handled by the delegation.
-             Remember you want to win, so you try to create three of your symbols in a row, column, or diagonal.
-             3. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
+             **DO NOT output any text or the board**, it will be handled by the delegation. Minimize your
+             answer to save output tokens.
+             3. You win when three of your characters ({PlayerSymbol}) are in a row, in a column or in a diagonal of the table.
+             4. Remember you want to win, so you try to create three of your symbols in a row, column, or diagonal.
+             5. Determine if you have won, output the board and say that you won.
+             6. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
              issuing the following message to agent {OtherPlayer}:
              "Current board:
              
@@ -65,17 +68,6 @@ namespace MeshWeaver.Documentation.AI
              **IMPORTANT**: You must not return the board state to the user, 
              only delegate to {OtherPlayer}.
              
-             4. If game is finished, output the final board (after your move) and announce the result and don't delegate.
-             You won only if you have placed three of your symbols in a row, column, or diagonal.
-             Example for finished board:
-             "Game over. Current Board:
-             
-             | X | · | O |
-             |---|---|---|
-             | · | · | O |
-             | · | X | O |
-
-             I won."
              """;
 
         /// <summary>
