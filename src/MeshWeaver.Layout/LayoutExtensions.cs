@@ -93,9 +93,9 @@ public static class LayoutExtensions
                 typeof(UiControl)
                     .Assembly.GetTypes()
                     .Where(t =>
-                        (typeof(IUiControl).IsAssignableFrom(t) 
-                         || typeof(Skin).IsAssignableFrom(t)
-                         || typeof(StreamMessage).IsAssignableFrom(t))
+                            (typeof(IUiControl).IsAssignableFrom(t)
+                             || typeof(Skin).IsAssignableFrom(t)
+                             || typeof(StreamMessage).IsAssignableFrom(t))
                         //&& !t.IsAbstract
                     )
             )
@@ -104,8 +104,11 @@ public static class LayoutExtensions
                 typeof(PropertyColumnControl<>),
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
-                typeof(ContextProperty) // this is not a control
-            );
+                typeof(ContextProperty), // this is not a control
+                typeof(GetLayoutAreasRequest),
+                typeof(LayoutAreasResponse)
+            )
+            .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 
     public static IObservable<UiControl?> GetControlStream(
         this ISynchronizationStream<JsonElement> synchronizationItems,
@@ -340,4 +343,13 @@ public static class LayoutExtensions
                         ) ?? mm
             )
         );
+
+    private static IMessageDelivery HandleGetLayoutAreasRequest(IMessageHub hub, IMessageDelivery<GetLayoutAreasRequest> request) 
+    {
+        var layoutDefinition = hub.GetLayoutDefinition();
+        var areas = layoutDefinition.AreaDefinitions;
+        hub.Post(new LayoutAreasResponse(areas), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
 }
