@@ -1,10 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text.Json;
+using System.ComponentModel.DataAnnotations;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
@@ -53,6 +52,21 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     [Fact]
+    public async Task GetSchema_KnownType_ShouldReturnNonEmptySchema()
+    {
+        // arrange
+        var client = GetClient();
+        var mockChat = new MockAgentChat { Context = new AgentContext { Address = new HostAddress() } };
+        var plugin = new DataPlugin(client, mockChat);
+
+        // act
+        var result = await plugin.GetSchema(nameof(TestType));
+
+        // assert
+        result.Should().NotBeNullOrEmpty();
+        result.Should().NotBe("{}");
+    }
+    [Fact]
     public async Task GetSchema_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
@@ -65,7 +79,26 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
         // assert
         result.Should().NotBeNullOrEmpty();
+        result.Should().Be("{}");
     }
+    /// <summary>
+    /// Configuration for test host
+    /// </summary>
+    /// <param name="configuration"></param>
+    /// <returns></returns>
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .AddData(data => data.AddSource(source => source.WithType<TestType>()));
+    }
+
+
+    /// <summary>
+    /// Test type used for testing the DataPlugin functionality.
+    /// </summary>
+    /// <param name="Id">Id field</param>
+    /// <param name="Name">name field</param>
+    public record TestType([property: Key] string Id, string Name);
 
     private class MockAgentChat : IAgentChat
     {
@@ -84,4 +117,5 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         public string Delegate(string agentName, string message, bool askUserFeedback = false) 
             => throw new NotImplementedException();
     }
+
 }
