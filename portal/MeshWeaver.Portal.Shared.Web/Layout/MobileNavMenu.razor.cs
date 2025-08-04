@@ -43,6 +43,20 @@ public partial class MobileNavMenu : ComponentBase
         );
 
         yield return new MobileNavMenuEntry(
+            "Agents",
+            () => NavigateToAsync("/app/Agents/Overview"),
+            DesktopNavMenu.AgentsIcon(),
+            LinkMatchRegex: new Regex("^/app/Agents")
+        );
+
+        yield return new MobileNavMenuEntry(
+            "Chat",
+            () => NavigateToAsync("/chat"),
+            DesktopNavMenu.ChatIcon(),
+            LinkMatchRegex: new Regex("^/chat")
+        );
+
+        yield return new MobileNavMenuEntry(
         "Settings",
         LaunchSettingsAsync,
         new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
