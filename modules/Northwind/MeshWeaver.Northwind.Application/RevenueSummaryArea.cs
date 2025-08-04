@@ -18,7 +18,7 @@ public static class RevenueSummaryArea
     /// <param name="layout">The layout definition to which the revenue summary view will be added.</param>
     /// <returns>The updated layout definition with the revenue summary view.</returns>
     public static LayoutDefinition AddRevenue(this LayoutDefinition layout)
-        => layout.WithView(nameof(RevenueSummary), Controls.Stack.WithView(RevenueSummary));
+        => layout.WithView(nameof(RevenueSummary), RevenueSummary);
 
     /// <summary>
     /// Retrieves the revenue summary data and converts it to a line chart.

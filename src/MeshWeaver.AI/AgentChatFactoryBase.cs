@@ -74,8 +74,8 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
         var ret = new AgentChatClient(agentChat, Hub.ServiceProvider);
 
-        // Add DelegationPlugin to agents that implement IAgentWithDelegations or are marked as default
-        var delegationPlugin = KernelPluginFactory.CreateFromObject(new DelegationPlugin(ret), "DelegationPlugin");
+        // Add ChatPlugin to agents that implement IAgentWithDelegations or are marked as default
+        var delegationPlugin = KernelPluginFactory.CreateFromObject(new ChatPlugin(ret), "ChatPlugin");
 
         // Find the default agent definition
         var defaultAgentDefinition = agentDefinitions.Values
@@ -167,7 +167,7 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                    
                    **DELEGATION METHOD - USE KERNEL FUNCTION:**
                    
-                   When you need to delegate to another agent, use the {{{nameof(Delegate)}}} tool from the {{{nameof(DelegationPlugin)}}}:
+                   When you need to delegate to another agent, use the {{{nameof(Delegate)}}} tool from the {{{nameof(ChatPlugin)}}}:
                    - agentName: The exact name of the agent to delegate to (use the names from the list above)
                    - message: Your message or task for the agent
                    - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)

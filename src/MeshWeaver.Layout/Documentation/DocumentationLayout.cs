@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using MeshWeaver.Data;
@@ -22,7 +23,7 @@ public static class DocumentationLayout
                 _ => true,
                 (tabs, host, ctx) => tabs.WithView(NamedArea(host.Reference.Area), ctx.DisplayName)
                 )
-            .WithView(nameof(Doc), (Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>>)Doc);
+            .WithView(nameof(Doc), Doc);
 
 
 
@@ -108,6 +109,16 @@ public static class DocumentationLayout
 
     private const string ReadPattern = @"^(?<sourceType>[^@]+)/(?<sourceId>[^@]+)/(?<documentId>[^@]+)$";
 
+
+    /// <summary>
+    /// Legacy methods to show sources and documents. Consider deleting
+    /// </summary>
+    /// <param name="area"></param>
+    /// <param name="context"></param>
+    /// <param name="cancellationToken"></param>
+    /// <returns></returns>
+    /// <exception cref="InvalidOperationException"></exception>
+    [Browsable(false)]
     public static async Task<UiControl> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
         if (area.Reference.Id is not string path)

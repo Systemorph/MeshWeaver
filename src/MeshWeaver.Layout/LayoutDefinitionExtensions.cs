@@ -206,7 +206,7 @@ public static class LayoutDefinitionExtensions
             .WithView(context, 
                 (a, ctx) 
                     => Observable.Return<UiControl>(view(a, ctx)))
-            .WithAreaDefinition(areaDefinition!);
+            .WithAreaDefinition(areaDefinition);
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,

@@ -19,7 +19,7 @@ public static class DiscountVsRevenueArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountVsRevenue(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountVsRevenue), Controls.Stack.WithView(DiscountVsRevenue))
+        => layout.WithView(nameof(DiscountVsRevenue), DiscountVsRevenue)
         ;
 
     /// <summary>

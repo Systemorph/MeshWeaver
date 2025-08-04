@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.SemanticKernel;
@@ -14,6 +15,7 @@ namespace MeshWeaver.Northwind.AI;
 public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
+    private Dictionary<string, LayoutAreaDefinition>? layoutDefinitionMap;
     /// <inheritdoc cref="IAgentDefinition"/>
     public string Name => "NorthwindAgent";
 
@@ -36,6 +38,7 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         - Generate reports and insights
         - Answer questions about customers, orders, products, and sales
         - Provide data-driven recommendations
+        - Layout areas (reports, views, charts, dashboards) related to Northwind data
         
         Use the DataPlugin to access structured domain data and the CollectionPlugin to work with any related files or documents.
         Always provide accurate, data-driven responses based on the available Northwind data.
@@ -45,12 +48,17 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     {
         var data = new DataPlugin(hub, chat, typeDefinitionMap);
         yield return data.CreateKernelPlugin();
+
+        var layout = new LayoutAreaPlugin(hub, chat, layoutDefinitionMap);
+        yield return layout.CreateKernelPlugin();
     }
 
     private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");
     async Task IInitializableAgent.InitializeAsync()
     {
-        var response = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(NorthwindAddress));
-        typeDefinitionMap = response.Message.Types.ToDictionary(x => x.Name);
+        var typeResponse = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(NorthwindAddress));
+        typeDefinitionMap = typeResponse.Message.Types.ToDictionary(x => x.Name);
+        var layoutResponse = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(NorthwindAddress));
+        layoutDefinitionMap = layoutResponse.Message.Areas.ToDictionary(x => x.Area);
     }
 }

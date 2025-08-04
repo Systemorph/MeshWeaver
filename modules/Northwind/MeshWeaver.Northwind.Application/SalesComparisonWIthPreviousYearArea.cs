@@ -22,7 +22,7 @@ public static class SalesComparisonWIthPreviousYearArea
     public static LayoutDefinition AddSalesComparison(this LayoutDefinition layout)
         =>
             layout
-                .WithView(nameof(SalesByCategoryWithPrevYear), Controls.Stack.WithView(SalesByCategoryWithPrevYear))
+                .WithView(nameof(SalesByCategoryWithPrevYear), SalesByCategoryWithPrevYear)
     ;
 
     /// <summary>

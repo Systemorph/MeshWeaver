@@ -16,14 +16,20 @@ public class LayoutAreaPlugin(
     IMessageHub hub, 
     IAgentChat chat,
     IReadOnlyDictionary<string, LayoutAreaDefinition>? areaDefinitions = null, 
-    Func<string, Address?>? addressMap = null)
+    Func<string, Address?>? addressMap = null,
+    Address? defaultAddress = null
+    )
 {
 
-    [KernelFunction, Description($"Get layout area definition by name from a specific address. Valid layout areas can be found using the {nameof(GetLayoutAreas)} function.")]
-    public string GetLayoutArea(
+    [KernelFunction, 
+     Description($"Displays a layout area. Return the string from this function as is without any additional text. It should start with @")]
+    public string DisplayLayoutArea(
         [Description($"Name of the layout area to retrieve. A list of valid layout areas can be found with the {nameof(GetLayoutAreas)} function")] string areaName,
         [Description($"Id of the layout area requested. Could be paramters steering the layout areas. See Layout Area Definition for details.")] string? id = null)
     {
+
+        if (areaDefinitions?.TryGetValue(areaName, out var definition) == true)
+            return $"@{definition.Url}";
 
         var address = GetAddress(areaName);
 
@@ -37,7 +43,8 @@ public class LayoutAreaPlugin(
         return ret;
     }
 
-    [KernelFunction, Description($"List all layout areas and their definitions available as a json structure. The area property should be used in the {nameof(GetLayoutArea)} tool.")]
+    [KernelFunction, 
+     Description($"List all layout areas and their definitions available as a json structure. The area property should be used in the {nameof(DisplayLayoutArea)} tool.")]
     public async Task<string> GetLayoutAreas()
     {
 
@@ -76,7 +83,7 @@ public class LayoutAreaPlugin(
                 .Select(m =>
                 {
                     var ret = KernelFunctionFactory.CreateFromMethod(m, hub.JsonSerializerOptions, this);
-                    if (ret.Name == nameof(GetLayoutArea))
+                    if (ret.Name == nameof(DisplayLayoutArea))
                     {
                         var areaParameter = ret.Metadata.Parameters.First();
                         areaParameter.Description = EnrichDescriptionByAreas(areaParameter.Description);

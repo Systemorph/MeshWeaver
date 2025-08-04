@@ -46,13 +46,11 @@ public record LayoutDefinition(IMessageHub Hub)
         return this;
     }
 
-    internal ImmutableList<LayoutAreaDefinition> AreaDefinitions { get; init; } = [];
-    public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition layoutArea)
-    {
-        if (layoutArea is null)
-            return this;
-        return this with { AreaDefinitions = AreaDefinitions.Add(layoutArea) };
-    }
+    internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
+    public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition? layoutArea) => 
+        layoutArea == null 
+            ? this 
+            : this with { AreaDefinitions = AreaDefinitions.SetItem(layoutArea.Area, layoutArea) };
 }
 
 
