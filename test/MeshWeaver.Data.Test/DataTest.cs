@@ -37,7 +37,7 @@ public record MyData(
 /// Tests for data plugin functionality including CRUD operations, schema generation, and data synchronization
 /// </summary>
 /// <param name="output">Test output helper for logging</param>
-public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
+public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 {
 
     private ImmutableDictionary<object, object> storage = ImmutableDictionary<object, object>.Empty;
