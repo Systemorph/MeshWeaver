@@ -20,7 +20,7 @@ public static class ClientsOverviewArea
     /// <param name="layout">The layout to which the clients overview view will be added.</param>
     /// <returns>The updated layout definition.</returns>
     public static LayoutDefinition AddClientsOverview(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopClients), Controls.Stack.WithView(TopClients))
+        => layout.WithView(nameof(TopClients), TopClients)
         ;
 
     /// <summary>

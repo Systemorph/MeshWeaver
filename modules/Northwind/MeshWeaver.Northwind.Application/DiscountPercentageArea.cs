@@ -18,7 +18,7 @@ public static class DiscountPercentageArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountPercentage(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountPercentage), Controls.Stack.WithView(DiscountPercentage))
+        => layout.WithView(nameof(DiscountPercentage), DiscountPercentage)
             
         ;
 

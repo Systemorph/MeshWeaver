@@ -344,12 +344,18 @@ public static class LayoutExtensions
             )
         );
 
-    private static IMessageDelivery HandleGetLayoutAreasRequest(IMessageHub hub, IMessageDelivery<GetLayoutAreasRequest> request) 
+    private static IMessageDelivery HandleGetLayoutAreasRequest(IMessageHub hub, IMessageDelivery<GetLayoutAreasRequest> request)
     {
-        var layoutDefinition = hub.GetLayoutDefinition();
-        var areas = layoutDefinition.AreaDefinitions;
+        var uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
+        var layoutDefinition = uiControlService.LayoutDefinition;
+        var areas = layoutDefinition
+            .AreaDefinitions
+            .Values
+            .Where(l => l.IsVisible());
         hub.Post(new LayoutAreasResponse(areas), o => o.ResponseFor(request));
         return request.Processed();
     }
 
+    internal static bool IsVisible(this LayoutAreaDefinition l)
+        => !l.Area.StartsWith("$") && l.IsInvisible != true;
 }

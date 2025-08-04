@@ -21,6 +21,12 @@ public static class DomainViews
             )
             .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
 
+    /// <summary>
+    /// Provides a diagram with the data model of the data domain.
+    /// </summary>
+    /// <param name="host"></param>
+    /// <param name="arg"></param>
+    /// <returns></returns>
     private static UiControl DataModel(LayoutAreaHost host, RenderingContext arg)
     {
         return new MarkdownControl(host.GetMermaidDiagram()); 
