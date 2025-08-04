@@ -4,7 +4,10 @@ Abstract: >
   Deep dive into MeshWeaver's distributed architecture, exploring message hubs, MVVM patterns, and reactive design principles that enable scalable cloud-native applications.
   
 Thumbnail: "images/architecture.jpeg"
-Published: "2025-07-10"
+Published: "2025-08-05"
+VideoTitle: "TO DO App Pt.1 | Install the Project Template"
+VideoUrl: "https://www.youtube.com/embed/AhOkaAD8IL4?si=T0YmAKTnGwNIjakA"
+VideoDuration: "00:29:18"
 Authors:
   - "Roland Bürgi"
 Tags:
