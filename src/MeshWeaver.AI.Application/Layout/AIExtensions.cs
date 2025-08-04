@@ -1,4 +1,5 @@
 #nullable enable
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
@@ -11,5 +12,8 @@ public static class AIExtensions
         => config.AddLayout(AddAILayouts);
 
     public static LayoutDefinition AddAILayouts(this LayoutDefinition layout)
-        => layout.AddAgentOverview().AddAgentDetails();
+        => layout.AddAgentOverview().AddAgentDetails().AddChatNavigation();
+
+    private static LayoutDefinition AddChatNavigation(this LayoutDefinition layout)
+        => layout.WithNavMenu("Chat", "/chat", FluentIcons.Chat());
 }
