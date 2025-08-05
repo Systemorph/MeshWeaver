@@ -317,9 +317,18 @@ public partial class AgentChatView
 
     private async Task InvokeAsync(ChatMessage userMessage, IAgentChat chat, string lastRole, TextContent responseText)
     {
+        var pendingDelegations = new List<ChatDelegationMessage>();
+        
         // Stream and display a new response from the IChatClient
         await foreach (var update in chat.GetResponseAsync([userMessage], currentResponseCancellation.Token))
         {
+            // Handle delegation messages specially - store them for later
+            if (update is ChatDelegationMessage delegationMessage)
+            {
+                pendingDelegations.Add(delegationMessage);
+                continue;
+            }
+
             if (lastRole == update.AuthorName)
             {
                 messages.AddMessages(new ChatResponseUpdate(new(update.AuthorName ?? update.Role.Value), update.Text), filter: c => c is not TextContent);
@@ -340,6 +349,17 @@ public partial class AgentChatView
 
             StateHasChanged();
         }
+        
+        // Add any pending delegation messages after the agent responses are complete
+        foreach (var delegation in pendingDelegations)
+        {
+            messages.Add(delegation);
+        }
+        
+        if (pendingDelegations.Any())
+        {
+            StateHasChanged();
+        }
 
     }
     private async Task InvokeStreamingAsync(ChatMessage userMessage, IAgentChat chat, string lastRole, TextContent responseText)
@@ -348,6 +368,35 @@ public partial class AgentChatView
         await foreach (var update in chat.GetStreamingResponseAsync([userMessage], currentResponseCancellation.Token))
         {
             var currentAuthor = update.AuthorName ?? "Assistant";
+
+            // Check if this is a delegation message by checking text pattern
+            if (update.Text.StartsWith("Delegating to @") || update.Text.StartsWith("Requesting user feedback before delegating to @"))
+            {
+                // Finalize current message if any before adding delegation
+                if (!string.IsNullOrWhiteSpace(currentResponseMessage?.Text))
+                {
+                    messages.Add(currentResponseMessage!);
+                    currentResponseMessage = null;
+                }
+
+                // Parse delegation info from text
+                var isDelegationWithFeedback = update.Text.StartsWith("Requesting user feedback");
+                var targetAgentStart = update.Text.IndexOf('@') + 1;
+                var targetAgentEnd = update.Text.IndexOf(':', targetAgentStart);
+                var targetAgent = update.Text.Substring(targetAgentStart, targetAgentEnd - targetAgentStart);
+                var delegationMessageText = update.Text.Substring(targetAgentEnd + 2); // Skip ": "
+
+                // Create and immediately add delegation message as separate message
+                var delegationMessage = new ChatDelegationMessage(
+                    currentAuthor,
+                    targetAgent,
+                    delegationMessageText,
+                    isDelegationWithFeedback);
+
+                messages.Add(delegationMessage);
+                StateHasChanged();
+                continue;
+            }
 
             if (lastRole == currentAuthor)
             {
@@ -375,6 +424,8 @@ public partial class AgentChatView
 
             StateHasChanged();
         }
+        
+        // Delegation messages are now added immediately during streaming, no need to defer them
     }
 
     private void SetAgentContext(IAgentChat chat)

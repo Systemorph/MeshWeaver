@@ -4,6 +4,7 @@
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Layout
 @using MeshWeaver.Utils
+@using MeshWeaver.AI
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 
 @if (Message.Role == ChatRole.User)
@@ -12,12 +13,37 @@
         @Message.Text
     </div>
 }
+else if (Message is ChatDelegationMessage delegationMessage)
+{
+    <ChatDelegationView DelegationMessage="delegationMessage" />
+}
 else if (Message.Role != ChatRole.User)
 {
     foreach (var content in Message.Contents)
     {
         if (content is TextContent { Text: { Length: > 0 } text })
         {
+            // Check if this is a delegation message that wasn't properly typed
+            if (text.StartsWith("Delegating to @") || text.StartsWith("Requesting user feedback before delegating to @"))
+            {
+                // Parse delegation info from text
+                var isDelegationWithFeedback = text.StartsWith("Requesting user feedback");
+                var targetAgentStart = text.IndexOf('@') + 1;
+                var targetAgentEnd = text.IndexOf(':', targetAgentStart);
+                var targetAgent = text.Substring(targetAgentStart, targetAgentEnd - targetAgentStart);
+                var delegationMessageText = text.Substring(targetAgentEnd + 2); // Skip ": "
+
+                // Create a delegation message for display
+                var parsedDelegationMessage = new ChatDelegationMessage(
+                    Message.AuthorName?.ToString() ?? "Assistant",
+                    targetAgent,
+                    delegationMessageText,
+                    isDelegationWithFeedback);
+
+                <ChatDelegationView DelegationMessage="parsedDelegationMessage" />
+            }
+            else
+            {
             <div class="assistant-message">
                 <div>
                     <div class="assistant-message-icon">
@@ -38,6 +64,7 @@ else if (Message.Role != ChatRole.User)
                     }
                 </div>
             </div>
+            }
         }
         else if (content is FunctionCallContent fcc)
         {

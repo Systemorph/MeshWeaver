@@ -65,14 +65,11 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
-                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
-                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
-
-                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
-                    {
-                        AuthorName = new(delegationInstruction.DelegatingAgent)
-                    };
+                    var delegationGuiMessage = new ChatDelegationMessage(
+                        delegationInstruction.DelegatingAgent,
+                        delegationInstruction.AgentName,
+                        delegationInstruction.Message,
+                        delegationInstruction.Type == DelegationType.ReplyTo);
 
                     yield return delegationGuiMessage;
 
@@ -175,14 +172,11 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
-                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
-                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
-
-                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
-                    {
-                        AuthorName = new(delegationInstruction.DelegatingAgent)
-                    };
+                    var delegationGuiMessage = new ChatDelegationMessage(
+                        delegationInstruction.DelegatingAgent,
+                        delegationInstruction.AgentName,
+                        delegationInstruction.Message,
+                        delegationInstruction.Type == DelegationType.ReplyTo);
 
                     yield return ConvertToStreamingUpdate(delegationGuiMessage);
 
