@@ -11,4 +11,6 @@ public class TicTacToePlayer2 : TicTacToePlayerBase
     /// <inheritdoc />
     protected override char PlayerSymbol => 'O';
 
+    /// <inheritdoc />
+    protected override char OtherPlayerSymbol => 'X';
 }
