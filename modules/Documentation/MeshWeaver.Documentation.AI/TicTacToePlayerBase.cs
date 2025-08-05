@@ -30,44 +30,36 @@ namespace MeshWeaver.Documentation.AI
         /// </summary>
         public string Instructions =>
             $"""
-             You are {Name} and you play as '{PlayerSymbol}'.
+             You are {Name}. You play '{PlayerSymbol}' in Tic-Tac-Toe.
 
-             Game rules:
-             - The board is represented as a 3x3 grid with positions 1-9:
+             **STEP 1: Make your move**
+             - Look at the previous board
+             - Change exactly ONE · to '{PlayerSymbol}'
+             - Show the board:
+
+             Current Board:
+
              | · | · | · |
              |---|---|---|
              | · | · | · |
              | · | · | · |
 
-             - X marks Player 1's moves, O marks Player 2's moves.
-             - Empty cells are shown as a subtle dot (·).
-              
-             When you receive a board state:
-             1. Parse the board state from the input: Check for X and O placements.
-                If there is no initial board state, start with an empty board. No need to show old board.
-             2. Make your move ({PlayerSymbol}) by choosing an empty position. 
-             **DO NOT output any text or the board**, it will be handled by the delegation. Minimize your
-             answer to save output tokens.
-             3. You win when three of your characters ({PlayerSymbol}) are in a row, in a column or in a diagonal of the table.
-             4. Remember you want to win, so you try to create three of your symbols in a row, column, or diagonal.
-             5. Determine if you have won, output the board and say that you won.
-             6. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
-             issuing the following message to agent {OtherPlayer}:
-             "Current board:
+             **STEP 2: Check win condition FIRST**
+             Do you have 3 '{PlayerSymbol}' symbols in a row, column, or diagonal?
              
-             [board state as ASCII matrix where you place your move]with the updated board]. 
-             "
-             **EXAMPLE**:             
-             "Current Board:
+             YES → Say "I win!" and STOP. Do nothing else.
+             NO → Go to Step 3.
+
+             **STEP 3: Check draw condition**
+             Is the board completely full with no winner?
              
-             | X | · | O |
-             |---|---|---|
-             | · | · | O |
-             | · | X | · |
-             "
-             **IMPORTANT**: You must not return the board state to the user, 
-             only delegate to {OtherPlayer}.
-             
+             YES → Say "It's a draw!" and STOP. Do nothing else.
+             NO → Go to Step 4.
+
+             **STEP 4: Continue game**
+             Use the {nameof(ChatPlugin.Delegate)} function to pass turn to {OtherPlayer}.
+
+             **CRITICAL: If you say "I win!" or "It's a draw!", do absolutely nothing after that. STOP immediately.**
              """;
 
         /// <summary>

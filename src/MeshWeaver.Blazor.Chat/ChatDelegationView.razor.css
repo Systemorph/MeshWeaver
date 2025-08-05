@@ -1,0 +1,118 @@
+.delegation-message {
+    margin: 12px 0;
+    border: 1px solid var(--neutral-stroke-divider);
+    border-radius: 8px;
+    background: var(--neutral-layer-floating);
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.delegation-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    cursor: pointer;
+    background: var(--neutral-layer-card-hover);
+    transition: background-color 0.2s ease;
+    border-bottom: 1px solid var(--neutral-stroke-divider);
+}
+
+.delegation-header:hover {
+    background: var(--neutral-layer-card-pressed);
+}
+
+.delegation-icon {
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+    color: var(--accent-foreground-rest);
+    flex-shrink: 0;
+}
+
+.delegation-icon svg {
+    width: 100%;
+    height: 100%;
+}
+
+.delegation-title {
+    flex: 1;
+    font-weight: 500;
+    color: var(--neutral-foreground-rest);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.delegation-title strong {
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+}
+
+.delegation-expand-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--neutral-foreground-hint);
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+.delegation-expand-icon svg {
+    width: 100%;
+    height: 100%;
+}
+
+.delegation-expand-icon.expanded {
+    transform: rotate(180deg);
+}
+
+.delegation-content {
+    padding: 16px;
+    background: var(--neutral-layer-card);
+    border-top: 1px solid var(--neutral-stroke-divider);
+}
+
+.delegation-message-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--neutral-foreground-hint);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+
+.delegation-message-text {
+    padding: 12px;
+    background: var(--neutral-layer-floating);
+    border: 1px solid var(--neutral-stroke-divider);
+    border-radius: 6px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--neutral-foreground-rest);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.delegation-feedback-notice {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: var(--accent-layer-card-default);
+    border: 1px solid var(--accent-stroke-control-default);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+    color: var(--accent-foreground-rest);
+}
+
+.delegation-feedback-notice svg {
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+/* Dark theme adjustments */
+@media (prefers-color-scheme: dark) {
+    .delegation-message {
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+}

@@ -24,7 +24,8 @@
       "Bash(dotnet remove:*)",
       "Bash(dotnet run:*)",
       "Bash(cp:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "WebFetch(domain:docs.anthropic.com)"
     ],
     "deny": []
   }
