@@ -671,8 +671,8 @@ public sealed class MessageHub : IMessageHub
                 logger.LogWarning("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
                 return;
             }
-            logger.LogDebug("STARTING DISPOSAL of hub {address} with parent {parent}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
-                Address, Configuration.ParentHub?.Address, Version, hostedHubs.Hubs.Count());
+            logger.LogDebug("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
+                Address,  Version, hostedHubs.Hubs.Count());
             
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
@@ -683,8 +683,8 @@ public sealed class MessageHub : IMessageHub
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
         {
-            logger.LogDebug("Hub {address} with parent {parent} has {count} hosted hubs to dispose: [{hubAddresses}]", 
-                Address, Configuration.ParentHub?.Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
+            logger.LogDebug("Hub {address} has {count} hosted hubs to dispose: [{hubAddresses}]", 
+                Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
         }
         else
         {
