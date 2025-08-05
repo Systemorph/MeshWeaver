@@ -25,7 +25,9 @@
       "Bash(dotnet run:*)",
       "Bash(cp:*)",
       "Bash(sed:*)",
-      "WebFetch(domain:docs.anthropic.com)"
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(dotnet tool install:*)",
+      "Bash(dotnet:*)"
     ],
     "deny": []
   }
