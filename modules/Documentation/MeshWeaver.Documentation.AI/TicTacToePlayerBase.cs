@@ -22,6 +22,10 @@ namespace MeshWeaver.Documentation.AI
         /// </summary>
         protected abstract char PlayerSymbol { get; }
         /// <summary>
+        /// Symbol of the other player
+        /// </summary>
+        protected abstract char OtherPlayerSymbol { get; }
+        /// <summary>
         /// Description of what this agent does
         /// </summary>
         public string Description => $"TicTacToe Player ({PlayerSymbol}) - Plays tic-tac-toe and can delegate back to {OtherPlayer} when it's their turn.";
@@ -30,36 +34,61 @@ namespace MeshWeaver.Documentation.AI
         /// </summary>
         public string Instructions =>
             $"""
-             You are {Name}. You play '{PlayerSymbol}' in Tic-Tac-Toe.
+             You are {Name} and you play as '{PlayerSymbol}'.
 
-             **STEP 1: Make your move**
-             - Look at the previous board
-             - Change exactly ONE · to '{PlayerSymbol}'
-             - Show the board:
-
-             Current Board:
-
+             Game rules:
+             - The board is represented as a 3x3 grid with positions 1-9:
              | · | · | · |
              |---|---|---|
              | · | · | · |
              | · | · | · |
 
-             **STEP 2: Check win condition FIRST**
-             Do you have 3 '{PlayerSymbol}' symbols in a row, column, or diagonal?
+             - X marks {nameof(TicTacToePlayer1)}'s moves, O marks {nameof(TicTacToePlayer2)}'s moves.
+             - Empty cells are shown as a subtle dot (·).
+              
+             When you receive a board state:
+             1. Parse the board state from the input: Check for X and O placements.
+                If there is no initial board state, start with an empty board. No need to show old board.
+                Output the current board state in the following format:
+                "Current board:
              
-             YES → Say "I win!" and STOP. Do nothing else.
-             NO → Go to Step 3.
-
-             **STEP 3: Check draw condition**
-             Is the board completely full with no winner?
+             [board state as ASCII matrix as parsed from previous message]. 
+             "
+             **EXAMPLE**:             
+             "Board after my move:
              
-             YES → Say "It's a draw!" and STOP. Do nothing else.
-             NO → Go to Step 4.
-
-             **STEP 4: Continue game**
-             Use the {nameof(ChatPlugin.Delegate)} function to pass turn to {OtherPlayer}.
-
-             **CRITICAL: If you say "I win!" or "It's a draw!", do absolutely nothing after that. STOP immediately.**
+             | X | · | O |
+             |---|---|---|
+             | · | · | O |
+             | · | X | · |
+             "
+             
+             2. Make your move ({PlayerSymbol}) by choosing an empty position.
+                Remember you want to win, so you try to create three of your symbols in a row, column, or diagonal.
+             3. Output the board **AFTER** your move in the following format:
+             "Board after my move:
+             
+             [board state as ASCII matrix where you place your move into the updated board]. 
+             "
+             **EXAMPLE**:             
+             "Board after my move:
+             
+             | X | · | O |
+             |---|---|---|
+             | · | · | O |
+             | · | X | · |
+             "
+             **IMPORTANT**: You must make a move, you cannot forward the board from the previous move.
+             4. You win when three of your characters ({PlayerSymbol}) are in a row, in a column or in a diagonal of the table.
+             5. Determine if you have won, output the board and say that you won.
+             6. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
+             issuing the following message to agent {OtherPlayer}: "Your turn".
+             
+             
+             **CRITICAL**:
+             - Do not output any additional text, only the board state after your move.
+             - You must always make a move before delegating to {OtherPlayer}.
+             - Do not delegate unless you have made your move and have output the board **AFTER** your move.
              """;
 
         /// <summary>
