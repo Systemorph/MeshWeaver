@@ -58,6 +58,69 @@ export async function renderChart(element, config) {
             finalConfig = chartConfig;
         }
 
+        // Apply responsive configuration if not already set
+        if (!finalConfig.options) {
+            finalConfig.options = {};
+        }
+        if (!finalConfig.options.responsive) {
+            finalConfig.options.responsive = true;
+        }
+        if (!finalConfig.options.maintainAspectRatio) {
+            finalConfig.options.maintainAspectRatio = false;
+        }
+        
+        // Apply mobile-friendly scale configuration only on narrow screens
+        const isNarrowScreen = window.innerWidth < 768;
+        
+        if (isNarrowScreen) {
+            if (!finalConfig.options.scales) {
+                finalConfig.options.scales = {};
+            }
+            
+            // Configure x-axis for better label handling on narrow screens
+            if (!finalConfig.options.scales.x) {
+                finalConfig.options.scales.x = {};
+            }
+            if (!finalConfig.options.scales.x.ticks) {
+                finalConfig.options.scales.x.ticks = {};
+            }
+            
+            // Only override rotation if not already specifically set
+            if (finalConfig.options.scales.x.ticks.maxRotation === undefined) {
+                finalConfig.options.scales.x.ticks.maxRotation = 45;
+            }
+            if (finalConfig.options.scales.x.ticks.minRotation === undefined) {
+                finalConfig.options.scales.x.ticks.minRotation = 0;
+            }
+            
+            // Add callback for label truncation on narrow screens only if no callback exists
+            if (!finalConfig.options.scales.x.ticks.callback) {
+                finalConfig.options.scales.x.ticks.callback = function(value, index, values) {
+                    const label = this.getLabelForValue(value);
+                    if (label && label.length > 10) {
+                        return label.substring(0, 8) + '...';
+                    }
+                    return label;
+                };
+            }
+            
+            // Configure data labels for narrow screens
+            if (!finalConfig.options.plugins) {
+                finalConfig.options.plugins = {};
+            }
+            if (!finalConfig.options.plugins.datalabels) {
+                finalConfig.options.plugins.datalabels = {};
+            }
+            
+            // Reduce font size and adjust positioning for data labels on narrow screens
+            finalConfig.options.plugins.datalabels.font = {
+                size: 8
+            };
+            finalConfig.options.plugins.datalabels.rotation = -90; // Rotate labels vertically
+            finalConfig.options.plugins.datalabels.anchor = 'end';
+            finalConfig.options.plugins.datalabels.align = 'top';
+        }
+
         console.log("Final config for Chart.js:", finalConfig);
 
         if (existingChart) {
@@ -71,6 +134,9 @@ export async function renderChart(element, config) {
             const newChart = new window.Chart(ctx, finalConfig);
             // Track this chart instance
             chartInstances.set(element.id || element, newChart);
+            
+            // Set up resize listener for this chart
+            setupResizeListener(newChart, element);
         }
     } catch (error) {
         console.error("Error rendering chart:", error);
@@ -213,10 +279,17 @@ function waitForGlobal(globalName, timeout = 5000) {
 function configureChartDefaults() {
     if (!window.Chart) return;
 
-    const Chart = window.Chart;    // Set default configurations
+    const Chart = window.Chart;    
+    
+    // Set default configurations
     Chart.defaults.scales.linear.suggestedMin = 0; // all linear Scales start at 0
     Chart.defaults.elements.line.fill = false; // lines default to line, not area
     Chart.defaults.elements.line.tension = 0; // lines default to straight lines instead of bezier curves
+    
+    // Configure responsive behavior
+    Chart.defaults.responsive = true;
+    Chart.defaults.maintainAspectRatio = false;
+    
     // Note: Don't set legend.display globally as it should be configurable per chart
 
     // Only configure datalabels if the plugin is registered
@@ -231,7 +304,7 @@ function configureChartDefaults() {
     Chart.defaults.plugins.tooltip.enabled = false;
 
     Chart.defaults.font.family = "roboto, \"sans-serif\"";
-    Chart.defaults.font.size = 12;
+    Chart.defaults.font.size = window.innerWidth < 768 ? 10 : 12;
 
     // Use the standard Fluent UI text color that updates with theme
     Chart.defaults.color = getComputedStyle(document.documentElement).getPropertyValue('--neutral-foreground-rest');
@@ -358,9 +431,78 @@ export function disposeChart(element) {
         } else {
             console.log("No chart found for element");
         }
+        
+        // Clean up resize listener
+        if (element._resizeHandler) {
+            window.removeEventListener('resize', element._resizeHandler);
+            delete element._resizeHandler;
+        }
     } catch (error) {
         console.error("Error disposing chart:", error);
     }
+}
+
+/**
+ * Set up resize listener for responsive behavior
+ * @param {Chart} chart - The Chart.js instance
+ * @param {HTMLCanvasElement} element - The canvas element
+ */
+function setupResizeListener(chart, element) {
+    let resizeTimeout;
+    
+    const handleResize = () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            if (chart && typeof chart.update === 'function') {
+                const isNarrowScreen = window.innerWidth < 768;
+                
+                // Update responsive configurations based on screen size
+                if (chart.config.options) {
+                    // Update data labels for screen size
+                    if (chart.config.options.plugins && chart.config.options.plugins.datalabels) {
+                        if (isNarrowScreen) {
+                            chart.config.options.plugins.datalabels.font = { size: 8 };
+                            chart.config.options.plugins.datalabels.rotation = -90;
+                            chart.config.options.plugins.datalabels.anchor = 'end';
+                            chart.config.options.plugins.datalabels.align = 'top';
+                        } else {
+                            // Reset to default data label settings for wide screens
+                            chart.config.options.plugins.datalabels.font = { size: 12 };
+                            chart.config.options.plugins.datalabels.rotation = 0;
+                            chart.config.options.plugins.datalabels.anchor = 'center';
+                            chart.config.options.plugins.datalabels.align = 'center';
+                        }
+                    }
+                    
+                    // Update x-axis tick configuration
+                    if (chart.config.options.scales && chart.config.options.scales.x && chart.config.options.scales.x.ticks) {
+                        if (isNarrowScreen) {
+                            chart.config.options.scales.x.ticks.maxRotation = 45;
+                            chart.config.options.scales.x.ticks.callback = function(value, index, values) {
+                                const label = this.getLabelForValue(value);
+                                if (label && label.length > 10) {
+                                    return label.substring(0, 8) + '...';
+                                }
+                                return label;
+                            };
+                        } else {
+                            chart.config.options.scales.x.ticks.maxRotation = 0;
+                            // Remove callback to restore full labels
+                            delete chart.config.options.scales.x.ticks.callback;
+                        }
+                    }
+                }
+                
+                // Force chart to resize and redraw
+                chart.resize();
+                chart.update('active');
+            }
+        }, 250); // Debounce resize events
+    };
+    
+    // Store the resize handler so we can remove it later
+    element._resizeHandler = handleResize;
+    window.addEventListener('resize', handleResize);
 }
 
 /**
