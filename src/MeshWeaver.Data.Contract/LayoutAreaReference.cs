@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
 {
     public object? Id { get; init; }
-    public string Layout { get; init; } = null!;
+    public string? Layout { get; init; }
 
     public const string Data = "data";
 

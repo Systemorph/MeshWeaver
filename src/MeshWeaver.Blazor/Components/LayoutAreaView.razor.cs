@@ -1,5 +1,6 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
@@ -15,7 +16,6 @@ public partial class LayoutAreaView
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
-    private LayoutAreaProperties? Properties { get; set; }
 
     private NamedAreaControl NamedArea =>
         new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage };
@@ -25,8 +25,8 @@ public partial class LayoutAreaView
         await base.SetParametersAsync(parameters);
         BindViewModel();
         if (AreaStream is not null
-            && (!AreaStream.Reference.Equals(ViewModel?.Reference) ||
-                !AreaStream.Owner.Equals(ViewModel?.Address)))
+            && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
+                !AreaStream.Owner.Equals(ViewModel.Address)))
         {
             AreaStream.Dispose();
             AreaStream = null;
@@ -37,7 +37,7 @@ public partial class LayoutAreaView
     private bool showProgress;
     private string? progressMessage;
     private DialogControl? currentDialog;
-    private bool showDialog = false;
+    private bool showDialog;
 
     private void BindViewModel()
     {
@@ -49,11 +49,17 @@ public partial class LayoutAreaView
 
     }
 
-    private Address ConvertAddress(object address, Address _)
+    private Address? ConvertAddress(object address, Address _)
     {
         if (address is string s)
             return Hub.GetAddress(s);
-        return Hub.GetAddress(address?.ToString()!);
+        return address switch
+        {
+            JsonElement je => je.Deserialize<Address>(Hub.JsonSerializerOptions),
+            JsonObject jo => jo.Deserialize<Address>(Hub.JsonSerializerOptions),
+            _ => Hub.GetAddress(address.ToString()!)
+
+        };
     }
 
     private Address? Address { get; set; }
@@ -79,7 +85,6 @@ public partial class LayoutAreaView
         AreaStream = null;
         DialogStream = null;
     }
-    private string? RenderingArea { get; set; }
     private void BindStream()
     {
         if (AreaStream is null)
@@ -100,7 +105,7 @@ public partial class LayoutAreaView
 
     private ISynchronizationStream<JsonElement>? SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
     {
-        return areaStream?.Reduce(
+        return areaStream.Reduce(
             new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
     }
 

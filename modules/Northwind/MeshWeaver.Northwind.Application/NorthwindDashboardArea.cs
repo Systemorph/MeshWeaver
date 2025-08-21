@@ -35,29 +35,25 @@ public static class NorthwindDashboardArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Order Summary"))
-                    .WithView(
-                        (area, ctx) => area.OrderSummary(ctx)
-                    ),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(OrdersSummaryArea.OrderSummary))),
                 skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Sales by category"))
-                    .WithView((area, ctx) => area.SalesByCategory(ctx)), skin =>
-                    skin.WithXs(12).WithSm(6)
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SalesOverviewArea.SalesByCategory))), 
+                skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(
-                        (area, ctx) => area.SupplierSummary(ctx)
-                    ),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SupplierSummaryArea.SupplierSummary))),
                     skin=>skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Top products"))
-                    .WithView(ProductOverviewArea.ProductOverview),
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(ProductOverviewArea.ProductOverview))),
                 skin => skin.WithXs(12).WithSm(6)
             );
     }

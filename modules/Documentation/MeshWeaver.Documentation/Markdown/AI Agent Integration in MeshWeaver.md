@@ -4,7 +4,9 @@ Abstract: >
   Learn how MeshWeaver's message-based architecture enables seamless AI agent integration through remote control patterns, Semantic Kernel, and universal data access plugins.
   
 Thumbnail: "images/ai-integration.jpeg"
-Published: "2025-07-13"
+Published: "2025-08-12"
+VideoUrl: "https://www.youtube.com/embed/CnDxqGyhTkE?si=tB7wZTJ_Ooh3MLgQ"
+VideoDuration: "18:15"
 Authors:
   - "Roland Bürgi"
 Tags:
@@ -142,7 +144,7 @@ This contextual information allows the agent to make intelligent decisions about
 
 ### Specialized Functions
 
-The `TodoAgent` also provides domain-specific functions that simplify common operations:
+The `TodoAgent` could also provide domain-specific functions that simplify common operations:
 
 ```csharp
 [KernelFunction]
@@ -172,6 +174,9 @@ This `CreateTodo` function encapsulates the business logic for creating well-for
 - **Status Management**: Setting appropriate default status
 - **Timestamp Handling**: Recording creation times
 - **JSON Formatting**: Ensuring proper data structure for the mesh
+
+However, in general it is not needed, as the data plugin provides sufficient functionality to lead through the CRUD process. We have thus
+removed this function from the project template.
 
 ## Natural Language Processing Examples
 
