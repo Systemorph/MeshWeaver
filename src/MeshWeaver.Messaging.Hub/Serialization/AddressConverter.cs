@@ -10,26 +10,46 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
     {
         return reader.TokenType switch
         {
-            JsonTokenType.StartObject => ReadFromObject(reader),
-            JsonTokenType.String => ReadFromString(reader),
+            JsonTokenType.StartObject => ReadFromObject(ref reader),
+            JsonTokenType.String => ReadFromString(ref reader),
             _ => throw new JsonException("Unexpected token type")
         };
     }
 
-    private Address ReadFromObject(Utf8JsonReader reader)
+    private Address ReadFromObject(ref Utf8JsonReader reader)
     {
-        using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-        if (
-            root.TryGetProperty("type", out var typeElement) &&
-            root.TryGetProperty("id", out var idElement)
-        )
-            return ParseAddress(typeElement.GetString() ?? throw new InvalidOperationException(), idElement.GetString() ?? throw new InvalidOperationException());
-        else
+        string? type = null;
+        string? id = null;
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("Expected StartObject token");
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+                break;
+            if (reader.TokenType == JsonTokenType.PropertyName)
+            {
+                string propertyName = reader.GetString()!;
+                reader.Read();
+                switch (propertyName)
+                {
+                    case "type":
+                        type = reader.GetString();
+                        break;
+                    case "id":
+                        id = reader.GetString();
+                        break;
+                    default:
+                        reader.Skip();
+                        break;
+                }
+            }
+        }
+        if (type == null || id == null)
             throw new JsonException("Invalid address object format");
+        return ParseAddress(type, id);
     }
 
-    private Address ReadFromString(Utf8JsonReader reader)
+    private Address ReadFromString(ref Utf8JsonReader reader)
     {
         var addressString = reader.GetString();
         if (addressString == null)
@@ -54,7 +74,6 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
         if (!typeRegistry.TryGetType(addressType, out var concreteType))
         {
             return new Address(addressType, id);
-            //throw new JsonException($"Unknown address type: {addressType}");
         }
 
         var address = (Address)Activator.CreateInstance(concreteType!.Type, [id])!;

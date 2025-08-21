@@ -1,6 +1,4 @@
-﻿using System.Collections.Immutable;
-using MeshWeaver.Data;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -8,26 +6,26 @@ public record DataChangeRequest
     : IRequest<DataChangeResponse>
 {
     public string? ChangedBy { get; init; } 
-    public ImmutableList<object> Creations { get; init; } = [];
+    public IReadOnlyCollection<object> Creations { get; init; } = [];
 
-    public ImmutableList<object> Updates { get; init; } = [];
-    public ImmutableList<object> Deletions { get; init; } = [];
+    public IReadOnlyCollection<object> Updates { get; init; } = [];
+    public IReadOnlyCollection<object> Deletions { get; init; } = [];
     public UpdateOptions? Options { get; init; } 
     public string? ClientId { get; init; } 
     public DataChangeRequest WithCreations(params IEnumerable<object> creations)
-        => this with { Creations = Creations.AddRange(creations) };
+        => this with { Creations = Creations.Concat(creations).ToArray() };
 
     public DataChangeRequest WithUpdates(params IEnumerable<object> updates)
-        => this with { Updates = Updates.AddRange(updates) };
+        => this with { Updates = Updates.Concat(updates).ToArray() };
     public DataChangeRequest WithDeletions(params IEnumerable<object> deletions)
-    => this with { Deletions = Deletions.AddRange(deletions) };
+    => this with { Deletions = Deletions.Concat(deletions).ToArray() };
 
     public static DataChangeRequest Create(IReadOnlyCollection<object> creations, string changedBy) =>
-        new() { Creations = creations.ToImmutableList(), ChangedBy = changedBy };
+        new() { Creations = creations, ChangedBy = changedBy };
     public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string? changedBy = null, UpdateOptions? options = null) =>
-        new() { Updates = updates.ToImmutableList(), ChangedBy = changedBy!, Options = options! };
+        new() { Updates = updates, ChangedBy = changedBy!, Options = options! };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
-        new() { Deletions = deletes.ToImmutableList(), ChangedBy = changedBy};
+        new() { Deletions = deletes, ChangedBy = changedBy};
 
 };
 

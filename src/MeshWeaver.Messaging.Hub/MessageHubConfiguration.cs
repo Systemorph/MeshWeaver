@@ -75,7 +75,7 @@ public record MessageHubConfiguration
         {
             if (!address.Equals(a))
                 return d;
-            var hub = f.Hub.GetHostedHub(a, configuration)?.DeliverMessage(d);
+            var hub = f.Hub.GetHostedHub(a, configuration).DeliverMessage(d);
 
             if (hub is null)
                 throw new ArgumentException($"Could not find hub with address {a}");
@@ -208,12 +208,12 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
-        TypeRegistry.WithType(typeof(T), name ?? typeof(T).Name);
+        TypeRegistry.WithType(typeof(T), name ?? typeof(T).FullName!);
         return this;
     }
     public MessageHubConfiguration WithType(Type type, string? name = null)
     {
-        TypeRegistry.WithType(type, name ?? type.Name);
+        TypeRegistry.WithType(type, name ?? type.FullName!);
         return this;
     }
 }

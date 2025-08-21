@@ -89,6 +89,7 @@ namespace MeshWeaver.Documentation.AI
              - Do not output any additional text, only the board state after your move.
              - You must always make a move before delegating to {OtherPlayer}.
              - Do not delegate unless you have made your move and have output the board **AFTER** your move.
+             - You must delegate automatically to {OtherPlayer} using the tool, without additional text, until the game is finished.
              """;
 
         /// <summary>
