@@ -77,33 +77,31 @@ public partial class DataGridView
     }
     public void RenderPropertyColumn(RenderTreeBuilder builder, PropertyColumnControl column)
     {
-        var attributeIndex = 0;
-        
-        builder.OpenComponent(attributeIndex++,
+        builder.OpenComponent(0,
             typeof(PropertyColumn<,>).MakeGenericType(typeof(JsonObject), column.GetPropertyType()));
-        builder.AddComponentParameter(attributeIndex++, nameof(PropertyColumn<object, object>.Property),
+        builder.AddComponentParameter(1, nameof(PropertyColumn<object, object>.Property),
             GetPropertyExpression((dynamic)column));
         if(Stream is null)
             throw new InvalidOperationException("Stream must be set before rendering the DataGridView.");
             
         // Only use properties that actually exist in FluentUI PropertyColumn
         if (column.Title is not null)
-            builder.AddAttribute(attributeIndex++, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext ?? "/"));
+            builder.AddAttribute(2, "Title", Stream.GetDataBoundValue<string>(column.Title, ViewModel.DataContext ?? "/"));
         if (column.Format is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
+            builder.AddAttribute(3, nameof(PropertyColumn<object, object>.Format), Stream.GetDataBoundValue<string>(column.Format, ViewModel.DataContext));
         if (column.Sortable is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
+            builder.AddAttribute(4, nameof(PropertyColumn<object, object>.Sortable), Stream.GetDataBoundValue<bool>(column.Sortable, ViewModel.DataContext));
         if (column.Tooltip is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.TooltipText),
+            builder.AddAttribute(5, nameof(PropertyColumn<object, object>.TooltipText),
                 (Func<JsonObject, string>)(_ => Stream.GetDataBoundValue<string>(column.Tooltip, ViewModel.DataContext ?? "/") ?? string.Empty));
         if (column.IsDefaultSortColumn is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.IsDefaultSortColumn), Stream.GetDataBoundValue<bool>(column.IsDefaultSortColumn, ViewModel.DataContext));
+            builder.AddAttribute(6, nameof(PropertyColumn<object, object>.IsDefaultSortColumn), Stream.GetDataBoundValue<bool>(column.IsDefaultSortColumn, ViewModel.DataContext));
         if (column.InitialSortDirection is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.InitialSortDirection), Stream.GetDataBoundValue<SortDirection>(column.InitialSortDirection, ViewModel.DataContext));
+            builder.AddAttribute(7, nameof(PropertyColumn<object, object>.InitialSortDirection), Stream.GetDataBoundValue<SortDirection>(column.InitialSortDirection, ViewModel.DataContext));
         if (column.Align is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.Align), Stream.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext));
+            builder.AddAttribute(8, nameof(PropertyColumn<object, object>.Align), Stream.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext));
         if (column.Width is not null)
-            builder.AddAttribute(attributeIndex++, nameof(PropertyColumn<object, object>.Width), Stream.GetDataBoundValue<string>(column.Width, ViewModel.DataContext));
+            builder.AddAttribute(9, nameof(PropertyColumn<object, object>.Width), Stream.GetDataBoundValue<string>(column.Width, ViewModel.DataContext));
 
         // Skip rendering if not visible
         if (column.Visible is not null && !Stream.GetDataBoundValue<bool>(column.Visible, ViewModel.DataContext))

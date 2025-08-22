@@ -119,7 +119,7 @@ public static class DocumentationLayout
     /// <returns></returns>
     /// <exception cref="InvalidOperationException"></exception>
     [Browsable(false)]
-    public static async Task<UiControl> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
+    public static async Task<UiControl?> Doc(LayoutAreaHost area, RenderingContext context, CancellationToken cancellationToken)
     {
         if (area.Reference.Id is not string path)
             throw new InvalidOperationException("No file name specified.");

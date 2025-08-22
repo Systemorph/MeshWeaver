@@ -13,7 +13,7 @@ public static class AgentDetailsArea
     {
         return layout.WithView(nameof(AgentDetails), AgentDetails);
     }
-    public static async Task<UiControl> AgentDetails(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
+    public static async Task<UiControl?> AgentDetails(LayoutAreaHost host, RenderingContext ctx, CancellationToken ct)
     {        // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
         var agents = host.Hub.ServiceProvider.GetService<IEnumerable<IAgentDefinition>>()?.ToList() ?? [];
@@ -35,7 +35,7 @@ public static class AgentDetailsArea
         // Expecting Id to contain the agent name directly
         return id?.ToString() ?? "";
     }
-    private static async Task<UiControl> CreateAgentDetailsView(IAgentDefinition agent, LayoutAreaHost host, CancellationToken _)
+    private static async Task<UiControl?> CreateAgentDetailsView(IAgentDefinition agent, LayoutAreaHost host, CancellationToken _)
     {
         var agents = await host.Hub.ServiceProvider.GetRequiredService<IAgentChatFactory>().GetAgentsAsync();
 

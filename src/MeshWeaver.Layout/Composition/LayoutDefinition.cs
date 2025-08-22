@@ -40,7 +40,7 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public int Count => AsyncRenderers.Count;
 
-    public LayoutDefinition AddRendering(Func<object, UiControl> rule)
+    public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
     {
         Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
         return this;

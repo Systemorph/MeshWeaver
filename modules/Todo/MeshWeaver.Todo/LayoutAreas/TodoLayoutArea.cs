@@ -20,7 +20,7 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control that updates when todo items change</returns>
-    public static IObservable<UiControl> TodoList(LayoutAreaHost host, RenderingContext context)
+    public static IObservable<UiControl?> TodoList(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         // Subscribe to the stream of TodoItem entities from the data source
@@ -36,7 +36,7 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing todos grouped by category</returns>
-    public static IObservable<UiControl> TodosByCategory(LayoutAreaHost host, RenderingContext context)
+    public static IObservable<UiControl?> TodosByCategory(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -51,7 +51,7 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing todo summary statistics</returns>
-    public static IObservable<UiControl> TodoSummary(LayoutAreaHost host, RenderingContext context)
+    public static IObservable<UiControl?> TodoSummary(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -65,7 +65,7 @@ public static class TodoLayoutArea
     /// </summary>
     /// <param name="todoItems">The collection of todo items</param>
     /// <returns>A markdown control with summary statistics</returns>
-    private static UiControl CreateTodoSummaryMarkdown(IReadOnlyCollection<TodoItem> todoItems)
+    private static UiControl? CreateTodoSummaryMarkdown(IReadOnlyCollection<TodoItem> todoItems)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# 📊 Todo Summary");
@@ -120,7 +120,7 @@ public static class TodoLayoutArea
     /// </summary>
     /// <param name="todoItems">The collection of todo items</param>
     /// <returns>A markdown control with todos grouped by category</returns>
-    private static UiControl CreateTodosByCategoryMarkdown(IReadOnlyCollection<TodoItem> todoItems)
+    private static UiControl? CreateTodosByCategoryMarkdown(IReadOnlyCollection<TodoItem> todoItems)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# 📂 Todos by Category");
@@ -219,7 +219,7 @@ public static class TodoLayoutArea
     /// <param name="todoItems">The collection of todo items</param>
     /// <param name="host">The layout area host for submitting changes</param>
     /// <returns>A LayoutGrid control with structured todo items</returns>
-    private static UiControl CreateInteractiveTodoListStack(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
+    private static UiControl? CreateInteractiveTodoListStack(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
     {
         // Create main LayoutGrid with minimal spacing
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
@@ -407,7 +407,7 @@ public static class TodoLayoutArea
         var editForm = Controls.Stack
             .WithView(Controls.H3("Create New Todo")
                 .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
-            .WithView(host.Edit(newTodo, newTodoDataId)
+            .WithView(host.Edit(newTodo, newTodoDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), newTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Save Todo")
@@ -648,7 +648,7 @@ public static class TodoLayoutArea
         var editForm = Controls.Stack
             .WithView(Controls.H3("Edit Todo")
                 .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
-            .WithView(host.Edit(todoToEdit, editTodoDataId)
+            .WithView(host.Edit(todoToEdit, editTodoDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
             .WithView(Controls.Stack
                 .WithView(Controls.Button("💾 Done")

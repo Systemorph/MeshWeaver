@@ -13,9 +13,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-builder.AddKeyedAzureTableClient("orleans-clustering");
-builder.AddKeyedAzureBlobClient(StorageProviders.Documentation);
-builder.AddKeyedAzureBlobClient(StorageProviders.Reinsurance);
+builder.AddKeyedAzureTableServiceClient("orleans-clustering");
+builder.AddKeyedAzureBlobServiceClient(StorageProviders.Documentation);
+builder.AddKeyedAzureBlobServiceClient(StorageProviders.Reinsurance);
 // Add services to the container.
 builder.ConfigureWebPortalServices();
 builder.ConfigurePostgreSqlContext("meshweaverdb");

@@ -38,7 +38,7 @@ public static class OrdersSummaryArea
     /// <remarks>
     /// This method constructs the Orders Summary view, incorporating a data grid to display aggregated order data. The specific contents and layout of the view are determined at runtime based on the rendering context.
     /// </remarks>
-    public static UiControl OrderSummary(
+    public static UiControl? OrderSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     )
