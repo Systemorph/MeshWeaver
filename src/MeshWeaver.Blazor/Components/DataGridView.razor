@@ -8,7 +8,10 @@
                         Virtualize="@virtualize"
                         ItemSize="@itemSize"
                         ResizableColumns="@resizableColumns"
-                        GenerateHeader="GenerateHeaderOption.Sticky"
+                        GenerateHeader="@GetGenerateHeaderOption()"
+                        GridTemplateColumns="@gridTemplateColumns"
+                        Loading="@loading"
+                        ShowHover="@showHover"
                         Pagination="@Pagination"
                         Style="@Style">
             @foreach (var column in ViewModel.Columns)
@@ -19,7 +22,10 @@
                 }
                 else if(column is TemplateColumnControl templateColumn)
                 {
-                    <TemplateColumn TGridItem="JsonObject">
+                    <TemplateColumn TGridItem="JsonObject" 
+                                    Title="@GetTemplateColumnTitle(templateColumn)"
+                                    Width="@GetTemplateColumnWidth(templateColumn)"
+                                    Align="@GetTemplateColumnAlign(templateColumn)">
                         <CascadingValue Name="Context" Value="@context">
                             <DispatchView ViewModel="@templateColumn.Template" Stream="@Stream" Area="@Area"></DispatchView>
                         </CascadingValue>
@@ -27,7 +33,7 @@
                 }
                 else
                 {
-                    throw new NotImplementedException();
+                    throw new NotImplementedException($"Column type {column.GetType().Name} is not supported.");
                 }
             }
         </FluentDataGrid>
