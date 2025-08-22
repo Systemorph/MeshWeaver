@@ -114,7 +114,7 @@ public record LayoutAreaHost : IDisposable
 
 
 
-    private UiControl ConvertToControl(object instance)
+    private UiControl? ConvertToControl(object instance)
         => uiControlService.Convert(instance);
 
 
@@ -124,7 +124,8 @@ public record LayoutAreaHost : IDisposable
             return new(store, [], Stream.StreamId);
 
         var control = ConvertToControl(view);
-
+        if (control == null)
+            return new(store, [], Stream.StreamId);
 
         var dataContext = control.DataContext ?? context.DataContext;
 
@@ -303,7 +304,7 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T : UiControl
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T : UiControl?
     {
         var ret = DisposeExistingAreas(store, context);
         RegisterForDisposal(context.Parent?.Area ?? context.Area,

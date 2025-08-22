@@ -6,7 +6,7 @@ using MeshWeaver.ShortGuid;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
-builder.AddKeyedAzureTableClient("orleans-clustering");
+builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 
 builder.ConfigurePostgreSqlContext("meshweaverdb");
 

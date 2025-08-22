@@ -51,7 +51,7 @@ public static class SupplierSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A layout stack control representing the supplier summary.</returns>
-    public static UiControl SupplierSummary(
+    public static UiControl? SupplierSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext context
     )

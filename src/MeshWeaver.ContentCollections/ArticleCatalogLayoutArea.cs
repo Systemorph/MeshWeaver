@@ -14,7 +14,7 @@ public static class ArticleCatalogLayoutArea
     /// <param name="ctx">Rendering context</param>
     /// <param name="ct"></param>
     /// <returns></returns>
-    public static async Task<UiControl> Catalog(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
+    public static async Task<UiControl?> Catalog(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var articleService = host.Hub.GetContentService();
         var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Reference), ct);
