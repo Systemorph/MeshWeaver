@@ -58,14 +58,14 @@ foreach ($project in $projects) {
         # Replace project references with package references based on project type
         switch ($project.Type) {
             "Portal" {
-                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\src\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" Version="' + $Version + '" />'
+                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\src\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" />'
                 $content = $content -replace '<ProjectReference Include="\.\.\\MeshWeaverApp1\.Todo\\MeshWeaverApp1\.Todo\.csproj" />', '<ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />'
             }
             "Library" {
-                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\src\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" Version="' + $Version + '" />'
+                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\src\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" />'
             }
             "Test" {
-                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\test\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" Version="' + $Version + '" />'
+                $content = $content -replace '<ProjectReference Include="\.\.\\\.\.\\test\\([^\\]+)\\([^\\]+)\.csproj" />', '<PackageReference Include="$2" />'
                 $content = $content -replace '<ProjectReference Include="\.\.\\MeshWeaverApp1\.Todo\\MeshWeaverApp1\.Todo\.csproj" />', '<ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />'
                 
                 # Add ItemGroup for appsettings.json if not already present
@@ -86,6 +86,101 @@ foreach ($project in $projects) {
         Set-Content -Path $csprojFile.FullName -Value $content
     }
 }
+
+# Generate Directory.Packages.props dynamically
+Write-Host "Generating Directory.Packages.props with dynamic versions..." -ForegroundColor Yellow
+
+# Function to parse PackageVersion elements from a Directory.Packages.props file
+function Get-PackageVersions {
+    param([string]$FilePath)
+    
+    $packages = @{}
+    if (Test-Path $FilePath) {
+        $xml = [xml](Get-Content $FilePath)
+        $packageVersions = $xml.Project.ItemGroup.PackageVersion
+        foreach ($packageVersion in $packageVersions) {
+            if ($packageVersion.Include -and $packageVersion.Version) {
+                $packages[$packageVersion.Include] = $packageVersion.Version
+            }
+        }
+    }
+    return $packages
+}
+
+# Read versions from main solution's Directory.Packages.props
+$mainPackages = Get-PackageVersions -FilePath "Directory.Packages.props"
+
+# Read versions from test Directory.Packages.props  
+$testPackages = Get-PackageVersions -FilePath "test\Directory.Packages.props"
+
+# Merge packages (test packages override main packages for conflicts)
+$allPackages = $mainPackages.Clone()
+foreach ($package in $testPackages.GetEnumerator()) {
+    $allPackages[$package.Key] = $package.Value
+}
+
+# Define MeshWeaver packages that should use the build version
+$meshWeaverPackages = @(
+    "MeshWeaver.AI",
+    "MeshWeaver.AI.Application", 
+    "MeshWeaver.AI.AzureFoundry",
+    "MeshWeaver.AI.AzureOpenAI",
+    "MeshWeaver.Blazor",
+    "MeshWeaver.Blazor.AgGrid",
+    "MeshWeaver.Blazor.ChartJs", 
+    "MeshWeaver.Blazor.Chat",
+    "MeshWeaver.ContentCollections",
+    "MeshWeaver.Data",
+    "MeshWeaver.Hosting.Blazor",
+    "MeshWeaver.Hosting.Monolith",
+    "MeshWeaver.Hosting.Monolith.TestBase",
+    "MeshWeaver.Kernel.Hub",
+    "MeshWeaver.Layout",
+    "MeshWeaver.Mesh.Contract",
+    "MeshWeaver.Messaging.Hub"
+)
+
+# Override MeshWeaver package versions with the build version
+foreach ($package in $meshWeaverPackages) {
+    $allPackages[$package] = $Version
+}
+
+# Generate Directory.Packages.props content
+$directoryPackagesContent = @"
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- MeshWeaver packages - using build version $Version -->
+"@
+
+# Add MeshWeaver packages first
+foreach ($package in $meshWeaverPackages | Sort-Object) {
+    if ($allPackages.ContainsKey($package)) {
+        $directoryPackagesContent += "`n    <PackageVersion Include=`"$package`" Version=`"$($allPackages[$package])`" />"
+    }
+}
+
+$directoryPackagesContent += "`n`n    <!-- Other packages -->"
+
+# Add all other packages
+foreach ($packageKvp in $allPackages.GetEnumerator() | Sort-Object Name) {
+    if ($packageKvp.Key -notin $meshWeaverPackages) {
+        $directoryPackagesContent += "`n    <PackageVersion Include=`"$($packageKvp.Key)`" Version=`"$($packageKvp.Value)`" />"
+    }
+}
+
+$directoryPackagesContent += @"
+
+  </ItemGroup>
+</Project>
+"@
+
+# Write Directory.Packages.props to the output directory
+$directoryPackagesContent | Out-File -FilePath "$OutputPath\Directory.Packages.props" -Encoding utf8
+
+Write-Host "Directory.Packages.props generated with MeshWeaver version $Version" -ForegroundColor Green
 
 # Create template.json files for each project
 Write-Host "Creating template metadata files..." -ForegroundColor Yellow
