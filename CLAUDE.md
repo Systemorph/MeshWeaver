@@ -251,8 +251,6 @@ public class MyTest : HubTestBase, IAsyncLifetime
 
 The solution uses centralized package management via `Directory.Packages.props`. When adding new dependencies, update the central package file rather than individual project files.
 
-Current version: 2.3.0 (managed during the build process through command line arguments)
-
 ### Key Configuration Files
 - `Directory.Build.props` - Global MSBuild properties and versioning
 - `Directory.Packages.props` - Centralized NuGet package version management  
