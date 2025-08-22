@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace MeshWeaver.TemplateGenerator;
 
@@ -54,6 +55,8 @@ public class TemplateGenerator
         RenameProjectFiles();
         UpdateProgramCs();
         UpdateProjectFiles();
+        GenerateDirectoryPackagesProps();
+        CopyClaude();
         CreateTemplateConfigs();
         CreateSolutionFile();
         CreateReadme();
@@ -83,7 +86,7 @@ public class TemplateGenerator
         Directory.CreateDirectory(markdownTargetDir);
 
         // Copy specific markdown files from root directory
-        var rootMarkdownFiles = new[] { "Readme.md", "AREA_NESTING_BUG_FIX.md" };
+        var rootMarkdownFiles = new[] { "Readme.md", "AREA_NESTING_BUG_FIX.md", "CLAUDE.md" };
         foreach (var file in rootMarkdownFiles)
         {
             var sourceFile = file;
@@ -195,15 +198,15 @@ public class TemplateGenerator
               </ItemGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.AI.Application" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Blazor.Chat" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.ContentCollections" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Kernel.Hub" Version="{_version}" />
-                <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+                <PackageReference Include="MeshWeaver.AI.Application" />
+                <PackageReference Include="MeshWeaver.AI.AzureOpenAI" />
+                <PackageReference Include="MeshWeaver.Blazor" />
+                <PackageReference Include="MeshWeaver.Blazor.Chat" />
+                <PackageReference Include="MeshWeaver.ContentCollections" />
+                <PackageReference Include="MeshWeaver.Hosting.Blazor" />
+                <PackageReference Include="MeshWeaver.Hosting.Monolith" />
+                <PackageReference Include="MeshWeaver.Kernel.Hub" />
+                <PackageReference Include="Microsoft.Extensions.Logging" />
               </ItemGroup>
 
               <ItemGroup>
@@ -228,10 +231,10 @@ public class TemplateGenerator
               </PropertyGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.Mesh.Contract" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Messaging.Hub" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Data" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Layout" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Mesh.Contract" />
+                <PackageReference Include="MeshWeaver.Messaging.Hub" />
+                <PackageReference Include="MeshWeaver.Data" />
+                <PackageReference Include="MeshWeaver.Layout" />
               </ItemGroup>
 
             </Project>
@@ -249,7 +252,7 @@ public class TemplateGenerator
               </PropertyGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.AI" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.AI" />
               </ItemGroup>
 
             </Project>
@@ -273,17 +276,337 @@ public class TemplateGenerator
               </ItemGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" Version="{_version}" />
-                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-                <PackageReference Include="xunit.v3" Version="3.0.0" />
-                <PackageReference Include="xunit.v3.extensibility.core" Version="3.0.0" />
-                <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
-                <PackageReference Include="FluentAssertions" Version="6.12.2" />
+                <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" />
+                <PackageReference Include="Microsoft.NET.Test.Sdk" />
+                <PackageReference Include="xunit.v3" />
+                <PackageReference Include="xunit.v3.extensibility.core" />
+                <PackageReference Include="xunit.runner.visualstudio" />
+                <PackageReference Include="FluentAssertions" />
               </ItemGroup>
 
             </Project>
             """;
         File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"), testCsproj);
+    }
+
+    private void GenerateDirectoryPackagesProps()
+    {
+        Console.WriteLine("Generating Directory.Packages.props with dynamic versions...");
+
+        // Read versions from main solution's Directory.Packages.props
+        var mainPackages = GetPackageVersions("Directory.Packages.props");
+        
+        // Read versions from test Directory.Packages.props
+        var testPackages = GetPackageVersions("test/Directory.Packages.props");
+        
+        // Merge packages (test packages override main packages for conflicts)
+        var allPackages = new Dictionary<string, string>(mainPackages);
+        foreach (var package in testPackages)
+        {
+            allPackages[package.Key] = package.Value;
+        }
+        
+        // Define MeshWeaver packages that should use the build version
+        var meshWeaverPackages = new[]
+        {
+            "MeshWeaver.AI",
+            "MeshWeaver.AI.Application", 
+            "MeshWeaver.AI.AzureFoundry",
+            "MeshWeaver.AI.AzureOpenAI",
+            "MeshWeaver.Blazor",
+            "MeshWeaver.Blazor.AgGrid",
+            "MeshWeaver.Blazor.ChartJs", 
+            "MeshWeaver.Blazor.Chat",
+            "MeshWeaver.ContentCollections",
+            "MeshWeaver.Data",
+            "MeshWeaver.Hosting.Blazor",
+            "MeshWeaver.Hosting.Monolith",
+            "MeshWeaver.Hosting.Monolith.TestBase",
+            "MeshWeaver.Kernel.Hub",
+            "MeshWeaver.Layout",
+            "MeshWeaver.Mesh.Contract",
+            "MeshWeaver.Messaging.Hub"
+        };
+        
+        // Override MeshWeaver package versions with the build version
+        foreach (var package in meshWeaverPackages)
+        {
+            allPackages[package] = _version;
+        }
+        
+        // Generate Directory.Packages.props content
+        var sb = new StringBuilder();
+        sb.AppendLine("<Project>");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine("    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>");
+        sb.AppendLine("  </PropertyGroup>");
+        sb.AppendLine("  <ItemGroup>");
+        sb.AppendLine($"    <!-- MeshWeaver packages - using build version {_version} -->");
+        
+        // Add MeshWeaver packages first
+        foreach (var package in meshWeaverPackages.OrderBy(p => p))
+        {
+            if (allPackages.ContainsKey(package))
+            {
+                sb.AppendLine($"    <PackageVersion Include=\"{package}\" Version=\"{allPackages[package]}\" />");
+            }
+        }
+        
+        sb.AppendLine();
+        sb.AppendLine("    <!-- Other packages -->");
+        
+        // Add all other packages
+        foreach (var package in allPackages.OrderBy(p => p.Key))
+        {
+            if (!meshWeaverPackages.Contains(package.Key))
+            {
+                sb.AppendLine($"    <PackageVersion Include=\"{package.Key}\" Version=\"{package.Value}\" />");
+            }
+        }
+        
+        sb.AppendLine("  </ItemGroup>");
+        sb.AppendLine("</Project>");
+        
+        // Write Directory.Packages.props to the output directory
+        File.WriteAllText(Path.Combine(_outputPath, "Directory.Packages.props"), sb.ToString());
+        
+        Console.WriteLine($"Directory.Packages.props generated with MeshWeaver version {_version}");
+    }
+    
+    private Dictionary<string, string> GetPackageVersions(string filePath)
+    {
+        var packages = new Dictionary<string, string>();
+        
+        if (File.Exists(filePath))
+        {
+            var xml = XDocument.Load(filePath);
+            var packageVersions = xml.Descendants("PackageVersion");
+            
+            foreach (var packageVersion in packageVersions)
+            {
+                var include = packageVersion.Attribute("Include")?.Value;
+                var version = packageVersion.Attribute("Version")?.Value;
+                
+                if (!string.IsNullOrEmpty(include) && !string.IsNullOrEmpty(version))
+                {
+                    packages[include] = version;
+                }
+            }
+        }
+        
+        return packages;
+    }
+
+    private void CopyClaude()
+    {
+        Console.WriteLine("Creating template-specific CLAUDE.md...");
+        
+        // Generate unique ports for each installation
+        var httpPort = GenerateUniquePort(5000, 6000);
+        var httpsPort = httpPort + 1;
+        
+        var claudeContent = CreateTemplateClaude(httpPort, httpsPort);
+        var targetFile = Path.Combine(_outputPath, "CLAUDE.md");
+        File.WriteAllText(targetFile, claudeContent);
+        Console.WriteLine($"  Created template CLAUDE.md with ports {httpPort}/{httpsPort}");
+        
+        // Update launch settings with the generated ports
+        UpdateLaunchSettingsPorts(httpPort, httpsPort);
+    }
+    
+    private int GenerateUniquePort(int minPort, int maxPort)
+    {
+        var random = new Random();
+        return random.Next(minPort, maxPort);
+    }
+    
+    private void UpdateLaunchSettingsPorts(int httpPort, int httpsPort)
+    {
+        Console.WriteLine($"Updating launch settings with ports {httpPort}/{httpsPort}...");
+        
+        var launchSettingsPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "Properties", "launchSettings.json");
+        if (!File.Exists(launchSettingsPath))
+        {
+            Console.WriteLine("  Warning: launchSettings.json not found");
+            return;
+        }
+        
+        var content = File.ReadAllText(launchSettingsPath);
+        
+        // Replace port numbers in the JSON
+        content = content.Replace("\"applicationUrl\": \"http://localhost:5000\"", 
+                                $"\"applicationUrl\": \"http://localhost:{httpPort}\"");
+        content = content.Replace("\"applicationUrl\": \"https://localhost:5001;http://localhost:5000\"", 
+                                $"\"applicationUrl\": \"https://localhost:{httpsPort};http://localhost:{httpPort}\"");
+        content = content.Replace("\"sslPort\": 5001", $"\"sslPort\": {httpsPort}");
+        
+        File.WriteAllText(launchSettingsPath, content);
+        Console.WriteLine("  Updated launchSettings.json with new ports");
+    }
+    
+    private string CreateTemplateClaude(int httpPort, int httpsPort)
+    {
+        return $@"# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this MeshWeaverApp1 solution.
+
+## Development Commands
+
+### Build and Test
+```bash
+# Build entire solution
+dotnet build
+
+# Run tests (uses xUnit v3)
+dotnet test
+
+# Run specific test project
+dotnet test MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj
+
+# Clean solution
+dotnet clean
+
+# Restore packages
+dotnet restore
+```
+
+### Running the Application
+
+#### Portal Application
+```bash
+cd MeshWeaverApp1.Portal
+dotnet run
+# Access at http://localhost:{httpPort} or https://localhost:{httpsPort}
+```
+
+## Architecture Overview
+
+### Core Concepts
+
+**Message Hub Architecture**: MeshWeaver is built on an actor-model message hub system (`MeshWeaver.Messaging.Hub`). All application interactions flow through hierarchical message routing with address-based partitioning (e.g., `@app/Address/AreaName`).
+
+**Layout Areas**: The UI system uses reactive Layout Areas - framework-agnostic UI abstractions that render in Blazor Server. Layout areas are addressed by route and automatically update via reactive streams.
+
+**AI-First Design**: First-class AI integration using Semantic Kernel with plugins that provide agents access to application state and functionality.
+
+### Project Structure
+
+- **`MeshWeaverApp1.Portal/`** - Web application (Blazor Server)
+- **`MeshWeaverApp1.Todo/`** - Todo business domain module  
+- **`MeshWeaverApp1.Todo.AI/`** - AI agents for Todo functionality
+- **`MeshWeaverApp1.Todo.Test/`** - Unit tests for Todo module
+
+### Architectural Patterns
+
+**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results. 
+The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`.
+
+**Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
+
+**Address-Based Routing**: Services register at specific addresses (e.g., `app/todo`). 
+Layout areas follow the pattern `@{{address}}/{{areaName}}/{{areaId}}`. The areaId is optional and depends on the view.
+
+**Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
+
+## Development Patterns
+
+### Adding New Layout Areas
+```csharp
+public static class MyLayoutArea
+{{
+    public static void AddMyLayoutArea(this LayoutConfiguration config) =>
+        config.AddLayoutArea(nameof(MyLayout), MyLayout);
+
+    public static UiControl MyLayout(LayoutAreaHost host, RenderingContext ctx) => 
+        Controls.Stack
+            .WithView(Controls.Html(""Some text""))
+            .WithView(Controls.Markdown(""Some markdown view""));
+}}
+```
+
+### Message Handling
+```csharp
+public static class MyHubConfiguration
+{{
+    public static MessageHubConfiguration AddMyHub(this MessageHubConfiguration config)
+    {{
+        return config.AddHandler<MyRequestAsync>(HandleMyRequestAsync)
+                     .AddHandler<MyRequest>(HandleMyRequest);
+    }}
+
+    public static async Task<IMessageDelivery> HandleMyRequestAsync(MessageHub hub, IMessageDelivery<MyRequestAsync> request, CancellationToken ct)
+    {{
+        // Process the request
+        var result = await SomeService.ProcessAsync(request.Message);
+        
+        // Send response
+        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
+        return request.Processed();
+    }}
+}}
+```
+
+### AI Plugin Development
+```csharp
+public class MyPlugin(IMessageHub hub, IAgentChat chat)
+{{
+    [KernelFunction]
+    [Description(""Description on how to use"")]
+    public async Task<string> DoSomething([Description(""Description for input"")]string input)
+    {{
+        var request = new MyRequest(input);
+        var address = chat.Context.Address;
+        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(address));
+        return JsonSerializer.Serialize(response.Message, hub.JsonSerializationOptions);
+    }}
+}}
+```
+
+## Key Dependencies
+
+- **.NET 9.0** - Target framework
+- **Blazor Server** - Web UI framework  
+- **Semantic Kernel** - AI integration
+- **xUnit v3** - Testing framework
+- **FluentAssertions** - Test assertions
+- **MeshWeaver** - Framework packages
+
+## Testing Guidelines
+
+Tests use xUnit v3 with MeshWeaver.Hosting.Monolith.TestBase:
+
+```csharp
+public class MyTest : HubTestBase, IAsyncLifetime
+{{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
+    {{
+        return base.ConfigureHost(config)
+            .AddTodoHub(); // Register your hub
+    }}
+
+    [Fact]
+    public async Task MyTestMethod()
+    {{
+        // Arrange
+        var request = new MyRequest(""test input"");
+        var hub = GetClient();
+
+        // Act
+        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
+        
+        // Assert
+        response.Should().NotBeNull();
+        response.Message.Result.Should().Be(""expected result"");
+    }}
+}}
+```
+
+## Configuration
+
+The solution uses centralized package management via `Directory.Packages.props`. All package versions are managed centrally.
+
+Current MeshWeaver version: {_version}
+";
     }
 
     private void CreateTemplateConfigs()
