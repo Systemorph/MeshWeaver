@@ -21,12 +21,12 @@ public abstract record MessageDelivery : IMessageDelivery
     private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
         ImmutableDictionary<string, object>.Empty;
     public IReadOnlyDictionary<string, object> Properties { get => PropertiesImpl; init => PropertiesImpl = value.ToImmutableDictionary(); }
-    public string State { get; init; } = MessageDeliveryState.Submitted;
+    public MessageDeliveryState State { get; init; } = MessageDeliveryState.Submitted;
 
     object IMessageDelivery.Message => GetMessage();
     protected abstract object GetMessage();
 
-    IMessageDelivery IMessageDelivery.ChangeState(string state)
+    IMessageDelivery IMessageDelivery.ChangeState(MessageDeliveryState state)
     {
         return this with { State = state };
     }

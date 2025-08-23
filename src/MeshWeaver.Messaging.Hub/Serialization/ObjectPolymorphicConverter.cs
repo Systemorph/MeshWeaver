@@ -67,10 +67,8 @@ public class ObjectPolymorphicConverter(ITypeRegistry typeRegistry) : JsonConver
                     var json = cleanedElement.GetRawText();
                     return JsonSerializer.Deserialize(json, typeInfo!.Type, options)!;
                 }
-                catch (NotSupportedException ex) when (ex.Message.Contains("polymorphic interface or abstract type"))
+                catch (NotSupportedException ex) when (ex.Message.StartsWith("Deserialization of interface or abstract"))
                 {
-                    // If the target type is abstract/interface and requires polymorphic deserialization,
-                    // but the JSON is missing proper discriminator, return as JsonElement
                     return cleanedElement.Clone();
                 }
             }
