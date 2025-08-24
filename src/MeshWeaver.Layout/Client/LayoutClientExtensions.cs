@@ -98,6 +98,9 @@ public static class LayoutClientExtensions
         if (value is string stringValue && typeof(T).IsEnum)
             return (T)Enum.Parse(typeof(T), stringValue);
 
+        if (value is null)
+            return default;
+
         // Use Convert.ChangeType for flexible conversion
         return (T?)Convert.ChangeType(value, typeof(T));
     }
