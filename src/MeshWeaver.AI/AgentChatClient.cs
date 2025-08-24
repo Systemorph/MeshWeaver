@@ -1,6 +1,7 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -284,14 +285,24 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
     {
         return content switch
         {
-            StreamingChatMessageContent chatMessage => new ChatResponseUpdate(ChatRole.Assistant, chatMessage.Content ?? string.Empty) { AuthorName = chatMessage.AuthorName },
-            StreamingTextContent text => new ChatResponseUpdate(ChatRole.Assistant, text.Text ?? string.Empty),
+            StreamingChatMessageContent chatMessage => ProcessStreamingText(chatMessage.Content ?? string.Empty, chatMessage.AuthorName),
+            StreamingTextContent text => ProcessStreamingText(text.Text ?? string.Empty),
             StreamingFunctionCallUpdateContent functionContent => new ChatResponseUpdate(
                 ChatRole.Assistant,
                 [new Microsoft.Extensions.AI.FunctionCallContent(functionContent.CallId!, functionContent.Name!,
                     string.IsNullOrEmpty(functionContent.Arguments) ? null :
                     JsonSerializer.Deserialize<IDictionary<string, object?>>(functionContent.Arguments))]),
             _ => null
+        };
+    }
+
+    private ChatResponseUpdate ProcessStreamingText(string text, string? authorName = null)
+    {
+        // For now, just pass through the text directly
+        // The UI will handle code block detection and rendering
+        return new ChatResponseUpdate(ChatRole.Assistant, text)
+        {
+            AuthorName = authorName
         };
     }
 
@@ -445,5 +456,6 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         /// </summary>
         ReplyTo
     }
+
 
 }

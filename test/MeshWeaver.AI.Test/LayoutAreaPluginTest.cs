@@ -241,7 +241,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // Verify it contains exactly the predefined areas
         var areas = jsonDoc.RootElement.EnumerateArray().ToArray();
-        areas.Should().HaveCountGreaterThan(3);
+        areas.Should().HaveCount(3);
         
         var areaNames = areas.Select(a => a.GetProperty("area").GetString()).ToArray();
         areaNames.Should().Contain("TestArea1");
