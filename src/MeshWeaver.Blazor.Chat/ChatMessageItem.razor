@@ -5,7 +5,6 @@
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Layout
 @using MeshWeaver.Utils
-@using MeshWeaver.AI
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 
 @if (Message.Role == ChatRole.User)
@@ -36,7 +35,7 @@ else if (Message.Role != ChatRole.User)
 
                 // Create a delegation message for display
                 var parsedDelegationMessage = new ChatDelegationMessage(
-                    Message.AuthorName?.ToString() ?? "Assistant",
+                    Message.AuthorName ?? "Assistant",
                     targetAgent,
                     delegationMessageText,
                     isDelegationWithFeedback);
@@ -58,7 +57,7 @@ else if (Message.Role != ChatRole.User)
                 <div class="assistant-message-header">@Message.Role.Value.Wordify()</div>
                 <div class="assistant-message-text">
                     @{
-                        var (beforeCode, language, codeContent, isIncomplete, afterCode) = ParseIncompleteCodeBlock(text);
+                        var (beforeCode, language,  isIncomplete, afterCode) = ParseIncompleteCodeBlock(text);
                     }
                     
                     @if (isIncomplete)
@@ -103,8 +102,8 @@ else if (Message.Role != ChatRole.User)
                     }
                     else
                     {
-                        @* Normal markdown rendering for complete text *@
-                        <MarkdownView ViewModel="@(new MarkdownControl(FormatTextForMarkdown(text)))" />
+                        @* Normal markdown rendering for complete text - no formatting to preserve code blocks *@
+                        <MarkdownView ViewModel="@(new MarkdownControl(text))" />
                     }
 
                     @foreach (var citation in Citations ?? [])
@@ -191,13 +190,13 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
 
         for (int i = 0; i < lines.Length; i++)
         {
-            var line = lines[i].Trim();
+            var line = lines[i];
 
             // If this line starts with a bullet point
-            if (line.StartsWith("•"))
+            if (line.Trim().StartsWith("•"))
             {
                 // Convert • to - for proper markdown bullet points
-                formattedLines.Add("- " + line.Substring(1).TrimStart());
+                formattedLines.Add("- " + line.Trim().Substring(1).TrimStart());
             }
             else
             {
@@ -210,16 +209,15 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
     /// <summary>
     /// Checks if the text contains an incomplete code block and returns the components needed for rendering.
     /// </summary>
-    private (string beforeCodeBlock, string language, string codeContent, bool isIncomplete, string afterCodeBlock) ParseIncompleteCodeBlock(string text)
+    private (string beforeCodeBlock, string language, bool isIncomplete, string afterCodeBlock) ParseIncompleteCodeBlock(string text)
     {
         if (string.IsNullOrEmpty(text))
-            return (text, "", "", false, "");
+            return (text, "", false, "");
 
         // Look for code block start pattern
         var codeBlockStartPattern = new Regex(@"```(\w*)?");
         var lines = text.Split('\n');
         var inCodeBlock = false;
-        var codeBlockStartIndex = -1;
         var language = "";
         var codeContent = new StringBuilder();
         var beforeCodeBlock = new StringBuilder();
@@ -234,7 +232,6 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
                 if (startMatch.Success && line.Trim() == startMatch.Value)
                 {
                     inCodeBlock = true;
-                    codeBlockStartIndex = i;
                     language = startMatch.Groups[1].Value;
                     continue;
                 }
@@ -249,7 +246,7 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
                 if (line.Trim() == "```")
                 {
                     // Code block is complete - this is handled by normal markdown
-                    return (text, "", "", false, "");
+                    return (text, "", false, "");
                 }
                 
                 if (codeContent.Length > 0)
@@ -261,10 +258,10 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
         // If we're still in a code block at the end, it's incomplete
         if (inCodeBlock)
         {
-            return (beforeCodeBlock.ToString(), language, codeContent.ToString(), true, "");
+            return (beforeCodeBlock.ToString(), language, true, "");
         }
         
-        return (text, "", "", false, "");
+        return (text, "",  false, "");
     }
 
 }
