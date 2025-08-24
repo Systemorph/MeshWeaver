@@ -30,7 +30,10 @@
       "Bash(dotnet:*)",
       "Bash(pwsh:*)",
       "Bash(powershell.exe:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch"
     ],
     "deny": []
   }

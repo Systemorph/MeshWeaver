@@ -52,6 +52,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
     public const string Render = "render";
     public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
     public SubmitCodeRequest? SubmitCode { get; set; }
+    public LayoutAreaComponentInfo? LayoutAreaComponent { get; set; }
 
     public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
     {
@@ -80,6 +81,9 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     public SubmitCodeRequest? GetSubmitCodeRequest()
     {
+        if (Info == "layout")
+            return null;
+
         if(Args.TryGetValue(Execute, out var executionId))
             return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString() };
         if (SubmitCode is not null)
@@ -89,9 +93,25 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         return null;
     }
 
+    public LayoutAreaComponentInfo? GetLayoutAreaComponent()
+    {
+        if (Info != "layout")
+            return null;
+
+        if (!Args.TryGetValue(Render, out var area) || string.IsNullOrWhiteSpace(area))
+            area = Guid.NewGuid().AsString();
+
+        var content = string.Join('\n', Lines.Lines).Trim();
+        if (string.IsNullOrWhiteSpace(content))
+            return null;
+
+        return new LayoutAreaComponentInfo(content, parser);
+    }
+
     public void Initialize()
     {
         Args = ParseArguments(Arguments).ToDictionary();
         SubmitCode = GetSubmitCodeRequest();
+        LayoutAreaComponent = GetLayoutAreaComponent();
     }
 }

@@ -36,11 +36,15 @@ public class LayoutAreaPlugin(
         if (address == null)
             return $"No address defined for layout area: {areaName}";
 
-        var ret = $"@{address}/{areaName}";
+        var ret = $"{address}/{areaName}";
         if (id is not null && id != "null")
             ret = $"{ret}/{id}";
 
-        return ret;
+        return $"""
+                ```layout"
+                {ret}
+                ```
+                """;
     }
 
     [KernelFunction, 

@@ -41,6 +41,11 @@ The pattern for referencing layout areas is simple. It consists of
 @("{addressType}/{addressId}/{area}/{**id}")
 ```
 
+An alternative syntax is to put it in a layout code block:
+```layout --show-header
+app/Northwind/AnnualReportSummary?Year=2023
+```
+
 The same can be achieved programmatically by instantiating a LayoutArea control:
 
 ```csharp --render LayoutArea --show-code
