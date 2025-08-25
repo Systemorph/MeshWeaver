@@ -25,7 +25,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
         {
             renderer.Write("<div class=\"code-content\">");
-            renderer.Write("<pre><code class='language-csharp'>");
+            renderer.Write($"<pre><code class='language-{fenced.Info}'>");
             renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
 
             renderer.WriteLeafRawLines(obj, true, true);

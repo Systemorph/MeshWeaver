@@ -48,6 +48,7 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 
 public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
+    private readonly BlockParser parser = parser;
     public const string Execute = "execute";
     public const string Render = "render";
     public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
@@ -99,7 +100,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         if (Info != "layout")
             return null;
 
-        var content = string.Join('\n', Lines.Lines).Trim();
+        var content = string.Join('\n', Lines.Lines ?? []).Trim();
         if (string.IsNullOrWhiteSpace(content))
         {
             LayoutAreaError = "Layout area content is empty. Please specify address and area.";
@@ -126,15 +127,17 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
                 return null;
             }
             
-            return new LayoutAreaComponentInfo(address, area, id, parser);
+            try
+            {
+                return new LayoutAreaComponentInfo(address, area, id, parser);
+            }
+            catch (ArgumentException ex)
+            {
+                LayoutAreaError = $"Layout area validation error: {ex.Message}";
+                return null;
+            }
         }
 
-        // Fall back to single string format for backward compatibility
-        if (!Args.TryGetValue(Render, out var fallbackArea) || string.IsNullOrWhiteSpace(fallbackArea))
-        {
-            LayoutAreaError = $"Invalid layout area format. Expected YAML format with 'address' and 'area' fields, or specify area name with --render argument.";
-            return null;
-        }
 
         // Validate that content looks like an address for backward compatibility
         if (!content.Contains('/'))
@@ -143,7 +146,17 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
             return null;
         }
 
-        return new LayoutAreaComponentInfo(content, fallbackArea, null, parser);
+        try
+        {
+            // For backward compatibility, construct URL in expected format
+            var url = $"{content}";
+            return new LayoutAreaComponentInfo(url, parser);
+        }
+        catch (ArgumentException ex)
+        {
+            LayoutAreaError = $"Layout area validation error: {ex.Message}";
+            return null;
+        }
     }
 
     private static Dictionary<string, string?>? ParseYamlLike(string content)
