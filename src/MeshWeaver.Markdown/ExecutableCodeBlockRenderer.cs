@@ -66,12 +66,22 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         // Handle layout blocks separately from executable code blocks
         if (fenced.Info == "layout")
         {
+            renderer.EnsureLine();
+            
             if (fenced.LayoutAreaComponent is not null)
             {
-                renderer.EnsureLine();
                 renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(fenced.LayoutAreaComponent.Address, fenced.LayoutAreaComponent.Area, fenced.LayoutAreaComponent.Id));
-                renderer.EnsureLine();
             }
+            else if (!string.IsNullOrEmpty(fenced.LayoutAreaError))
+            {
+                // Render error message as a styled div
+                renderer.Write("<div class=\"layout-area-error\" style=\"border: 1px solid #e74c3c; background-color: #fdf2f2; color: #c0392b; padding: 12px; border-radius: 4px; margin: 8px 0;\">");
+                renderer.Write("<strong>Layout Area Error:</strong> ");
+                renderer.WriteEscape(fenced.LayoutAreaError);
+                renderer.Write("</div>");
+            }
+            
+            renderer.EnsureLine();
             return;
         }
 

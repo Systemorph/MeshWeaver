@@ -27,7 +27,13 @@ public class LayoutAreaComponentInfo : ContainerBlock
         }
         else
             Id = string.Join('/', parts.Skip(3));
+    }
 
+    public LayoutAreaComponentInfo(string address, string area, string? id, BlockParser blockParser) : base(blockParser)
+    {
+        Address = address;
+        Area = area;
+        Id = id;
     }
 
     public string Area { get; }
