@@ -53,6 +53,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
     public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
     public SubmitCodeRequest? SubmitCode { get; set; }
     public LayoutAreaComponentInfo? LayoutAreaComponent { get; set; }
+    public string? LayoutAreaError { get; set; }
 
     public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
     {
@@ -98,20 +99,95 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         if (Info != "layout")
             return null;
 
-        if (!Args.TryGetValue(Render, out var area) || string.IsNullOrWhiteSpace(area))
-            area = Guid.NewGuid().AsString();
-
         var content = string.Join('\n', Lines.Lines).Trim();
         if (string.IsNullOrWhiteSpace(content))
+        {
+            LayoutAreaError = "Layout area content is empty. Please specify address and area.";
             return null;
+        }
 
-        return new LayoutAreaComponentInfo(content, parser);
+        // Try to parse as YAML-like structure first
+        var yamlData = ParseYamlLike(content);
+        if (yamlData != null)
+        {
+            var address = yamlData.GetValueOrDefault("address", "");
+            var area = yamlData.GetValueOrDefault("area", Args.GetValueOrDefault(Render, ""));
+            var id = yamlData.GetValueOrDefault("id", null);
+            
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                LayoutAreaError = "Missing required 'address' field in layout area configuration.";
+                return null;
+            }
+            
+            if (string.IsNullOrWhiteSpace(area))
+            {
+                LayoutAreaError = "Missing required 'area' field in layout area configuration.";
+                return null;
+            }
+            
+            return new LayoutAreaComponentInfo(address, area, id, parser);
+        }
+
+        // Fall back to single string format for backward compatibility
+        if (!Args.TryGetValue(Render, out var fallbackArea) || string.IsNullOrWhiteSpace(fallbackArea))
+        {
+            LayoutAreaError = $"Invalid layout area format. Expected YAML format with 'address' and 'area' fields, or specify area name with --render argument.";
+            return null;
+        }
+
+        // Validate that content looks like an address for backward compatibility
+        if (!content.Contains('/'))
+        {
+            LayoutAreaError = $"Invalid address format '{content}'. Expected format: 'addressType/addressId' or use YAML format with separate 'address' and 'area' fields.";
+            return null;
+        }
+
+        return new LayoutAreaComponentInfo(content, fallbackArea, null, parser);
+    }
+
+    private static Dictionary<string, string?>? ParseYamlLike(string content)
+    {
+        try
+        {
+            var result = new Dictionary<string, string?>();
+            var lines = content.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                var colonIndex = trimmed.IndexOf(':');
+                if (colonIndex == -1)
+                    return null; // Not YAML-like format
+
+                var key = trimmed[..colonIndex].Trim();
+                var value = trimmed[(colonIndex + 1)..].Trim();
+                
+                // Remove quotes if present
+                if (value.StartsWith('"') && value.EndsWith('"'))
+                    value = value[1..^1];
+                else if (value.StartsWith('\'') && value.EndsWith('\''))
+                    value = value[1..^1];
+
+                result[key] = value;
+            }
+
+            return result.Count > 0 ? result : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void Initialize()
     {
         Args = ParseArguments(Arguments).ToDictionary();
         SubmitCode = GetSubmitCodeRequest();
+        LayoutAreaError = null; // Reset error state
         LayoutAreaComponent = GetLayoutAreaComponent();
     }
 }
