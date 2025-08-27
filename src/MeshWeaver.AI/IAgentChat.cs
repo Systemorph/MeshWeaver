@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI.Persistence;
+using MeshWeaver.Layout;
 using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI;
@@ -34,6 +35,10 @@ public interface IAgentChat
     /// <param name="askUserFeedback">Whether to ask for user feedback before proceeding</param>
     /// <returns>A task that represents the delegation operation</returns>
     string Delegate(string agentName, string message, bool askUserFeedback = false);
+
+    /// <summary>Displays a layout area in the chat as a visual component.</summary>
+    /// <param name="layoutAreaControl">The layout area control</param>
+    void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);
 
     AgentContext? Context { get; }
 }

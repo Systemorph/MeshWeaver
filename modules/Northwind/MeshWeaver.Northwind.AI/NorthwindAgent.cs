@@ -40,7 +40,7 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         - Provide data-driven recommendations
         - Layout areas (reports, views, charts, dashboards) related to Northwind data
         
-        Use the DataPlugin to access structured domain data and the CollectionPlugin to work with any related files or documents.
+        Use the DataPlugin to access structured domain data and the LayoutAreaPlugin to display visual components.
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
 

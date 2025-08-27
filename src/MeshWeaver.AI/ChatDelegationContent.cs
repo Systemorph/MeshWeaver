@@ -3,9 +3,9 @@ using Microsoft.Extensions.AI;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Represents a delegation message in the chat system
+/// Represents a delegation content in chat messages
 /// </summary>
-public class ChatDelegationMessage : ChatMessage
+public class ChatDelegationContent : AIContent
 {
     /// <summary>
     /// The agent that is delegating
@@ -27,30 +27,15 @@ public class ChatDelegationMessage : ChatMessage
     /// </summary>
     public bool RequiresUserFeedback { get; }
 
-    public ChatDelegationMessage(
+    public ChatDelegationContent(
         string delegatingAgent, 
         string targetAgent, 
         string delegationMessage, 
-        bool requiresUserFeedback = false) 
-        : base(ChatRole.Assistant, CreateDisplayContent(delegatingAgent, targetAgent, delegationMessage, requiresUserFeedback))
+        bool requiresUserFeedback = false)
     {
         DelegatingAgent = delegatingAgent;
         TargetAgent = targetAgent;
         DelegationMessage = delegationMessage;
         RequiresUserFeedback = requiresUserFeedback;
-        AuthorName = new(delegatingAgent);
-    }
-
-    private static IList<AIContent> CreateDisplayContent(
-        string delegatingAgent, 
-        string targetAgent, 
-        string delegationMessage, 
-        bool requiresUserFeedback)
-    {
-        var displayText = requiresUserFeedback
-            ? $"Requesting user feedback before delegating to @{targetAgent}: {delegationMessage}"
-            : $"Delegating to @{targetAgent}: {delegationMessage}";
-            
-        return [new TextContent(displayText)];
     }
 }

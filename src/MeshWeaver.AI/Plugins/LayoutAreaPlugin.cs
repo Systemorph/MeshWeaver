@@ -1,6 +1,8 @@
 ﻿using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
+using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
@@ -22,29 +24,45 @@ public class LayoutAreaPlugin(
 {
 
     [KernelFunction, 
-     Description($"Displays a layout area. Return the string from this function as is without any additional text. It should start with @")]
+     Description($"Displays a layout area as a visual component in the chat.")]
     public string DisplayLayoutArea(
         [Description($"Name of the layout area to retrieve. A list of valid layout areas can be found with the {nameof(GetLayoutAreas)} function")] string areaName,
         [Description($"Id of the layout area requested. Could be paramters steering the layout areas. See Layout Area Definition for details.")] string? id = null)
     {
+        if (string.IsNullOrWhiteSpace(areaName))
+            return "Please specify which area should be displayed.";
 
         if (areaDefinitions?.TryGetValue(areaName, out var definition) == true)
-            return $"@{definition.Url}";
+        {
+            // Parse the address from the definition URL
+            var addressString = definition.Url.Contains('/') ? string.Join('/', definition.Url.Split('/').Take(2)) : definition.Url;
+            var reference = new LayoutAreaReference(definition.Area);
+            if (id != null)
+            {
+                reference = reference with { Id = id };
+            }
+            
+            var layoutAreaControl = new LayoutAreaControl(addressString, reference);
+            
+            chat.DisplayLayoutArea(layoutAreaControl);
+            return $"Displaying layout area: {definition.Area}";
+        }
 
         var address = GetAddress(areaName);
 
         if (address == null)
             return $"No address defined for layout area: {areaName}";
 
-        var ret = $"{address}/{areaName}";
-        if (id is not null && id != "null")
-            ret = $"{ret}/{id}";
-
-        return $"""
-                ```layout"
-                {ret}
-                ```
-                """;
+        var areaReference = new LayoutAreaReference(areaName);
+        if (id != null)
+        {
+            areaReference = areaReference with { Id = id };
+        }
+        
+        var control = new LayoutAreaControl(address, areaReference);
+        
+        chat.DisplayLayoutArea(control);
+        return $"Displaying layout area: {areaName}";
     }
 
     [KernelFunction, 

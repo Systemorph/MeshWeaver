@@ -82,47 +82,108 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         Func<object?,T?, T?>? conversion = null,
         T defaultValue = default!)
     {
-        var expr = propertySelector.Body as MemberExpression;
-        Action<object?> setter = expr?.Member is PropertyInfo pi 
-            ? o => pi.SetValue(this,o) 
-            : expr?.Member is FieldInfo fi 
-                ? o => fi.SetValue(this, o) 
-                : throw new ArgumentException(
-                    "Expression provided must point to a property or field.", 
-                    nameof(propertySelector)
-                    );
+        try
+        {
+            var expr = propertySelector.Body as MemberExpression;
+            Action<object?> setter = expr?.Member is PropertyInfo pi 
+                ? o => pi.SetValue(this,o) 
+                : expr?.Member is FieldInfo fi 
+                    ? o => fi.SetValue(this, o) 
+                    : throw new ArgumentException(
+                        "Expression provided must point to a property or field.", 
+                        nameof(propertySelector)
+                        );
 
-        if (value is JsonPointerReference reference)
-        {
-            if (Model is not null && !reference.Pointer.StartsWith('/'))
-                setter(Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue));
-            else if(Stream is not null)
-                bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
-                    .Subscribe(v =>
-                        {
-                            Logger.LogTrace("Binding property in Area {area}", Area);
-                            InvokeAsync(() =>
-                            {
-                                setter(v);
-                                RequestStateChange();
-                            });
-                        }
-                    )
-                );
-            
+            if (value is JsonPointerReference reference)
+            {
+                try
+                {
+                    if (Model is not null && !reference.Pointer.StartsWith('/'))
+                    {
+                        var convertedValue = Hub.ConvertSingle(Model.GetValueFromModel(reference), conversion, defaultValue);
+                        setter(convertedValue);
+                    }
+                    else if(Stream is not null)
+                    {
+                        bindings.Add(Stream.DataBind(reference, DataContext, conversion, defaultValue)
+                            .Subscribe(v =>
+                                {
+                                    try
+                                    {
+                                        Logger.LogTrace("Binding property in Area {area}", Area);
+                                        InvokeAsync(() =>
+                                        {
+                                            setter(v);
+                                            RequestStateChange();
+                                        });
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Logger.LogError(ex, "Error setting bound property value in Area {area}", Area);
+                                    }
+                                }
+                            )
+                        );
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error binding JsonPointerReference '{pointer}' in Area {area}", reference.Pointer, Area);
+                    // Set default value on binding failure
+                    setter(Hub.ConvertSingle(null, conversion, defaultValue));
+                }
+            }
+            else if (value is ContextProperty contextProperty)
+            {
+                try
+                {
+                    var val = 
+                        Context is JsonObject jo 
+                            ? jo[contextProperty.Property]
+                            : Context?.GetType().GetProperty(contextProperty.Property)?.GetValue(Context);
+                    setter(Hub.ConvertSingle(val, conversion, defaultValue));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error binding ContextProperty '{property}' in Area {area}", contextProperty.Property, Area);
+                    // Set default value on binding failure
+                    setter(Hub.ConvertSingle(null, conversion, defaultValue));
+                }
+            }
+            else
+            {
+                try
+                {
+                    setter(Hub.ConvertSingle(value, conversion, defaultValue));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error binding value '{value}' in Area {area}", value, Area);
+                    // Set default value on binding failure
+                    setter(Hub.ConvertSingle(null, conversion, defaultValue));
+                }
+            }
         }
-        else if (value is ContextProperty contextProperty)
+        catch (Exception ex)
         {
-            var val = 
-                Context is JsonObject jo 
-                    ? jo[contextProperty.Property]
-                    : Context?.GetType().GetProperty(contextProperty.Property)?.GetValue(Context);
-            setter(Hub.ConvertSingle(val, conversion, defaultValue));
-
-        }
-        else
-        {
-            setter(Hub.ConvertSingle(value, conversion, defaultValue));
+            Logger.LogError(ex, "Critical error in DataBind for Area {area}", Area);
+            // Attempt to set default value as last resort
+            try
+            {
+                var expr = propertySelector.Body as MemberExpression;
+                if (expr?.Member is PropertyInfo pi)
+                {
+                    pi.SetValue(this, defaultValue);
+                }
+                else if (expr?.Member is FieldInfo fi)
+                {
+                    fi.SetValue(this, defaultValue);
+                }
+            }
+            catch (Exception innerEx)
+            {
+                Logger.LogError(innerEx, "Failed to set default value after DataBind error in Area {area}", Area);
+            }
         }
     }
 

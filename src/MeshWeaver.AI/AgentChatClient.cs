@@ -1,8 +1,8 @@
 ﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +19,7 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 {
     private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly DelegationState delegationState = new();
+    private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentRunningAgent;
 
     public AgentContext? Context { get; private set; }
@@ -44,12 +45,24 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 // Track the current running agent
                 currentRunningAgent = content.AuthorName ?? "Assistant";
 
+
                 var message = new ChatMessage(ChatRole.Assistant, [aiContent])
                 {
                     AuthorName = new(content.AuthorName ?? "Assistant")
                 };
 
                 yield return message;
+                
+                // Check for any queued layout area content and yield as messages
+                while (queuedLayoutAreaContent.Count > 0)
+                {
+                    var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+                    var layoutAreaMessage = new ChatMessage(ChatRole.Assistant, [layoutAreaContent])
+                    {
+                        AuthorName = new(currentRunningAgent ?? "Assistant")
+                    };
+                    yield return layoutAreaMessage;
+                }
             }
 
             // Only check for delegations if we actually got content from an agent
@@ -66,13 +79,18 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationGuiMessage = new ChatDelegationMessage(
+                    var delegationContent = new ChatDelegationContent(
                         delegationInstruction.DelegatingAgent,
                         delegationInstruction.AgentName,
                         delegationInstruction.Message,
                         delegationInstruction.Type == DelegationType.ReplyTo);
 
-                    yield return delegationGuiMessage;
+                    var delegationChatMessage = new ChatMessage(ChatRole.Assistant, [delegationContent])
+                    {
+                        AuthorName = new(delegationInstruction.DelegatingAgent)
+                    };
+
+                    yield return delegationChatMessage;
 
                     // Add delegation message and continue the loop
                     agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
@@ -158,6 +176,16 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
                 yield return converted;
             }
+            
+            // Check for any queued layout area content and yield as response updates
+            while (queuedLayoutAreaContent.Count > 0)
+            {
+                var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [layoutAreaContent])
+                {
+                    AuthorName = currentRunningAgent ?? "Assistant"
+                };
+            }
 
             // Only check for delegations if we actually got content from an agent
             if (!hasContent)
@@ -173,13 +201,16 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationGuiMessage = new ChatDelegationMessage(
+                    var delegationContent = new ChatDelegationContent(
                         delegationInstruction.DelegatingAgent,
                         delegationInstruction.AgentName,
                         delegationInstruction.Message,
                         delegationInstruction.Type == DelegationType.ReplyTo);
 
-                    yield return ConvertToStreamingUpdate(delegationGuiMessage);
+                    yield return new ChatResponseUpdate(ChatRole.Assistant, [delegationContent])
+                    {
+                        AuthorName = delegationInstruction.DelegatingAgent
+                    };
 
                     // Add delegation message and continue the loop
                     agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
@@ -205,7 +236,13 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     public Task ResumeAsync(ChatConversation conversation)
     {
-        agentChat.AddChatMessages(conversation.Messages.Select(ConvertToAgentChat).ToArray());
+        // Filter out UI-specific content that should not be passed to agents
+        var messagesToResume = conversation.Messages
+            .Where(m => !m.Contents.Any(c => c is ChatLayoutAreaContent or ChatDelegationContent))
+            .Select(ConvertToAgentChat)
+            .ToArray();
+            
+        agentChat.AddChatMessages(messagesToResume);
         return Task.CompletedTask;
     }
 
@@ -239,6 +276,13 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
             return $"Delegation to {agentName} scheduled. It will be processed after you return.";
         }
     }
+
+    public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+    {
+        var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
+        queuedLayoutAreaContent.Enqueue(layoutAreaContent);
+    }
+    
     private ChatMessageContent ConvertToAgentChat(ChatMessage message)
     {
         ChatMessageContentItemCollection collection = new();
@@ -331,6 +375,7 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         }
         return textBuilder.ToString();
     }
+
 
     /// <summary>
     /// Manages the state for delegation scenarios within this chat client.
