@@ -9,13 +9,13 @@
             </svg>
         </div>
         <div class="delegation-title">
-            @if (DelegationMessage.RequiresUserFeedback)
+            @if (DelegationContent.RequiresUserFeedback)
             {
-                <span>Requesting feedback before delegating to <strong>@@@DelegationMessage.TargetAgent</strong></span>
+                <span>Requesting feedback before delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
             }
             else
             {
-                <span>Delegating to <strong>@@@DelegationMessage.TargetAgent</strong></span>
+                <span>Delegating to <strong>@@@DelegationContent.TargetAgent</strong></span>
             }
         </div>
         <div class="delegation-expand-icon @(isExpanded ? "expanded" : "")">
@@ -30,9 +30,9 @@
         <div class="delegation-content">
             <div class="delegation-message-label">Message:</div>
             <div class="delegation-message-text">
-                @DelegationMessage.DelegationMessage
+                @DelegationContent.DelegationMessage
             </div>
-            @if (DelegationMessage.RequiresUserFeedback)
+            @if (DelegationContent.RequiresUserFeedback)
             {
                 <div class="delegation-feedback-notice">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -49,7 +49,7 @@
     private bool isExpanded = false;
 
     [Parameter, EditorRequired]
-    public required ChatDelegationMessage DelegationMessage { get; set; }
+    public required ChatDelegationContent DelegationContent { get; set; }
 
     private void ToggleExpanded()
     {

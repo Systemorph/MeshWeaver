@@ -13,15 +13,19 @@
         @Message.Text
     </div>
 }
-else if (Message is ChatDelegationMessage delegationMessage)
-{
-    <ChatDelegationView DelegationMessage="delegationMessage" />
-}
 else if (Message.Role != ChatRole.User)
 {
     foreach (var content in Message.Contents)
     {
-        if (content is TextContent { Text: { Length: > 0 } text })
+        if (content is ChatDelegationContent delegationContent)
+        {
+            <ChatDelegationView DelegationContent="@delegationContent" />
+        }
+        else if (content is ChatLayoutAreaContent layoutAreaContent)
+        {
+            <ChatLayoutAreaView LayoutAreaContent="@layoutAreaContent" />
+        }
+        else if (content is TextContent { Text: { Length: > 0 } text })
         {
             // Check if this is a delegation message that wasn't properly typed
             if (text.StartsWith("Delegating to @") || text.StartsWith("Requesting user feedback before delegating to @"))
@@ -33,14 +37,14 @@ else if (Message.Role != ChatRole.User)
                 var targetAgent = text.Substring(targetAgentStart, targetAgentEnd - targetAgentStart);
                 var delegationMessageText = text.Substring(targetAgentEnd + 2); // Skip ": "
 
-                // Create a delegation message for display
-                var parsedDelegationMessage = new ChatDelegationMessage(
+                // Create a delegation content for display
+                var parsedDelegationContent = new ChatDelegationContent(
                     Message.AuthorName ?? "Assistant",
                     targetAgent,
                     delegationMessageText,
                     isDelegationWithFeedback);
 
-                <ChatDelegationView DelegationMessage="parsedDelegationMessage" />
+                <ChatDelegationView DelegationContent="parsedDelegationContent" />
             }
             else
             {
