@@ -194,3 +194,4 @@ public record TemplateColumnControl(UiControl Template)
     public TemplateColumnControl WithRowHeader(object? isRowHeader = null) => this with { IsRowHeader = isRowHeader ?? true };
 }
 
+public record DataGridCellClick(object? Item, int Column);
