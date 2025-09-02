@@ -30,8 +30,6 @@ public record DataGridControl(object Data)
     // Selection
     public object? SelectionMode { get; init; }
     public object? SelectedItems { get; init; }
-    public object? OnRowFocus { get; init; }
-    public object? OnRowClick { get; init; }
     
     // Pagination
     public object? Pagination { get; init; }
@@ -44,7 +42,6 @@ public record DataGridControl(object Data)
     // Row Properties
     public object? RowClass { get; init; }
     public object? RowStyle { get; init; }
-    public object? ItemKey { get; init; }
     
     // Column Management
     public object? ShowHover { get; init; } = true;
@@ -65,15 +62,12 @@ public record DataGridControl(object Data)
     public DataGridControl WithEmptyContent(object emptyContent) => This with { EmptyContent = emptyContent };
     public DataGridControl WithSelectionMode(object selectionMode) => This with { SelectionMode = selectionMode };
     public DataGridControl WithSelectedItems(object selectedItems) => This with { SelectedItems = selectedItems };
-    public DataGridControl WithRowFocusHandler(object onRowFocus) => This with { OnRowFocus = onRowFocus };
-    public DataGridControl WithRowClickHandler(object onRowClick) => This with { OnRowClick = onRowClick };
     public DataGridControl WithPagination(object pagination) => This with { Pagination = pagination };
     public DataGridControl WithItemsProvider(object itemsProvider) => This with { ItemsProvider = itemsProvider };
     public DataGridControl WithAriaLabel(object ariaLabel) => This with { AriaLabel = ariaLabel };
     public DataGridControl WithRole(object role) => This with { Role = role };
     public DataGridControl WithRowClass(object rowClass) => This with { RowClass = rowClass };
     public DataGridControl WithRowStyle(object rowStyle) => This with { RowStyle = rowStyle };
-    public DataGridControl WithItemKey(object itemKey) => This with { ItemKey = itemKey };
     public DataGridControl WithShowHover(object? showHover = null) => This with { ShowHover = showHover ?? true };
     public DataGridControl WithTotalItemCount(object totalItemCount) => This with { TotalItemCount = totalItemCount };
     public DataGridControl WithAutoFit(object? autoFit = null) => This with { AutoFit = autoFit ?? true };

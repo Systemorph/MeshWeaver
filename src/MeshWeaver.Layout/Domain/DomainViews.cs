@@ -10,14 +10,13 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class DomainViews
 {
-    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config, Func<DomainViewConfiguration, DomainViewConfiguration>? configuration = null)
+    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config)
         => config
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
             .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel)
-            )
-            .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
+            );
 
 
 
@@ -44,7 +43,7 @@ public static class DomainViews
             var idString = parts[1];
             var keyType = typeDefinition.GetKeyType();
             var id = keyType == typeof(string)  ? idString : JsonSerializer.Deserialize(idString, keyType)!;
-            return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().Render(new(area, typeDefinition, idString, id, ctx));
+            return DomainDetails.GetDetails(area, typeDefinition, id, ctx);
         }
         catch (Exception e)
         {
@@ -67,9 +66,7 @@ public static class DomainViews
             throw new DataSourceConfigurationException(
                 $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
 
-        var context = new EntityRenderingContext(area, typeDefinition, null, null, ctx);
-        return area.Hub.ServiceProvider.GetRequiredService<IDomainLayoutService>().GetCatalog(context);
-
+        return DomainCatalog.GetCatalog(area, typeDefinition, ctx);
     }
 
     

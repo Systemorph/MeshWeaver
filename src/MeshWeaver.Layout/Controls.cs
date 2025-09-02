@@ -185,4 +185,6 @@ public static class Controls
 
     public static FileBrowserControl FileBrowser(object collection, object? path = null)
         => new(collection) { Path = path! };
+
+    public static RedirectControl Redirect(object href) => new(href);
 }

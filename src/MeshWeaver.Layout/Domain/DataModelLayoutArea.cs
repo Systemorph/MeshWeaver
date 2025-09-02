@@ -13,10 +13,11 @@ public static class DataModelLayoutArea
     /// Provides a diagram with the data model of the data domain.
     /// </summary>
     /// <param name="host"></param>
-    /// <param name="arg"></param>
+    /// <param name="context"></param>
     /// <returns></returns>
-    public static UiControl DataModel(LayoutAreaHost host, RenderingContext arg)
+    public static UiControl DataModel(LayoutAreaHost host, RenderingContext context)
     {
+        var _ = context; // currently unused
         var argId = host.Reference.Id?.ToString();
         if (!string.IsNullOrWhiteSpace(argId))
         {

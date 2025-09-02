@@ -154,11 +154,11 @@ public static class LayoutClientExtensions
             // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
             string s => ConvertString<T>(s),
-            _ => ConvertNullableOrNumericValue<T>(value, defaultValue)
+            _ => ConvertNullableOrNumericValue(value, defaultValue)
         };
     }
 
-    private static T ConvertNullableOrNumericValue<T>(object value, T? defaultValue)
+    private static T? ConvertNullableOrNumericValue<T>(object? value, T? defaultValue)
     {
         // Handle nullable source types - extract the underlying value if it has one
         if (value != null)
@@ -184,10 +184,10 @@ public static class LayoutClientExtensions
         }
         
         // Not a nullable type, proceed with normal numeric conversion
-        return ConvertNumericValue<T>(value);
+        return ConvertNumericValue<T>(defaultValue);
     }
 
-    private static T ConvertNumericValue<T>(object value)
+    private static T? ConvertNumericValue<T>(object? value)
     {
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         
@@ -198,7 +198,7 @@ public static class LayoutClientExtensions
         }
         
         // Fall back to Convert.ChangeType for non-numeric types
-        return (T)Convert.ChangeType(value, typeof(T));
+        return (T?)Convert.ChangeType(value, typeof(T));
     }
 
     private static bool IsNumericType(Type type)
@@ -212,7 +212,7 @@ public static class LayoutClientExtensions
         };
     }
 
-    private static T ConvertNumericSafely<T>(object value, Type targetType)
+    private static T? ConvertNumericSafely<T>(object? value, Type targetType)
     {
         // Handle special double values that cause overflow
         if (value is double d)
@@ -241,7 +241,7 @@ public static class LayoutClientExtensions
         }
         
         // Use Convert.ChangeType for other numeric conversions
-        return (T)Convert.ChangeType(value, targetType);
+        return (T?)Convert.ChangeType(value, targetType);
     }
 
     private static bool IsIntegerType(Type type)
