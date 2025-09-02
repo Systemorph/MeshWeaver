@@ -15,8 +15,14 @@ public static class DomainDetails
 {
     public static UiControl GetDetails(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext ctx)
     {
+        // Title with right-aligned navigation icons
+        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
+        if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
+            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
+        
+        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{typeDefinition.DisplayName}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
         var ret = new StackControl()
-            .WithView(Controls.Title(typeDefinition.DisplayName, 1));
+            .WithView(Controls.Html(titleWithNav));
         
         var description = typeDefinition.Type.GetXmlDocsSummary();
         if (!string.IsNullOrWhiteSpace(description))

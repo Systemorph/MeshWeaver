@@ -134,7 +134,6 @@ public static class DataModelLayoutArea
                 sb.AppendLine($"click {typeName} href \"{link}\" \"View {typeName} details\" _self");
             }
 
-
             // Add inheritance relationships
             foreach (var type in groupSet)
             {
@@ -188,15 +187,17 @@ public static class DataModelLayoutArea
 
         var typeSummary = type.GetXmlDocsSummary();
 
-        sb.AppendLine($"# {type.Name}");
-        if (!string.IsNullOrWhiteSpace(typeSummary))
-            sb.AppendLine($"> {typeSummary}");
-        sb.AppendLine();
-
-        // Navigation links
-        sb.AppendLine($"[⬅ Overview](/{host.Hub.Address}/DataModel)");
+        // Title with right-aligned navigation icons
+        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel\" title=\"Data Model Overview\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
         if (type.BaseType is { } bt && bt != typeof(object) && host.IsDomainType(bt))
-            sb.AppendLine($" • [⬆ Base: {bt.Name}](/{host.Hub.Address}/DataModel/{bt.Name})");
+            navigationIcons += $" <a href=\"/{host.Hub.Address}/DataModel/{bt.Name}\" title=\"Base: {bt.Name}\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🔝</a>";
+        if (!string.IsNullOrWhiteSpace(typeDef.CollectionName))
+            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDef.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
+        
+        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{type.Name}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
+        sb.AppendLine(titleWithNav);
+        if (!string.IsNullOrWhiteSpace(typeSummary))
+            sb.AppendLine($"{typeSummary}");
         sb.AppendLine();
 
         // Properties section as a single table: inherited first, then declared
