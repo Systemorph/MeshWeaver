@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.Northwind.Domain
 {
@@ -18,7 +19,7 @@ namespace MeshWeaver.Northwind.Domain
     public record Category(
         [property: Key] int CategoryId,
         string CategoryName,
-        string Description,
+        [property: UiControl<TextAreaControl>] string Description,
         string Picture
     ) : INamed
     {
