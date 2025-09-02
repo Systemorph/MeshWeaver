@@ -106,7 +106,8 @@ public static class LayoutExtensions
                 typeof(Option<>), // this is not a control
                 typeof(ContextProperty), // this is not a control
                 typeof(GetLayoutAreasRequest),
-                typeof(LayoutAreasResponse)
+                typeof(LayoutAreasResponse),
+                typeof(DataGridCellClick)
             )
             .WithHandler<GetLayoutAreasRequest>(HandleGetLayoutAreasRequest);
 

@@ -216,6 +216,6 @@ public partial class DataGridView
 
     private void HandleCellClick(FluentDataGridCell<JsonObject> obj)
     {
-        Hub.Post(new ClickedEvent(Area, Stream!.StreamId), o => o.WithTarget(Stream.Owner));
+        Hub.Post(new ClickedEvent(Area, Stream!.StreamId){Payload = new DataGridCellClick(obj.Item, obj.GridColumn)}, o => o.WithTarget(Stream.Owner));
     }
 }
