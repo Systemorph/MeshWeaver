@@ -8,6 +8,7 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Xunit;
@@ -115,6 +116,7 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 
     private class MockAgentChat : IAgentChat
     {
+
         public AgentContext? Context { get; set; }
         
         public void SetContext(AgentContext applicationContext) => Context = applicationContext;
@@ -129,6 +131,11 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         
         public string Delegate(string agentName, string message, bool askUserFeedback = false) 
             => throw new NotImplementedException();
+        public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+        {
+            throw new NotImplementedException();
+        }
+
     }
 
 }

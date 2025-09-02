@@ -1,0 +1,16 @@
+@using Microsoft.AspNetCore.Components
+@inherits BlazorView<RedirectControl, RedirectView>
+@inject NavigationManager NavigationManager
+
+@code
+{
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        
+        if (ViewModel?.Href is string href)
+        {
+            NavigationManager.NavigateTo(href);
+        }
+    }
+}

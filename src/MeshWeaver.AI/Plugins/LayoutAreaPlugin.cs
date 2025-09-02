@@ -18,8 +18,7 @@ public class LayoutAreaPlugin(
     IMessageHub hub, 
     IAgentChat chat,
     IReadOnlyDictionary<string, LayoutAreaDefinition>? areaDefinitions = null, 
-    Func<string, Address?>? addressMap = null,
-    Address? defaultAddress = null
+    Func<string, Address?>? addressMap = null
     )
 {
 

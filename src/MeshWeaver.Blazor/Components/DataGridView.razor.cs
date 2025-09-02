@@ -29,9 +29,6 @@ public partial class DataGridView
     private object? emptyContent;
     private object? loadingTemplate;
     private object? totalItemCount;
-    private object? onRowFocus;
-    private object? onRowClick;
-    private object? itemKey;
     private bool autoFit;
     private bool autoFocus;
     private bool autoItemsPerPage;
@@ -64,9 +61,6 @@ public partial class DataGridView
         DataBind(ViewModel.EmptyContent, x => x.emptyContent);
         DataBind(ViewModel.LoadingTemplate, x => x.loadingTemplate);
         DataBind(ViewModel.TotalItemCount, x => x.totalItemCount);
-        DataBind(ViewModel.OnRowFocus, x => x.onRowFocus);
-        DataBind(ViewModel.OnRowClick, x => x.onRowClick);
-        DataBind(ViewModel.ItemKey, x => x.itemKey);
         DataBind(ViewModel.AutoFit, x => x.autoFit, defaultValue: true);
         DataBind(ViewModel.AutoFocus, x => x.autoFocus, defaultValue: true);
         DataBind(ViewModel.AutoItemsPerPage, x => x.autoItemsPerPage, defaultValue: true);
@@ -183,20 +177,7 @@ public partial class DataGridView
         return null;
     }
 
-    private EventCallback<FluentDataGridRow<JsonObject>>? GetRowFocusHandler()
-    {
-        return onRowFocus as EventCallback<FluentDataGridRow<JsonObject>>?;
-    }
 
-    private EventCallback<FluentDataGridRow<JsonObject>>? GetRowClickHandler()
-    {
-        return onRowClick as EventCallback<FluentDataGridRow<JsonObject>>?;
-    }
-
-    private Func<JsonObject, string>? GetItemKey()
-    {
-        return itemKey as Func<JsonObject, string>;
-    }
 
     // TemplateColumn helper methods - only using supported properties
     private string? GetTemplateColumnTitle(TemplateColumnControl column)
@@ -214,8 +195,11 @@ public partial class DataGridView
         return Stream?.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext ?? "/") ?? Align.Start;
     }
 
-    private void HandleCellClick(FluentDataGridCell<JsonObject> obj)
+
+    public EventCallback<FluentDataGridCell<JsonObject>> OnCellClick => EventCallback.Factory.Create<FluentDataGridCell<JsonObject>>(this, HandleCellClick);
+    private Task HandleCellClick(FluentDataGridCell<JsonObject> obj)
     {
         Hub.Post(new ClickedEvent(Area, Stream!.StreamId){Payload = new DataGridCellClick(obj.Item, obj.GridColumn)}, o => o.WithTarget(Stream.Owner));
+        return Task.CompletedTask;
     }
 }

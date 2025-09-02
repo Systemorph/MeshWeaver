@@ -319,6 +319,11 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
             throw new NotImplementedException();
         }
 
+        public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+        {
+            throw new NotImplementedException();
+        }
+
         public AgentContext? Context { get; set; }
     }
 }

@@ -17,7 +17,7 @@
                         AutoFocus="@autoFocus"
                         Class="@Class"
                         AutoItemsPerPage="@autoItemsPerPage"
-                        OnCellClick="HandleCellClick"
+                        OnCellClick="@OnCellClick"
                         Style="@Style">
             @foreach (var column in ViewModel.Columns)
             {
