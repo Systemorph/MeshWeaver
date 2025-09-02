@@ -66,7 +66,7 @@ public static class DomainViews
             throw new DataSourceConfigurationException(
                 $"Collection {collection} is not mapped in Address {area.Hub.Address}.");
 
-        return DomainCatalog.GetCatalog(area, typeDefinition, ctx);
+        return DomainCatalogLayoutArea.GetCatalog(area, typeDefinition, ctx);
     }
 
     

@@ -25,22 +25,25 @@ public static class ProductOverviewToolbarArea
     /// <param name="context">The rendering context.</param>
     /// <returns>An object representing the product overview toolbar.</returns>
     public static UiControl ProductOverviewToolbar(this LayoutAreaHost layoutArea, RenderingContext context)
-        => Controls.Toolbar.WithView((_, _) =>
+    {
+        var _ = context;
+        return Controls.Toolbar.WithView((_, _) =>
             layoutArea.GetProductCategories()
                 .Select(categories =>
                     Template.Bind(new ProductOverviewToolbar(0),
                         tb =>
                             Controls.Select(
-                                tb.Category, 
-                                categories.Select<Category, Option<int>>(c => new Option<int>(c.CategoryId, c.CategoryName))
+                                tb.Category,
+                                categories.Select<Category, Option<int>>(c =>
+                                        new Option<int>(c.CategoryId, c.CategoryName))
                                     .Prepend(new Option<int>(0, "All Categories"))
                                     .Cast<Option>()
                                     .ToArray()
-                                ),
+                            ),
                         nameof(ProductOverviewToolbar))
                 )
-        )
-    ;
+        );
+    }
 
     private static IObservable<IEnumerable<Category>> GetProductCategories(this LayoutAreaHost layoutArea)
         => layoutArea.Workspace.GetStream(typeof(Category))

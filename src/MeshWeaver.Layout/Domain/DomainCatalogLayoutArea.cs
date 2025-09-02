@@ -9,13 +9,18 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
-public static class DomainCatalog
+public static class DomainCatalogLayoutArea
 {
 
     public static UiControl GetCatalog(LayoutAreaHost host, ITypeDefinition typeDefinition, RenderingContext ctx)
     {
+        var _= ctx;
+
+        // Title with right-aligned navigation icon
+        var navigationIcon = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
+        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h2 style=\"margin: 0; flex-grow: 1;\">{typeDefinition.DisplayName}</h2><div style=\"flex-shrink: 0;\">{navigationIcon}</div></div>";
         var ret = Controls.Stack
-            .WithView(Controls.Title(typeDefinition.DisplayName, 2));
+            .WithView(Controls.Html(titleWithNav));
         
         var description = typeDefinition.Type.GetXmlDocsSummary();
         if (!string.IsNullOrWhiteSpace(description))
