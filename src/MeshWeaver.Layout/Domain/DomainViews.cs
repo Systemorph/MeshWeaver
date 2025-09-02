@@ -1,6 +1,4 @@
 ﻿using System.ComponentModel;
-using System.Reflection;
-using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -17,20 +15,10 @@ public static class DomainViews
             .AddLayout(layout => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
-            .WithView(nameof(DataModel), DataModel)
+            .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel)
             )
             .WithServices(services => services.AddSingleton<IDomainLayoutService>(sp => new DomainLayoutService((configuration ?? (x => x)).Invoke(new(sp.GetRequiredService<IMessageHub>())))));
 
-    /// <summary>
-    /// Provides a diagram with the data model of the data domain.
-    /// </summary>
-    /// <param name="host"></param>
-    /// <param name="arg"></param>
-    /// <returns></returns>
-    private static UiControl DataModel(LayoutAreaHost host, RenderingContext arg)
-    {
-        return new MarkdownControl(host.GetMermaidDiagram()); 
-    }
 
 
     public const string Type = nameof(Type);
@@ -111,66 +99,6 @@ public static class DomainViews
             .OrderBy(x => x.Order ?? int.MaxValue).ThenBy(x => x.DisplayName);
     }
 
-    private static readonly HashSet<string> ExcludedMethods =
-    [
-        "<Clone>$",
-        "Deconstruct",
-        "ToString",
-        "Equals",
-        "GetHashCode"
-    ];
-    private static string GetMermaidDiagram(this LayoutAreaHost host)
-    {
-        var types = host.GetTypes().ToArray();
-        var sb = new StringBuilder();
-
-        // Group types into subgraphs based on some criteria, e.g., namespace or group name
-        var groupedTypes = types.GroupBy(t => t.GroupName ?? "Default");
-
-        foreach (var group in groupedTypes)
-        {
-            sb.AppendLine($"## {group.Key}");
-            sb.AppendLine("```mermaid");
-            sb.AppendLine("classDiagram");
-
-            foreach (var type in group)
-            {
-                var typeName = type.Type.Name;
-                var collectionName = host.Hub.ServiceProvider.GetRequiredService<ITypeRegistry>()
-                    .GetCollectionName(type.Type);
-                var link = $"{host.Hub.Address}/type/{collectionName}";
-
-                sb.AppendLine($"class {typeName} {{");
-
-                // Add properties
-                foreach (var prop in type.Type.GetProperties())
-                {
-                    sb.AppendLine($"  {prop.PropertyType.Name} {prop.Name}");
-                }
-
-                // Add methods
-                foreach (var method in type.Type
-                             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                             .Where(m => !m.IsSpecialName && !ExcludedMethods.Contains(m.Name)))
-                    sb.AppendLine($"  {method.ReturnType.Name} {method.Name}({GetParameters(method)})");
-                sb.AppendLine("}");
-            }
-
-            sb.AppendLine("```");
-        }
-
-        return sb.ToString();
-    }
-
-    private static string GetParameters(MethodInfo method)
-    {
-        return string.Join(", ",
-            method.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}")
-        );
-    }
-
-    public static string? GetDetailsUri(this IMessageHub hub, Type type, object id) =>
-        GetDetailsReference(hub, type, id)?.ToHref(hub.Address);
 
     public static LayoutAreaReference? GetDetailsReference(this IMessageHub hub, Type type, object id)
     {

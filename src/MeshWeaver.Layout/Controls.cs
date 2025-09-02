@@ -66,7 +66,7 @@ public static class Controls
     /// <summary>
     /// Gets a new instance of <see cref="ToolbarControl"/>.
     /// </summary>
-    public static ToolbarControl Toolbar => new ToolbarControl();
+    public static ToolbarControl Toolbar => new();
 
     /// <summary>
     /// Creates a new instance of <see cref="SelectControl"/> with the specified item.
