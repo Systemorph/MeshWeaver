@@ -49,7 +49,11 @@ public record DataGridControl(object Data)
     // Column Management
     public object? ShowHover { get; init; } = true;
     public object? TotalItemCount { get; init; }
-    
+    public object? AutoFit { get; init; }
+    public object? AutoFocus { get; init; }
+    public object? AutoItemsPerPage { get; init; }
+    public object? ItemsPerPage { get; init; }
+
     // Fluent Methods for Configuration
     public DataGridControl WithVirtualize(object virtualize) => This with { Virtualize = virtualize };
     public DataGridControl WithItemSize(object itemSize) => This with { ItemSize = itemSize };
@@ -72,6 +76,10 @@ public record DataGridControl(object Data)
     public DataGridControl WithItemKey(object itemKey) => This with { ItemKey = itemKey };
     public DataGridControl WithShowHover(object? showHover = null) => This with { ShowHover = showHover ?? true };
     public DataGridControl WithTotalItemCount(object totalItemCount) => This with { TotalItemCount = totalItemCount };
+    public DataGridControl WithAutoFit(object? autoFit = null) => This with { AutoFit = autoFit ?? true };
+    public DataGridControl WithAutoFocus(object? autoFocus = null) => This with { AutoFocus = autoFocus ?? true };
+    public DataGridControl WithAutoItemsPerPage(object? autoItemsPerPage = null) => This with { AutoItemsPerPage = autoItemsPerPage ?? true };
+    public DataGridControl WithItemsPerPage(object itemsPerPage) => This with { ItemsPerPage = itemsPerPage };
 }
 
 public record ContextProperty(string Property);
