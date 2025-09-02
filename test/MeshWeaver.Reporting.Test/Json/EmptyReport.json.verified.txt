@@ -22,11 +22,11 @@
   OnGridReady:
 event => {
                 var allColumnIds = [];
-                event.columnApi.getAllGridColumns().forEach(function (column) {
-                allColumnIds.push(column.colId);
+                event.api.getAllColumns().forEach(function (column) {
+                    allColumnIds.push(column.getColId());
                 });
-
-                event.columnApi.autoSizeColumns(allColumnIds);
+                
+                event.api.autoSizeColumns(allColumnIds, false);
         },
   ColumnHoverHighlight: true,
   DomLayout: autoHeight
