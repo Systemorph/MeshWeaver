@@ -61,7 +61,10 @@ public class LayoutAreaPlugin(
         var control = new LayoutAreaControl(address, areaReference);
         
         chat.DisplayLayoutArea(control);
-        return $"Displaying layout area: {areaName}";
+        var ret = $"Displaying layout area: {areaName}";
+        if(id is not null)
+            ret += $" with id: {id}";
+        return ret; 
     }
 
     [KernelFunction, 

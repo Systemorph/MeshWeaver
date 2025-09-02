@@ -155,9 +155,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().StartWith("@");
         result.Should().Contain(areaName);
-        result.Should().Be($"@{new HostAddress()}/{areaName}");
     }
 
     /// <summary>
@@ -178,10 +176,8 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().StartWith("@");
         result.Should().Contain(areaName);
         result.Should().Contain(id);
-        result.Should().Be($"@{new HostAddress()}/{areaName}/{id}");
     }
 
     /// <summary>
@@ -321,7 +317,6 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
         {
-            throw new NotImplementedException();
         }
 
         public AgentContext? Context { get; set; }

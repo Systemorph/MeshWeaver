@@ -31,8 +31,9 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         var markdownPath = Path.Combine(GetAssemblyLocation(), "Markdown");
         var files = Directory.GetFiles(markdownPath, "*", SearchOption.AllDirectories);
 
-        // Get blob service client
-        var blobServiceClient = new BlobServiceClient(ContainerExtensions.AzuriteConnectionString);
+        // Get blob service client with compatible API version
+        var blobClientOptions = new BlobClientOptions(BlobClientOptions.ServiceVersion.V2021_12_02);
+        var blobServiceClient = new BlobServiceClient(ContainerExtensions.AzuriteConnectionString, blobClientOptions);
 
         // Get or create container
         var containerClient = blobServiceClient.GetBlobContainerClient(StorageProviders.Articles);
@@ -65,7 +66,9 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
     {
         services.AddAzureClients(clientBuilder =>
         {
-            clientBuilder.AddBlobServiceClient(ContainerExtensions.AzuriteConnectionString).WithName(StorageProviders.Articles); 
+            clientBuilder.AddBlobServiceClient(ContainerExtensions.AzuriteConnectionString)
+                .WithName(StorageProviders.Articles)
+                .WithVersion(BlobClientOptions.ServiceVersion.V2021_12_02); 
         });
         return services
             .AddAzureBlobArticles()

@@ -184,7 +184,7 @@ public static class LayoutClientExtensions
         }
         
         // Not a nullable type, proceed with normal numeric conversion
-        return ConvertNumericValue<T>(defaultValue);
+        return ConvertNumericValue<T>(value);
     }
 
     private static T? ConvertNumericValue<T>(object? value)
@@ -241,7 +241,7 @@ public static class LayoutClientExtensions
         }
         
         // Use Convert.ChangeType for other numeric conversions
-        return (T?)Convert.ChangeType(value, targetType);
+        return value is null ? default : (T?)Convert.ChangeType(value, targetType);
     }
 
     private static bool IsIntegerType(Type type)
