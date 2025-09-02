@@ -32,10 +32,14 @@ public partial class DataGridView
     private object? onRowFocus;
     private object? onRowClick;
     private object? itemKey;
+    private bool autoFit;
+    private bool autoFocus;
+    private bool autoItemsPerPage;
+    private int itemsPerPage;
 
-    private PaginationState Pagination { get; } = new()
+    private PaginationState Pagination  => new()
     {
-        ItemsPerPage = 10
+        ItemsPerPage = itemsPerPage
     };
 
     private IQueryable<JsonObject> QueryableData = Enumerable.Empty<JsonObject>().AsQueryable();
@@ -63,6 +67,11 @@ public partial class DataGridView
         DataBind(ViewModel.OnRowFocus, x => x.onRowFocus);
         DataBind(ViewModel.OnRowClick, x => x.onRowClick);
         DataBind(ViewModel.ItemKey, x => x.itemKey);
+        DataBind(ViewModel.AutoFit, x => x.autoFit, defaultValue: true);
+        DataBind(ViewModel.AutoFocus, x => x.autoFocus, defaultValue: true);
+        DataBind(ViewModel.AutoItemsPerPage, x => x.autoItemsPerPage, defaultValue: true);
+        DataBind(ViewModel.ItemsPerPage, x => x.itemsPerPage, defaultValue: 10);
+
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
@@ -203,5 +212,10 @@ public partial class DataGridView
     private Align GetTemplateColumnAlign(TemplateColumnControl column)
     {
         return Stream?.GetDataBoundValue<Align>(column.Align, ViewModel.DataContext ?? "/") ?? Align.Start;
+    }
+
+    private void HandleCellClick(FluentDataGridCell<JsonObject> obj)
+    {
+        Hub.Post(new ClickedEvent(Area, Stream!.StreamId), o => o.WithTarget(Stream.Owner));
     }
 }
