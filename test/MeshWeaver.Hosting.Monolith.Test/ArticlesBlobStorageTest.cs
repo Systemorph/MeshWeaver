@@ -1,16 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reactive.Linq;
 using System.Threading.Tasks;
-using Azure.Identity;
 using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
-using FluentAssertions;
-using FluentAssertions.Extensions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.AzureBlob;
-using MeshWeaver.Layout;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -118,33 +113,9 @@ public class ArticlesBlobStorageTest : ArticlesTest
 
 
     [Fact]
-    public override async Task NotFound()
+    public override Task NotFound()
     {
-        var client = GetClient();
-        var articleStream = client.RenderArticle("Test","NotFound");
-
-        try
-        {
-            var control = await articleStream
-                .Timeout(5.Seconds()) // Shorter timeout for blob storage
-                .FirstAsync();
-
-            control.Should().BeOfType<MarkdownControl>();
-        }
-        catch (TimeoutException)
-        {
-            // Azure Blob storage has a known issue with reactive streams not completing
-            // when articles don't exist. For now, we'll accept this as the expected behavior
-            // since the infrastructure is working correctly.
-            
-            // The test passes if we get a timeout because it means:
-            // 1. Container started successfully (no port conflicts)  
-            // 2. Azure client connected successfully (no connection string errors)
-            // 3. System is looking for the article but it doesn't exist (expected behavior)
-            
-            // This workaround can be removed once the reactive stream completion issue is fixed
-            Assert.True(true, "Test passed - Azure Blob storage infrastructure is working correctly");
-        }
+        return base.NotFound();
     }
 
 }
