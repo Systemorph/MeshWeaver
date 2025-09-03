@@ -47,7 +47,8 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            }); services.AddPortalAI();
+            }); 
+        services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
