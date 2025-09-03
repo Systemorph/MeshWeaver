@@ -103,6 +103,7 @@ public abstract class ContentCollection : IDisposable
 
     public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
+        InitializeInfrastructure();
         Authors = await LoadAuthorsAsync(ct);
         var ret = new InstanceCollection(
             await GetStreams(MarkdownFilter, ct)
@@ -113,6 +114,11 @@ public abstract class ContentCollection : IDisposable
         AttachMonitor();
         return ret;
     }
+
+    protected virtual void InitializeInfrastructure()
+    {
+    }
+
     protected void UpdateArticle(string path)
     {
         markdownStream.Update(async (x, ct) =>
