@@ -45,7 +45,6 @@ public record DataGridControl(object Data)
     
     // Column Management
     public object? ShowHover { get; init; } = true;
-    public object? TotalItemCount { get; init; }
     public object? AutoFit { get; init; }
     public object? AutoFocus { get; init; }
     public object? AutoItemsPerPage { get; init; }
@@ -69,7 +68,6 @@ public record DataGridControl(object Data)
     public DataGridControl WithRowClass(object rowClass) => This with { RowClass = rowClass };
     public DataGridControl WithRowStyle(object rowStyle) => This with { RowStyle = rowStyle };
     public DataGridControl WithShowHover(object? showHover = null) => This with { ShowHover = showHover ?? true };
-    public DataGridControl WithTotalItemCount(object totalItemCount) => This with { TotalItemCount = totalItemCount };
     public DataGridControl WithAutoFit(object? autoFit = null) => This with { AutoFit = autoFit ?? true };
     public DataGridControl WithAutoFocus(object? autoFocus = null) => This with { AutoFocus = autoFocus ?? true };
     public DataGridControl WithAutoItemsPerPage(object? autoItemsPerPage = null) => This with { AutoItemsPerPage = autoItemsPerPage ?? true };

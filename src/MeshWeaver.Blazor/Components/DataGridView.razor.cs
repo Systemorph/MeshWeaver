@@ -28,16 +28,13 @@ public partial class DataGridView
     private object? itemsProvider;
     private object? emptyContent;
     private object? loadingTemplate;
-    private object? totalItemCount;
+    private int totalItemCount;
     private bool autoFit;
     private bool autoFocus;
     private bool autoItemsPerPage;
     private int itemsPerPage;
 
-    private PaginationState Pagination  => new()
-    {
-        ItemsPerPage = itemsPerPage
-    };
+    private PaginationState Pagination { get; set; } = new();
 
     private IQueryable<JsonObject> QueryableData = Enumerable.Empty<JsonObject>().AsQueryable();
 
@@ -60,17 +57,30 @@ public partial class DataGridView
         DataBind(ViewModel.ItemsProvider, x => x.itemsProvider);
         DataBind(ViewModel.EmptyContent, x => x.emptyContent);
         DataBind(ViewModel.LoadingTemplate, x => x.loadingTemplate);
-        DataBind(ViewModel.TotalItemCount, x => x.totalItemCount);
         DataBind(ViewModel.AutoFit, x => x.autoFit, defaultValue: true);
-        DataBind(ViewModel.AutoFocus, x => x.autoFocus, defaultValue: true);
+        DataBind(ViewModel.AutoFocus, x => x.autoFocus, defaultValue: false);
         DataBind(ViewModel.AutoItemsPerPage, x => x.autoItemsPerPage, defaultValue: true);
         DataBind(ViewModel.ItemsPerPage, x => x.itemsPerPage, defaultValue: 10);
-
+        Pagination.ItemsPerPage = itemsPerPage;
         DataBind(
             ViewModel.Data,
             x => x.QueryableData,
-            (o, _) => o is null ? null : ((JsonElement)o).Deserialize<IEnumerable<JsonObject>>()?.AsQueryable() ?? Enumerable.Empty<JsonObject>().AsQueryable()
-        );
+            (o, _) =>
+            { 
+                if(o is null)
+                    return null;
+                var elements = ((JsonElement)o).Deserialize<IReadOnlyCollection<JsonObject>>();
+                if(elements is null)
+                    return  Enumerable.Empty<JsonObject>().AsQueryable();
+                totalItemCount = elements.Count;
+                return elements.AsQueryable();
+            });
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        await Pagination.SetTotalItemCountAsync(totalItemCount);
     }
 
     protected override void OnInitialized()
@@ -78,6 +88,7 @@ public partial class DataGridView
         base.OnInitialized();
         Pagination.TotalItemCountChanged += (_, _) => StateHasChanged();
     }
+
     public void RenderPropertyColumn(RenderTreeBuilder builder, PropertyColumnControl column)
     {
         builder.OpenComponent(0,
