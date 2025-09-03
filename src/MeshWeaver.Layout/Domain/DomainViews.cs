@@ -10,13 +10,11 @@ namespace MeshWeaver.Layout.Domain;
 
 public static class DomainViews
 {
-    public static MessageHubConfiguration AddDomainViews(this MessageHubConfiguration config)
-        => config
-            .AddLayout(layout => layout
+    public static LayoutDefinition AddDomainViews(this LayoutDefinition layout)
+        => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
-            .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel)
-            );
+            .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel);
 
 
 
