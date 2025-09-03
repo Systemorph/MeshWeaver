@@ -36,7 +36,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
                         )
                 )
             )
-            .AddDomainViews();
+            .AddLayout(l => l.AddDomainViews());
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
