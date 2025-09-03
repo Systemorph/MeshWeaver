@@ -40,7 +40,7 @@ public static class DataModelLayoutArea
             .SelectMany(x => typeRegistry.Types.Select(t => t.Value).Where(t => !t.Equals(x) && x.Type.IsAssignableFrom(t.Type)))
             .DistinctBy(x => x.Type)
             .OrderBy(x => x.Order ?? int.MaxValue)
-            .ThenBy(x => x.DisplayName);
+            .ThenBy(x => x.GroupName);
     }
 
     private static IEnumerable<ITypeDefinition> GetAllDomainTypes(this LayoutAreaHost host)
