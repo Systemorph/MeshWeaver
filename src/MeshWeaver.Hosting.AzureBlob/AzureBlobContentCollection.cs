@@ -10,20 +10,22 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
-public class AzureBlobContentCollection : ContentCollection
+public class AzureBlobContentCollection(
+    ContentSourceConfig config,
+    IMessageHub hub,
+    BlobServiceClient client) : ContentCollection(config, hub)
 {
-    private readonly BlobContainerClient containerClient;
+    private BlobContainerClient containerClient = null!;
     private readonly ISynchronizationStream<InstanceCollection>? articleStream;
-    private readonly ILogger<AzureBlobContentCollection> logger;
+    private readonly ILogger<AzureBlobContentCollection> logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobContentCollection>>();
+    private readonly ContentSourceConfig config = config;
 
-    public AzureBlobContentCollection(
-        ContentSourceConfig config,
-        IMessageHub hub,
-        BlobServiceClient client) : base(config, hub)
+    protected override void InitializeInfrastructure()
     {
+        base.InitializeInfrastructure();
         var containerName = config.BasePath;
-        logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobContentCollection>>();
         containerClient = client.GetBlobContainerClient(containerName);
+
     }
 
     public override async Task<Stream?> GetContentAsync(string? path, CancellationToken ct = default)
@@ -121,7 +123,7 @@ public class AzureBlobContentCollection : ContentCollection
         }
         catch
         {
-            logger.LogWarning("No authors.json file in content collection.");
+            logger?.LogWarning("No authors.json file in content collection.");
             return ImmutableDictionary<string, Author>.Empty;
         }
     }
