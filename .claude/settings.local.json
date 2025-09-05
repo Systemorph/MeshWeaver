@@ -33,7 +33,8 @@
       "Bash(mkdir:*)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:github.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git checkout:*)"
     ],
     "deny": []
   }
