@@ -95,4 +95,6 @@ public record ChartModel : IRenderableObject
 
     public UiControl ToControl()
         => new ChartControl(this);
+
+    public static implicit operator UiControl(ChartModel model) => model.ToControl();
 }
