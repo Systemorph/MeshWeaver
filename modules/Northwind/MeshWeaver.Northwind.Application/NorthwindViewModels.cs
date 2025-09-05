@@ -34,6 +34,14 @@ namespace MeshWeaver.Northwind.Application
                             .AddOrdersSummary()
                             .AddCustomerSummary()
                             .AddSupplierSummary()
+                            .AddOrdersOverview()
+                            .AddProductAnalysis()
+                            .AddCustomerAnalysis()
+                            .AddSalesGeography()
+                            .AddEmployeePerformance()
+                            .AddInventoryAnalysis()
+                            .AddTimeSeriesAnalysis()
+                            .AddDetailedReports()
                     )
                 ;
         }
