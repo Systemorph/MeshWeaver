@@ -47,6 +47,7 @@ public partial class MainLayout
     }
     public bool IsAIChatVisible { get; private set; }
     private AgentChatView? chatComponent;
+    private ChatPosition currentChatPosition = ChatPosition.Right;
 
     public void ToggleAIChatVisibility()
     {
@@ -65,6 +66,12 @@ public partial class MainLayout
         {
             await chatComponent.ResetConversationAsync();
         }
+    }
+
+    private void OnChatPositionChanged(ChatPosition newPosition)
+    {
+        currentChatPosition = newPosition;
+        StateHasChanged();
     }
 
 

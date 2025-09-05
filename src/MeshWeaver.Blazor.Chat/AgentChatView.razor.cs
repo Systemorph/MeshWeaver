@@ -8,6 +8,13 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.Blazor.Chat;
 
+public enum ChatPosition
+{
+    Right,
+    Left,
+    Bottom
+}
+
 public partial class AgentChatView
 {
     private Lazy<Task<IAgentChat>> lazyChat;
@@ -25,6 +32,11 @@ public partial class AgentChatView
     [Parameter] public bool UseStreaming { get; set; } = true;
     // Chat history panel state
     private bool showChatHistory;
+    
+    // Chat position state
+    private ChatPosition currentPosition = ChatPosition.Right;
+    private bool positionMenuVisible = false;
+    [Parameter] public EventCallback<ChatPosition> OnPositionChanged { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -494,7 +506,22 @@ public partial class AgentChatView
         }
     }
 
+    private async Task ChangeChatPosition(ChatPosition newPosition)
+    {
+        if (currentPosition != newPosition)
+        {
+            currentPosition = newPosition;
+            if (OnPositionChanged.HasDelegate)
+            {
+                await OnPositionChanged.InvokeAsync(currentPosition);
+            }
+        }
+        positionMenuVisible = false;
+        StateHasChanged();
+    }
+
     public void Dispose()
     => currentResponseCancellation.Cancel();
+
 
 }
