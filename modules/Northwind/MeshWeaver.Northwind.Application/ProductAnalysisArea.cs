@@ -4,6 +4,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -43,10 +44,12 @@ public static class ProductAnalysisArea
                     .Take(10)
                     .ToArray();
 
-                return (UiControl)Charting.Chart.Bar(topProducts.Select(p => p.Revenue), "Revenues")
-                    .WithLabels(topProducts.Select(p => p.Product))
-                    .WithTitle("Top 10 Products by Revenue");
+                var chart = (UiControl)Charting.Chart.Bar(topProducts.Select(p => p.Revenue), "Revenue")
+                    .WithLabels(topProducts.Select(p => p.Product));
 
+                return Controls.Stack
+                    .WithView(Controls.H2("Top 10 Products by Revenue"))
+                    .WithView(chart);
             });
 
     /// <summary>
@@ -73,7 +76,9 @@ public static class ProductAnalysisArea
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
                     .SliceRowsBy(nameof(NorthwindDataCube.Product))
                     .ToLineChart(builder => builder)
-                    .Select(x => x.ToControl());
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Product Performance Trends"))
+                        .WithView(chart.ToControl()));
             });
 
     /// <summary>
@@ -84,14 +89,20 @@ public static class ProductAnalysisArea
     /// <returns>An observable sequence of UI controls representing product category analysis.</returns>
     public static IObservable<UiControl> ProductCategoryAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.Amount))
-                    .SliceRowsBy(nameof(NorthwindDataCube.Category))
-                    .ToPieChart(builder => builder)
-                    .Select(x => x.ToControl())
-            );
+            .Select(data =>
+            {
+                var categoryData = data.GroupBy(x => x.Category)
+                    .Select(g => new { Category = g.Key.ToString(), Revenue = g.Sum(x => x.Amount) })
+                    .OrderByDescending(x => x.Revenue)
+                    .ToArray();
+
+                var chart = (UiControl)Charting.Chart.Pie(categoryData.Select(c => c.Revenue), "Revenue")
+                    .WithLabels(categoryData.Select(c => c.Category));
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Revenue by Product Category"))
+                    .WithView(chart);
+            });
 
     /// <summary>
     /// Gets the product profitability analysis.
@@ -118,7 +129,7 @@ public static class ProductAnalysisArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Product Profitability Analysis"))
-                        .WithView(Controls.DataGrid(productMetrics.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(productMetrics.ToArray()))
                 );
             });
 
@@ -154,7 +165,9 @@ public static class ProductAnalysisArea
                     .SliceColumnsBy("DiscountBracket")
                     .SliceRowsBy("Product")
                     .ToBarChart(builder => builder)
-                    .Select(x => x.ToControl());
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Product Discount Impact Analysis"))
+                        .WithView(chart.ToControl()));
             });
 
     /// <summary>
@@ -192,7 +205,7 @@ public static class ProductAnalysisArea
                         - Higher turnover ratio indicates faster-moving inventory
                         """))
                         .WithView(Controls.H3("Product Sales Velocity Metrics"))
-                        .WithView(Controls.DataGrid(velocityData.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(velocityData.ToArray()))
                 );
             });
 

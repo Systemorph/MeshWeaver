@@ -3,6 +3,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -30,15 +31,20 @@ public static class EmployeePerformanceArea
     /// <returns>An observable sequence of UI controls representing top employees by revenue.</returns>
     public static IObservable<UiControl> TopEmployeesByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.Amount))
-                    .SliceRowsBy(nameof(NorthwindDataCube.Employee))
-                    .ToBarChart(builder => builder
-)
-                    .Select(x => x.ToControl())
-            );
+            .Select(data =>
+            {
+                var employeeData = data.GroupBy(x => x.Employee)
+                    .Select(g => new { Employee = g.Key.ToString(), Revenue = g.Sum(x => x.Amount) })
+                    .OrderByDescending(x => x.Revenue)
+                    .ToArray();
+
+                var chart = (UiControl)Charting.Chart.Bar(employeeData.Select(e => e.Revenue), "Revenue")
+                    .WithLabels(employeeData.Select(e => e.Employee));
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Top Employees by Revenue"))
+                    .WithView(chart);
+            });
 
     /// <summary>
     /// Gets employee performance metrics.
@@ -64,7 +70,7 @@ public static class EmployeePerformanceArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Employee Performance Metrics"))
-                        .WithView(Controls.DataGrid(employeeMetrics.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(employeeMetrics.ToArray()))
                 );
             });
 

@@ -3,6 +3,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -53,7 +54,7 @@ public static class InventoryAnalysisArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Stock Levels Analysis"))
-                        .WithView(Controls.DataGrid(stockAnalysis.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(stockAnalysis.ToArray()))
                 );
             });
 
@@ -81,7 +82,7 @@ public static class InventoryAnalysisArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Supplier Performance Analysis"))
-                        .WithView(Controls.DataGrid(supplierData.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(supplierData.ToArray()))
                 );
             });
 

@@ -27,4 +27,11 @@ public record LayoutAreaDefinition(string Area, string Url)
     public int? Order { get; init; } = 0;
     public LayoutAreaDefinition WithCategory(string category)
         => this with { Category = category };
+
+    // Thumbnail metadata (optional; populated by a generation pipeline)
+    public string? ThumbnailUrl { get; init; }
+    public string? ThumbnailHash { get; init; }
+    public DateTimeOffset? ThumbnailGeneratedAt { get; init; }
+    public LayoutAreaDefinition WithThumbnail(string url, string? hash = null, DateTimeOffset? generatedAt = null)
+        => this with { ThumbnailUrl = url, ThumbnailHash = hash, ThumbnailGeneratedAt = generatedAt };
 }
