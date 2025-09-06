@@ -3,6 +3,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -35,9 +36,10 @@ public static class TimeSeriesAnalysisArea
                     .Pivot(data.ToDataCube())
                     .WithAggregation(a => a.Sum(x => x.Amount))
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToLineChart(builder => builder
-)
-                    .Select(x => x.ToControl())
+                    .ToLineChart(builder => builder)
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Monthly Sales Trend"))
+                        .WithView(chart.ToControl()))
             );
 
     /// <summary>
@@ -73,7 +75,7 @@ public static class TimeSeriesAnalysisArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Quarterly Performance Metrics"))
-                        .WithView(Controls.DataGrid(quarterlyMetrics.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(quarterlyMetrics.ToArray()))
                 );
             });
 

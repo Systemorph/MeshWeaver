@@ -3,6 +3,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
 
@@ -52,7 +53,7 @@ public static class DetailedReportsArea
                     Controls.Stack
                         .WithView(Controls.H2("Order Details Report"))
                         .WithView(Controls.Markdown("Comprehensive view of all order line items with full transaction details."))
-                        .WithView(Controls.DataGrid(orderDetails.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(orderDetails.ToArray()))
                 );
             });
 
@@ -84,7 +85,7 @@ public static class DetailedReportsArea
                     Controls.Stack
                         .WithView(Controls.H2("Product Sales Report"))
                         .WithView(Controls.Markdown("Comprehensive analysis of product performance including sales metrics and customer reach."))
-                        .WithView(Controls.DataGrid(productSales.ToArray()))
+                        .WithView(layoutArea.ToDataGrid(productSales.ToArray()))
                 );
             });
 

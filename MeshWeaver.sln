@@ -252,6 +252,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.GoogleMaps", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.Blazor.GoogleMaps", "src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj", "{A091A9A6-4C5E-F236-E0DB-CF35C391C231}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{C0B667A8-6915-4037-83AE-1444A4E9B745}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaver.ThumbnailGenerator", "tools\MeshWeaver.ThumbnailGenerator\MeshWeaver.ThumbnailGenerator.csproj", "{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1450,6 +1454,18 @@ Global
 		{A091A9A6-4C5E-F236-E0DB-CF35C391C231}.Release|x64.Build.0 = Release|Any CPU
 		{A091A9A6-4C5E-F236-E0DB-CF35C391C231}.Release|x86.ActiveCfg = Release|Any CPU
 		{A091A9A6-4C5E-F236-E0DB-CF35C391C231}.Release|x86.Build.0 = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|x64.Build.0 = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Debug|x86.Build.0 = Debug|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|x64.ActiveCfg = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|x64.Build.0 = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|x86.ActiveCfg = Release|Any CPU
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1559,6 +1575,7 @@ Global
 		{A1B2C3D4-5E6F-7890-1234-567890ABCDEF} = {B7F5D6B0-E961-41F5-91D5-C51EA6374D92}
 		{8463AD4F-3F6C-144F-0FB5-736E31200D95} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{A091A9A6-4C5E-F236-E0DB-CF35C391C231} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{B2F1D719-8E6C-9DFC-FC96-99FE85C29F2D} = {C0B667A8-6915-4037-83AE-1444A4E9B745}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {331ADDC7-02A4-4F0E-8C47-2060003082F2}

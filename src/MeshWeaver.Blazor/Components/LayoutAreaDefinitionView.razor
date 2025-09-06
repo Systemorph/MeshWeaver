@@ -1,7 +1,11 @@
 ﻿@inherits BlazorView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>
 
+@{
+    var img = ViewModel.Definition.ThumbnailUrl ?? ViewModel.Definition.ImageUrl;
+    var alt = $"Thumbnail for {ViewModel.Definition.Title}";
+}
 <a href="@ViewModel.Definition.Url" class="card text-decoration-none">
-    <img src="@ViewModel.Definition.ImageUrl" class="card-img-top" alt="Card image">
+    <img src="@img" class="card-img-top" alt="@alt">
     <div class="card-body">
         <h5 class="card-title">@ViewModel.Definition.Title</h5>
         <p class="card-text">@ViewModel.Definition.Description</p>
