@@ -19,47 +19,44 @@ window.chatResizer = {
         // Determine if we're resizing a bottom panel or side panel
         const isBottomPanel = layout.classList.contains('chat-bottom');
         
-        // Throttling variables
-        let isThrottled = false;
-        const throttleDelay = 16; // ~60fps
+        // Simple throttling for horizontal resize only
+        let lastUpdate = 0;
+        const throttleMs = isBottomPanel ? 0 : 8; // Only throttle horizontal resize
         
         // Set up the mouse events for resizing
         const mouseMoveHandler = (e) => {
             // Prevent default to avoid text selection
             e.preventDefault();
 
-            // Throttle the resize updates for better performance
-            if (isThrottled) return;
-            isThrottled = true;
+            // Simple time-based throttling for horizontal resize only
+            const now = Date.now();
+            if (!isBottomPanel && now - lastUpdate < throttleMs) return;
+            lastUpdate = now;
 
-            requestAnimationFrame(() => {
-                if (isBottomPanel) {
-                    // Calculate the new height based on mouse position (from bottom edge)
-                    const height = window.innerHeight - e.clientY;
+            if (isBottomPanel) {
+                // Calculate the new height based on mouse position (from bottom edge)
+                const height = window.innerHeight - e.clientY;
 
-                    // Apply minimum and maximum constraints for height
-                    const minHeight = 200;
-                    const maxHeight = window.innerHeight * 0.7;
-                    const newHeight = Math.min(Math.max(height, minHeight), maxHeight);
+                // Apply minimum and maximum constraints for height
+                const minHeight = 200;
+                const maxHeight = window.innerHeight * 0.7;
+                const newHeight = Math.min(Math.max(height, minHeight), maxHeight);
 
-                    // Update the CSS custom property to adjust the chat area height
-                    layout.style.setProperty('--chat-height', `${newHeight}px`);
-                } else {
-                    // Calculate the new width based on mouse position (from right edge for right panel, from left for left panel)
-                    const isLeftPanel = layout.classList.contains('chat-left');
-                    const width = isLeftPanel ? e.clientX : window.innerWidth - e.clientX;
+                // Update the CSS custom property to adjust the chat area height
+                layout.style.setProperty('--chat-height', `${newHeight}px`);
+            } else {
+                // Calculate the new width based on mouse position (from right edge for right panel, from left for left panel)
+                const isLeftPanel = layout.classList.contains('chat-left');
+                const width = isLeftPanel ? e.clientX : window.innerWidth - e.clientX;
 
-                    // Apply minimum and maximum constraints for width
-                    const minWidth = 300;
-                    const maxWidth = window.innerWidth * 0.8;
-                    const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
+                // Apply minimum and maximum constraints for width
+                const minWidth = 300;
+                const maxWidth = window.innerWidth * 0.8;
+                const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
 
-                    // Update the CSS custom property to adjust the chat area width
-                    layout.style.setProperty('--chat-width', `${newWidth}px`);
-                }
-                
-                isThrottled = false;
-            });
+                // Update the CSS custom property to adjust the chat area width
+                layout.style.setProperty('--chat-width', `${newWidth}px`);
+            }
         };
 
         const mouseUpHandler = () => {

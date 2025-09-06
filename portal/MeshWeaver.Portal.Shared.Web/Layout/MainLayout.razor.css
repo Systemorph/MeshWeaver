@@ -62,6 +62,7 @@
 
     ::deep.layout.chat-visible.chat-bottom {
         --chat-height: 300px;
+        grid-template-columns: auto 1fr;
         grid-template-rows: auto auto 1fr var(--chat-height);
         grid-template-areas:
             "icon head"
@@ -181,6 +182,18 @@
             "main main";
         background-color: var(--fill-color);
         color: var(--neutral-foreground-rest);
+    }
+
+    /* Mobile bottom position */
+    ::deep.layout.chat-visible.chat-bottom {
+        --chat-height: 250px;
+        grid-template-rows: auto auto auto 1fr var(--chat-height);
+        grid-template-areas:
+            "icon head"
+            "nav-menu nav-menu"
+            "messagebar messagebar"
+            "main main"
+            "chat chat";
     }
 
     ::deep.layout>.meshweaver-icon {
@@ -428,21 +441,109 @@
 }
 
 /* Bottom position specific fixes */
-.layout.chat-bottom .ai-chat-content {
-    height: 100%;
-    min-height: 0;
-    overflow: visible;
+.layout.chat-bottom .ai-chat-overlay {
+    display: flex !important;
+    flex-direction: column !important;
+    height: var(--chat-height, 300px) !important;
+    min-height: 200px !important;
+    max-height: 70vh !important;
+    position: relative !important;
+    z-index: 10;
 }
 
-.layout.chat-bottom .ai-chat-content ::deep .message-list-container {
-    height: calc(100% - 120px);
-    min-height: 100px;
-}
-
-.layout.chat-bottom .ai-chat-content ::deep .chat-container {
+.layout.chat-bottom .ai-chat-resizer {
+    display: block !important;
+    height: 8px !important;
+    width: 100% !important;
+    cursor: row-resize !important;
+    background-color: var(--neutral-stroke-rest) !important;
+    flex-shrink: 0 !important;
+    order: 0 !important;
+    z-index: 11;
     position: relative;
-    flex-shrink: 0;
-    padding: 10px;
-    background-color: var(--neutral-layer-1);
-    border-top: 1px solid var(--neutral-stroke-rest);
+}
+
+.layout.chat-bottom .ai-chat-container {
+    flex: 1 !important;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    order: 1 !important;
+    background-color: var(--neutral-layer-1) !important;
+    border-top: none !important;
+    min-height: 0 !important;
+    height: calc(100% - 8px) !important;
+}
+
+.layout.chat-bottom .ai-chat-content {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    min-height: 200px !important;
+}
+
+/* Fix the actual chat structure - chat-app-container is the root */
+.layout.chat-bottom .ai-chat-content ::deep .chat-app-container {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: 200px !important;
+}
+
+/* Chat header visibility */
+.layout.chat-bottom .ai-chat-content ::deep .chat-header {
+    flex-shrink: 0 !important;
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background-color: var(--neutral-layer-4) !important;
+    border-bottom: 1px solid var(--neutral-stroke-rest) !important;
+    min-height: 50px !important;
+    padding: 10px 15px !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+
+.layout.chat-bottom .ai-chat-content ::deep .chat-header .chat-title,
+.layout.chat-bottom .ai-chat-content ::deep .chat-header .chat-actions {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+.layout.chat-bottom .ai-chat-content ::deep .chat-header .chat-actions {
+    display: flex !important;
+    gap: 5px !important;
+}
+
+/* Chat main area - contains messages and input */
+.layout.chat-bottom .ai-chat-content ::deep .chat-main-area {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 150px !important;
+    overflow: hidden !important;
+}
+
+/* Messages area - scrollable */
+.layout.chat-bottom .ai-chat-content ::deep .chat-messages-area {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    min-height: 80px !important;
+    padding: 10px !important;
+}
+
+/* Input container - always at bottom */
+.layout.chat-bottom .ai-chat-content ::deep .chat-container {
+    flex-shrink: 0 !important;
+    padding: 12px !important;
+    background-color: var(--neutral-layer-1) !important;
+    border-top: 1px solid var(--neutral-stroke-rest) !important;
+    min-height: 70px !important;
+    max-height: 120px !important;
+    display: block !important;
+    position: relative !important;
+    z-index: 2 !important;
 }

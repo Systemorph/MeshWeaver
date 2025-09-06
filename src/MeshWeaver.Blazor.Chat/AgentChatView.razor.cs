@@ -508,16 +508,22 @@ public partial class AgentChatView
 
     private async Task ChangeChatPosition(ChatPosition newPosition)
     {
+        positionMenuVisible = false;
+        
         if (currentPosition != newPosition)
         {
             currentPosition = newPosition;
+            StateHasChanged(); // Update UI immediately
+            
             if (OnPositionChanged.HasDelegate)
             {
                 await OnPositionChanged.InvokeAsync(currentPosition);
             }
         }
-        positionMenuVisible = false;
-        StateHasChanged();
+        else
+        {
+            StateHasChanged();
+        }
     }
 
     public void Dispose()
