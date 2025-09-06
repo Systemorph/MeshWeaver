@@ -7,14 +7,14 @@
     <script async src="https://www.googletagmanager.com/gtag/js?id=@TrackingId"></script>
     <script>
         window.dataLayer = window.dataLayer || [];
-        function gtag(){dataLayer.push(arguments);}
+        function gtag() { dataLayer.push(arguments); }
         gtag('js', new Date());
 
         gtag('config', '@TrackingId');
     </script>
 }
 
-<div class="@(IsVisible ? "cookie-consent-banner" : "cookie-consent-banner hidden")">
+<div id="meshweaver-cookie-banner" class="@(IsVisible ? "cookie-consent-banner" : "cookie-consent-banner hidden")">
     <div class="cookie-consent-content">
         <div class="cookie-consent-text">
             <FluentStack Orientation="Orientation.Vertical">
@@ -24,12 +24,10 @@
             </FluentStack>
         </div>
         <div class="cookie-consent-buttons">
-            <FluentButton Appearance="Appearance.Accent"
-                          @onclick="AcceptCookies">
+            <FluentButton id="meshweaver-cookie-accept" Appearance="Appearance.Accent" @onclick="AcceptCookies">
                 Accept
             </FluentButton>
-            <FluentButton Appearance="Appearance.Neutral"
-                          @onclick="RejectCookies">
+            <FluentButton Appearance="Appearance.Neutral" @onclick="RejectCookies">
                 Reject Non-Essential
             </FluentButton>
         </div>
