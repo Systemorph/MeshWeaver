@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -66,12 +67,16 @@ public static class InventoryAnalysisArea
     /// <returns>An observable sequence of UI controls representing supplier analysis.</returns>
     public static IObservable<UiControl> SupplierAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
+            .CombineLatest(layoutArea.Workspace.GetStream<Supplier>()!)
+            .SelectMany(tuple =>
             {
+                var data = tuple.First;
+                var suppliers = tuple.Second!.ToDictionary(s => s.SupplierId, s => s.CompanyName);
+                
                 var supplierData = data.GroupBy(x => x.Supplier)
                     .Select(g => new
                     {
-                        SupplierId = g.Key,
+                        Supplier = suppliers.TryGetValue(g.Key, out var name) ? name : g.Key.ToString(),
                         ProductCount = g.Select(x => x.Product).Distinct().Count(),
                         TotalRevenue = g.Sum(x => x.Amount),
                         TotalQuantity = g.Sum(x => x.Quantity),

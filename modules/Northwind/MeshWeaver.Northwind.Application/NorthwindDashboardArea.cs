@@ -34,7 +34,7 @@ public static class NorthwindDashboardArea
             .WithClass("main-content")
             .WithView(
                 Controls.Stack
-                    .WithView(Controls.PaneHeader("Order Summary"))
+                    .WithView(Controls.PaneHeader("Top 5 Orders Summary"))
                     .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(OrdersSummaryArea.OrderSummary))),
                 skin => skin.WithXs(12).WithSm(6)
             )

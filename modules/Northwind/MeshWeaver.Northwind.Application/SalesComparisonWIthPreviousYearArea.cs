@@ -47,7 +47,9 @@ public static class SalesComparisonWIthPreviousYearArea
                                     d.WithAnchor(DataLabelsAnchor.End)
                                         .WithAlign(DataLabelsAlign.End))
                                 )
-                    ).Select(x => x.ToControl())
+                    ).Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Category with Previous Year"))
+                        .WithView(chart.ToControl()))
             );
     }
 }

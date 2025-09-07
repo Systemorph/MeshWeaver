@@ -28,8 +28,7 @@ public abstract class ContentCollection : IDisposable
         Hub,
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x);
-        ret.Initialize(InitializeAsync, _ => Task.CompletedTask);
+            x => x.WithInitialization((_,ct) => InitializeAsync(ct)));
         return ret;
     }
     protected IMessageHub Hub { get; }
@@ -38,7 +37,7 @@ public abstract class ContentCollection : IDisposable
     public bool IsHidden => config.HiddenFrom.Length > 0;
     public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
 
-    public IObservable<object?>? GetMarkdown(string path)
+    public IObservable<object?> GetMarkdown(string path)
         => markdownStream
             .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) 
                 ? path[..^3] 

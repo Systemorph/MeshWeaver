@@ -12,6 +12,8 @@
         IconActive="AgentsIcon(true)" Text="Agents" />
     <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()"
         IconActive="ChatIcon(true)" Text="Chat" />
+    <FluentAppBarItem Href="/app/Northwind/LayoutAreas?thumbnail-base=/static/Northwind/thumbnails" Match="NavLinkMatch.All" IconRest="NorthwindIcon()"
+        IconActive="NorthwindIcon(true)" Text="Northwind" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
             <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"

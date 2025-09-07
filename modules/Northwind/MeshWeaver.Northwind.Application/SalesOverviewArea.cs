@@ -48,7 +48,9 @@ public static class SalesOverviewArea
                                         .WithAlign(DataLabelsAlign.End))
                                 )
                     )
-                    .Select(x => new ChartControl(x).WithClass("chart sales-by-category-chart"))
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Category"))
+                        .WithView(new ChartControl(chart).WithClass("chart sales-by-category-chart")))
                     
             );
     }

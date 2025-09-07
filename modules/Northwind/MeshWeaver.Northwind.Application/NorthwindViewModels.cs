@@ -30,7 +30,6 @@ namespace MeshWeaver.Northwind.Application
                             .AddDomainViews()
                             .AddAnnualReport()
                             .AddDashboard()
-                            .AddProductsSummary()
                             .AddOrdersSummary()
                             .AddCustomerSummary()
                             .AddSupplierSummary()

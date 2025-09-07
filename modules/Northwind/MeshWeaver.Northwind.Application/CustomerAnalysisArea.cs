@@ -1,14 +1,11 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Arithmetics;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Pivot.Aggregations;
-using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Domain;
+using LayoutDefinition = MeshWeaver.Layout.Composition.LayoutDefinition;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -37,23 +34,47 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing top customers by revenue.</returns>
-    public static IObservable<UiControl> TopCustomersByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .Select(data =>
-            {
-                var topCustomers = data.GroupBy(x => x.Customer)
-                    .Select(g => new { Customer = g.Key?.ToString() ?? "Unknown", Revenue = g.Sum(x => x.Amount) })
-                    .OrderByDescending(x => x.Revenue)
-                    .Take(15)
-                    .ToArray();
+    public static UiControl? TopCustomersByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(CustomerToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new CustomerToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .CombineLatest(area.Workspace.GetStream<Customer>()!)
+                .Select(tuple =>
+                {
+                    var data = tuple.First;
+                    var customers = tuple.Second!.ToDictionary(c => c.CustomerId, c => c.CompanyName);
+                    
+                    var topCustomers = data.GroupBy(x => x.Customer)
+                        .Select(g => new { 
+                            Customer = customers.TryGetValue(g.Key?.ToString() ?? "", out var name) ? name : g.Key?.ToString() ?? "Unknown", 
+                            Revenue = g.Sum(x => x.Amount) 
+                        })
+                        .OrderByDescending(x => x.Revenue)
+                        .Take(15)
+                        .ToArray();
 
-                var chart = (UiControl)Charting.Chart.Bar(topCustomers.Select(c => c.Revenue), "Revenue")
-                    .WithLabels(topCustomers.Select(c => c.Customer));
+                    var chart = (UiControl)Charting.Chart.Bar(topCustomers.Select(c => c.Revenue), "Revenue")
+                        .WithLabels(topCustomers.Select(c => c.Customer));
 
-                return Controls.Stack
-                    .WithView(Controls.H2("Top 15 Customers by Revenue"))
-                    .WithView(chart);
-            });
+                    return Controls.Stack
+                        .WithView(Controls.H2("Top 15 Customers by Revenue"))
+                        .WithView(chart);
+                }));
+    }
+
+    /// <summary>
+    /// Toolbar configuration for customer lifetime value view.
+    /// </summary>
+    private record CustomerLifetimeToolbar
+    {
+        public const string Table = nameof(Table);
+        public const string Chart = nameof(Chart);
+
+        [UiControl<RadioGroupControl>(Options = new[] { "Table", "Chart" })]
+        public string Display { get; init; } = Table;
+    }
 
     /// <summary>
     /// Gets the customer lifetime value analysis.
@@ -61,20 +82,40 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer lifetime value.</returns>
-    public static IObservable<UiControl> CustomerLifetimeValue(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .SelectMany(data =>
+    public static UiControl? CustomerLifetimeValue(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        return layoutArea.Toolbar(new CustomerLifetimeToolbar(),
+            (toolbar, area, _) => toolbar.Display switch
             {
+                CustomerLifetimeToolbar.Chart => area.CustomerLifetimeChart(),
+                _ => area.CustomerLifetimeTable()
+            }
+        );
+    }
+
+    /// <summary>
+    /// Gets the table view for customer lifetime value data.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <returns>An observable sequence of UI controls representing customer lifetime value table.</returns>
+    private static IObservable<UiControl> CustomerLifetimeTable(this LayoutAreaHost layoutArea)
+        => layoutArea.GetDataCube()
+            .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
+            .SelectMany(tuple =>
+            {
+                var data = tuple.First;
+                var customers = tuple.Second!.ToDictionary(c => c.CustomerId, c => c.CompanyName);
+                
                 var customerMetrics = data.GroupBy(x => x.Customer)
                     .Select(g => new
                     {
-                        Customer = g.Key,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        Customer = customers.TryGetValue(g.Key?.ToString() ?? "", out var name) ? name : g.Key?.ToString() ?? "Unknown",
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         FirstOrderDate = g.Min(x => x.OrderDate),
                         LastOrderDate = g.Max(x => x.OrderDate),
                         CustomerTenure = (g.Max(x => x.OrderDate) - g.Min(x => x.OrderDate)).TotalDays,
-                        AvgOrderValue = g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount))
+                        AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount)), 2)
                     })
                     .Where(x => x.CustomerTenure > 0)
                     .Select(x => new
@@ -83,8 +124,8 @@ public static class CustomerAnalysisArea
                         x.TotalRevenue,
                         x.OrderCount,
                         x.AvgOrderValue,
-                        CustomerTenureMonths = x.CustomerTenure / 30.44,
-                        MonthlyValue = x.TotalRevenue / Math.Max(x.CustomerTenure / 30.44, 1)
+                        CustomerTenureMonths = Math.Round(x.CustomerTenure / 30.44, 1),
+                        MonthlyValue = Math.Round(x.TotalRevenue / Math.Max(x.CustomerTenure / 30.44, 1), 2)
                     })
                     .OrderByDescending(x => x.TotalRevenue)
                     .Take(20);
@@ -97,41 +138,72 @@ public static class CustomerAnalysisArea
             });
 
     /// <summary>
+    /// Gets the chart view for customer lifetime value data.
+    /// </summary>
+    /// <param name="layoutArea">The layout area host.</param>
+    /// <returns>An observable sequence of UI controls representing customer lifetime value chart.</returns>
+    private static IObservable<UiControl> CustomerLifetimeChart(this LayoutAreaHost layoutArea)
+        => layoutArea.GetDataCube()
+            .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
+            .Select(tuple =>
+            {
+                var data = tuple.First;
+                var customers = tuple.Second!.ToDictionary(c => c.CustomerId, c => c.CompanyName);
+                
+                var customerMetrics = data.GroupBy(x => x.Customer)
+                    .Select(g => new
+                    {
+                        Customer = customers.TryGetValue(g.Key?.ToString() ?? "", out var name) ? name : g.Key?.ToString() ?? "Unknown",
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
+                        MonthlyValue = Math.Round(g.Sum(x => x.Amount) / Math.Max((g.Max(x => x.OrderDate) - g.Min(x => x.OrderDate)).TotalDays / 30.44, 1), 2)
+                    })
+                    .OrderByDescending(x => x.TotalRevenue)
+                    .Take(10)
+                    .ToArray();
+
+                var chart = (UiControl)Charting.Chart.Bar(customerMetrics.Select(c => c.MonthlyValue), "MonthlyValue")
+                    .WithLabels(customerMetrics.Select(c => c.Customer));
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Customer Lifetime Value Analysis"))
+                    .WithView(chart);
+            });
+
+    /// <summary>
     /// Gets the customer order frequency analysis.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer order frequency.</returns>
-    public static IObservable<UiControl> CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .SelectMany(data =>
-            {
-                var frequencyData = data.GroupBy(x => x.Customer)
-                    .Select(g => new
-                    {
-                        Customer = g.Key,
-                        OrderCount = g.DistinctBy(x => x.OrderId).Count()
-                    })
-                    .GroupBy(x => x.OrderCount switch
-                    {
-                        1 => "1 Order",
-                        2 => "2 Orders", 
-                        >= 3 and <= 5 => "3-5 Orders",
-                        >= 6 and <= 10 => "6-10 Orders",
-                        >= 11 and <= 20 => "11-20 Orders",
-                        _ => "20+ Orders"
-                    })
-                    .Select(g => new { FrequencyBracket = g.Key, CustomerCount = g.Count() });
+    public static UiControl CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
+        =>
+            Controls.Stack.WithView(Controls.H2("Customer Order Frequency"))
+                .WithView(
+                    layoutArea.GetDataCube()
+                        .Select(data =>
+                        {
+                            var frequencyData = data.GroupBy(x => x.Customer)
+                                .Select(g => new
+                                {
+                                    Customer = g.Key, OrderCount = g.DistinctBy(x => x.OrderId).Count()
+                                })
+                                .GroupBy(x => x.OrderCount switch
+                                {
+                                    1 => "1 Order",
+                                    2 => "2 Orders",
+                                    >= 3 and <= 5 => "3-5 Orders",
+                                    >= 6 and <= 10 => "6-10 Orders",
+                                    >= 11 and <= 20 => "11-20 Orders",
+                                    _ => "20+ Orders"
+                                })
+                                .Select(g => new { FrequencyBracket = g.Key, CustomerCount = g.Count() })
+                                .ToArray();
 
-                return layoutArea.Workspace
-                    .Pivot(frequencyData.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.CustomerCount))
-                    .SliceRowsBy("FrequencyBracket")
-                    .ToPieChart(builder => builder)
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Customer Order Frequency Distribution"))
-                        .WithView(chart.ToControl()));
-            });
+                            return Charting.Chart.Pie(frequencyData.Select(x => x.CustomerCount), "CustomerCount")
+                                .WithLabels(frequencyData.Select(x => x.FrequencyBracket))
+                                .ToControl();
+                        })
+                );
 
     /// <summary>
     /// Gets the customer segmentation analysis.
@@ -141,12 +213,16 @@ public static class CustomerAnalysisArea
     /// <returns>An observable sequence of UI controls representing customer segmentation.</returns>
     public static IObservable<UiControl> CustomerSegmentation(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
+            .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
+            .SelectMany(tuple =>
             {
+                var data = tuple.First;
+                var customers = tuple.Second!.ToDictionary(c => c.CustomerId, c => c.CompanyName);
+                
                 var customerSegments = data.GroupBy(x => x.Customer)
                     .Select(g => new
                     {
-                        Customer = g.Key,
+                        Customer = customers.TryGetValue(g.Key?.ToString() ?? "", out var name) ? name : g.Key?.ToString() ?? "Unknown",
                         TotalRevenue = g.Sum(x => x.Amount),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         AvgOrderValue = g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount))
@@ -178,9 +254,8 @@ public static class CustomerAnalysisArea
 
                 return Observable.Return(
                     Controls.Stack
+                        .WithView(Controls.H2("Customer Segmentation"))
                         .WithView(Controls.Markdown("""
-                        ## Customer Segmentation Analysis
-                        
                         Customer segments based on revenue and order frequency:
                         - **VIP**: $5,000+ revenue AND 10+ orders
                         - **High Value**: $2,000+ revenue AND 5+ orders  
@@ -199,45 +274,52 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer retention analysis.</returns>
-    public static IObservable<UiControl> CustomerRetentionAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> CustomerRetentionAnalysis(this LayoutAreaHost layoutArea,
+        RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
+            .Select(data =>
             {
-                var customerMonthlyActivity = data.GroupBy(x => new { x.Customer, x.OrderMonth })
-                    .Select(g => new { g.Key.Customer, g.Key.OrderMonth })
-                    .GroupBy(x => x.Customer)
-                    .Select(g => new
-                    {
-                        Customer = g.Key,
-                        ActiveMonths = g.Select(x => x.OrderMonth).Distinct().Count(),
-                        FirstMonth = g.Min(x => x.OrderMonth),
-                        LastMonth = g.Max(x => x.OrderMonth)
-                    });
-
-                var retentionMetrics = customerMonthlyActivity.GroupBy(x => x.ActiveMonths)
-                    .Select(g => new
-                    {
-                        ActiveMonthsRange = g.Key switch
+                var yearlyRetentionData = data.GroupBy(x => x.OrderYear)
+                    .SelectMany(yearGroup => yearGroup
+                        .GroupBy(x => new { x.Customer, x.OrderMonth })
+                        .Select(g => new { g.Key.Customer, g.Key.OrderMonth })
+                        .GroupBy(x => x.Customer)
+                        .Select(g => new
+                        {
+                            Year = yearGroup.Key,
+                            Customer = g.Key,
+                            ActiveMonths = g.Select(x => x.OrderMonth).Distinct().Count()
+                        })
+                        .GroupBy(x => x.ActiveMonths switch
                         {
                             1 => "1 Month",
                             2 => "2 Months",
                             >= 3 and <= 6 => "3-6 Months",
                             >= 7 and <= 12 => "7-12 Months",
                             _ => "12+ Months"
-                        },
-                        CustomerCount = g.Count()
-                    })
-                    .GroupBy(x => x.ActiveMonthsRange)
-                    .Select(g => new { RetentionPeriod = g.Key, CustomerCount = g.Sum(x => x.CustomerCount) });
+                        })
+                        .Select(g => new { Year = yearGroup.Key, RetentionPeriod = g.Key, CustomerCount = g.Count() })
+                    )
+                    .GroupBy(x => x.RetentionPeriod)
+                    .ToDictionary(g => g.Key, g => g.GroupBy(x => x.Year).ToDictionary(yg => yg.Key, yg => yg.Sum(x => x.CustomerCount)));
 
-                return layoutArea.Workspace
-                    .Pivot(retentionMetrics.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.CustomerCount))
-                    .SliceRowsBy("RetentionPeriod")
-                    .ToBarChart(builder => builder)
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Customer Retention Analysis"))
-                        .WithView(chart.ToControl()));
+                var orderedPeriods = new[] { "1 Month", "2 Months", "3-6 Months", "7-12 Months", "12+ Months" };
+                var years = data.Select(x => x.OrderYear).Distinct().OrderBy(x => x).ToArray();
+                
+                var datasets = years.Select(year => new
+                {
+                    Label = year.ToString(),
+                    Data = orderedPeriods.Select(period => 
+                        yearlyRetentionData.TryGetValue(period, out var yearData) && 
+                        yearData.TryGetValue(year, out var count) ? count : 0).ToArray()
+                }).ToArray();
+
+                var chart = (UiControl)Charting.Chart.Line(datasets.First().Data, "Customer Count")
+                    .WithLabels(orderedPeriods);
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Customer Retention Analysis by Year"))
+                    .WithView(chart);
             });
 
     /// <summary>
@@ -333,31 +415,38 @@ public static class CustomerAnalysisArea
     /// <returns>An observable sequence of UI controls representing customer purchase behavior.</returns>
     public static IObservable<UiControl> CustomerPurchaseBehavior(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
+            .CombineLatest(layoutArea.Workspace.GetStream<Category>()!)
+            .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
+            .Select(tuple =>
             {
+                var data = tuple.First.First;
+                var categories = tuple.First.Second!.ToDictionary(c => c.CategoryId, c => c.CategoryName);
+                var customers = tuple.Second!.ToDictionary(c => c.CustomerId, c => c.CompanyName);
+                
                 var behaviorData = data.GroupBy(x => x.Customer)
                     .Select(g => new
                     {
-                        Customer = g.Key,
-                        PreferredCategories = g.GroupBy(x => x.Category)
+                        Customer = customers.TryGetValue(g.Key?.ToString() ?? "", out var name) ? name : g.Key?.ToString() ?? "Unknown",
+                        PreferredCategories = string.Join(", ",g.GroupBy(x => x.Category)
                             .OrderByDescending(cat => cat.Sum(x => x.Amount))
                             .Take(2)
-                            .Select(cat => cat.Key.ToString())
-                            .ToList(),
-                        AvgDiscount = g.Average(x => x.Discount),
+                            .Select(cat => categories[cat.Key])
+                            ),
+                        AvgDiscountPercent = $"{Math.Round(g.Average(x => x.Discount) * 100, 1)}%",
                         PreferredOrderMonth = g.GroupBy(x => x.OrderMonth)
                             .OrderByDescending(month => month.Count())
                             .First().Key,
-                        TotalRevenue = g.Sum(x => x.Amount)
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2)
                     })
                     .OrderByDescending(x => x.TotalRevenue)
-                    .Take(20);
+                    .Take(20)
+                    .ToArray();
 
-                return Observable.Return(
+                return 
                     Controls.Stack
                         .WithView(Controls.H2("Customer Purchase Behavior Analysis"))
-                        .WithView(layoutArea.ToDataGrid(behaviorData.ToArray()))
-                );
+                        .WithView(layoutArea.ToDataGrid(behaviorData))
+                ;
             });
 
     private static UiControl CreateCustomerMap(object[] countryData)
@@ -432,4 +521,17 @@ public static class CustomerAnalysisArea
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
             .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+}
+
+/// <summary>
+/// Represents a toolbar for customer analysis with year filtering.
+/// </summary>
+public record CustomerToolbar
+{
+    internal const string Years = "years";
+    
+    /// <summary>
+    /// The year selected in the toolbar.
+    /// </summary>
+    [Dimension<int>(Options = Years)] public int Year { get; init; }
 }
