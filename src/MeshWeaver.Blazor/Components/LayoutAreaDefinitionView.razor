@@ -7,7 +7,9 @@
 
 <a href="@ViewModel.Definition.Url" class="card layout-area-card text-decoration-none">
     <div class="layout-area-card-content">
-        <img src="@img" class="layout-area-card-image" alt="@alt">
+        <img src="@img" class="layout-area-card-image" alt="@alt" 
+             data-thumbnail-base="@(ViewModel.Id?.ToString())" 
+             data-area-name="@ExtractAreaName(ViewModel.Definition)">
         <div class="layout-area-card-text">
             <h5 class="layout-area-card-title">@ViewModel.Definition.Title</h5>
             <p class="layout-area-card-description">@(ViewModel.Definition.Description ?? "")</p>
@@ -15,49 +17,104 @@
     </div>
 </a>
 
+<script>
+(function() {
+    // Function to update image source based on dark mode
+    function updateImageForDarkMode() {
+        const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ||
+                          document.documentElement.classList.contains('dark') ||
+                          document.body.classList.contains('dark') ||
+                          document.documentElement.getAttribute('data-theme') === 'dark';
+        
+        const images = document.querySelectorAll('.layout-area-card-image[data-thumbnail-base][data-area-name]');
+        images.forEach(img => {
+            const thumbnailBase = img.getAttribute('data-thumbnail-base');
+            const areaName = img.getAttribute('data-area-name');
+            
+            if (thumbnailBase && areaName) {
+                const fileName = isDarkMode ? `${areaName}-dark.png` : `${areaName}.png`;
+                const newSrc = `${thumbnailBase.replace(/\/$/, '')}/${fileName}`;
+                
+                if (img.src !== newSrc) {
+                    img.src = newSrc;
+                }
+            }
+        });
+    }
+    
+    // Update images on load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', updateImageForDarkMode);
+    } else {
+        updateImageForDarkMode();
+    }
+    
+    // Listen for dark mode changes
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateImageForDarkMode);
+    }
+    
+    // Also listen for manual theme changes (FluentUI, etc.)
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && 
+                (mutation.attributeName === 'class' || mutation.attributeName === 'data-theme')) {
+                updateImageForDarkMode();
+            }
+        });
+    });
+    
+    observer.observe(document.documentElement, { attributes: true });
+    observer.observe(document.body, { attributes: true });
+})();
+</script>
+
 <style>
 .layout-area-card {
     display: block;
     border: 1px solid var(--neutral-stroke-rest);
-    border-radius: 8px;
+    border-radius: 12px;
     background: var(--neutral-fill-rest);
-    transition: all 0.2s ease;
+    transition: all 0.3s ease;
     cursor: pointer;
-    height: 140px;
+    height: 160px;
     overflow: hidden;
     text-decoration: none !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
 .layout-area-card:hover {
     border-color: var(--accent-fill-rest);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     text-decoration: none !important;
+    transform: translateY(-2px);
 }
 
 .layout-area-card-content {
     display: flex;
     align-items: center;
-    gap: 20px;
-    padding: 16px;
+    gap: 24px;
+    padding: 20px;
     height: 100%;
 }
 
 .layout-area-card-image {
-    width: 108px;
-    height: 108px;
+    width: 120px;
+    height: 90px;
     object-fit: cover;
     border-radius: 8px;
     flex-shrink: 0;
     background: var(--neutral-fill-secondary);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
 
 .layout-area-card-text {
-    flex: 0 1 200px;
+    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
-    max-width: 200px;
+    max-width: 380px;
 }
 
 .layout-area-card-title {
@@ -99,10 +156,8 @@
         {
             var thumbnailBaseUrl = id;
             var areaName = ExtractAreaName(ViewModel.Definition);
+            // Start with light mode image, JavaScript will switch to dark if needed
             var thumbnailUrl = $"{thumbnailBaseUrl.TrimEnd('/')}/{areaName}.png";
-            
-            // TODO: In a real implementation, you might want to check if the thumbnail exists
-            // For now, we'll assume it exists if thumbnailBaseUrl is provided
             return thumbnailUrl;
         }
         

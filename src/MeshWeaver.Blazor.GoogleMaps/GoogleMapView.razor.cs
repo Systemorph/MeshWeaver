@@ -70,13 +70,23 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             
             // Pass API key to JavaScript for dynamic loading and register marker click callback
             await jsModule.InvokeVoidAsync("initializeMap", MapId, mapOptions, ApiKey);
+            
+            // Small delay to let map initialization settle
+            await Task.Delay(200);
+            
             await jsModule.InvokeVoidAsync("setMarkerClickCallback", MapId, DotNetObjectReference.Create(this));
             Logger.LogDebug("Map initialized successfully");
             
-            // Update markers
-            
             StateHasChanged();
-            Logger.LogDebug("Map loading complete, IsLoaded = true");
+            Logger.LogDebug("Map loading complete");
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected during map initialization");
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed during map initialization");
         }
         catch (Exception ex)
         {
@@ -91,6 +101,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
 
         try
         {
+            // Check if the JavaScript module is still valid before calling
             var markerConfigs = ViewModel.Markers.Select(m => new
             {
                 id = m.Id ?? Guid.NewGuid().ToString(),
@@ -101,11 +112,24 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
                 icon = m.Icon
             }).ToArray();
 
+            // Add a small delay to ensure map is ready for marker updates
+            await Task.Delay(100);
+            
             await jsModule.InvokeVoidAsync("updateMarkers", MapId, markerConfigs);
+            
+            Logger.LogDebug("Successfully updated {MarkerCount} markers for map {MapId}", markerConfigs.Length, MapId);
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected, skipping marker update for map {MapId}", MapId);
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed, skipping marker update for map {MapId}", MapId);
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to update markers");
+            Logger.LogWarning(ex, "Failed to update markers for map {MapId}", MapId);
         }
     }
 
