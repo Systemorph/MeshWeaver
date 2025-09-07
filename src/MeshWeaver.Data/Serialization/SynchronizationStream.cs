@@ -201,10 +201,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
 
-        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId),
-            ConfigureSynchronizationHub);
+        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
 
-        startupDeferrable = Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
 
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
@@ -214,6 +212,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
 
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
+
+        startupDeferrable = 
+            Configuration.Initialization is not null ? 
+                Hub.Defer(d => d.Message is not ExecutionRequest) :
+            Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
         
         Hub.InvokeAsync(Initialize);
     }
@@ -268,6 +271,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
+        if(Hub.Disposal is not null)
+            return;
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
         {

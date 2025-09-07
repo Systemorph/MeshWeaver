@@ -130,37 +130,62 @@ public static class ThumbnailGenerator
 
     private static async Task WaitForContentLoad(IPage page, string areaName)
     {
-        // Wait for the area page to signal that content is ready
+        Console.WriteLine($"  ⏳ Waiting for content to stabilize for {areaName}...");
+        
+        // Simple, reliable approach: wait for initial content, then give time for everything to load
         try
         {
-            Console.WriteLine($"  🔍 Waiting for content to load for {areaName}...");
-            
-            // Wait for the area-loaded attribute to be set to true
-            await page.WaitForSelectorAsync("[data-area-loaded='true']", new PageWaitForSelectorOptions
-            {
-                Timeout = 10000 // 10 second timeout for content to be ready
-            });
-            
-            Console.WriteLine($"  ✅ Content loaded for {areaName}");
-        }
-        catch (TimeoutException)
-        {
-            Console.WriteLine($"  ⚠️  Content loading timeout for {areaName}, proceeding anyway...");
-            
-            // Fallback: wait for any content indicators
+            // First, wait for at least some content to appear (don't wait forever)
             try
             {
-                await Task.WhenAny(
-                    WaitForSelectorSafe(page, ".content-ready", 2000),
-                    WaitForSelectorSafe(page, "main, .content, [role='main']", 2000),
-                    WaitForSelectorSafe(page, "body[data-catalog-loaded='true']", 2000)
-                );
+                await page.WaitForSelectorAsync("main, .content, [role='main'], .area-page-container", new PageWaitForSelectorOptions
+                {
+                    Timeout = 8000 // 8 seconds max wait for initial content
+                });
+                Console.WriteLine($"  ✅ Initial content detected for {areaName}");
             }
             catch (TimeoutException)
             {
-                // Continue anyway - content might be loaded
-                Console.WriteLine($"  ⚠️  All loading indicators failed for {areaName}, proceeding...");
+                Console.WriteLine($"  ⚠️  No initial content selector found for {areaName}, proceeding anyway...");
             }
+            
+            // Give content time to fully render - this is the key for complex dashboards
+            Console.WriteLine($"  🕐 Allowing 8 seconds for all areas to render completely...");
+            await Task.Delay(8000);
+            
+            // Optional: Do a quick final check to see if we have any obvious loading indicators
+            try
+            {
+                var hasLoadingIndicators = await page.EvaluateAsync<bool>(@"
+                    () => {
+                        // Check for common loading indicators
+                        const spinners = document.querySelectorAll('fluent-progress-ring, .loading, .spinner, [data-area-loaded=""false""]');
+                        return spinners.length > 0;
+                    }
+                ");
+                
+                if (hasLoadingIndicators)
+                {
+                    Console.WriteLine($"  ⏳ Loading indicators still present, waiting additional 4 seconds...");
+                    await Task.Delay(4000);
+                }
+                else
+                {
+                    Console.WriteLine($"  ✅ No loading indicators detected");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ⚠️  Could not check loading indicators: {ex.Message}");
+            }
+            
+            Console.WriteLine($"  ✅ Content loading wait complete for {areaName}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  ⚠️  Error waiting for content load for {areaName}: {ex.Message}");
+            Console.WriteLine($"  🔄 Using fallback wait period...");
+            await Task.Delay(5000);
         }
     }
 
