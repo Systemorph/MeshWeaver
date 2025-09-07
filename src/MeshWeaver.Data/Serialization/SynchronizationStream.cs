@@ -213,10 +213,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        startupDeferrable = 
-            Configuration.Initialization is not null ? 
-                Hub.Defer(d => d.Message is not ExecutionRequest) :
-            Hub.Defer(d => d.Message is not DataChangedEvent && d.Message is not ExecutionRequest);
+        if(Configuration.Deferral is not null)
+            startupDeferrable = Hub.Defer(Configuration.Deferral);
         
         Hub.InvokeAsync(Initialize);
     }
@@ -369,6 +367,8 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal bool NullReturn { get; init; }
 
+    internal Predicate<IMessageDelivery>? Deferral { get; init; }
+
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
 
@@ -382,4 +382,10 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithExceptionCallback(Func<Exception, Task> exceptionCallback)
         => this with { ExceptionCallback = exceptionCallback };
+
+    public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
+        => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
+
+    public StreamConfiguration<TStream> WithDeferral(Predicate<IMessageDelivery> deferral)
+        => this with { Deferral = deferral };
 }

@@ -15,10 +15,8 @@ public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) 
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
     ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 
-    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
-    {
-        return CreateStream(identity, x => x);
-    }
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity) => 
+        CreateStream(identity, x => x.WithDeferral(d => d.Message is not DataChangedEvent{ChangeType:ChangeType.Full}));
 
     protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config) => 
         Workspace.GetRemoteStream(Address, GetReference());
