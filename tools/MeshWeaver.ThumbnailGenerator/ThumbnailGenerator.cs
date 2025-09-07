@@ -153,18 +153,60 @@ public static class ThumbnailGenerator
             Console.WriteLine($"  🕐 Allowing 8 seconds for all areas to render completely...");
             await Task.Delay(8000);
             
-            // Optional: Do a quick final check to see if we have any obvious loading indicators
+            // Check for loading indicators and Google Maps specifically
             try
             {
-                var hasLoadingIndicators = await page.EvaluateAsync<bool>(@"
+                var loadingStatus = await page.EvaluateAsync<dynamic>(@"
                     () => {
                         // Check for common loading indicators
                         const spinners = document.querySelectorAll('fluent-progress-ring, .loading, .spinner, [data-area-loaded=""false""]');
-                        return spinners.length > 0;
+                        
+                        // Check for Google Maps elements and their loading state
+                        const googleMapContainers = document.querySelectorAll('[id*=""google-map""], .google-map');
+                        let googleMapsReady = true;
+                        let googleMapsCount = googleMapContainers.length;
+                        
+                        googleMapContainers.forEach(container => {
+                            const mapDiv = container.querySelector('div[style*=""position""]');
+                            if (!mapDiv || mapDiv.children.length === 0) {
+                                googleMapsReady = false;
+                            }
+                        });
+                        
+                        return {
+                            hasSpinners: spinners.length > 0,
+                            googleMapsCount: googleMapsCount,
+                            googleMapsReady: googleMapsReady,
+                            hasGoogleMapsScript: !!window.google && !!window.google.maps
+                        };
                     }
                 ");
                 
-                if (hasLoadingIndicators)
+                var hasSpinners = (bool)loadingStatus.hasSpinners;
+                var googleMapsCount = (int)loadingStatus.googleMapsCount;
+                var googleMapsReady = (bool)loadingStatus.googleMapsReady;
+                var hasGoogleMapsScript = (bool)loadingStatus.hasGoogleMapsScript;
+                
+                if (googleMapsCount > 0)
+                {
+                    Console.WriteLine($"  🗺️  Detected {googleMapsCount} Google Maps element(s)");
+                    
+                    if (!hasGoogleMapsScript)
+                    {
+                        Console.WriteLine($"  ⏳ Google Maps API not loaded yet, waiting 6 seconds...");
+                        await Task.Delay(6000);
+                    }
+                    else if (!googleMapsReady)
+                    {
+                        Console.WriteLine($"  ⏳ Google Maps not fully rendered, waiting 4 seconds...");
+                        await Task.Delay(4000);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  ✅ Google Maps appear to be ready");
+                    }
+                }
+                else if (hasSpinners)
                 {
                     Console.WriteLine($"  ⏳ Loading indicators still present, waiting additional 4 seconds...");
                     await Task.Delay(4000);
