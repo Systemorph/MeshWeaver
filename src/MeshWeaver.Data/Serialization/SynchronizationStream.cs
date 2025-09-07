@@ -215,8 +215,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         if(Configuration.Deferral is not null)
             startupDeferrable = Hub.Defer(Configuration.Deferral);
-        
-        Hub.InvokeAsync(Initialize);
+
+        if (Configuration.Initialization is not null)
+        {
+            startupDeferrable = Hub.Defer(d => d.Message is not ExecutionRequest);
+            Hub.InvokeAsync(Initialize);
+        }
     }
 
     private IDisposable? startupDeferrable;
