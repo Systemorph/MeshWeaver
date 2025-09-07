@@ -21,6 +21,8 @@ namespace MeshWeaver.Layout.DataBinding
             TimeSpan dueTime,
             IScheduler? scheduler = null)
         {
+            return source;
+
             scheduler ??= DefaultScheduler.Instance;
 
             return Observable.Create<T>(observer =>
