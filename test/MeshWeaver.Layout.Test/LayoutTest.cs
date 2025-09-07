@@ -89,7 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area.ToString()!)
+        var control = await stream.GetControlStream(reference.Area)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control

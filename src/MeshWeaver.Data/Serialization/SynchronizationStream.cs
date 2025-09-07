@@ -213,14 +213,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        if(Configuration.Deferral is not null)
-            startupDeferrable = Hub.Defer(Configuration.Deferral);
 
         if (Configuration.Initialization is not null)
         {
             startupDeferrable = Hub.Defer(d => d.Message is not ExecutionRequest);
             Hub.InvokeAsync(Initialize);
         }
+        else if (Configuration.Deferral is not null)
+            startupDeferrable = Hub.Defer(Configuration.Deferral);
     }
 
     private IDisposable? startupDeferrable;
