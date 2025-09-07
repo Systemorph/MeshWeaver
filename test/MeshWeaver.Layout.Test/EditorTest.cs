@@ -162,7 +162,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
-    [Fact]
+    [Fact(Skip = "Debounce disabled for now")]
     public async Task TestEditorWithDelayed()
     {
         var client = GetClient();

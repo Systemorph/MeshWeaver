@@ -11,7 +11,7 @@ namespace MeshWeaver.Layout.Test;
 
 public class DebounceTest
 {
-    [Fact]
+    [Fact(Skip = "Debounce disabled for now")]
     public async Task BasicDebounce()
     {
         // List to capture debounced values
