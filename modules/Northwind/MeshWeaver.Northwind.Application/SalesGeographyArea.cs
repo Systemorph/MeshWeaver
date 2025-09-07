@@ -4,6 +4,10 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Domain;
+using MeshWeaver.DataCubes;
+using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Pivot.Aggregations;
+using MeshWeaver.Charting.Pivot;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -28,24 +32,24 @@ public static class SalesGeographyArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing country sales comparison.</returns>
-    public static IObservable<UiControl> CountrySalesComparison(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .Select(data =>
-            {
-                var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
-                    .GroupBy(x => x.ShipCountry)
-                    .Select(g => new { Country = g.Key!, Revenue = g.Sum(x => x.Amount) })
-                    .OrderByDescending(x => x.Revenue)
-                    .Take(15)
-                    .ToArray();
-
-                var chart = (UiControl)Charting.Chart.Bar(countryData.Select(c => c.Revenue), "Revenue")
-                    .WithLabels(countryData.Select(c => c.Country));
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Sales by Country"))
-                    .WithView(chart);
-            });
+    public static UiControl? CountrySalesComparison(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .SelectMany(data =>
+                    area.Workspace
+                        .Pivot(data.Where(x => !string.IsNullOrEmpty(x.ShipCountry)).ToDataCube())
+                        .WithAggregation(a => a.Sum(x => x.Amount))
+                        .SliceRowsBy(nameof(NorthwindDataCube.ShipCountry))
+                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderYear))
+                        .ToBarChart(builder => builder)
+                        .Select(chart => (UiControl)Controls.Stack
+                            .WithView(Controls.H2("Sales by Country (Stacked by Year)"))
+                            .WithView(chart.ToControl()))
+                ));
+    }
 
     /// <summary>
     /// Gets the regional analysis with data grid.
@@ -53,27 +57,32 @@ public static class SalesGeographyArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing regional analysis.</returns>
-    public static IObservable<UiControl> RegionalAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .SelectMany(data =>
-            {
-                var regionalData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
-                    .GroupBy(x => x.ShipCountry)
-                    .Select(g => new
-                    {
-                        Country = g.Key!,
-                        TotalRevenue = g.Sum(x => x.Amount),
-                        CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        OrderCount = g.DistinctBy(x => x.OrderId).Count()
-                    })
-                    .OrderByDescending(x => x.TotalRevenue);
+    public static UiControl? RegionalAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .SelectMany(data =>
+                {
+                    var regionalData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
+                        .GroupBy(x => x.ShipCountry)
+                        .Select(g => new
+                        {
+                            Country = g.Key!,
+                            TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
+                            CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
+                            OrderCount = g.DistinctBy(x => x.OrderId).Count()
+                        })
+                        .OrderByDescending(x => x.TotalRevenue);
 
-                return Observable.Return(
-                    Controls.Stack
-                        .WithView(Controls.H2("Regional Sales Analysis"))
-                        .WithView(layoutArea.ToDataGrid(regionalData.ToArray()))
-                );
-            });
+                    return Observable.Return(
+                        Controls.Stack
+                            .WithView(Controls.H2("Regional Sales Analysis"))
+                            .WithView(layoutArea.ToDataGrid(regionalData.ToArray()))
+                    );
+                }));
+    }
 
     /// <summary>
     /// Toolbar configuration for sales map view.
@@ -118,7 +127,7 @@ public static class SalesGeographyArea
                     .Select(g => new
                     {
                         Country = g.Key!,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count()
                     })
@@ -146,7 +155,7 @@ public static class SalesGeographyArea
                     .Select(g => new
                     {
                         Country = g.Key!,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count()
                     })
@@ -231,4 +240,17 @@ public static class SalesGeographyArea
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
             .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+}
+
+/// <summary>
+/// Represents a toolbar for sales geography analysis with year filtering.
+/// </summary>
+public record SalesGeographyToolbar
+{
+    internal const string Years = "years";
+    
+    /// <summary>
+    /// The year selected in the toolbar.
+    /// </summary>
+    [Dimension<int>(Options = Years)] public int Year { get; init; }
 }

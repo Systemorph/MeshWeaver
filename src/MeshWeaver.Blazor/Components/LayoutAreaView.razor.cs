@@ -38,6 +38,7 @@ public partial class LayoutAreaView
     private string? progressMessage;
     private DialogControl? currentDialog;
     private bool showDialog;
+    private bool IsContentLoaded { get; set; }
 
     private void BindViewModel()
     {
@@ -46,7 +47,7 @@ public partial class LayoutAreaView
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
         DataBind(ViewModel.Address, x => x.Address, ConvertAddress!);
         DataBind(ViewModel.Reference.Layout ?? ViewModel.Reference.Area, x => x.Area);
-
+        IsContentLoaded = true;
     }
 
     private Address? ConvertAddress(object address, Address _)

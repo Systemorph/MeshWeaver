@@ -55,6 +55,13 @@ public partial class MobileNavMenu : ComponentBase
             DesktopNavMenu.ChatIcon(),
             LinkMatchRegex: new Regex("^/chat")
         );
+        
+        yield return new MobileNavMenuEntry(
+            "Northwind",
+            () => NavigateToAsync($"/area/{DesktopNavMenu.LayoutAreas("Northwind")}?thumbnail-base=/static/Northwind/thumbnails"),
+            DesktopNavMenu.NorthwindIcon(),
+            LinkMatchRegex: new Regex("^/area/.*/LayoutAreas")
+        );
 
         yield return new MobileNavMenuEntry(
         "Settings",

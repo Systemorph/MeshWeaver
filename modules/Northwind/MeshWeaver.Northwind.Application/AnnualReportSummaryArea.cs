@@ -45,7 +45,6 @@ public static class AnnualReportSummaryArea
     {
         var currentYear = layoutArea.Year();
         var previousYear = currentYear - 1;
-
         return layoutArea.SummaryItems()
                 .Select(items => items.ToDictionary(x => x.Year))
                 .Select(items =>

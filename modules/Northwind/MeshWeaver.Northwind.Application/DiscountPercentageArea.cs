@@ -38,7 +38,9 @@ public static class DiscountPercentageArea
                         builder => builder
                             .WithLegend()
                     )
-                    .Select(x => x.ToControl())
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Discount Percentage"))
+                        .WithView(chart.ToControl()))
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetCombinedDiscountsDataCube(this LayoutAreaHost area)

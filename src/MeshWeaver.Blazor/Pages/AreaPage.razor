@@ -2,5 +2,10 @@
 @using MeshWeaver.Blazor.Layouts
 @layout EmptyLayout
 
-<LayoutAreaView ViewModel="@ViewModel" />
+<div class="area-page-container @(IsContentReady ? "content-ready" : "content-loading")" data-area-loaded="@(IsContentReady ? "true" : "false")">
+    @if (ViewModel != null)
+    {
+        <LayoutAreaView ViewModel="@ViewModel" />
+    }
+</div>
 

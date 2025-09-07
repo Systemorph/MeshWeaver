@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Components;
+﻿using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.GoogleMaps;
@@ -13,7 +13,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
     [Inject] private IOptions<GoogleMapsConfiguration> Configuration { get; set; } = null!;
 
     private string ApiKey => Configuration.Value.ApiKey ?? "";
-    private string MapId { get; set; }
+    private string MapId { get; set; } = null!;
     private string? Height { get; set; }
     private string? Width { get; set; }
     private IJSObjectReference? jsModule;

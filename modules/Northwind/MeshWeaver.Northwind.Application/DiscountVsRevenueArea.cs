@@ -49,7 +49,9 @@ public static class DiscountVsRevenueArea
                                         .WithAlign(DataLabelsAlign.Center)
                                 )
                             )
-                    ).Select(x => x.ToControl())
+                    ).Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Revenue vs Discount Analysis"))
+                        .WithView(chart.ToControl()))
 
             );
 

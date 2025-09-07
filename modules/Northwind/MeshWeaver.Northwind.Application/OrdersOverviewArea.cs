@@ -6,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -29,16 +30,24 @@ public static class OrdersOverviewArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of objects representing the orders count.</returns>
-    public static IObservable<UiControl> OrdersCount(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a.CountDistinctBy(x => x.OrderId))
-                    .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToLineChart(builder => builder).Select(x => x.ToControl())
-
-            );
+    public static UiControl? OrdersCount(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(OrdersToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new OrdersToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .SelectMany(data =>
+                    area.Workspace
+                        .Pivot(data.ToDataCube())
+                        .WithAggregation(a => a.CountDistinctBy(x => x.OrderId))
+                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
+                        .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
+                        .ToLineChart(builder => builder)
+                        .Select(chart => (UiControl)Controls.Stack
+                            .WithView(Controls.H2("Monthly Orders Count by Year"))
+                            .WithView(chart.ToControl()))
+                ));
+    }
 
     /// <summary>
     /// Gets the average order value for the specified layout area and rendering context.
@@ -60,10 +69,27 @@ public static class OrdersOverviewArea
                         .WithResultTransformation(pair => ArithmeticOperations.Divide(pair.sum, pair.count))
                     )
                     .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToLineChart(builder => builder).Select(x => x.ToControl())
+                    .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
+                    .ToLineChart(builder => builder)
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Average Order Value Trends by Year"))
+                        .WithView(chart.ToControl()))
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
             .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+}
+
+/// <summary>
+/// Represents a toolbar for orders overview with year filtering.
+/// </summary>
+public record OrdersToolbar
+{
+    internal const string Years = "years";
+    
+    /// <summary>
+    /// The year selected in the toolbar.
+    /// </summary>
+    [Dimension<int>(Options = Years)] public int Year { get; init; }
 }

@@ -1,14 +1,135 @@
 ﻿@inherits BlazorView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>
 
 @{
-    var img = ViewModel.Definition.ThumbnailUrl ?? ViewModel.Definition.ImageUrl;
+    var img = GetImageUrl();
     var alt = $"Thumbnail for {ViewModel.Definition.Title}";
 }
-<a href="@ViewModel.Definition.Url" class="card text-decoration-none">
-    <img src="@img" class="card-img-top" alt="@alt">
-    <div class="card-body">
-        <h5 class="card-title">@ViewModel.Definition.Title</h5>
-        <p class="card-text">@ViewModel.Definition.Description</p>
-        <span class="btn btn-primary">Go to Area</span>
+
+<a href="@ViewModel.Definition.Url" class="card layout-area-card text-decoration-none">
+    <div class="layout-area-card-content">
+        <img src="@img" class="layout-area-card-image" alt="@alt">
+        <div class="layout-area-card-text">
+            <h5 class="layout-area-card-title">@ViewModel.Definition.Title</h5>
+            <p class="layout-area-card-description">@(ViewModel.Definition.Description ?? "")</p>
+        </div>
     </div>
 </a>
+
+<style>
+.layout-area-card {
+    display: block;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-fill-rest);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    height: 140px;
+    overflow: hidden;
+    text-decoration: none !important;
+}
+
+.layout-area-card:hover {
+    border-color: var(--accent-fill-rest);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    text-decoration: none !important;
+}
+
+.layout-area-card-content {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 16px;
+    height: 100%;
+}
+
+.layout-area-card-image {
+    width: 108px;
+    height: 108px;
+    object-fit: cover;
+    border-radius: 8px;
+    flex-shrink: 0;
+    background: var(--neutral-fill-secondary);
+}
+
+.layout-area-card-text {
+    flex: 0 1 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    max-width: 200px;
+}
+
+.layout-area-card-title {
+    margin: 0;
+    font-size: 1.25em;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-decoration: none !important;
+}
+
+.layout-area-card-description {
+    margin: 0;
+    font-size: 1em;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.4;
+    text-decoration: none !important;
+}
+</style>
+
+@code {
+    private string GetImageUrl()
+    {
+        // First priority: explicit ThumbnailUrl
+        if (!string.IsNullOrEmpty(ViewModel.Definition.ThumbnailUrl))
+        {
+            return ViewModel.Definition.ThumbnailUrl;
+        }
+        
+        var id = ViewModel.Id?.ToString();
+        // Second priority: check for thumbnail using base URL from Id
+        if (!string.IsNullOrEmpty(id))
+        {
+            var thumbnailBaseUrl = id;
+            var areaName = ExtractAreaName(ViewModel.Definition);
+            var thumbnailUrl = $"{thumbnailBaseUrl.TrimEnd('/')}/{areaName}.png";
+            
+            // TODO: In a real implementation, you might want to check if the thumbnail exists
+            // For now, we'll assume it exists if thumbnailBaseUrl is provided
+            return thumbnailUrl;
+        }
+        
+        // Fallback: use standard ImageUrl or default placeholder
+        return ViewModel.Definition.ImageUrl ?? GetDefaultImage();
+    }
+    
+    private string ExtractAreaName(LayoutAreaDefinition definition)
+    {
+        // Try to extract area name from URL first
+        if (!string.IsNullOrEmpty(definition.Url))
+        {
+            var pathParts = definition.Url.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (pathParts.Length > 0)
+            {
+                // Take the last part as area name
+                return pathParts[^1];
+            }
+        }
+        
+        // Fallback to title, sanitize for filename
+        return definition.Title?.Replace(" ", "").Replace("-", "") ?? "unknown";
+    }
+
+    private string GetDefaultImage()
+    {
+        // SVG placeholder image
+        return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHZpZXdCb3g9IjAgMCA4MCA4MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiBmaWxsPSIjRjVGNUY1Ii8+CjxwYXRoIGQ9Ik00MCAyNUM0Ni42Mjc0IDI1IDUyIDMwLjM3MjYgNTIgMzdDNTIgNDMuNjI3NCA0Ni42Mjc0IDQ5IDQwIDQ5QzMzLjM3MjYgNDkgMjggNDMuNjI3NCAyOCAzN0MyOCAzMC4zNzI2IDMzLjM3MjYgMjUgNDAgMjVaIiBmaWxsPSIjRDREREREIi8+CjxwYXRoIGQ9Ik0yNCA1NUg1NlY0NUgyNFY1NVoiIGZpbGw9IiNEREREREQiLz4KPHN2Zz4K";
+    }
+}

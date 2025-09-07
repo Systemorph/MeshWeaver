@@ -9,6 +9,7 @@ namespace MeshWeaver.Blazor.Pages;
 public partial class AreaPage
 {
     private LayoutAreaControl ViewModel { get; set; } = null!;
+    private bool IsContentReady { get; set; } = false;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = null!;
@@ -55,9 +56,24 @@ public partial class AreaPage
 
         ViewModel = Controls.LayoutArea(Address!, Reference)
             with {
-                ShowProgress = true,
+                ShowProgress = false, // Disable progress indicator for cleaner screenshots
             };
 
+        // Reset content ready state when parameters change
+        IsContentReady = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        
+        // Use a short delay to allow content to stabilize, then mark as ready
+        if (!IsContentReady)
+        {
+            await Task.Delay(1000); // Allow content to load
+            IsContentReady = true;
+            StateHasChanged();
+        }
     }
 
 

@@ -51,4 +51,9 @@ public partial class DesktopNavMenu : ComponentBase
         => active
             ? new Icons.Filled.Size24.ShoppingBag()
             : new Icons.Regular.Size24.ShoppingBag();
+    
+    public static Icon NorthwindIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Globe()
+            : new Icons.Regular.Size24.Globe();
 }

@@ -6,6 +6,8 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Northwind.Domain;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -29,22 +31,34 @@ public static class EmployeePerformanceArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing top employees by revenue.</returns>
-    public static IObservable<UiControl> TopEmployeesByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .Select(data =>
-            {
-                var employeeData = data.GroupBy(x => x.Employee)
-                    .Select(g => new { Employee = g.Key.ToString(), Revenue = g.Sum(x => x.Amount) })
-                    .OrderByDescending(x => x.Revenue)
-                    .ToArray();
+    public static UiControl? TopEmployeesByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(EmployeeToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new EmployeeToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .CombineLatest(area.Workspace.GetStream<Employee>()!)
+                .Select(tuple =>
+                {
+                    var data = tuple.First;
+                    var employees = tuple.Second!.ToDictionary(e => e.EmployeeId, e => $"{e.FirstName} {e.LastName}");
+                    
+                    var employeeData = data.GroupBy(x => x.Employee)
+                        .Select(g => new { 
+                            Employee = employees.TryGetValue(g.Key, out var name) ? name : g.Key.ToString(), 
+                            Revenue = g.Sum(x => x.Amount) 
+                        })
+                        .OrderByDescending(x => x.Revenue)
+                        .ToArray();
 
-                var chart = (UiControl)Charting.Chart.Bar(employeeData.Select(e => e.Revenue), "Revenue")
-                    .WithLabels(employeeData.Select(e => e.Employee));
+                    var chart = (UiControl)Charting.Chart.Bar(employeeData.Select(e => e.Revenue), "Revenue")
+                        .WithLabels(employeeData.Select(e => e.Employee));
 
-                return Controls.Stack
-                    .WithView(Controls.H2("Top Employees by Revenue"))
-                    .WithView(chart);
-            });
+                    return Controls.Stack
+                        .WithView(Controls.H2("Top Employees by Revenue"))
+                        .WithView(chart);
+                }));
+    }
 
     /// <summary>
     /// Gets employee performance metrics.
@@ -54,16 +68,20 @@ public static class EmployeePerformanceArea
     /// <returns>An observable sequence of UI controls representing employee metrics.</returns>
     public static IObservable<UiControl> EmployeeMetrics(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
+            .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
+            .SelectMany(tuple =>
             {
+                var data = tuple.First;
+                var employees = tuple.Second!.ToDictionary(e => e.EmployeeId, e => $"{e.FirstName} {e.LastName}");
+                
                 var employeeMetrics = data.GroupBy(x => x.Employee)
                     .Select(g => new
                     {
-                        EmployeeId = g.Key,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        Employee = employees.TryGetValue(g.Key, out var name) ? name : g.Key.ToString(),
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        AvgOrderValue = g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount))
+                        AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount)), 2)
                     })
                     .OrderByDescending(x => x.TotalRevenue);
 
@@ -77,4 +95,17 @@ public static class EmployeePerformanceArea
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
             .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+}
+
+/// <summary>
+/// Represents a toolbar for employee performance analysis with year filtering.
+/// </summary>
+public record EmployeeToolbar
+{
+    internal const string Years = "years";
+    
+    /// <summary>
+    /// The year selected in the toolbar.
+    /// </summary>
+    [Dimension<int>(Options = Years)] public int Year { get; init; }
 }

@@ -6,6 +6,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -29,18 +30,24 @@ public static class TimeSeriesAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing monthly sales trends.</returns>
-    public static IObservable<UiControl> MonthlySalesTrend(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.Amount))
-                    .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToLineChart(builder => builder)
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Monthly Sales Trend"))
-                        .WithView(chart.ToControl()))
-            );
+    public static UiControl? MonthlySalesTrend(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(TimeSeriesToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new TimeSeriesToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .SelectMany(data =>
+                    area.Workspace
+                        .Pivot(data.ToDataCube())
+                        .WithAggregation(a => a.Sum(x => x.Amount))
+                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
+                        .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
+                        .ToLineChart(builder => builder)
+                        .Select(chart => (UiControl)Controls.Stack
+                            .WithView(Controls.H2("Monthly Sales Trend"))
+                            .WithView(chart.ToControl()))
+                ));
+    }
 
     /// <summary>
     /// Gets the quarterly performance analysis.
@@ -65,10 +72,10 @@ public static class TimeSeriesAnalysisArea
                     .Select(g => new
                     {
                         Quarter = g.Key,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        AvgOrderValue = g.GroupBy(x => x.OrderId).Average(orderGroup => orderGroup.Sum(x => x.Amount))
+                        AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(orderGroup => orderGroup.Sum(x => x.Amount)), 2)
                     })
                     .OrderBy(x => x.Quarter);
 
@@ -82,4 +89,17 @@ public static class TimeSeriesAnalysisArea
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
             .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+}
+
+/// <summary>
+/// Represents a toolbar for time series analysis with year filtering.
+/// </summary>
+public record TimeSeriesToolbar
+{
+    internal const string Years = "years";
+    
+    /// <summary>
+    /// The year selected in the toolbar.
+    /// </summary>
+    [Dimension<int>(Options = Years)] public int Year { get; init; }
 }

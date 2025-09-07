@@ -72,11 +72,11 @@ public static class DetailedReportsArea
                     {
                         ProductName = g.Key ?? "Unknown",
                         Category = g.First().Category,
-                        TotalRevenue = g.Sum(x => x.Amount),
+                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
                         TotalQuantitySold = g.Sum(x => x.Quantity),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        AvgDiscount = g.Average(x => x.Discount)
+                        AvgDiscount = Math.Round(g.Average(x => x.Discount) * 100, 1)
                     })
                     .OrderByDescending(x => x.TotalRevenue)
                     .Take(50);

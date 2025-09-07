@@ -45,7 +45,9 @@ public static class DiscountSummaryArea
                                         .WithAlign(DataLabelsAlign.End)
                                 )
                             )
-                    ).Select(x => x.ToControl())
+                    ).Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Monthly Discount Summary"))
+                        .WithView(chart.ToControl()))
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
