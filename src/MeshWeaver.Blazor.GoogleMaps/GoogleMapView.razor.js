@@ -132,10 +132,7 @@ const googleMaps = {
                     marker.addListener('click', () => {
                         const position = marker.getPosition();
                         this.markerClickCallbacks[mapId].invokeMethodAsync('OnMarkerClicked', 
-                            markerId, 
-                            markerOptions.title || '', 
-                            position.lat(), 
-                            position.lng()
+                            markerId
                         );
                     });
                 }

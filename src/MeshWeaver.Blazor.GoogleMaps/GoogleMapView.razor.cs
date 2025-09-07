@@ -178,7 +178,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
     }
 
     [JSInvokable]
-    public void OnMarkerClicked(string markerId, string markerTitle, double lat, double lng)
+    public void OnMarkerClicked(string markerId)
     {
         // Post ClickedEvent to the hub with markerId as payload
         var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)

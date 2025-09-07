@@ -84,7 +84,7 @@ public static class EditorExtensions
 
 
     private static readonly int DebounceWindow = 20; // milliseconds
-    public static UiControl? Edit<T>(
+    public static UiControl Edit<T>(
         this IServiceProvider serviceProvider,
         IObservable<T> observable,
         Func<T, LayoutAreaHost, RenderingContext, UiControl> result)
