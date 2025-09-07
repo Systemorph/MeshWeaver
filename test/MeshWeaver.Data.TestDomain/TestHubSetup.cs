@@ -1,6 +1,5 @@
 ﻿using System.Linq;
 using System.Threading;
-using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;
 using MeshWeaver.Messaging;

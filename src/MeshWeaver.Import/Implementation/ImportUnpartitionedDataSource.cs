@@ -18,7 +18,7 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
 
 
 
-    protected override async Task<EntityStore> GetInitialValue(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
+    protected override async Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
         var importManager = Workspace.Hub.ServiceProvider.GetRequiredService<ImportManager>();
         var store = await importManager.ImportInstancesAsync(

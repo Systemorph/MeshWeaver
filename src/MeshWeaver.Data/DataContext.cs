@@ -75,9 +75,6 @@ public sealed record DataContext : IDisposable
     {
         DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
 
-
-        foreach (var dataSource in DataSourcesById.Values)
-            dataSource.Initialize();
         DataSourcesByType = DataSourcesById.Values
             .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
         DataSourcesByCollection = DataSourcesByType.Select(kvp => new KeyValuePair<string, IDataSource>(TypeRegistry.GetCollectionName(kvp.Key)!, kvp.Value)).ToDictionary();
