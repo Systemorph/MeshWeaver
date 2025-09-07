@@ -144,18 +144,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Func<Exception, Task> exceptionCallback) =>
         Hub.Post(new UpdateStreamRequest(update, exceptionCallback));
 
-    public void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback)
+    public void Initialize()
     {
-        Hub.InvokeAsync(async ct =>
-        {
-            var initialValue = await init.Invoke(ct);
-            SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
-        }, exceptionCallback);
-    }
-
-    public void Initialize(TStream startWith)
-    {
-        SetCurrent(new ChangeItem<TStream>(startWith, StreamId, Hub.Version));
+        if (Configuration.Initialization is not null)
+            Hub.InvokeAsync(async ct =>
+            {
+                var initialValue = await Configuration.Initialization.Invoke(this, ct);
+                SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
+            }, Configuration.ExceptionCallback);
     }
 
 
@@ -214,9 +210,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
+
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
 
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
+        
+        Hub.InvokeAsync(Initialize);
     }
 
     private IDisposable? startupDeferrable;
@@ -368,4 +367,14 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
 
+    internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
+
+    
+    internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
+
+    public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
+        => this with { Initialization = init };
+
+    public StreamConfiguration<TStream> WithExceptionCallback(Func<Exception, Task> exceptionCallback)
+        => this with { ExceptionCallback = exceptionCallback };
 }

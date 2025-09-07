@@ -43,9 +43,6 @@ public interface ISynchronizationStream<TStream>
     void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback);
     void Update(Func<TStream?, ChangeItem<TStream>?> update) => Update(update, _ => Task.CompletedTask);
     void Update(Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> update, Func<Exception, Task> exceptionCallback);
-    void Initialize(Func<CancellationToken, Task<TStream>> init, Func<Exception, Task> exceptionCallback);
-    void Initialize(Func<TStream> init, Func<Exception, Task> exceptionCallback) => Initialize(_ => Task.FromResult(init()), exceptionCallback);
-    void Initialize(TStream init);
     ReduceManager<TStream> ReduceManager { get; }
 
 }

@@ -43,9 +43,9 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
                 new AggregateWorkspaceReference(),
                 new ReduceManager<ImmutableDictionary<string, object>>(Hub),
                 x => x
+                    .WithInitialization((_, _) => Task.FromResult(ImmutableDictionary<string, object>.Empty))
             );
             
-        AreasStream.Initialize(_ => Task.FromResult(ImmutableDictionary<string,object>.Empty), _ => Task.CompletedTask);
         Hub.RegisterForDisposal(this);
         DisposeOnTimeout();
     }

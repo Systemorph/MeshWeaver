@@ -34,20 +34,32 @@ public record LayoutAreaHost : IDisposable
 
     public LayoutDefinition LayoutDefinition { get; }
     private readonly ILogger<LayoutAreaHost> logger;
+
     public LayoutAreaHost(IWorkspace workspace,
         LayoutAreaReference reference,
         IUiControlService uiControlService,
-        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> configuration)
+        Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>>? configuration)
     {
         this.uiControlService = uiControlService;
         Workspace = workspace;
+        var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
         LayoutDefinition = uiControlService.LayoutDefinition;
+        configuration ??= c => c;
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
-            configuration);
+            c => configuration.Invoke(c).WithInitialization(async (_, _) => (await LayoutDefinition
+                    .RenderAsync(this, context, new EntityStore()
+                        .Update(LayoutAreaReference.Areas, x => x)
+                        .Update(LayoutAreaReference.Data, x => x)
+                    ))
+                .Store).WithExceptionCallback(ex =>
+            {
+                FailRendering(ex);
+                return Task.CompletedTask;
+            }));
         Reference = reference;
         Stream.RegisterForDisposal(this);
         Stream.RegisterForDisposal(
@@ -374,33 +386,8 @@ public record LayoutAreaHost : IDisposable
         return ret;
     }
 
-    internal ISynchronizationStream<EntityStore> RenderLayoutArea()
+    internal ISynchronizationStream<EntityStore> GetStream()
     {
-        logger.LogDebug("Scheduling re-rendering");
-
-        InvokeAsync(() =>
-        {
-            //DisposeAllAreas();
-            logger.LogDebug("Start re-rendering");
-            var reference = (LayoutAreaReference)Stream.Reference;
-            var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
-            Stream.Initialize(async _ =>
-                    (await LayoutDefinition
-                        .RenderAsync(this, context, new EntityStore()
-                            .Update(LayoutAreaReference.Areas, x => x)
-                            .Update(LayoutAreaReference.Data, x => x)
-                        ))
-                        .Store, ex =>
-            {
-                FailRendering(ex);
-                return Task.CompletedTask;
-            });
-            logger.LogDebug("End re-rendering");
-        }, ex =>
-        {
-            FailRendering(ex);
-            return Task.CompletedTask;
-        });
         return Stream;
     }
 

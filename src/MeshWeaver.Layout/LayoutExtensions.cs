@@ -46,7 +46,7 @@ public static class LayoutExtensions
                                             workspace.Hub.ServiceProvider
                                                 .GetRequiredService<IUiControlService>(),
                                             configuration!)
-                                        .RenderLayoutArea()
+                                        .GetStream()
                             )
                     );
                 }).AddLayoutTypes()
