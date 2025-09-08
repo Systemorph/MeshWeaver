@@ -209,22 +209,40 @@ public static class SalesGeographyArea
             ["Venezuela"] = new(6.4238, -66.5897)
         };
 
-        var markers = new List<MapMarker>();
+        var circles = new List<MapCircle>();
         var validCountries = new List<dynamic>();
+        
+        // Calculate max revenue for proportional sizing
+        var maxRevenue = countryData.Max(c => c.TotalRevenue);
+        var minRadius = 50000; // 50km minimum
+        var maxRadius = 500000; // 500km maximum
         
         foreach (var country in countryData)
         {
-            var countryName = country.GetType().GetProperty("Country")?.GetValue(country)?.ToString() ?? "";
-            var revenue = country.GetType().GetProperty("TotalRevenue")?.GetValue(country) ?? 0;
-            
-            if (countryCoordinates.TryGetValue(countryName, out var coordinates))
+            if (countryCoordinates.TryGetValue(country.Country, out var coordinates))
             {
                 validCountries.Add(country);
-                markers.Add(new MapMarker
+                
+                // Calculate proportional radius based on revenue
+                var revenueRatio = country.TotalRevenue / maxRevenue;
+                var radius = minRadius + (maxRadius - minRadius) * revenueRatio;
+                
+                // Color intensity based on revenue (darker = higher revenue)
+                var intensity = Math.Min(1.0, revenueRatio + 0.3); // Ensure minimum visibility
+                var red = (int)(255 * intensity);
+                var fillColor = $"#{red:X2}4444";
+                var strokeColor = $"#{red:X2}0000";
+                
+                circles.Add(new MapCircle
                 {
-                    Position = coordinates,
-                    Title = $"{countryName}: ${revenue:N0}",
-                    Label = countryName.Substring(0, Math.Min(2, countryName.Length)),
+                    Center = coordinates,
+                    Radius = radius,
+                    FillColor = fillColor,
+                    FillOpacity = 0.35,
+                    StrokeColor = strokeColor,
+                    StrokeOpacity = 0.8,
+                    StrokeWeight = 2,
+                    Id = country.Country,
                     Data = country
                 });
             }
@@ -242,10 +260,9 @@ public static class SalesGeographyArea
         return new GoogleMapControl
         {
             Options = mapOptions,
-            Markers = markers
+            Circles = circles
         }.WithClass("full-width-map")
-         .WithStyle(style => style.WithWidth("100%").WithHeight("600px"))
-            ;
+         .WithStyle(style => style.WithWidth("100%").WithHeight("600px"));
     }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

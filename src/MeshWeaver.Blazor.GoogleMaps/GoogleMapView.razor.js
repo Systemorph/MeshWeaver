@@ -1,7 +1,9 @@
 const googleMaps = {
     maps: {},
     markers: {},
+    circles: {},
     markerClickCallbacks: {},
+    circleClickCallbacks: {},
     apiLoaded: false,
 
     loadGoogleMapsAPI: function(apiKey) {
@@ -94,6 +96,7 @@ const googleMaps = {
                 const map = new google.maps.Map(mapElement, mapOptions);
                 this.maps[mapId] = map;
                 this.markers[mapId] = [];
+                this.circles[mapId] = [];
 
                 // Force a resize in case of timing issues
                 setTimeout(() => {
@@ -221,6 +224,88 @@ const googleMaps = {
         this.markerClickCallbacks[mapId] = dotNetObjectReference;
     },
 
+    addCircle: function (mapId, circleOptions) {
+        return new Promise((resolve, reject) => {
+            if (!this.maps[mapId]) {
+                reject(`Map '${mapId}' not found`);
+                return;
+            }
+
+            try {
+                const circle = new google.maps.Circle({
+                    strokeColor: circleOptions.strokeColor || '#FF0000',
+                    strokeOpacity: circleOptions.strokeOpacity || 0.8,
+                    strokeWeight: circleOptions.strokeWeight || 2,
+                    fillColor: circleOptions.fillColor || '#FF0000',
+                    fillOpacity: circleOptions.fillOpacity || 0.35,
+                    map: this.maps[mapId],
+                    center: { lat: circleOptions.center.lat, lng: circleOptions.center.lng },
+                    radius: circleOptions.radius || 1000
+                });
+
+                const circleId = circleOptions.id || `circle_${Date.now()}_${Math.random()}`;
+                
+                // Add click listener if callback is available
+                if (this.circleClickCallbacks[mapId]) {
+                    circle.addListener('click', () => {
+                        this.circleClickCallbacks[mapId].invokeMethodAsync('OnCircleClicked', 
+                            circleId
+                        );
+                    });
+                }
+                
+                this.circles[mapId].push({ id: circleId, circle: circle });
+
+                resolve(circleId);
+            } catch (error) {
+                reject(error.message);
+            }
+        });
+    },
+
+    clearCircles: function (mapId) {
+        return new Promise((resolve, reject) => {
+            if (!this.maps[mapId]) {
+                reject(`Map '${mapId}' not found`);
+                return;
+            }
+
+            try {
+                const circles = this.circles[mapId] || [];
+                circles.forEach(circleData => {
+                    circleData.circle.setMap(null);
+                });
+                this.circles[mapId] = [];
+                resolve(true);
+            } catch (error) {
+                reject(error.message);
+            }
+        });
+    },
+
+    updateCircles: function (mapId, circleConfigs) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                // Clear existing circles
+                await this.clearCircles(mapId);
+
+                // Add new circles
+                const circlePromises = circleConfigs.map(config => 
+                    this.addCircle(mapId, config)
+                );
+
+                await Promise.all(circlePromises);
+                resolve(true);
+            } catch (error) {
+                reject(error.message);
+            }
+        });
+    },
+
+    setCircleClickCallback: function (mapId, dotNetObjectReference) {
+        this.circleClickCallbacks[mapId] = dotNetObjectReference;
+    },
+
     isGoogleMapsLoaded: function () {
         return this.apiLoaded && typeof google !== 'undefined' && typeof google.maps !== 'undefined';
     }
@@ -257,4 +342,20 @@ export function setMarkerClickCallback(mapId, dotNetObjectReference) {
 
 export function isGoogleMapsLoaded() {
     return googleMaps.isGoogleMapsLoaded();
+}
+
+export function addCircle(mapId, circleOptions) {
+    return googleMaps.addCircle(mapId, circleOptions);
+}
+
+export function clearCircles(mapId) {
+    return googleMaps.clearCircles(mapId);
+}
+
+export function updateCircles(mapId, circleConfigs) {
+    return googleMaps.updateCircles(mapId, circleConfigs);
+}
+
+export function setCircleClickCallback(mapId, dotNetObjectReference) {
+    return googleMaps.setCircleClickCallback(mapId, dotNetObjectReference);
 }

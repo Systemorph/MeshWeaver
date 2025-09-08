@@ -491,23 +491,45 @@ public static class CustomerAnalysisArea
             ["Venezuela"] = new(6.4238, -66.5897)
         };
 
-        var markers = new List<MapMarker>();
+        var circles = new List<MapCircle>();
         var validCountries = new List<dynamic>();
+        
+        // Calculate max customer count for proportional sizing
+        var maxCustomerCount = countryData.Max(c => 
+            Convert.ToInt32(c.GetType().GetProperty("CustomerCount")?.GetValue(c) ?? 0));
+        var minRadius = 40000; // 40km minimum
+        var maxRadius = 400000; // 400km maximum
         
         foreach (var country in countryData)
         {
             var countryName = country.GetType().GetProperty("Country")?.GetValue(country)?.ToString() ?? "";
-            var customerCount = country.GetType().GetProperty("CustomerCount")?.GetValue(country) ?? 0;
-            var revenue = country.GetType().GetProperty("TotalRevenue")?.GetValue(country) ?? 0;
+            var customerCount = Convert.ToInt32(country.GetType().GetProperty("CustomerCount")?.GetValue(country) ?? 0);
+            var revenue = Convert.ToDouble(country.GetType().GetProperty("TotalRevenue")?.GetValue(country) ?? 0);
             
             if (countryCoordinates.TryGetValue(countryName, out var coordinates))
             {
                 validCountries.Add(country);
-                markers.Add(new MapMarker
+                
+                // Calculate proportional radius based on customer count
+                var customerRatio = maxCustomerCount > 0 ? (double)customerCount / maxCustomerCount : 0;
+                var radius = minRadius + (maxRadius - minRadius) * customerRatio;
+                
+                // Color intensity based on customer count (darker blue = more customers)
+                var intensity = Math.Min(1.0, customerRatio + 0.3); // Ensure minimum visibility
+                var blue = (int)(255 * intensity);
+                var fillColor = $"#4444{blue:X2}";
+                var strokeColor = $"#0000{blue:X2}";
+                
+                circles.Add(new MapCircle
                 {
-                    Position = coordinates,
-                    Title = $"{countryName}: {customerCount} customers, ${revenue:N0}",
-                    Label = countryName.Substring(0, Math.Min(2, countryName.Length)),
+                    Center = coordinates,
+                    Radius = radius,
+                    FillColor = fillColor,
+                    FillOpacity = 0.35,
+                    StrokeColor = strokeColor,
+                    StrokeOpacity = 0.8,
+                    StrokeWeight = 2,
+                    Id = countryName,
                     Data = country
                 });
             }
@@ -525,7 +547,7 @@ public static class CustomerAnalysisArea
         return new GoogleMapControl
         {
             Options = mapOptions,
-            Markers = markers
+            Circles = circles
         }.WithStyle(style => style.WithWidth("100%").WithHeight("500px"));
     }
 

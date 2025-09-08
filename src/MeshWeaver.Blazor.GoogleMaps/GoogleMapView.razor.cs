@@ -39,10 +39,11 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
         try
         {
             await UpdateMarkers();
+            await UpdateCircles();
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error in UpdateMarkers");
+            Logger.LogError(ex, "Error in UpdateMarkers/UpdateCircles");
         }
         await base.OnAfterRenderAsync(firstRender);
     }
@@ -73,6 +74,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             await Task.Delay(200);
             
             await jsModule.InvokeVoidAsync("setMarkerClickCallback", MapId, DotNetObjectReference.Create(this));
+            await jsModule.InvokeVoidAsync("setCircleClickCallback", MapId, DotNetObjectReference.Create(this));
             Logger.LogDebug("Map initialized successfully");
             
             StateHasChanged();
@@ -111,7 +113,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             }).ToArray();
 
             // Add a small delay to ensure map is ready for marker updates
-            await Task.Delay(100);
+            await Task.Delay(100); 
             
             await jsModule.InvokeVoidAsync("updateMarkers", MapId, markerConfigs);
             
@@ -128,6 +130,45 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to update markers for map {MapId}", MapId);
+        }
+    }
+
+    private async Task UpdateCircles()
+    {
+        if (string.IsNullOrEmpty(MapId) || ViewModel.Circles == null || jsModule == null || !ViewModel.Circles.Any())
+            return;
+
+        try
+        {
+            var circleConfigs = ViewModel.Circles.Select(c => new
+            {
+                id = c.Id ?? Guid.NewGuid().ToString(),
+                center = new { lat = c.Center.Lat, lng = c.Center.Lng },
+                radius = c.Radius,
+                fillColor = c.FillColor ?? "#FF0000",
+                fillOpacity = c.FillOpacity,
+                strokeColor = c.StrokeColor ?? "#FF0000",
+                strokeOpacity = c.StrokeOpacity,
+                strokeWeight = c.StrokeWeight
+            }).ToArray();
+
+            await Task.Delay(100);
+            
+            await jsModule.InvokeVoidAsync("updateCircles", MapId, circleConfigs);
+            
+            Logger.LogDebug("Successfully updated {CircleCount} circles for map {MapId}", circleConfigs.Length, MapId);
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected, skipping circle update for map {MapId}", MapId);
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed, skipping circle update for map {MapId}", MapId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to update circles for map {MapId}", MapId);
         }
     }
 
@@ -181,6 +222,19 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
         var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)
         {
             Payload = markerId
+        };
+
+        // Post the event through the Hub
+        Hub.Post(clickedEvent, o => o.WithTarget(Stream.Owner));
+    }
+
+    [JSInvokable]
+    public void OnCircleClicked(string circleId)
+    {
+        // Post ClickedEvent to the hub with circleId as payload
+        var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)
+        {
+            Payload = circleId
         };
 
         // Post the event through the Hub

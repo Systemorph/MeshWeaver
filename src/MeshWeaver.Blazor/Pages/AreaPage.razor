@@ -2,10 +2,15 @@
 @using MeshWeaver.Blazor.Layouts
 @layout EmptyLayout
 
+<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
+<PageTitle>@PageTitle</PageTitle>
 <div class="area-page-container @(IsContentReady ? "content-ready" : "content-loading")" data-area-loaded="@(IsContentReady ? "true" : "false")">
-    @if (ViewModel != null)
-    {
+    <CascadingValue Value="@Mode" Name="ThemeMode">
         <LayoutAreaView ViewModel="@ViewModel" />
-    }
+    </CascadingValue>
 </div>
 
+@code
+{
+    private DesignThemeModes Mode;
+}

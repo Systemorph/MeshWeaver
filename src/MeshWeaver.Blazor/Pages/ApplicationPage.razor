@@ -1,6 +1,12 @@
 @page "/app/{Application}/{Area}/{**Id}"
 
+<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
-<LayoutAreaView ViewModel="@ViewModel" Top="true" />
-
+<CascadingValue Value="@Mode" Name="ThemeMode">
+    <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+</CascadingValue>
+@code
+{
+    private DesignThemeModes Mode;
+}
