@@ -40,10 +40,6 @@ public record LayoutAreaHost : IDisposable
         IUiControlService uiControlService,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>>? configuration)
     {
-        executionHub = workspace.Hub.GetHostedHub(
-            new LayoutExecutionAddress(),
-            x => x
-        );
 
         this.uiControlService = uiControlService;
         Workspace = workspace;
@@ -155,9 +151,6 @@ public record LayoutAreaHost : IDisposable
 
         return ret;
     }
-
-
-    private readonly IMessageHub executionHub;
 
 
     public void UpdateArea(RenderingContext context, object? view)
@@ -276,12 +269,11 @@ public record LayoutAreaHost : IDisposable
         foreach (var disposable in disposablesByArea.ToArray())
             disposable.Value.ForEach(d => d.Dispose());
         disposablesByArea.Clear();
-        executionHub.Dispose();
-    }
+   }
 
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
     {
-        executionHub.InvokeAsync(action, exceptionCallback);
+        Stream.Hub.InvokeAsync(action, exceptionCallback);
     }
 
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) =>
