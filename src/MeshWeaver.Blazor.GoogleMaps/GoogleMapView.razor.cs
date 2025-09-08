@@ -14,8 +14,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
 
     private string ApiKey => Configuration.Value.ApiKey ?? "";
     private string MapId { get; set; } = null!;
-    private string? Height { get; set; }
-    private string? Width { get; set; }
+    private object? Style { get; set; }
     private IJSObjectReference? jsModule;
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -144,8 +143,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             return string.IsNullOrWhiteSpace(toString) ? $"google-map-{Guid.NewGuid().AsString()}" : toString;
         });
 
-        DataBind(ViewModel.Height, x => x.Height);
-        DataBind(ViewModel.Width, x => x.Width);
+        DataBind(ViewModel.Style, x => x.Style);
     }
 
 

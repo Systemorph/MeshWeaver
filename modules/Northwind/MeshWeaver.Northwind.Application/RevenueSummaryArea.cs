@@ -9,7 +9,9 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add revenue summary to the layout and retrieve revenue data.
+/// Creates revenue trend analysis showing monthly sales performance over multiple years.
+/// Displays interactive line charts with year filtering to track revenue patterns and identify
+/// seasonal trends, growth periods, and performance comparisons across different time frames.
 /// </summary>
 public static class RevenueSummaryArea
 {
@@ -22,11 +24,15 @@ public static class RevenueSummaryArea
         => layout.WithView(nameof(RevenueSummary), RevenueSummary);
 
     /// <summary>
-    /// Retrieves the revenue summary data and converts it to a line chart.
+    /// Displays a multi-line chart showing monthly revenue trends with separate lines for each year.
+    /// Features a year filter toolbar to focus on specific time periods. Each year is represented
+    /// by a different colored line connecting monthly revenue data points. The chart includes
+    /// a "Revenue Summary by Year" header and shows exact revenue amounts when hovering over data points.
+    /// Helps identify seasonal patterns and year-over-year growth trends.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the revenue summary line chart.</returns>
+    /// <returns>A line chart with year-based filtering and monthly revenue trend lines.</returns>
     public static UiControl? RevenueSummary(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(RevenueToolbar.Years, layoutArea.GetAllYearsOfOrders());

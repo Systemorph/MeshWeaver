@@ -10,7 +10,9 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage discount summary areas in the layout.
+/// Creates discount impact analysis showing total discount amounts distributed across monthly periods.
+/// Displays a vertical bar chart with data labels showing how much discount money was given per month,
+/// helping track promotional spending and its distribution over time.
 /// </summary>
 public static class DiscountSummaryArea
 {
@@ -25,11 +27,15 @@ public static class DiscountSummaryArea
         ;
 
     /// <summary>
-    /// Generates a discount summary view for the specified layout area and rendering context.
+    /// Displays a vertical bar chart showing total discount amounts given each month.
+    /// Each bar represents the sum of all discounts applied in that month, with data labels
+    /// positioned at the end of bars showing exact dollar amounts. Features the "Monthly Discount Summary"
+    /// header and helps visualize promotional spending patterns across different months.
+    /// Useful for understanding seasonal discount trends and promotional budget allocation.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the discount summary view.</returns>
+    /// <returns>A vertical bar chart with monthly discount totals and descriptive header.</returns>
     public static IObservable<UiControl> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>

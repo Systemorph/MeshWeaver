@@ -7,8 +7,6 @@ public record GoogleMapControl() : UiControl<GoogleMapControl>("MeshWeaver.Googl
 
     public MapOptions? Options { get; set; }
     public IEnumerable<MapMarker>? Markers { get; set; }
-    public string? Height { get; set; } = "600px";
-    public string? Width { get; set; } = "100%";
 
 }
 

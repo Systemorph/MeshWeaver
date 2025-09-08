@@ -1,4 +1,4 @@
-using Microsoft.Playwright;
+﻿using Microsoft.Playwright;
 
 namespace MeshWeaver.ThumbnailGenerator;
 
@@ -87,18 +87,18 @@ public static class ThumbnailGenerator
                 var fileName = isDarkMode ? $"{areaName}-dark.png" : $"{areaName}.png";
                 var filePath = Path.Combine(outputDir, fileName);
 
-                // Navigate to the area URL with optimized settings
+                // Navigate to the area URL
                 await page.GotoAsync(url, new PageGotoOptions
                 {
-                    WaitUntil = WaitUntilState.DOMContentLoaded, // Faster than NetworkIdle
-                    Timeout = 15000 // Reduced from 30s
+                    WaitUntil = WaitUntilState.NetworkIdle,
+                    Timeout = 30000
                 });
 
-                // Optimized content loading detection
+                // Simple content loading wait
                 await WaitForContentLoad(page, areaName);
 
-                // Reduced stabilization wait
-                await page.WaitForTimeoutAsync(500); // Reduced from 2000ms
+                // Additional wait for content to stabilize
+                await page.WaitForTimeoutAsync(2000);
 
                 // Take screenshot
                 await page.ScreenshotAsync(new PageScreenshotOptions
@@ -130,104 +130,38 @@ public static class ThumbnailGenerator
 
     private static async Task WaitForContentLoad(IPage page, string areaName)
     {
-        Console.WriteLine($"  ⏳ Waiting for content to stabilize for {areaName}...");
-        
-        // Simple, reliable approach: wait for initial content, then give time for everything to load
         try
         {
-            // First, wait for at least some content to appear (don't wait forever)
+            // Wait for content to load (similar to catalog logic)
             try
             {
-                await page.WaitForSelectorAsync("main, .content, [role='main'], .area-page-container", new PageWaitForSelectorOptions
+                await page.WaitForSelectorAsync("body[data-catalog-loaded='true']", new PageWaitForSelectorOptions
                 {
-                    Timeout = 8000 // 8 seconds max wait for initial content
+                    Timeout = 10000
                 });
-                Console.WriteLine($"  ✅ Initial content detected for {areaName}");
             }
             catch (TimeoutException)
             {
-                Console.WriteLine($"  ⚠️  No initial content selector found for {areaName}, proceeding anyway...");
-            }
-            
-            // Give content time to fully render - this is the key for complex dashboards
-            Console.WriteLine($"  🕐 Allowing 8 seconds for all areas to render completely...");
-            await Task.Delay(8000);
-            
-            // Check for loading indicators and Google Maps specifically
-            try
-            {
-                var loadingStatus = await page.EvaluateAsync<dynamic>(@"
-                    () => {
-                        // Check for common loading indicators
-                        const spinners = document.querySelectorAll('fluent-progress-ring, .loading, .spinner, [data-area-loaded=""false""]');
-                        
-                        // Check for Google Maps elements and their loading state
-                        const googleMapContainers = document.querySelectorAll('[id*=""google-map""], .google-map');
-                        let googleMapsReady = true;
-                        let googleMapsCount = googleMapContainers.length;
-                        
-                        googleMapContainers.forEach(container => {
-                            const mapDiv = container.querySelector('div[style*=""position""]');
-                            if (!mapDiv || mapDiv.children.length === 0) {
-                                googleMapsReady = false;
-                            }
-                        });
-                        
-                        return {
-                            hasSpinners: spinners.length > 0,
-                            googleMapsCount: googleMapsCount,
-                            googleMapsReady: googleMapsReady,
-                            hasGoogleMapsScript: !!window.google && !!window.google.maps
-                        };
-                    }
-                ");
-                
-                var hasSpinners = (bool)loadingStatus.hasSpinners;
-                var googleMapsCount = (int)loadingStatus.googleMapsCount;
-                var googleMapsReady = (bool)loadingStatus.googleMapsReady;
-                var hasGoogleMapsScript = (bool)loadingStatus.hasGoogleMapsScript;
-                
-                if (googleMapsCount > 0)
+                // If no catalog loaded signal, wait for spinner to disappear or content to appear
+                try
                 {
-                    Console.WriteLine($"  🗺️  Detected {googleMapsCount} Google Maps element(s)");
-                    
-                    if (!hasGoogleMapsScript)
+                    await page.WaitForSelectorAsync("fluent-progress-ring", new PageWaitForSelectorOptions
                     {
-                        Console.WriteLine($"  ⏳ Google Maps API not loaded yet, waiting 6 seconds...");
-                        await Task.Delay(6000);
-                    }
-                    else if (!googleMapsReady)
-                    {
-                        Console.WriteLine($"  ⏳ Google Maps not fully rendered, waiting 4 seconds...");
-                        await Task.Delay(4000);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"  ✅ Google Maps appear to be ready");
-                    }
+                        State = WaitForSelectorState.Detached,
+                        Timeout = 15000
+                    });
                 }
-                else if (hasSpinners)
+                catch (TimeoutException)
                 {
-                    Console.WriteLine($"  ⏳ Loading indicators still present, waiting additional 4 seconds...");
-                    await Task.Delay(4000);
-                }
-                else
-                {
-                    Console.WriteLine($"  ✅ No loading indicators detected");
+                    // Continue anyway - content might be loaded
+                    Console.WriteLine($"  Warning: Loading indicators not found for {areaName}, proceeding...");
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  ⚠️  Could not check loading indicators: {ex.Message}");
-            }
-            
-            Console.WriteLine($"  ✅ Content loading wait complete for {areaName}");
+
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"  ⚠️  Error waiting for content load for {areaName}: {ex.Message}");
-            Console.WriteLine($"  🔄 Using fallback wait period...");
-            await Task.Delay(5000);
+            Console.WriteLine($"  Warning: Content load detection failed: {ex.Message}");
         }
     }
 

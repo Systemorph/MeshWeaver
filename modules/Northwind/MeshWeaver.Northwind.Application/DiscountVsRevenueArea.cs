@@ -9,7 +9,9 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage discount vs revenue areas in the layout.
+/// Creates a comparative analysis showing revenue amounts alongside discount amounts in a stacked bar chart.
+/// Visualizes the relationship between total sales revenue and promotional discounts given,
+/// helping understand the impact of discounting strategies on overall business performance.
 /// </summary>
 public static class DiscountVsRevenueArea
 {
@@ -23,11 +25,15 @@ public static class DiscountVsRevenueArea
         ;
 
     /// <summary>
-    /// Generates a view with a chart which has a combined representation of revenues and discounts for the specified layout area and rendering context.
+    /// Displays a stacked bar chart comparing monthly revenue amounts with discount amounts side-by-side.
+    /// Each month shows two stacked sections: actual revenue generated and total discounts applied,
+    /// with different colors for easy distinction. Data labels are centered on each section showing
+    /// exact amounts. The "Revenue vs Discount Analysis" header provides context for the comparison.
+    /// Helps visualize the ratio of discounts to revenue and identify months with heavy promotional activity.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the discount summary view.</returns>
+    /// <returns>A stacked bar chart showing monthly revenue and discount amounts with centered data labels.</returns>
     public static IObservable<UiControl> DiscountVsRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetCombinedDiscountsDataCube()
             .SelectMany(data =>

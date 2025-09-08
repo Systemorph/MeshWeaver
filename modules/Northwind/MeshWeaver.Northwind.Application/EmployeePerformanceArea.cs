@@ -12,7 +12,9 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage employee performance areas in the layout.
+/// Creates employee performance analytics showing sales achievements, customer relationships, and productivity metrics.
+/// Features interactive bar charts ranking employees by revenue and detailed performance tables with key indicators
+/// including total sales, order counts, customer coverage, and average order values per employee.
 /// </summary>
 public static class EmployeePerformanceArea
 {
@@ -26,11 +28,14 @@ public static class EmployeePerformanceArea
             .WithView(nameof(EmployeeMetrics), EmployeeMetrics);
 
     /// <summary>
-    /// Gets the top employees by revenue chart.
+    /// Displays a horizontal bar chart ranking all employees by total sales revenue.
+    /// Shows employee full names (first + last) with corresponding revenue amounts.
+    /// Features a year filter toolbar to analyze performance for specific time periods.
+    /// Bars are color-coded and automatically sorted from highest to lowest revenue performers.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing top employees by revenue.</returns>
+    /// <returns>A horizontal bar chart with employee names and revenue totals, plus year filter controls.</returns>
     public static UiControl? TopEmployeesByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(EmployeeToolbar.Years, layoutArea.GetAllYearsOfOrders());
@@ -61,11 +66,15 @@ public static class EmployeePerformanceArea
     }
 
     /// <summary>
-    /// Gets employee performance metrics.
+    /// Shows a comprehensive data grid with detailed employee performance metrics.
+    /// Displays columns for employee name, total revenue, order count, unique customer count,
+    /// and average order value. Rows are sorted by total revenue descending to highlight
+    /// top performers. Provides quantitative insights into each employee's sales effectiveness,
+    /// customer relationship management, and average deal size.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing employee metrics.</returns>
+    /// <returns>A data grid table with employee performance metrics and column headers.</returns>
     public static IObservable<UiControl> EmployeeMetrics(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)

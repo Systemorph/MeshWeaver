@@ -13,7 +13,9 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage product analysis areas in the layout.
+/// Creates comprehensive product analytics including revenue rankings, performance trends, category analysis,
+/// discount impact studies, and sales velocity measurements. Features interactive charts and data grids
+/// with year filtering to analyze product performance across multiple dimensions and time periods.
 /// </summary>
 public static class ProductAnalysisArea
 {
@@ -30,11 +32,14 @@ public static class ProductAnalysisArea
             .WithView(nameof(ProductSalesVelocity), ProductSalesVelocity);
 
     /// <summary>
-    /// Gets the top products by revenue chart.
+    /// Displays a horizontal bar chart showing the top 10 products ranked by total revenue.
+    /// Features year filtering toolbar and shows product names with corresponding revenue amounts.
+    /// Each bar is color-coded and includes data labels for easy comparison of product performance.
+    /// Helps identify best-selling products and their revenue contribution to the business.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing top products by revenue.</returns>
+    /// <returns>A horizontal bar chart with product names and revenue amounts, plus year filter controls.</returns>
     public static UiControl? TopProductsByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(ProductToolbar.Years, layoutArea.GetAllYearsOfOrders());

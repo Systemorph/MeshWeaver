@@ -10,7 +10,9 @@ using LayoutDefinition = MeshWeaver.Layout.Composition.LayoutDefinition;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage customer analysis areas in the layout.
+/// Creates comprehensive customer analytics views showing detailed customer behavior, segmentation,
+/// lifetime value analysis, geographic distribution maps, purchase patterns, and retention metrics.
+/// Provides both tabular data grids and interactive charts to analyze customer performance.
 /// </summary>
 public static class CustomerAnalysisArea
 {
@@ -29,11 +31,13 @@ public static class CustomerAnalysisArea
             .WithView(nameof(CustomerPurchaseBehavior), CustomerPurchaseBehavior);
 
     /// <summary>
-    /// Gets the top customers by revenue chart.
+    /// Displays a horizontal bar chart showing the top 15 customers ranked by total revenue.
+    /// Features a year filter toolbar and shows customer company names with corresponding revenue amounts.
+    /// The chart is color-coded and includes data labels for easy comparison of customer performance.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing top customers by revenue.</returns>
+    /// <returns>A bar chart with customer names and revenue amounts, plus year filter controls.</returns>
     public static UiControl? TopCustomersByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(CustomerToolbar.Years, layoutArea.GetAllYearsOfOrders());
@@ -77,11 +81,14 @@ public static class CustomerAnalysisArea
     }
 
     /// <summary>
-    /// Gets the customer lifetime value analysis.
+    /// Shows customer lifetime value metrics with toggle between table and chart views.
+    /// Table view displays detailed customer metrics including total revenue, order count, average order value,
+    /// customer tenure in months, and calculated monthly value. Chart view shows top 10 customers by monthly value
+    /// in a bar chart format. Includes toolbar to switch between visualization types.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing customer lifetime value.</returns>
+    /// <returns>Either a data grid with detailed customer metrics or a bar chart showing monthly customer values.</returns>
     public static UiControl? CustomerLifetimeValue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.Toolbar(new CustomerLifetimeToolbar(),
@@ -170,11 +177,14 @@ public static class CustomerAnalysisArea
             });
 
     /// <summary>
-    /// Gets the customer order frequency analysis.
+    /// Displays a pie chart showing customer distribution by order frequency brackets.
+    /// Segments customers into groups: 1 Order, 2 Orders, 3-5 Orders, 6-10 Orders, 11-20 Orders, and 20+ Orders.
+    /// Each segment shows the count and percentage of customers in that frequency range with distinct colors.
+    /// Helps identify customer loyalty patterns and repeat purchase behavior.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing customer order frequency.</returns>
+    /// <returns>A pie chart with customer frequency segments and a header title.</returns>
     public static UiControl CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
         =>
             Controls.Stack.WithView(Controls.H2("Customer Order Frequency"))
@@ -206,11 +216,14 @@ public static class CustomerAnalysisArea
                 );
 
     /// <summary>
-    /// Gets the customer segmentation analysis.
+    /// Shows customer segmentation analysis with customers categorized into VIP, High Value, Regular, Occasional, and New segments.
+    /// Includes detailed segmentation criteria explanation and a data grid showing customer count, total revenue,
+    /// and average revenue per segment. VIP customers have $5,000+ revenue AND 10+ orders, while other segments
+    /// are based on revenue thresholds and order frequency combinations.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing customer segmentation.</returns>
+    /// <returns>Markdown explanation of segments plus a data grid with segment metrics.</returns>
     public static IObservable<UiControl> CustomerSegmentation(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
@@ -512,10 +525,8 @@ public static class CustomerAnalysisArea
         return new GoogleMapControl
         {
             Options = mapOptions,
-            Markers = markers,
-            Height = "500px",
-            Width = "100%"
-        };
+            Markers = markers
+        }.WithStyle(style => style.WithWidth("100%").WithHeight("500px"));
     }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
