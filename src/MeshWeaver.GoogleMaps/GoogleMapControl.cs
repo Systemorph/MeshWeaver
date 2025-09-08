@@ -7,6 +7,7 @@ public record GoogleMapControl() : UiControl<GoogleMapControl>("MeshWeaver.Googl
 
     public MapOptions? Options { get; set; }
     public IEnumerable<MapMarker>? Markers { get; set; }
+    public IEnumerable<MapCircle>? Circles { get; set; }
 
 }
 
@@ -33,6 +34,19 @@ public record MapMarker
     public string? Label { get; init; }
     public bool Draggable { get; init; } = false;
     public string? Icon { get; init; }
+    public string? Id { get; init; }
+    public object? Data { get; init; }
+}
+
+public record MapCircle
+{
+    public LatLng Center { get; init; } = new(0, 0);
+    public double Radius { get; init; } = 1000;
+    public string? FillColor { get; init; } = "#FF0000";
+    public double FillOpacity { get; init; } = 0.35;
+    public string? StrokeColor { get; init; } = "#FF0000";
+    public double StrokeOpacity { get; init; } = 0.8;
+    public int StrokeWeight { get; init; } = 2;
     public string? Id { get; init; }
     public object? Data { get; init; }
 }
