@@ -1,9 +1,6 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Pivot.Builder;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -35,18 +32,23 @@ public static class DiscountPercentageArea
     /// <returns>A pie chart with discount percentage segments and legend, plus descriptive header.</returns>
     public static IObservable<UiControl> DiscountPercentage(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetCombinedDiscountsDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .SliceColumnsBy(nameof(NorthwindDataCube.Discount))
-                    .ToPieChart(
-                        builder => builder
-                            .WithLegend()
-                    )
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Sales by Discount Percentage"))
-                        .WithView(chart.ToControl()))
-            );
+            .Select(data =>
+            {
+                var discountData = data.GroupBy(x => (x.Discount * 100).ToString("0") + "%")
+                    .Select(g => new { 
+                        DiscountLevel = g.Key, 
+                        Revenue = Math.Round(g.Sum(x => x.Amount), 2) 
+                    })
+                    .OrderBy(x => x.DiscountLevel)
+                    .ToArray();
+
+                var chart = (UiControl)Charting.Chart.Pie(discountData.Select(d => d.Revenue), "Revenue")
+                    .WithLabels(discountData.Select(d => d.DiscountLevel));
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Sales by Discount Percentage"))
+                    .WithView(chart);
+            });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetCombinedDiscountsDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()

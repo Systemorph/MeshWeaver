@@ -1,11 +1,6 @@
 ﻿using System.Reactive.Linq;
-using MeshWeaver.Arithmetics;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Pivot.Aggregations;
-using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Northwind.Application;
@@ -41,17 +36,23 @@ public static class OrdersOverviewArea
         return layoutArea.Toolbar(new OrdersToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
                 .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
-                .SelectMany(data =>
-                    area.Workspace
-                        .Pivot(data.ToDataCube())
-                        .WithAggregation(a => a.CountDistinctBy(x => x.OrderId))
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                        .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
-                        .ToLineChart(builder => builder)
-                        .Select(chart => (UiControl)Controls.Stack
-                            .WithView(Controls.H2("Monthly Orders Count by Year"))
-                            .WithView(chart.ToControl()))
-                ));
+                .Select(data =>
+                {
+                    var monthlyOrders = data.GroupBy(x => x.OrderDate.ToString("yyyy-MM"))
+                        .Select(g => new { 
+                            Month = g.Key, 
+                            OrderCount = g.DistinctBy(x => x.OrderId).Count() 
+                        })
+                        .OrderBy(x => x.Month)
+                        .ToArray();
+
+                    var chart = (UiControl)Charting.Chart.Line(monthlyOrders.Select(m => m.OrderCount), "Order Count")
+                        .WithLabels(monthlyOrders.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
+
+                    return Controls.Stack
+                        .WithView(Controls.H2("Monthly Orders Count"))
+                        .WithView(chart);
+                }));
     }
 
     /// <summary>
@@ -65,24 +66,23 @@ public static class OrdersOverviewArea
     /// <returns>A line chart showing monthly average order values with year-based color coding.</returns>
     public static IObservable<UiControl> AvgOrderValue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a
-                        .WithAggregation(enumerable =>
-                        {
-                            var list = enumerable.ToList();
-                            return (sum: list.Sum(x => x.Amount), count: list.DistinctBy(x => x.OrderId).Count());
-                        })
-                        .WithResultTransformation(pair => ArithmeticOperations.Divide(pair.sum, pair.count))
-                    )
-                    .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
-                    .ToLineChart(builder => builder)
-                    .Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Average Order Value Trends by Year"))
-                        .WithView(chart.ToControl()))
-            );
+            .Select(data =>
+            {
+                var monthlyAvgValues = data.GroupBy(x => x.OrderDate.ToString("yyyy-MM"))
+                    .Select(g => new { 
+                        Month = g.Key, 
+                        AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount)), 2)
+                    })
+                    .OrderBy(x => x.Month)
+                    .ToArray();
+
+                var chart = (UiControl)Charting.Chart.Line(monthlyAvgValues.Select(m => m.AvgOrderValue), "Average Order Value")
+                    .WithLabels(monthlyAvgValues.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
+
+                return Controls.Stack
+                    .WithView(Controls.H2("Average Order Value Trends"))
+                    .WithView(chart);
+            });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
