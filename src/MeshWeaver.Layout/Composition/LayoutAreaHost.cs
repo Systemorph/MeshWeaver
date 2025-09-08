@@ -55,7 +55,8 @@ public record LayoutAreaHost : IDisposable
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
-            c => configuration.Invoke(c).WithInitialization(async (_, _) => (await LayoutDefinition
+            c => configuration.Invoke(c)
+                .WithInitialization(async (_, _) => (await LayoutDefinition
                     .RenderAsync(this, context, new EntityStore()
                         .Update(LayoutAreaReference.Areas, x => x)
                         .Update(LayoutAreaReference.Data, x => x)
