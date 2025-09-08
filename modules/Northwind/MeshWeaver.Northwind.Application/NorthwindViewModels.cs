@@ -41,6 +41,13 @@ namespace MeshWeaver.Northwind.Application
                             .AddInventoryAnalysis()
                             .AddTimeSeriesAnalysis()
                             .AddDetailedReports()
+                            .AddTopProductsByCategory()
+                            .AddSalesByCategoryComparison()
+                            .AddFinancialSummary()
+                            .AddTopSalesRepresentatives()
+                            .AddOrdersAnalysis()
+                            .AddSalesAnalysis()
+                            .AddTopClients()
                     )
                 ;
         }

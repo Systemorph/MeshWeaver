@@ -14,7 +14,6 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
 
     private string ApiKey => Configuration.Value.ApiKey ?? "";
     private string MapId { get; set; } = null!;
-    private object? Style { get; set; }
     private IJSObjectReference? jsModule;
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
