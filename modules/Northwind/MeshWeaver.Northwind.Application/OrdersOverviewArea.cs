@@ -11,7 +11,9 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage the orders overview area in the layout.
+/// Creates order analytics displays showing monthly order trends and average order values over time.
+/// Features interactive line charts with year filtering to track order volume patterns and revenue per order.
+/// Provides insights into business growth and customer spending behavior across different time periods.
 /// </summary>
 public static class OrdersOverviewArea
 {
@@ -25,11 +27,14 @@ public static class OrdersOverviewArea
             .WithView(nameof(AvgOrderValue), AvgOrderValue);
 
     /// <summary>
-    /// Gets the orders count for the specified layout area and rendering context.
+    /// Displays a line chart showing monthly order counts with separate lines for each year.
+    /// Features a year filter toolbar and tracks the total number of distinct orders placed each month.
+    /// The chart helps visualize seasonal trends and year-over-year growth in order volume.
+    /// Each year is represented by a different colored line with data points for each month.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the orders count.</returns>
+    /// <returns>A line chart with year filter toolbar showing monthly order count trends.</returns>
     public static UiControl? OrdersCount(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(OrdersToolbar.Years, layoutArea.GetAllYearsOfOrders());
@@ -50,11 +55,14 @@ public static class OrdersOverviewArea
     }
 
     /// <summary>
-    /// Gets the average order value for the specified layout area and rendering context.
+    /// Shows a line chart displaying average order value trends across months and years.
+    /// Calculates the mean revenue per order for each month, helping identify spending patterns
+    /// and seasonal variations in customer purchase amounts. Each year appears as a separate line
+    /// with different colors, making it easy to compare average order values year-over-year.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the average order value.</returns>
+    /// <returns>A line chart showing monthly average order values with year-based color coding.</returns>
     public static IObservable<UiControl> AvgOrderValue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>

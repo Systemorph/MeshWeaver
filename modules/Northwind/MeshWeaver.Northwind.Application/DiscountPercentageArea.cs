@@ -8,7 +8,9 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage discount percentages areas in the layout.
+/// Creates discount analysis visualization showing sales distribution across different discount levels.
+/// Displays an interactive pie chart with colored segments representing revenue amounts for each discount percentage,
+/// helping identify the impact of promotional pricing on total sales volume.
 /// </summary>
 public static class DiscountPercentageArea
 {
@@ -23,11 +25,14 @@ public static class DiscountPercentageArea
         ;
 
     /// <summary>
-    /// Generates a view with a chart which has pie chart with total sales by discount amounts for the specified layout area and rendering context.
+    /// Displays a colorful pie chart showing total sales revenue segmented by discount percentage levels.
+    /// Each slice represents a different discount rate (0%, 5%, 10%, 15%, etc.) with the size proportional
+    /// to total sales at that discount level. Includes a legend showing discount percentages and corresponding
+    /// revenue amounts. The "Sales by Discount Percentage" header provides context for the visualization.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the discount summary view.</returns>
+    /// <returns>A pie chart with discount percentage segments and legend, plus descriptive header.</returns>
     public static IObservable<UiControl> DiscountPercentage(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetCombinedDiscountsDataCube()
             .SelectMany(data =>

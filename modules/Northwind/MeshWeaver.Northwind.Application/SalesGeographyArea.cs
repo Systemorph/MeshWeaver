@@ -138,6 +138,7 @@ public static class SalesGeographyArea
                     Controls.Stack
                         .WithView(Controls.H2("Global Sales Distribution"))
                         .WithView(layoutArea.ToDataGrid(countryData))
+                        .WithClass("full-width-container")
                 );
             });
 
@@ -152,7 +153,7 @@ public static class SalesGeographyArea
             {
                 var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
                     .GroupBy(x => x.ShipCountry)
-                    .Select(g => new
+                    .Select(g => new CountryData
                     {
                         Country = g.Key!,
                         TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
@@ -165,11 +166,21 @@ public static class SalesGeographyArea
                 return Observable.Return(
                     Controls.Stack
                         .WithView(Controls.H2("Global Sales Distribution"))
-                        .WithView(CreateSalesMap(countryData))
+                        .WithView(
+                            CreateSalesMap(countryData)
+                        )
+                        .WithStyle(style => style.WithWidth("100%"))
                 );
             });
 
-    private static UiControl CreateSalesMap(object[] countryData)
+    private record CountryData
+    {
+        public required string Country { get; init; }
+        public required double TotalRevenue { get; init; }
+        public required int CustomerCount { get; init; }
+        public required int OrderCount { get; init; }
+    }
+    private static UiControl CreateSalesMap(CountryData[] countryData)
     {
         // Country coordinates mapping (major countries from Northwind)
         var countryCoordinates = new Dictionary<string, LatLng>
@@ -231,10 +242,10 @@ public static class SalesGeographyArea
         return new GoogleMapControl
         {
             Options = mapOptions,
-            Markers = markers,
-            Height = "500px",
-            Width = "100%"
-        };
+            Markers = markers
+        }.WithClass("full-width-map")
+         .WithStyle(style => style.WithWidth("100%").WithHeight("600px"))
+            ;
     }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)

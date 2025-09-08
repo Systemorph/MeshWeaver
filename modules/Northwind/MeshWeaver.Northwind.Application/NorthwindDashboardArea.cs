@@ -4,30 +4,33 @@ using MeshWeaver.Layout.Composition;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Defines a static class for creating and managing the Northwind Dashboard within the MeshWeaver.Northwind.ViewModel namespace. This class provides methods to add the dashboard to a layout and to generate the main dashboard view.
+/// Creates the main Northwind Dashboard showing a comprehensive overview of business metrics.
+/// Displays key performance indicators including top orders summary, sales by category charts,
+/// supplier performance data, and top-selling products in an organized grid layout.
 /// </summary>
 public static class NorthwindDashboardArea
 {
     /// <summary>
-    /// Adds the Northwind Dashboard view to the specified layout.
+    /// Adds the main dashboard view to the layout configuration.
+    /// Creates a navigation entry that displays the comprehensive business dashboard.
     /// </summary>
     /// <param name="layout">The layout definition to which the dashboard view will be added.</param>
     /// <returns>The updated layout definition including the Northwind Dashboard view.</returns>
-    /// <remarks>This method enhances the provided layout definition by adding a navigation link to the Northwind Dashboard view, using the FluentIcons.Grid icon for the menu. It configures the dashboard view's appearance and behavior within the application's navigation structure.
-    /// </remarks>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
         => layout.WithView(nameof(Dashboard), Dashboard, area => area.WithCategory("Dashboards"))
             ;
 
     /// <summary>
-    /// Generates the main dashboard view for a given layout area and rendering context.
+    /// Renders the main dashboard displaying four key business metric panels:
+    /// - Top 5 Orders Summary: Shows highest value recent orders with customer details
+    /// - Sales by Category: Bar chart comparing revenue across product categories 
+    /// - Supplier Summary: Performance metrics and statistics for all suppliers
+    /// - Top Products: List of best-selling products by revenue with quantities sold
+    /// All panels are arranged in a responsive grid layout that adapts to screen size.
     /// </summary>
     /// <param name="layoutArea">The layout area host where the dashboard view will be displayed.</param>
     /// <param name="context">The rendering context for generating the view.</param>
-    /// <returns>A dynamically generated view object representing the Northwind Dashboard.</returns>
-    /// <remarks>
-    /// This method constructs the main view of the Northwind Dashboard, incorporating various subviews and components to provide a comprehensive overview of the application's data and functionality. The specific contents and layout of the dashboard are determined at runtime based on the rendering context.
-    /// </remarks>
+    /// <returns>A grid layout containing four business metric panels with headers and data visualizations.</returns>
     public static UiControl Dashboard(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return Controls.LayoutGrid

@@ -13,7 +13,9 @@ using MeshWeaver.Reporting.Models;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Defines a static class within the MeshWeaver.Northwind.ViewModel namespace for creating and managing a Supplier Summary view. This view provides a comprehensive overview of suppliers, including details such as name, contact information, and products supplied.
+/// Creates supplier performance analysis with switchable views between data grid tables and bar charts.
+/// Shows supplier revenue by month with year filtering, displaying either detailed tabular data
+/// or visual bar chart representation of supplier performance across different time periods.
 /// </summary>
 public static class SupplierSummaryArea
 {
@@ -46,11 +48,14 @@ public static class SupplierSummaryArea
     }
 
     /// <summary>
-    /// Generates the supplier summary view.
+    /// Renders supplier performance analysis with toolbar controls for year filtering and view switching.
+    /// Features radio buttons to toggle between "Table" and "Chart" views, plus year selection dropdown.
+    /// Table view shows detailed supplier data in a grid format, while Chart view displays the same data
+    /// as a horizontal bar chart. Both views show monthly revenue breakdown by supplier with year filtering.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>A layout stack control representing the supplier summary.</returns>
+    /// <returns>A toolbar interface with either a data grid or bar chart showing supplier performance.</returns>
     public static UiControl? SupplierSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext context

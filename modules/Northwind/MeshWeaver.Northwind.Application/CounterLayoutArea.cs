@@ -4,16 +4,21 @@ using MeshWeaver.Layout.Composition;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// This is an example of a view which uses local state.
+/// Creates an interactive counter demonstration showing local state management in layout areas.
+/// Displays a clickable "Increase Counter" button with a live counter value that updates
+/// each time the button is pressed, demonstrating real-time UI state changes.
 /// </summary>
 public static class CounterLayoutArea
 {
     /// <summary>
-    /// Adds a counter view to the specified layout area.
+    /// Renders an interactive counter interface with a button and numeric display.
+    /// Shows a "Increase Counter" button above a large title displaying the current count (starting at 0).
+    /// Each button click increments the counter by 1 and immediately updates the displayed number.
+    /// Demonstrates dynamic UI updates and local state management within a single layout area.
     /// </summary>
     /// <param name="host">The layout area host to which the counter view will be added.</param>
     /// <param name="context">The rendering context for the view.</param>
-    /// <returns>An object representing the configured view within the layout.</returns>
+    /// <returns>A vertical stack containing an action button and counter display title.</returns>
 
     public static UiControl Counter(this LayoutAreaHost host, RenderingContext context)
     {

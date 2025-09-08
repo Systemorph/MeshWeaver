@@ -11,7 +11,9 @@ using MeshWeaver.Northwind.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage inventory analysis areas in the layout.
+/// Creates inventory management displays showing stock levels, reorder status, and supplier performance analytics.
+/// Features data grids with stock status indicators (Out of Stock, Low Stock, Normal, High) and supplier metrics
+/// including product counts, revenue totals, and average pricing across all suppliers.
 /// </summary>
 public static class InventoryAnalysisArea
 {
@@ -25,11 +27,15 @@ public static class InventoryAnalysisArea
             .WithView(nameof(SupplierAnalysis), SupplierAnalysis);
 
     /// <summary>
-    /// Gets the stock levels analysis.
+    /// Displays a data grid showing inventory status for all products with stock level analysis.
+    /// Columns include product name, units in stock, units on order, reorder level, total units sold,
+    /// and calculated stock status (Out of Stock, Low Stock, Normal Stock, High Stock).
+    /// Products are sorted by stock level (lowest first) to prioritize items needing attention.
+    /// Stock status helps identify which products need reordering or have excess inventory.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing stock levels analysis.</returns>
+    /// <returns>A data grid with product inventory details and color-coded stock status indicators.</returns>
     public static IObservable<UiControl> StockLevelsAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
@@ -60,11 +66,15 @@ public static class InventoryAnalysisArea
             });
 
     /// <summary>
-    /// Gets supplier analysis.
+    /// Shows supplier performance metrics in a comprehensive data grid analysis.
+    /// Displays supplier company names with key performance indicators: number of different products supplied,
+    /// total revenue generated, total quantity sold, and average unit price across their products.
+    /// Suppliers are ranked by total revenue to identify the most valuable business partnerships.
+    /// Helps with supplier relationship management and procurement decisions.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of UI controls representing supplier analysis.</returns>
+    /// <returns>A data grid showing supplier performance metrics sorted by revenue contribution.</returns>
     public static IObservable<UiControl> SupplierAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .CombineLatest(layoutArea.Workspace.GetStream<Supplier>()!)

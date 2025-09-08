@@ -7,7 +7,9 @@ using MeshWeaver.Northwind.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides a static view for customer summaries within the Northwind application. This class includes methods to register and generate the customer summary view within a specified layout.
+/// Creates a comprehensive customer summary displaying key customer metrics in a sortable data grid.
+/// Shows customer company names, total order counts, total revenue, average order values, and last order dates
+/// to provide a complete overview of customer relationship and purchasing behavior.
 /// </summary>
 public static class CustomerSummaryArea
 {
@@ -23,13 +25,15 @@ public static class CustomerSummaryArea
         ;
 
     /// <summary>
-    /// Generates the customer summary view for a given layout area and rendering context.
+    /// Displays a comprehensive data grid showing customer performance metrics and relationship data.
+    /// Features columns for customer company name, total orders count, total revenue (rounded to 2 decimals),
+    /// average order value, and last order date. Customers are sorted by total revenue descending to highlight
+    /// the most valuable customers. Includes a "Customer Summary" header and provides complete customer insights
+    /// for relationship management and sales analysis.
     /// </summary>
     /// <param name="layoutArea">The layout area host where the customer summary view will be displayed.</param>
     /// <param name="ctx">The rendering context for generating the view.</param>
-    /// <returns>A layout stack control representing the customer summary.</returns>
-    /// <remarks>This method constructs a stack control that includes a pane header titled "Customer Summary". Additional views can be added to the stack to complete the summary display.
-    /// </remarks>
+    /// <returns>A data grid table with customer metrics and descriptive header.</returns>
     public static IObservable<UiControl> CustomerSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
