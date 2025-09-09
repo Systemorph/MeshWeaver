@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using System.Reactive.Linq;
@@ -11,6 +12,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Shows customer company names, total order counts, total revenue, average order values, and last order dates
 /// to provide a complete overview of customer relationship and purchasing behavior.
 /// </summary>
+[Display(GroupName = "Customers", Order = 120)]
 public static class CustomerSummaryArea
 {
     /// <summary>

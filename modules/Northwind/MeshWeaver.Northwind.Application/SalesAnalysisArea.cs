@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -10,6 +11,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Creates sales analysis reports with growth summaries and category performance insights.
 /// Provides comprehensive analysis comparing sales data between years and generating markdown reports.
 /// </summary>
+[Display(GroupName = "Sales", Order = 201)]
 public static class SalesAnalysisArea
 {
     /// <summary>

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
@@ -17,6 +18,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Shows supplier revenue by month with year filtering, displaying either detailed tabular data
 /// or visual bar chart representation of supplier performance across different time periods.
 /// </summary>
+[Display(GroupName = "Products", Order = 420)]
 public static class SupplierSummaryArea
 {
     /// <summary>

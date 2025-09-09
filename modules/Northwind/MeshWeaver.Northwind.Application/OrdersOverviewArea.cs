@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Domain;
@@ -10,6 +11,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features interactive line charts with year filtering to track order volume patterns and revenue per order.
 /// Provides insights into business growth and customer spending behavior across different time periods.
 /// </summary>
+[Display(GroupName = "Orders", Order = 601)]
 public static class OrdersOverviewArea
 {
     /// <summary>

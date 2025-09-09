@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -9,6 +10,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add and render the annual report summary area.
 /// </summary>
+[Display(GroupName = "Dashboards", Order = 20)]
 public static class AnnualReportSummaryArea
 {
     /// <summary>
@@ -19,7 +21,7 @@ public static class AnnualReportSummaryArea
     public static LayoutDefinition AddAnnualReportSummary(this LayoutDefinition layout)
         => 
             layout
-                .WithView(nameof(AnnualReportSummary), AnnualReportSummary, area => area.WithCategory("Dashboard"))
+                .WithView(nameof(AnnualReportSummary), AnnualReportSummary, area => area.WithGroup("Dashboards"))
             ;
 
     /// <summary>

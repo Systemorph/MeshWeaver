@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -10,6 +11,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Creates top clients analysis with dynamic tables and reward suggestions.
 /// Provides comprehensive client analysis with purchase rankings and personalized reward strategies.
 /// </summary>
+[Display(GroupName = "Customers", Order = 110)]
 public static class TopClientsArea
 {
     /// <summary>
@@ -28,6 +30,7 @@ public static class TopClientsArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A markdown table with top clients ranking.</returns>
+    [Display(Name = "Top Clients Table", GroupName = "Customers", Order = 1)]
     public static IObservable<UiControl> TopClientsTable(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
             .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
@@ -72,6 +75,7 @@ public static class TopClientsArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A markdown report with personalized reward suggestions.</returns>
+    [Display(Name = "Top Clients Reward Suggestions", GroupName = "Customers", Order = 2)]
     public static IObservable<UiControl> TopClientsRewardSuggestions(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
             .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)

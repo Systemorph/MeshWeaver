@@ -1,3 +1,4 @@
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features interactive bar charts showing top employees by revenue and dynamically generated markdown tables
 /// with detailed earnings breakdowns, employee insights, and performance recommendations.
 /// </summary>
+[Display(GroupName = "Employees")]
 public static class TopSalesRepresentativesArea
 {
     /// <summary>
@@ -20,7 +22,7 @@ public static class TopSalesRepresentativesArea
     /// <param name="layout">The layout definition to which the top sales representatives area will be added.</param>
     /// <returns>The updated layout definition with the top sales representatives area added.</returns>
     public static LayoutDefinition AddTopSalesRepresentatives(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopEmployees), TopEmployees)
+        => layout.WithView(nameof(TopSalesRepresentatives), TopSalesRepresentatives)
             .WithView(nameof(TopEmployeesTable), TopEmployeesTable)
             .WithView(nameof(TopEmployeesReport), TopEmployeesReport);
 
@@ -33,7 +35,7 @@ public static class TopSalesRepresentativesArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A horizontal bar chart with employee names and revenue totals.</returns>
-    public static IObservable<UiControl> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static IObservable<UiControl> TopSalesRepresentatives(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
             .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
             .Select(tuple =>

@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Northwind.Application;
@@ -8,6 +9,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Displays key performance indicators including top orders summary, sales by category charts,
 /// supplier performance data, and top-selling products in an organized grid layout.
 /// </summary>
+[Display(GroupName = "Dashboards", Order = 10)]
 public static class NorthwindDashboardArea
 {
     /// <summary>
@@ -17,7 +19,7 @@ public static class NorthwindDashboardArea
     /// <param name="layout">The layout definition to which the dashboard view will be added.</param>
     /// <returns>The updated layout definition including the Northwind Dashboard view.</returns>
     public static LayoutDefinition AddDashboard(this LayoutDefinition layout)
-        => layout.WithView(nameof(Dashboard), Dashboard, area => area.WithCategory("Dashboards"))
+        => layout.WithView(nameof(Dashboard), Dashboard, area => area.WithGroup("Dashboards"))
             ;
 
     /// <summary>

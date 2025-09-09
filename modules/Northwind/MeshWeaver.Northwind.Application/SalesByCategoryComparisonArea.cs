@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -10,6 +11,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Creates a sales comparison table showing category-wise sales performance across multiple years.
 /// Displays revenue figures, differences, and percentage changes between years in a structured table format.
 /// </summary>
+[Display(GroupName = "Sales", Order = 230)]
 public static class SalesByCategoryComparisonArea
 {
     /// <summary>
@@ -96,6 +98,6 @@ public static class SalesByCategoryComparisonArea
         public double Sales2022 { get; init; }
         public double Sales2023 { get; init; }
         public double Difference { get; init; }
-        public string PercentageChange { get; init; }
+        public string PercentageChange { get; init; } = string.Empty;
     }
 }

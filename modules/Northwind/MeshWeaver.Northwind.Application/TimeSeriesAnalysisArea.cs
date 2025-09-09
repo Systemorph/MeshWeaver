@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -13,6 +14,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add and manage time series analysis areas in the layout.
 /// </summary>
+[Display(GroupName = "Sales", Order = 220)]
 public static class TimeSeriesAnalysisArea
 {
     /// <summary>

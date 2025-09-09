@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
@@ -13,6 +14,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Displays interactive line charts with year filtering to track revenue patterns and identify
 /// seasonal trends, growth periods, and performance comparisons across different time frames.
 /// </summary>
+[Display(GroupName = "Financial", Order = 710)]
 public static class RevenueSummaryArea
 {
     /// <summary>
@@ -33,6 +35,7 @@ public static class RevenueSummaryArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A line chart with year-based filtering and monthly revenue trend lines.</returns>
+    [Display(Name = "Revenue Summary", GroupName = "Financial", Order = 1)]
     public static UiControl? RevenueSummary(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(RevenueToolbar.Years, layoutArea.GetAllYearsOfOrders());

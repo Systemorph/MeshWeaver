@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using MeshWeaver.Layout;
@@ -11,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Provides detailed financial analysis including monthly breakdowns, discount effectiveness,
 /// and revenue trends with dynamically generated content from actual business data.
 /// </summary>
+[Display(GroupName = "Discounting", Order = 301)]
 public static class DiscountVsRevenueArea
 {
     /// <summary>

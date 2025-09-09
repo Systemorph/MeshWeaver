@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -15,6 +16,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features data grids with stock status indicators (Out of Stock, Low Stock, Normal, High) and supplier metrics
 /// including product counts, revenue totals, and average pricing across all suppliers.
 /// </summary>
+[Display(GroupName = "Products", Order = 410)]
 public static class InventoryAnalysisArea
 {
     /// <summary>

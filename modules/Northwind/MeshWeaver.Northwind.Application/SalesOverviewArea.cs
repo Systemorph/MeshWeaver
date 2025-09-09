@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
@@ -14,6 +16,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Creates sales overview visualizations showing revenue performance across different product categories.
 /// Displays interactive bar charts with data labels and customizable ordering options to analyze sales patterns.
 /// </summary>
+[Display(GroupName = "Sales", Order = 200)]
 public static class SalesOverviewArea
 {
     /// <summary>

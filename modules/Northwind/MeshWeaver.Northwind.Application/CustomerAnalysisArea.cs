@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
@@ -15,6 +17,7 @@ namespace MeshWeaver.Northwind.Application;
 /// lifetime value analysis, geographic distribution maps, purchase patterns, and retention metrics.
 /// Provides both tabular data grids and interactive charts to analyze customer performance.
 /// </summary>
+[Display(GroupName = "Customers", Order = 100)]
 public static class CustomerAnalysisArea
 {
     /// <summary>
@@ -39,6 +42,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A bar chart with customer names and revenue amounts, plus year filter controls.</returns>
+    [Display(Name = "Top Customers by Revenue", GroupName = "Customers", Order = 1)]
     public static UiControl? TopCustomersByRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(CustomerToolbar.Years, layoutArea.GetAllYearsOfOrders());
@@ -61,7 +65,7 @@ public static class CustomerAnalysisArea
                         .ToArray();
 
                     var chart = (UiControl)Charting.Chart.Bar(topCustomers.Select(c => c.Revenue), "Revenue")
-                        .WithLabels(topCustomers.Select(c => c.Customer));
+                        .WithLabels(topCustomers.Select(c => c.Customer ?? "Unknown"));
 
                     return Controls.Stack
                         .WithView(Controls.H2("Top 15 Customers by Revenue"))
@@ -90,6 +94,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>Either a data grid with detailed customer metrics or a bar chart showing monthly customer values.</returns>
+    [Display(Name = "Customer Lifetime Value", GroupName = "Customers", Order = 2)]
     public static UiControl? CustomerLifetimeValue(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.Toolbar(new CustomerLifetimeToolbar(),
@@ -170,7 +175,7 @@ public static class CustomerAnalysisArea
                     .ToArray();
 
                 var chart = (UiControl)Charting.Chart.Bar(customerMetrics.Select(c => c.MonthlyValue), "MonthlyValue")
-                    .WithLabels(customerMetrics.Select(c => c.Customer));
+                    .WithLabels(customerMetrics.Select(c => c.Customer ?? "Unknown"));
 
                 return Controls.Stack
                     .WithView(Controls.H2("Customer Lifetime Value Analysis"))
@@ -186,6 +191,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A pie chart with customer frequency segments and a header title.</returns>
+    [Display(Name = "Customer Order Frequency", GroupName = "Customers", Order = 3)]
     public static UiControl CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
         =>
             Controls.Stack.WithView(Controls.H2("Customer Order Frequency"))
@@ -225,6 +231,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>Markdown explanation of segments plus a data grid with segment metrics.</returns>
+    [Display(Name = "Customer Segmentation", GroupName = "Customers", Order = 4)]
     public static IObservable<UiControl> CustomerSegmentation(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .CombineLatest(layoutArea.Workspace.GetStream<Customer>()!)
@@ -288,6 +295,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer retention analysis.</returns>
+    [Display(Name = "Customer Retention Analysis", GroupName = "Customers", Order = 5)]
     public static IObservable<UiControl> CustomerRetentionAnalysis(this LayoutAreaHost layoutArea,
         RenderingContext context)
         => layoutArea.GetDataCube()
@@ -355,6 +363,7 @@ public static class CustomerAnalysisArea
     /// <param name="host">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer geographic distribution.</returns>
+    [Display(Name = "Customer Geographic Distribution", GroupName = "Customers", Order = 6)]
     public static UiControl? CustomerGeographicDistribution(this LayoutAreaHost host, RenderingContext context)
     {
         return host.Toolbar(new CustomerGeographicToolbar(),
@@ -369,7 +378,6 @@ public static class CustomerAnalysisArea
     /// <summary>
     /// Gets the table view for customer geographic data.
     /// </summary>
-    /// <param name="host">The layout area host.</param>
     /// <returns>An observable sequence of UI controls representing customer geographic table.</returns>
     private static UiControl CustomerGeographicTable()
         => Controls.Stack
@@ -395,7 +403,6 @@ public static class CustomerAnalysisArea
     /// <summary>
     /// Gets the map view for customer geographic data.
     /// </summary>
-    /// <param name="host">The layout area host.</param>
     /// <returns>An observable sequence of UI controls representing customer geographic map.</returns>
     private static UiControl CustomerGeographicMap()
         => Controls.Stack
@@ -425,6 +432,7 @@ public static class CustomerAnalysisArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing customer purchase behavior.</returns>
+    [Display(Name = "Customer Purchase Behavior", GroupName = "Customers", Order = 7)]
     public static IObservable<UiControl> CustomerPurchaseBehavior(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .CombineLatest(layoutArea.Workspace.GetStream<Category>()!)

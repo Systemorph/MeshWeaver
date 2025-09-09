@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -14,6 +15,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Shows a vertical bar chart with customer identifiers and their corresponding sales amounts,
 /// featuring data labels positioned for optimal visibility and automatic ranking by performance.
 /// </summary>
+[Display(GroupName = "Customers")]
 public static class ClientsOverviewArea
 {
     /// <summary>

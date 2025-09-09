@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
@@ -15,6 +16,7 @@ namespace MeshWeaver.Northwind.Application
     /// Displays an interactive horizontal bar chart with data labels and product names,
     /// automatically sorted from highest to lowest sales performance.
     /// </summary>
+    [Display(GroupName = "Products", Order = 402)]
     public static class TopProductsArea
     {
         /// <summary>
