@@ -24,7 +24,7 @@ public static class LayoutAreaCatalogArea
                 skin => skin
                 .WithAdaptiveRendering(true)
                 .WithJustify(JustifyContent.Center)
-                .WithSpacing(16)), (s, l)
+                .WithSpacing(32)), (s, l)
                 => s.WithView(CreateLayoutAreaControl(l, thumbnailBaseUrl),
                     skin => skin.WithLg(3).WithMd(4).WithSm(6).WithXs(12)));
     }
