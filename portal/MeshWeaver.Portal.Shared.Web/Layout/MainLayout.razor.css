@@ -381,7 +381,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        z-index: 1000;
+        z-index: 900;
         background-color: var(--neutral-layer-1);
         pointer-events: auto;
     }
