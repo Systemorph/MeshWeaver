@@ -37,6 +37,17 @@ public partial class AgentChatView
     private ChatPosition currentPosition = ChatPosition.Right;
     private bool positionMenuVisible = false;
     [Parameter] public EventCallback<ChatPosition> OnPositionChanged { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnMessageAdded { get; set; }
+
+    private async Task OnNewMessageReceived(ChatMessage message)
+    {
+        // Handle new message events (e.g., auto-scroll, notifications, analytics)
+        if (OnMessageAdded.HasDelegate)
+        {
+            await OnMessageAdded.InvokeAsync(message);
+        }
+    }
+
 
     protected override async Task OnInitializedAsync()
     {

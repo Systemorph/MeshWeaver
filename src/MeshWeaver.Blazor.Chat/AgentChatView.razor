@@ -88,7 +88,8 @@
             }
             else
             {
-                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage">
+                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage"
+                                OnNewMessage="@OnNewMessageReceived">
                     <NoMessagesContent>
                         <div>You can ask me questions about your data or submit documents to import.
                         </div>
