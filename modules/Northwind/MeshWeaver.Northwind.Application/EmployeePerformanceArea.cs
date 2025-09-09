@@ -41,7 +41,7 @@ public static class EmployeePerformanceArea
         layoutArea.SubscribeToDataStream(EmployeeToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new EmployeeToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .CombineLatest(area.Workspace.GetStream<Employee>()!)
                 .Select(tuple =>
                 {
@@ -75,10 +75,14 @@ public static class EmployeePerformanceArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>A data grid table with employee performance metrics and column headers.</returns>
-    public static IObservable<UiControl> EmployeeMetrics(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
-            .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
-            .SelectMany(tuple =>
+    public static UiControl? EmployeeMetrics(this LayoutAreaHost layoutArea, RenderingContext context)
+    {
+        layoutArea.SubscribeToDataStream(EmployeeToolbar.Years, layoutArea.GetAllYearsOfOrders());
+        return layoutArea.Toolbar(new EmployeeToolbar(), (tb, area, _) =>
+            area.GetNorthwindDataCubeData()
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .CombineLatest(area.Workspace.GetStream<Employee>()!)
+                .SelectMany(tuple =>
             {
                 var data = tuple.First;
                 var employees = tuple.Second!.ToDictionary(e => e.EmployeeId, e => $"{e.FirstName} {e.LastName}");
@@ -99,11 +103,11 @@ public static class EmployeePerformanceArea
                         .WithView(Controls.H2("Employee Performance Metrics"))
                         .WithView(layoutArea.ToDataGrid(employeeMetrics.ToArray()))
                 );
-            });
+            }));
+    }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
-        => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+        => area.GetNorthwindDataCubeData();
 }
 
 /// <summary>

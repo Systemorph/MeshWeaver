@@ -1,13 +1,11 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Charting;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Domain;
-using MeshWeaver.DataCubes;
-using MeshWeaver.Pivot.Builder;
-using MeshWeaver.Pivot.Aggregations;
-using MeshWeaver.Charting.Pivot;
+using MeshWeaver.Charting.Models.Bar;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -27,7 +25,7 @@ public static class SalesGeographyArea
             .WithView(nameof(SalesMapView), SalesMapView);
 
     /// <summary>
-    /// Gets the country sales comparison chart.
+    /// Shows a stacked bar chart with sales by country. Can be filtered by year.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
@@ -37,32 +35,51 @@ public static class SalesGeographyArea
         layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .SelectMany(data =>
-                    area.Workspace
-                        .Pivot(data.Where(x => !string.IsNullOrEmpty(x.ShipCountry)).ToDataCube())
-                        .WithAggregation(a => a.Sum(x => x.Amount))
-                        .SliceRowsBy(nameof(NorthwindDataCube.ShipCountry))
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderYear))
-                        .ToBarChart(builder => builder)
-                        .Select(chart => (UiControl)Controls.Stack
-                            .WithView(Controls.H2("Sales by Country (Stacked by Year)"))
-                            .WithView(chart.ToControl()))
-                ));
+                {
+                    var filteredData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry));
+                    
+                    // Group by country and year to create chart datasets
+                    var countryYearGroups = filteredData
+                        .GroupBy(x => new { x.ShipCountry, x.OrderYear })
+                        .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+                    
+                    // Get unique years and countries
+                    var years = countryYearGroups.Keys.Select(k => k.OrderYear).Distinct().OrderBy(y => y).ToArray();
+                    var countries = countryYearGroups.Keys.Select(k => k.ShipCountry).Distinct().OrderBy(c => c).ToArray();
+                    
+                    // Create a dataset for each year
+                    var dataSets = years.Select(year =>
+                    {
+                        var yearData = countries.Select(country => 
+                            countryYearGroups.TryGetValue(new { ShipCountry = country, OrderYear = year }, out var amount) ? amount : 0.0)
+                            .ToArray();
+                        return new BarDataSet(yearData).WithLabel(year.ToString());
+                    }).ToArray();
+                    
+                    var chart = Chart.Create(dataSets)
+                        .Stacked()
+                        .WithLabels(countries);
+                    
+                    return Observable.Return((UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Country (Stacked by Year)"))
+                        .WithView(chart.ToControl()));
+                }));
     }
 
     /// <summary>
-    /// Gets the regional analysis with data grid.
+    /// Shows a data grid with regional sales analysis including total revenue, customer count, and order count by country. Can be filtered by year.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing regional analysis.</returns>
-    public static UiControl? RegionalAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
+    public static UiControl RegionalAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .SelectMany(data =>
                 {
                     var regionalData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
@@ -97,7 +114,7 @@ public static class SalesGeographyArea
     }
 
     /// <summary>
-    /// Gets the sales map view with toolbar to toggle between map and table.
+    /// Shows an interactive Google Maps view with sales data represented as circles, with toolbar to toggle between map and data grid table.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>

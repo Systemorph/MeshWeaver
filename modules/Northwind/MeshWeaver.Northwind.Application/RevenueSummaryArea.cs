@@ -38,7 +38,7 @@ public static class RevenueSummaryArea
         layoutArea.SubscribeToDataStream(RevenueToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new RevenueToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .SelectMany(data =>
                     area.Workspace
                         .Pivot(data.ToDataCube())
@@ -52,8 +52,7 @@ public static class RevenueSummaryArea
     }
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
-        => area.GetNorthwindDataCubeData()
-            .Select(d => d.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+        => area.GetNorthwindDataCubeData();
 }
 
 /// <summary>
