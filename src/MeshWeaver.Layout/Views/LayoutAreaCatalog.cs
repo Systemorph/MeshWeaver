@@ -18,15 +18,32 @@ public static class LayoutAreaCatalogArea
         // Extract thumbnail base URL from the layout area ID if present
         var thumbnailBaseUrl = ExtractThumbnailBaseUrl(host.Reference.Id?.ToString());
         
-        return layouts
-            .OrderBy(x => x.Title)
-            .Aggregate(Controls.LayoutGrid.WithSkin(
-                skin => skin
-                .WithAdaptiveRendering(true)
-                .WithJustify(JustifyContent.Center)
-                .WithSpacing(32)), (s, l)
-                => s.WithView(CreateLayoutAreaControl(l, thumbnailBaseUrl),
-                    skin => skin.WithLg(3).WithMd(4).WithSm(6).WithXs(12)));
+        // Group layouts by category, then order within groups
+        var groupedLayouts = layouts
+            .GroupBy(l => l.Group ?? "General")
+            .OrderBy(g => g.Key == "General" ? "ZZ_General" : g.Key) // Put "General" at the end
+            .ToArray();
+        
+        // Create sections for each group
+        var sections = groupedLayouts.Aggregate(
+            Controls.Stack,
+            (stack, group) =>
+            {
+                var categoryTitle = group.Key == "General" ? "Other Areas" : group.Key;
+                
+                var categoryGrid = group
+                    .OrderBy(x => x.Order ?? 0)
+                    .ThenBy(x => x.Title)
+                    .Aggregate(Controls.LayoutGrid, (s, l)
+                        => s.WithView(CreateLayoutAreaControl(l, thumbnailBaseUrl),
+                            skin => skin.WithLg(3).WithMd(4).WithSm(6).WithXs(12)));
+                
+                return stack
+                    .WithView(Controls.H2(categoryTitle))
+                    .WithView(categoryGrid); 
+            });
+        
+        return sections;
     }
 
     private static string? ExtractThumbnailBaseUrl(string? layoutAreaId)

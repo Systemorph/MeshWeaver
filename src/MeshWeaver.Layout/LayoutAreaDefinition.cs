@@ -22,11 +22,11 @@ public record LayoutAreaDefinition(string Area, string Url)
     public LayoutAreaDefinition WithReferences(params IEnumerable<string> reference) =>
         this with { CRefs = CRefs.AddRange(reference.Where(x => x != null)) };
 
-    public string? Category { get; init; }
+    public string? Group { get; init; }
     public bool? IsInvisible { get; init; }
     public int? Order { get; init; } = 0;
-    public LayoutAreaDefinition WithCategory(string category)
-        => this with { Category = category };
+    public LayoutAreaDefinition WithGroup(string group)
+        => this with { Group = group };
 
     // Thumbnail metadata (optional; populated by a generation pipeline)
     public string? ThumbnailUrl { get; init; }

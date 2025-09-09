@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reflection;
 using System.Text;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
@@ -7,6 +8,7 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
+[Display(GroupName = "Data Model", Order = 99)]
 public static class DataModelLayoutArea
 {
     /// <summary>

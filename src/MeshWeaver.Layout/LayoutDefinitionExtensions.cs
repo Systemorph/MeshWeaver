@@ -142,14 +142,29 @@ public static class LayoutDefinitionExtensions
             var method = delgate.Method;
             var doc = method.GetXmlDocsSummary();
             ret = ret.WithDescription(doc);
-            if(method.GetCustomAttribute<DisplayAttribute>() is { } displayAttribute)
+            
+            // Check class-level DisplayAttribute for GroupName and fallback Order
+            var declaringType = method.DeclaringType;
+            if (declaringType?.GetCustomAttribute<DisplayAttribute>() is { } classDisplayAttribute)
             {
-                ret = ret with{Order = displayAttribute.Order};
-                if(displayAttribute.Description is not null)
-                    ret = ret.WithDescription(displayAttribute.Description);
-                if(displayAttribute.Name is not null)
-                    ret = ret.WithTitle(displayAttribute.Name);
+                if (classDisplayAttribute.GroupName is not null)
+                    ret = ret.WithGroup(classDisplayAttribute.GroupName);
+                if (ret.Order is null or 0 && classDisplayAttribute.GetOrder() is not null and not 0)
+                    ret = ret with { Order = classDisplayAttribute.Order };
             }
+            
+            // Check method-level DisplayAttribute (takes precedence)
+            if(method.GetCustomAttribute<DisplayAttribute>() is { } methodDisplayAttribute)
+            {
+                ret = ret with{Order = methodDisplayAttribute.Order};
+                if(methodDisplayAttribute.Description is not null)
+                    ret = ret.WithDescription(methodDisplayAttribute.Description);
+                if(methodDisplayAttribute.Name is not null)
+                    ret = ret.WithTitle(methodDisplayAttribute.Name);
+                if(methodDisplayAttribute.GroupName is not null)
+                    ret = ret.WithGroup(methodDisplayAttribute.GroupName);
+            }
+            
             if (method.GetCustomAttribute<BrowsableAttribute>() is { } browsableAtt)
                 ret = ret with{IsInvisible = !browsableAtt.Browsable};
         }
