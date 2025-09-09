@@ -167,7 +167,7 @@ public static class SalesGeographyArea
                     Controls.Stack
                         .WithView(Controls.H2("Global Sales Distribution"))
                         .WithView(
-                            CreateSalesMap(countryData)
+                            CreateSalesMapWithDetails(layoutArea, countryData)
                         )
                         .WithStyle(style => style.WithWidth("100%"))
                 );
@@ -180,7 +180,42 @@ public static class SalesGeographyArea
         public required int CustomerCount { get; init; }
         public required int OrderCount { get; init; }
     }
-    private static UiControl CreateSalesMap(CountryData[] countryData)
+    private static UiControl CreateSalesMapWithDetails(LayoutAreaHost host, CountryData[] countryData)
+    {
+        const string SalesDetails = nameof(SalesDetails);
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(CreateSalesMapControl(countryData)
+            .WithClickAction(context =>
+            {
+                var selectedCountryId = context.Payload?.ToString();
+                if (selectedCountryId == null)
+                    return;
+                var selectedCountry = countryData.FirstOrDefault(cd => cd.Country == selectedCountryId);
+                if (selectedCountry is null)
+                    return;
+                // Replace last segment of context.Area with "SalesDetail"
+                var areaSegments = context.Area.Split('/');
+                if (areaSegments.Length > 0)
+                    areaSegments[^1] = SalesDetails;
+                var salesDetailArea = string.Join('/', areaSegments);
+                host.UpdateArea(salesDetailArea, 
+                    Controls.Markdown($"""
+                                      ## {selectedCountry.Country} Sales Details
+                                      
+                                      | Metric | Value |
+                                      |--------|-------|
+                                      | Total Revenue | ${selectedCountry.TotalRevenue:N2} |
+                                      | Customer Count | {selectedCountry.CustomerCount:N0} |
+                                      | Order Count | {selectedCountry.OrderCount:N0} |
+                                      | Average Revenue per Customer | ${selectedCountry.TotalRevenue / Math.Max(selectedCountry.CustomerCount, 1):N2} |
+                                      | Average Revenue per Order | ${selectedCountry.TotalRevenue / Math.Max(selectedCountry.OrderCount, 1):N2} |
+                                      """));
+            }))
+            .WithView(Controls.H4("Click circle for details"), SalesDetails);
+    }
+
+    private static UiControl CreateSalesMapControl(CountryData[] countryData)
     {
         // Country coordinates mapping (major countries from Northwind)
         var countryCoordinates = new Dictionary<string, LatLng>
@@ -210,7 +245,6 @@ public static class SalesGeographyArea
         };
 
         var circles = new List<MapCircle>();
-        var validCountries = new List<dynamic>();
         
         // Calculate max revenue for proportional sizing
         var maxRevenue = countryData.Max(c => c.TotalRevenue);
@@ -221,8 +255,6 @@ public static class SalesGeographyArea
         {
             if (countryCoordinates.TryGetValue(country.Country, out var coordinates))
             {
-                validCountries.Add(country);
-                
                 // Calculate proportional radius based on revenue
                 var revenueRatio = country.TotalRevenue / maxRevenue;
                 var radius = minRadius + (maxRadius - minRadius) * revenueRatio;
