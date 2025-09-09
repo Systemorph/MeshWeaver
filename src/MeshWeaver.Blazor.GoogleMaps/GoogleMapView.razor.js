@@ -134,7 +134,7 @@ const googleMaps = {
                 if (this.markerClickCallbacks[mapId]) {
                     marker.addListener('click', () => {
                         const position = marker.getPosition();
-                        this.markerClickCallbacks[mapId].invokeMethodAsync('OnMarkerClicked', 
+                        this.markerClickCallbacks[mapId].invokeMethodAsync('OnClicked', 
                             markerId
                         );
                     });
@@ -248,7 +248,7 @@ const googleMaps = {
                 // Add click listener if callback is available
                 if (this.circleClickCallbacks[mapId]) {
                     circle.addListener('click', () => {
-                        this.circleClickCallbacks[mapId].invokeMethodAsync('OnCircleClicked', 
+                        this.circleClickCallbacks[mapId].invokeMethodAsync('OnClicked', 
                             circleId
                         );
                     });

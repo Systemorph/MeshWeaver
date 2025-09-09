@@ -12,7 +12,7 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
 {
     [Inject] private IOptions<GoogleMapsConfiguration> Configuration { get; set; } = null!;
 
-    private string ApiKey => Configuration.Value.ApiKey ?? "";
+    private string ApiKey => Configuration.Value.ApiKey;
     private string MapId { get; set; } = null!;
     private IJSObjectReference? jsModule;
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -36,14 +36,18 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             }
         }
 
-        try
+        // Only update markers and circles after first render is complete
+        if (!firstRender)
         {
-            await UpdateMarkers();
-            await UpdateCircles();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Error in UpdateMarkers/UpdateCircles");
+            try
+            {
+                await UpdateMarkers();
+                await UpdateCircles();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error in UpdateMarkers/UpdateCircles");
+            }
         }
         await base.OnAfterRenderAsync(firstRender);
     }
@@ -76,6 +80,10 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
             await jsModule.InvokeVoidAsync("setMarkerClickCallback", MapId, DotNetObjectReference.Create(this));
             await jsModule.InvokeVoidAsync("setCircleClickCallback", MapId, DotNetObjectReference.Create(this));
             Logger.LogDebug("Map initialized successfully");
+            
+            // Update markers and circles after map is fully initialized
+            await UpdateMarkers();
+            await UpdateCircles();
             
             StateHasChanged();
             Logger.LogDebug("Map loading complete");
@@ -216,38 +224,16 @@ public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
     }
 
     [JSInvokable]
-    public void OnMarkerClicked(string markerId)
+    public void OnClicked(string id)
     {
-        // Post ClickedEvent to the hub with markerId as payload
+        // Post ClickedEvent to the hub with id as payload
         var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)
         {
-            Payload = markerId
+            Payload = id
         };
 
         // Post the event through the Hub
         Hub.Post(clickedEvent, o => o.WithTarget(Stream.Owner));
     }
 
-    [JSInvokable]
-    public void OnCircleClicked(string circleId)
-    {
-        // Post ClickedEvent to the hub with circleId as payload
-        var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)
-        {
-            Payload = circleId
-        };
-
-        // Post the event through the Hub
-        Hub.Post(clickedEvent, o => o.WithTarget(Stream.Owner));
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        if (jsModule is not null)
-        {
-            await jsModule.DisposeAsync();
-        }
-        
-        await base.DisposeAsync();
-    }
 }

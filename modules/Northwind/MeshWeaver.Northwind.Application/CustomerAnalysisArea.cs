@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -343,12 +344,13 @@ public static class CustomerAnalysisArea
         public const string Map = nameof(Map);
         public const string Table = nameof(Table);
 
-        [UiControl<RadioGroupControl>(Options = new[] { "Table", "Map" })]
-        public string Display { get; init; } = Table;
+        [UiControl<RadioGroupControl>(Options = new[] {  Map, Table })]
+        public string Display { get; init; } = Map;
     }
 
     /// <summary>
-    /// Gets the customer geographic distribution.
+    /// Gets the customer geographic distribution. Outputs Revenues and customer count by geography.
+    /// Represents data in a table or a map.
     /// </summary>
     /// <param name="host">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
@@ -356,10 +358,10 @@ public static class CustomerAnalysisArea
     public static UiControl? CustomerGeographicDistribution(this LayoutAreaHost host, RenderingContext context)
     {
         return host.Toolbar(new CustomerGeographicToolbar(),
-            (toolbar, area, _) => toolbar.Display switch
+            (toolbar, _, _) => toolbar.Display switch
             {
-                CustomerGeographicToolbar.Map => area.CustomerGeographicMap(),
-                _ => area.CustomerGeographicTable()
+                CustomerGeographicToolbar.Map => CustomerGeographicMap(),
+                _ => CustomerGeographicTable()
             }
         );
     }
@@ -369,56 +371,53 @@ public static class CustomerAnalysisArea
     /// </summary>
     /// <param name="host">The layout area host.</param>
     /// <returns>An observable sequence of UI controls representing customer geographic table.</returns>
-    private static IObservable<UiControl> CustomerGeographicTable(this LayoutAreaHost host)
-        => host.GetDataCube()
-            .SelectMany(data =>
-            {
-                var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
-                    .GroupBy(x => x.ShipCountry)
-                    .Select(g => new
-                    {
-                        Country = g.Key!,
-                        CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
-                        OrderCount = g.DistinctBy(x => x.OrderId).Count()
-                    })
-                    .OrderByDescending(x => x.TotalRevenue)
-                    .ToArray();
+    private static UiControl CustomerGeographicTable()
+        => Controls.Stack
+            .WithView(Controls.H2("Customer Geographic Distribution"))
+            .WithView((host,_) => host.GetDataCube()
+                .Select(data =>
+                {
+                    var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
+                        .GroupBy(x => x.ShipCountry)
+                        .Select(g => new CustomerGeographicData
+                        {
+                            Country = g.Key!,
+                            CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
+                            TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
+                            OrderCount = g.DistinctBy(x => x.OrderId).Count()
+                        })
+                        .OrderByDescending(x => x.TotalRevenue)
+                        .ToArray();
 
-                return Observable.Return(
-                    Controls.Stack
-                        .WithView(Controls.H2("Customer Geographic Distribution"))
-                        .WithView(host.ToDataGrid(countryData))
-                );
-            });
+                    return host.ToDataGrid(countryData);
+                }));
 
     /// <summary>
     /// Gets the map view for customer geographic data.
     /// </summary>
     /// <param name="host">The layout area host.</param>
     /// <returns>An observable sequence of UI controls representing customer geographic map.</returns>
-    private static IObservable<UiControl> CustomerGeographicMap(this LayoutAreaHost host)
-        => host.GetDataCube()
-            .SelectMany(data =>
-            {
-                var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
-                    .GroupBy(x => x.ShipCountry)
-                    .Select(g => new
-                    {
-                        Country = g.Key!,
-                        CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
-                        TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
-                        OrderCount = g.DistinctBy(x => x.OrderId).Count()
-                    })
-                    .OrderByDescending(x => x.TotalRevenue)
-                    .ToArray();
+    private static UiControl CustomerGeographicMap()
+        => Controls.Stack
+            .WithWidth("100%")
+            .WithView(Controls.H2("Customer Geographic Distribution"))
+            .WithView((host, ctx) => host.GetDataCube()
+                .Select(data =>
+                {
+                    var countryData = data.Where(x => !string.IsNullOrEmpty(x.ShipCountry))
+                        .GroupBy(x => x.ShipCountry)
+                        .Select(g => new CustomerGeographicData
+                        {
+                            Country = g.Key!,
+                            CustomerCount = g.Select(x => x.Customer).Distinct().Count(),
+                            TotalRevenue = Math.Round(g.Sum(x => x.Amount), 2),
+                            OrderCount = g.DistinctBy(x => x.OrderId).Count()
+                        })
+                        .OrderByDescending(x => x.TotalRevenue)
+                        .ToArray();
+                    return CreateCustomerMapWithDetails(host, countryData);
+                }));
 
-                return Observable.Return(
-                    Controls.Stack
-                        .WithView(Controls.H2("Customer Geographic Distribution"))
-                        .WithView(CreateCustomerMap(countryData))
-                );
-            });
 
     /// <summary>
     /// Gets the customer purchase behavior analysis.
@@ -462,7 +461,50 @@ public static class CustomerAnalysisArea
                 ;
             });
 
-    private static UiControl CreateCustomerMap(object[] countryData)
+    private record CustomerGeographicData
+    {
+        public required string Country { get; init; }
+        public required int CustomerCount { get; init; }
+        public required double TotalRevenue { get; init; }
+        public required int OrderCount { get; init; }
+    }
+
+    private static UiControl CreateCustomerMapWithDetails(LayoutAreaHost host, CustomerGeographicData[] countryData)
+    {
+        const string CustomerDetails = nameof(CustomerDetails);
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithView(CreateCustomerMapControl(countryData)
+            .WithClickAction(context =>
+            {
+                var selectedCountryId = context.Payload?.ToString();
+                if (selectedCountryId == null)
+                    return;
+                var selectedCountry = countryData.FirstOrDefault(cd => cd.Country == selectedCountryId);
+                if (selectedCountry is null)
+                    return;
+                // Replace last segment of context.Area with "CustomerDetails"
+                var areaSegments = context.Area.Split('/');
+                if (areaSegments.Length > 0)
+                    areaSegments[^1] = CustomerDetails;
+                var customerDetailArea = string.Join('/', areaSegments);
+                host.UpdateArea(customerDetailArea, 
+                    Controls.Markdown($"""
+                                      ## {selectedCountry.Country} Customer Details
+                                      
+                                      | Metric | Value |
+                                      |--------|-------|
+                                      | Customer Count | {selectedCountry.CustomerCount:N0} |
+                                      | Total Revenue | ${selectedCountry.TotalRevenue:N2} |
+                                      | Order Count | {selectedCountry.OrderCount:N0} |
+                                      | Average Revenue per Customer | ${selectedCountry.TotalRevenue / Math.Max(selectedCountry.CustomerCount, 1):N2} |
+                                      | Average Revenue per Order | ${selectedCountry.TotalRevenue / Math.Max(selectedCountry.OrderCount, 1):N2} |
+                                      """));
+            }))
+            .WithView(Controls.H4("Click circle for details"), CustomerDetails);
+    }
+
+    private static UiControl CreateCustomerMapControl(CustomerGeographicData[] countryData)
     {
         // Country coordinates mapping (major countries from Northwind)
         var countryCoordinates = new Dictionary<string, LatLng>
@@ -492,26 +534,18 @@ public static class CustomerAnalysisArea
         };
 
         var circles = new List<MapCircle>();
-        var validCountries = new List<dynamic>();
         
         // Calculate max customer count for proportional sizing
-        var maxCustomerCount = countryData.Max(c => 
-            Convert.ToInt32(c.GetType().GetProperty("CustomerCount")?.GetValue(c) ?? 0));
+        var maxCustomerCount = countryData.Max(c => c.CustomerCount);
         var minRadius = 40000; // 40km minimum
         var maxRadius = 400000; // 400km maximum
         
         foreach (var country in countryData)
-        {
-            var countryName = country.GetType().GetProperty("Country")?.GetValue(country)?.ToString() ?? "";
-            var customerCount = Convert.ToInt32(country.GetType().GetProperty("CustomerCount")?.GetValue(country) ?? 0);
-            var revenue = Convert.ToDouble(country.GetType().GetProperty("TotalRevenue")?.GetValue(country) ?? 0);
-            
-            if (countryCoordinates.TryGetValue(countryName, out var coordinates))
+        {            
+            if (countryCoordinates.TryGetValue(country.Country, out var coordinates))
             {
-                validCountries.Add(country);
-                
                 // Calculate proportional radius based on customer count
-                var customerRatio = maxCustomerCount > 0 ? (double)customerCount / maxCustomerCount : 0;
+                var customerRatio = maxCustomerCount > 0 ? (double)country.CustomerCount / maxCustomerCount : 0;
                 var radius = minRadius + (maxRadius - minRadius) * customerRatio;
                 
                 // Color intensity based on customer count (darker blue = more customers)
@@ -529,7 +563,7 @@ public static class CustomerAnalysisArea
                     StrokeColor = strokeColor,
                     StrokeOpacity = 0.8,
                     StrokeWeight = 2,
-                    Id = countryName,
+                    Id = country.Country,
                     Data = country
                 });
             }
