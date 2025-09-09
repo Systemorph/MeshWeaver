@@ -14,7 +14,7 @@ public static class DomainViews
         => layout
             .WithView(nameof(Catalog), Catalog)
             .WithView(nameof(Details), Details)
-            .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel);
+            .WithView(nameof(DataModelLayoutArea.DataModel), DataModelLayoutArea.DataModel, area => area.WithDescription($"The data model for the domain behind {layout.Hub.Address}."));
 
 
 
