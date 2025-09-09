@@ -35,7 +35,6 @@ public static class TopSalesRepresentativesArea
     /// <returns>A horizontal bar chart with employee names and revenue totals.</returns>
     public static IObservable<UiControl> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)))
             .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
             .Select(tuple =>
             {
@@ -71,7 +70,6 @@ public static class TopSalesRepresentativesArea
     /// <returns>A markdown-formatted table with employee earnings data.</returns>
     public static IObservable<UiControl> TopEmployeesTable(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)))
             .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
             .Select(tuple =>
             {
@@ -109,7 +107,6 @@ public static class TopSalesRepresentativesArea
     /// <returns>A concise markdown report with key performance insights.</returns>
     public static IObservable<UiControl> TopEmployeesReport(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)))
             .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
             .Select(tuple =>
             {

@@ -58,5 +58,5 @@ public static class DiscountSummaryArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+            ;
 }

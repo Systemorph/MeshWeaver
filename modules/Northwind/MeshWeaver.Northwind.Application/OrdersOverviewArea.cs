@@ -35,7 +35,7 @@ public static class OrdersOverviewArea
         layoutArea.SubscribeToDataStream(OrdersToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new OrdersToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .Select(data =>
                 {
                     var monthlyOrders = data.GroupBy(x => x.OrderDate.ToString("yyyy-MM"))
@@ -86,7 +86,7 @@ public static class OrdersOverviewArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+            ;
 }
 
 /// <summary>
