@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -35,7 +36,11 @@ public static class DiscountVsRevenueArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var monthlyData = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                
+                var monthlyData = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
                         Month = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMM"),
@@ -73,13 +78,17 @@ public static class DiscountVsRevenueArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var totalRevenue = data.Sum(x => x.Amount);
-                var totalDiscount = data.Sum(x => x.UnitPrice * x.Quantity * x.Discount);
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                
+                var totalRevenue = filteredData.Sum(x => x.Amount);
+                var totalDiscount = filteredData.Sum(x => x.UnitPrice * x.Quantity * x.Discount);
                 var avgMonthlyRevenue = totalRevenue / 12;
                 var avgMonthlyDiscount = totalDiscount / 12;
                 var discountPercentage = (totalDiscount / totalRevenue) * 100;
 
-                var monthlyData = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
+                var monthlyData = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
                         Month = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM"),
@@ -147,14 +156,19 @@ public static class DiscountVsRevenueArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var monthlyData = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                
+                var monthlyData = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
+                        MonthNumeric = g.Key.Month,
                         Month = new DateTime(g.Key.Year, g.Key.Month, 1).ToString("MMMM"),
                         Revenue = Math.Round(g.Sum(x => x.Amount), 2),
                         Discount = Math.Round(g.Sum(x => x.UnitPrice * x.Quantity * x.Discount), 2)
                     })
-                    .OrderBy(x => x.Month)
+                    .OrderBy(x => x.MonthNumeric)
                     .ToArray();
 
                 var table = new StringBuilder();
@@ -184,15 +198,20 @@ public static class DiscountVsRevenueArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var discountAnalysis = data.GroupBy(x => Math.Round(x.Discount * 100 / 5) * 5) // Group by 5% brackets
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                
+                var discountAnalysis = filteredData.GroupBy(x => Math.Round(x.Discount * 100 / 5) * 5) // Group by 5% brackets
                     .Select(g => new
                     {
+                        DiscountNumeric = g.Key,
                         DiscountLevel = g.Key == 0 ? "No Discount" : $"{g.Key}% Discount",
                         Revenue = Math.Round(g.Sum(x => x.Amount), 2),
                         OrderCount = g.DistinctBy(x => x.OrderId).Count(),
                         AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount)), 2)
                     })
-                    .OrderBy(x => x.DiscountLevel)
+                    .OrderBy(x => x.DiscountNumeric)
                     .ToArray();
 
                 var totalRevenue = discountAnalysis.Sum(x => x.Revenue);

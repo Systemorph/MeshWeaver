@@ -27,11 +27,11 @@ Tags:
 
 This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2023. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
 
-@("app/Northwind/DiscountAnalysisReport")
+@("app/Northwind/DiscountAnalysisReport?Year=2023")
 
-@("app/Northwind/DiscountVsRevenue")
+@("app/Northwind/DiscountVsRevenue?Year=2023")
 
-@("app/Northwind/MonthlyBreakdownTable")
+@("app/Northwind/MonthlyBreakdownTable?Year=2023")
 
 ### Analysis
 - **Revenue Trends:** The analysis shows clear patterns in revenue generation throughout the year, with seasonal variations affecting overall performance.
@@ -52,9 +52,9 @@ The analysis reveals that the majority of sales were made without any discount, 
 
 ### Discount Effectiveness Table
 
-@("app/Northwind/DiscountPercentage")
+@("app/Northwind/DiscountPercentage?Year=2023")
 
-@("app/Northwind/DiscountEffectivenessReport")
+@("app/Northwind/DiscountEffectivenessReport?Year=2023")
 
 ### Strategic Recommendations
 

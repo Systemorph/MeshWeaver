@@ -37,7 +37,10 @@ public static class OrdersAnalysisArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var monthlyOrders = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                var monthlyOrders = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
                         Month = g.Key.Month,
@@ -139,7 +142,11 @@ public static class OrdersAnalysisArea
         => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var monthlyAvgValues = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                
+                var monthlyAvgValues = filteredData.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
                     .Select(g => new
                     {
                         Month = g.Key.Month,
