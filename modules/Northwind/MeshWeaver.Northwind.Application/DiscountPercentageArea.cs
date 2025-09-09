@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
@@ -9,6 +10,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Displays an interactive pie chart with colored segments representing revenue amounts for each discount percentage,
 /// helping identify the impact of promotional pricing on total sales volume.
 /// </summary>
+[Display(GroupName = "Discounting", Order = 302)]
 public static class DiscountPercentageArea
 {
     /// <summary>

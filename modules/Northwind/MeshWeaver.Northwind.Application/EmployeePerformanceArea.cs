@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -16,6 +17,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features interactive bar charts ranking employees by revenue and detailed performance tables with key indicators
 /// including total sales, order counts, customer coverage, and average order values per employee.
 /// </summary>
+[Display(GroupName = "Employees", Order = 510)]
 public static class EmployeePerformanceArea
 {
     /// <summary>

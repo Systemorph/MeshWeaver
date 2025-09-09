@@ -1,3 +1,4 @@
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Layout;
@@ -11,6 +12,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Displays product names with their corresponding sales amounts, filtered by category and optionally by year.
 /// Uses dynamic filtering based on URL parameters to provide targeted product performance insights.
 /// </summary>
+[Display(GroupName = "Products")]
 public static class TopProductsByCategoryArea
 {
     /// <summary>

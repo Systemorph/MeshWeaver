@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add sales comparison with the previous year to a layout.
 /// </summary>
+[Display(GroupName = "Sales", Order = 300)]
 public static class SalesComparisonWIthPreviousYearArea
 {
     /// <summary>

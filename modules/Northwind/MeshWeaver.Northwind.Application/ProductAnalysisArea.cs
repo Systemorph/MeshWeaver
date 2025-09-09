@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Arithmetics;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -17,6 +18,7 @@ namespace MeshWeaver.Northwind.Application;
 /// discount impact studies, and sales velocity measurements. Features interactive charts and data grids
 /// with year filtering to analyze product performance across multiple dimensions and time periods.
 /// </summary>
+[Display(GroupName = "Products", Order = 401)]
 public static class ProductAnalysisArea
 {
     /// <summary>

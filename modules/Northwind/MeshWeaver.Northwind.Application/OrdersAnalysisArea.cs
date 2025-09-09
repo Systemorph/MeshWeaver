@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -11,6 +12,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features interactive charts showing order counts and average values over time, plus detailed markdown
 /// tables with monthly breakdowns, insights, and business recommendations based on actual order data.
 /// </summary>
+[Display(GroupName = "Orders", Order = 600)]
 public static class OrdersAnalysisArea
 {
     /// <summary>

@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -12,6 +14,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Features product details including names, categories, unit prices, quantities sold, discounts given, and total revenue.
 /// Includes toolbar filtering by category and displays products ranked by total sales amount.
 /// </summary>
+[Display(GroupName = "Products", Order = 400)]
 public static class ProductOverviewArea
 {
     /// <summary>

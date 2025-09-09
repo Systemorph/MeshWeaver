@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -14,6 +16,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Displays a horizontal bar chart with employee names and their corresponding sales figures,
 /// featuring data labels and automatic sorting from highest to lowest performance.
 /// </summary>
+[Display(GroupName = "Employees", Order = 500)]
 public static class EmployeesOverviewArea
 {
     /// <summary>

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add and manage detailed reports areas in the layout.
 /// </summary>
+[Display(GroupName = "Orders", Order = 610)]
 public static class DetailedReportsArea
 {
     /// <summary>

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add and manage sales geography areas in the layout.
 /// </summary>
+[Display(GroupName = "Sales", Order = 210)]
 public static class SalesGeographyArea
 {
     /// <summary>
@@ -30,7 +32,8 @@ public static class SalesGeographyArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing country sales comparison.</returns>
-    public static UiControl? CountrySalesComparison(this LayoutAreaHost layoutArea, RenderingContext context)
+    [Display(Name = "Country Sales Comparison", GroupName = "Sales", Order = 1)]
+    public static UiControl CountrySalesComparison(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new SalesGeographyToolbar(), (tb, area, _) =>
@@ -42,18 +45,18 @@ public static class SalesGeographyArea
                     
                     // Group by country and year to create chart datasets
                     var countryYearGroups = filteredData
-                        .GroupBy(x => new { x.ShipCountry, x.OrderYear })
+                        .GroupBy(x => (x.ShipCountry, x.OrderYear))
                         .ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
                     
                     // Get unique years and countries
                     var years = countryYearGroups.Keys.Select(k => k.OrderYear).Distinct().OrderBy(y => y).ToArray();
-                    var countries = countryYearGroups.Keys.Select(k => k.ShipCountry).Distinct().OrderBy(c => c).ToArray();
+                    var countries = countryYearGroups.Keys.Select(k => k.ShipCountry ?? string.Empty).Distinct().OrderBy(c => c).ToArray();
                     
                     // Create a dataset for each year
                     var dataSets = years.Select(year =>
                     {
                         var yearData = countries.Select(country => 
-                            countryYearGroups.TryGetValue(new { ShipCountry = country, OrderYear = year }, out var amount) ? amount : 0.0)
+                            countryYearGroups.GetValueOrDefault((country,  year), 0.0))
                             .ToArray();
                         return new BarDataSet(yearData).WithLabel(year.ToString());
                     }).ToArray();
@@ -74,6 +77,7 @@ public static class SalesGeographyArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing regional analysis.</returns>
+    [Display(Name = "Regional Analysis", GroupName = "Sales", Order = 2)]
     public static UiControl RegionalAnalysis(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         layoutArea.SubscribeToDataStream(SalesGeographyToolbar.Years, layoutArea.GetAllYearsOfOrders());
@@ -119,7 +123,8 @@ public static class SalesGeographyArea
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
     /// <returns>An observable sequence of UI controls representing sales map with toolbar.</returns>
-    public static UiControl? SalesMapView(this LayoutAreaHost layoutArea, RenderingContext context)
+    [Display(Name = "Sales Map View", GroupName = "Sales", Order = 3)]
+    public static UiControl SalesMapView(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.Toolbar(new SalesMapToolbar(),
             (toolbar, area, _) => toolbar.Display switch

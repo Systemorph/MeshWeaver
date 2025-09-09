@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
@@ -9,6 +10,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Creates a financial summary dashboard displaying key performance indicators and metrics.
 /// Shows total revenue, order count, average order value, and other critical business metrics.
 /// </summary>
+[Display(GroupName = "Financial", Order = 700)]
 public static class FinancialSummaryArea
 {
     /// <summary>

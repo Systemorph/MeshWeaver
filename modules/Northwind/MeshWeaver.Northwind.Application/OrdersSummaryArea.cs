@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
@@ -14,6 +15,7 @@ namespace MeshWeaver.Northwind.Application;
 /// Shows customer company names, order amounts (formatted as currency), and purchase dates
 /// with year filtering capability to analyze high-value orders across different time periods.
 /// </summary>
+[Display(GroupName = "Orders", Order = 602)]
 public static class OrdersSummaryArea
 {
     /// <summary>
