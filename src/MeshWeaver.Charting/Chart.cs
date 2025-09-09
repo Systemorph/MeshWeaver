@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using System.Collections;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Models.Bar;
@@ -133,7 +133,7 @@ public static class Chart
 
     public static ChartModel ToChart(this IEnumerable<DataSet> dataSets) => Create(dataSets.ToArray());
 
-    public static ChartModel Create(params DataSet[] dataSets) =>
+    public static ChartModel Create(params IReadOnlyCollection<DataSet> dataSets) =>
         dataSets
             .OfType<IChartOptionsConfiguration>()
             .Aggregate(new ChartModel(dataSets), (r, c) => r.WithOptions(c.Configure));
