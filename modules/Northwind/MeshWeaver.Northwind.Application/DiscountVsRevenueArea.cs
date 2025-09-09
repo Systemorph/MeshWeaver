@@ -33,7 +33,6 @@ public static class DiscountVsRevenueArea
     /// <returns>A bar chart comparing monthly revenue and discount amounts.</returns>
     public static IObservable<UiControl> DiscountVsRevenue(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyData = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
@@ -72,7 +71,6 @@ public static class DiscountVsRevenueArea
     /// <returns>A detailed financial analysis report in markdown format.</returns>
     public static IObservable<UiControl> DiscountAnalysisReport(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var totalRevenue = data.Sum(x => x.Amount);
@@ -147,7 +145,6 @@ public static class DiscountVsRevenueArea
     /// <returns>A comprehensive markdown table with monthly financial breakdown.</returns>
     public static IObservable<UiControl> MonthlyBreakdownTable(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyData = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
@@ -185,7 +182,6 @@ public static class DiscountVsRevenueArea
     /// <returns>A table showing discount effectiveness data.</returns>
     public static IObservable<UiControl> DiscountEffectivenessReport(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var discountAnalysis = data.GroupBy(x => Math.Round(x.Discount * 100 / 5) * 5) // Group by 5% brackets

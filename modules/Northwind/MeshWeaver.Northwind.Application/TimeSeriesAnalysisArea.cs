@@ -35,7 +35,7 @@ public static class TimeSeriesAnalysisArea
         layoutArea.SubscribeToDataStream(TimeSeriesToolbar.Years, layoutArea.GetAllYearsOfOrders());
         return layoutArea.Toolbar(new TimeSeriesToolbar(), (tb, area, _) =>
             area.GetNorthwindDataCubeData()
-                .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
+                .Select(data => data.Where(x => (tb.Year == 0 || x.OrderDate.Year == tb.Year)))
                 .SelectMany(data =>
                     area.Workspace
                         .Pivot(data.ToDataCube())
@@ -88,7 +88,7 @@ public static class TimeSeriesAnalysisArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+            ;
 }
 
 /// <summary>

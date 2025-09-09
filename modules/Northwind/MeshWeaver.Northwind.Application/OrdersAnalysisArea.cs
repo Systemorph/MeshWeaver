@@ -35,7 +35,6 @@ public static class OrdersAnalysisArea
     /// <returns>A detailed markdown report with order statistics and business insights.</returns>
     public static IObservable<UiControl> OrdersSummaryReport(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyOrders = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
@@ -102,7 +101,6 @@ public static class OrdersAnalysisArea
     /// <returns>A markdown table displaying monthly order statistics.</returns>
     public static IObservable<UiControl> MonthlyOrdersTable(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyOrders = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
@@ -139,7 +137,6 @@ public static class OrdersAnalysisArea
     /// <returns>A markdown table showing monthly average order prices.</returns>
     public static IObservable<UiControl> AvgOrderValueReport(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyAvgValues = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
@@ -176,7 +173,6 @@ public static class OrdersAnalysisArea
     /// <returns>A markdown table showing monthly average order prices.</returns>
     public static IObservable<UiControl> MonthlyAvgPricesTable(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(data => data.Where(x => x.OrderDate >= new DateTime(2023, 1, 1) && x.OrderDate < new DateTime(2024, 1, 1)))
             .Select(data =>
             {
                 var monthlyAvgValues = data.GroupBy(x => new { x.OrderDate.Year, x.OrderDate.Month })
