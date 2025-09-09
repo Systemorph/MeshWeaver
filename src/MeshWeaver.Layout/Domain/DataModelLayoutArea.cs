@@ -8,7 +8,7 @@ using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
-[Display(GroupName = "Data Model", Order = 99)]
+[Display(GroupName = "Data Model")]
 public static class DataModelLayoutArea
 {
     /// <summary>
