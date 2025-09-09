@@ -26,7 +26,7 @@ public static class LayoutAreaCatalogArea
         
         // Create sections for each group
         var sections = groupedLayouts.Aggregate(
-            Controls.Stack,
+            Controls.Stack.WithWidth("100%"),
             (stack, group) =>
             {
                 var categoryTitle = group.Key == "General" ? "Other Areas" : group.Key;
@@ -34,13 +34,16 @@ public static class LayoutAreaCatalogArea
                 var categoryGrid = group
                     .OrderBy(x => x.Order ?? 0)
                     .ThenBy(x => x.Title)
-                    .Aggregate(Controls.LayoutGrid, (s, l)
+                    .Aggregate(Controls.LayoutGrid.WithStyle(style => style.WithWidth("100%")), (s, l)
                         => s.WithView(CreateLayoutAreaControl(l, thumbnailBaseUrl),
-                            skin => skin.WithLg(3).WithMd(4).WithSm(6).WithXs(12)));
-                
+                            skin => skin.WithLg(3).WithMd(4).WithSm(6).WithXs(12)))
+                    
+                    ;
+
                 return stack
                     .WithView(Controls.H2(categoryTitle))
-                    .WithView(categoryGrid); 
+                    .WithView(categoryGrid)
+                    .WithVerticalGap(20); 
             });
         
         return sections;
