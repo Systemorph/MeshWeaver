@@ -1,12 +1,20 @@
-@page "/app/{Application}/{Area}/{**Id}"
+@* Fallback route - matches any 4-segment path *@
+@page "/{AddressType}/{Application}/{Area}/{**Id}"
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+    @if (!IsValidAddressType)
+    {
+        <div class="error-container">
+            <h2>Invalid Address Type</h2>
+            <p>The address type '<strong>@AddressType</strong>' is not registered in the system.</p>
+            <p>Please double-check the url you have entered.</p>
+        </div>
+    }
+    else
+    {
+        <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+    }
 </CascadingValue>
-@code
-{
-    private DesignThemeModes Mode;
-}

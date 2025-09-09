@@ -18,6 +18,8 @@ public static class BlazorHostingExtensions
             .ConfigureServices(services => services
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
+                .Configure<RouteOptions>(options =>
+                    options.ConstraintMap.Add("addresstype", typeof(AddressTypeRouteConstraint)))
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 

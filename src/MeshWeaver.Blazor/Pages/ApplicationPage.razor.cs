@@ -3,16 +3,24 @@ using Microsoft.AspNetCore.Components;
 using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
 public partial class ApplicationPage
 {
+    private DesignThemeModes Mode;
     private LayoutAreaControl ViewModel { get; set; } = null!;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = null!;
 
+    [Inject]
+    private IMessageHub Hub { get; set; } = null!;
+
+    [Parameter]
+    public string? AddressType { get; set; } = "";
     [Parameter]
     public string? Application { get; set; } = "";
     [Parameter]
@@ -32,7 +40,14 @@ public partial class ApplicationPage
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-    private object Address => new ApplicationAddress(Application!);
+    private object? Address => IsValidAddressType ? MeshExtensions.MapAddress(AddressType!, Application!) : null;
+    private bool IsValidAddressType => GetValidAddressTypes().Contains(AddressType!);
+    
+    private HashSet<string> GetValidAddressTypes() => 
+        Hub.TypeRegistry.Types
+            .Where(kvp => kvp.Value.Type.IsAssignableTo(typeof(Address)))
+            .Select(kvp => kvp.Key)
+            .ToHashSet();
 
     private LayoutAreaReference Reference { get; set; } = null!;
     protected override async Task OnParametersSetAsync()
@@ -51,7 +66,14 @@ public partial class ApplicationPage
 
 
 
-        ViewModel = Controls.LayoutArea(Address, Reference)
+        if (!IsValidAddressType)
+        {
+            // Handle invalid address type
+            PageTitle = $"Invalid Address Type: {AddressType}";
+            return;
+        }
+
+        ViewModel = Controls.LayoutArea(Address!, Reference)
             with
         {
             ShowProgress = true
