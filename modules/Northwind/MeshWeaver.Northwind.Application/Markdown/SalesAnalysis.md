@@ -26,7 +26,7 @@ Click the year above the chart to select which information to display.
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/SalesGrowthSummary")
+@("app/Northwind/SalesGrowthSummary?Year=2023")
 
   </div>
   <div style="flex: 1;">

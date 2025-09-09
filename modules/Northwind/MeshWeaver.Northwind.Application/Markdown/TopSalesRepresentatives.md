@@ -25,17 +25,17 @@ This report highlights the top-performing employees of the month based on the am
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/TopEmployeesTable")
+@("app/Northwind/TopEmployeesTable?Year=2023")
 
   </div>
   <div style="flex: 1;">
 
-@("app/Northwind/TopEmployees")
+@("app/Northwind/TopEmployees?Year=2023")
 
   </div>
 </div>
 
-@("app/Northwind/TopEmployeesReport")
+@("app/Northwind/TopEmployeesReport?Year=2023")
 
 ## Employee Recognition and Performance Impact
 

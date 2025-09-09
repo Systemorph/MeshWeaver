@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
@@ -29,8 +29,7 @@ public static class FinancialSummaryArea
     /// <returns>A dashboard with financial summary metrics and KPIs.</returns>
     public static IObservable<UiControl> FinancialSummary(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        var filterYear = 2023; // Hardcoded for demo
-
+        var financialYear = layoutArea.Reference.GetParameterValue("Year");
         return layoutArea.GetNorthwindDataCubeData()
             .CombineLatest(
                 layoutArea.Workspace.GetStream<Customer>()!,
@@ -43,6 +42,7 @@ public static class FinancialSummaryArea
                 var products = tuple.Third!.ToDictionary(p => p.ProductId, p => p);
                 var orders = tuple.Fourth!.ToDictionary(o => o.OrderId, o => o);
 
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
                 // Filter data by year
                 var filteredData = data.Where(d => d.OrderDate.Year == filterYear).ToList();
 

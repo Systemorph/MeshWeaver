@@ -25,17 +25,17 @@ This report provides an analysis of the top 5 clients based on their total purch
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/TopClientsTable")
+@("app/Northwind/TopClientsTable?Year=2023")
 
   </div>
   <div style="flex: 1;">
 
-@("app/Northwind/TopClients")
+@("app/Northwind/TopClients?Year=2023")
 
   </div>
 </div>
 
-@("app/Northwind/TopClientsRewardSuggestions")
+@("app/Northwind/TopClientsRewardSuggestions?Year=2023")
 
 In addition to targeted strategies for top clients, implementing general reward programs can significantly enhance overall customer satisfaction and loyalty. These programs can be designed to cater to a broader customer base, ensuring that all clients feel valued and appreciated. The following recommendations provide a framework for creating effective and engaging reward programs that can be adapted to various business models.
 

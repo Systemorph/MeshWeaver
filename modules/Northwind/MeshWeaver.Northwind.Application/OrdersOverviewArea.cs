@@ -65,10 +65,13 @@ public static class OrdersOverviewArea
     /// <param name="context">The rendering context.</param>
     /// <returns>A line chart showing monthly average order values with year-based color coding.</returns>
     public static IObservable<UiControl> AvgOrderValue(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetDataCube()
+        => layoutArea.GetNorthwindDataCubeData()
             .Select(data =>
             {
-                var monthlyAvgValues = data.GroupBy(x => x.OrderDate.ToString("yyyy-MM"))
+                var financialYear = layoutArea.Reference.GetParameterValue("Year");
+                var filterYear = financialYear != null && int.TryParse(financialYear, out var year) ? year : data.Max(d => d.OrderYear);
+                var filteredData = data.Where(d => d.OrderDate.Year == filterYear);
+                var monthlyAvgValues = filteredData.GroupBy(x => x.OrderDate.ToString("yyyy-MM"))
                     .Select(g => new { 
                         Month = g.Key, 
                         AvgOrderValue = Math.Round(g.GroupBy(x => x.OrderId).Average(order => order.Sum(x => x.Amount)), 2)
