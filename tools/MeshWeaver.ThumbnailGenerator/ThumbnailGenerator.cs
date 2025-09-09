@@ -41,7 +41,7 @@ public static class ThumbnailGenerator
         // Create a persistent context to maintain localStorage across pages
         await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
         {
-            ViewportSize = new ViewportSize { Width = 1200, Height = 800 },
+            ViewportSize = new ViewportSize { Width = 1400, Height = 1200 },
             ColorScheme = isDarkMode ? ColorScheme.Dark : ColorScheme.Light
         });
 
