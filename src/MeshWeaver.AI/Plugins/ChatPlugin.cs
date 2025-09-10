@@ -11,15 +11,16 @@ public class ChatPlugin(IAgentChat agentChat)
 {
     /// <summary>
     /// Delegates a task to another agent. This is useful when you need to hand off a task to a specialized agent that can handle it better.
+    /// If you feel a message does not fall within your responsibility or expertise, delegate to the default agent.
     /// </summary>
     /// <param name="agentName"></param>
     /// <param name="message"></param>
     /// <param name="askUserFeedback"></param>
     /// <returns></returns>
     [KernelFunction]
-    [Description("Delegate a task to another agent. Use this when you need to hand off a task to a specialized agent.")]
+    [Description("Delegate a task to another agent. Use this when you need to hand off a task to a specialized agent. If the message does not fall within your responsibility, delegate to the default agent.")]
     public string Delegate(
-        [Description("The exact name of the agent to delegate to")] string agentName,
+        [Description("The exact name of the agent to delegate to (use 'default' for the default agent)")] string agentName,
         [Description("The message or task to send to the agent")] string message,
         [Description("Whether to ask for user feedback before proceeding (default: false)")] bool askUserFeedback = false)
     {

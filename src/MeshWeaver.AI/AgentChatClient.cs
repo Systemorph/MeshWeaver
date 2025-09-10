@@ -15,12 +15,16 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
-public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvider) : IAgentChat
+public class AgentChatClient(
+    AgentChat agentChat,
+    IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
+    IServiceProvider serviceProvider) : IAgentChat
 {
     private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly DelegationState delegationState = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentRunningAgent;
+    private string? lastContextAddress;
 
     public AgentContext? Context { get; private set; }
 
@@ -135,20 +139,99 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     private ChatMessage ProcessMessageWithContext(ChatMessage message)
     {
-        if (Context == null || message.Role != ChatRole.User)
+        if (message.Role != ChatRole.User)
             return message;
 
         // Extract original text content
         var originalText = ExtractTextFromMessage(message);
-
-        // Create new message with context template
-        var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
-        var messageWithContext = $"{originalText}\n<Context>\n{contextJson}\n</Context>";
+        
+        // Determine the selected agent
+        var selectedAgent = DetermineSelectedAgent(originalText);
+        
+        // Update the current running agent if we're routing to a specific agent
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            currentRunningAgent = selectedAgent;
+        }
+        
+        // Format the final message with context
+        var messageWithContext = FormatMessageWithContext(originalText, selectedAgent);
+        
+        // Always update the last context address after processing
+        lastContextAddress = Context?.Address;
 
         return new ChatMessage(ChatRole.User, [new TextContent(messageWithContext)])
         {
             AuthorName = message.AuthorName
         };
+    }
+
+    private string? DetermineSelectedAgent(string originalText)
+    {
+        // Check for explicit agent targeting
+        if (originalText.TrimStart().StartsWith("@"))
+        {
+            // Validate that it's actually targeting a valid agent
+            var trimmedText = originalText.TrimStart();
+            var spaceIndex = trimmedText.IndexOf(' ');
+            var agentName = spaceIndex > 0 ? trimmedText.Substring(1, spaceIndex - 1) : trimmedText.Substring(1);
+            
+            var targetAgent = agentChat.Agents.FirstOrDefault(a => a.Name is not null && a.Name.Equals(agentName, StringComparison.OrdinalIgnoreCase));
+            if (targetAgent != null)
+            {
+                // Valid agent targeted - track it and don't override the message
+                currentRunningAgent = targetAgent.Name;
+                return null; // Don't add another agent directive
+            }
+            // If not a valid agent name, continue with normal agent selection logic
+        }
+
+        // Check if we should trigger agent reselection
+        var currentAddress = Context?.Address;
+        var shouldReselectAgent = ShouldReselectAgent(currentAddress);
+
+        if (shouldReselectAgent)
+        {
+            // Trigger agent selection logic
+            return SelectAgentForContext(Context);
+        }
+        else if (!string.IsNullOrEmpty(currentRunningAgent))
+        {
+            // Continue with current agent
+            return currentRunningAgent;
+        }
+
+        return null; // Use default routing
+    }
+
+    private bool ShouldReselectAgent(string? currentAddress)
+    {
+        // If the address actually changed, reselect agent
+        if (lastContextAddress != currentAddress)
+            return true;
+
+        // If we don't have a current running agent, try to select one
+        if (string.IsNullOrEmpty(currentRunningAgent))
+            return true;
+
+        return false; // Keep current agent
+    }
+
+    private string FormatMessageWithContext(string originalText, string? selectedAgent)
+    {
+        var contextJson = JsonSerializer.Serialize(Context!, hub.JsonSerializerOptions);
+        
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            // Route to the selected agent
+            var agentDirective = $"@{selectedAgent} {originalText}";
+            return $"{agentDirective}\n<Context>\n{contextJson}\n</Context>";
+        }
+        else
+        {
+            // Use default routing or user-specified agent targeting
+            return $"{originalText}\n<Context>\n{contextJson}\n</Context>";
+        }
     }
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
@@ -374,6 +457,45 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
             }
         }
         return textBuilder.ToString();
+    }
+
+    /// <summary>
+    /// Selects the appropriate agent based on context changes and agent capabilities.
+    /// </summary>
+    private string? SelectAgentForContext(AgentContext? newContext)
+    {
+        // If no context, use current agent or default
+        if (newContext is null)
+            return currentRunningAgent;
+
+        if (currentRunningAgent is null)
+            return null;
+
+        var currentAgent = agentDefinitions.GetValueOrDefault(currentRunningAgent);
+        if (currentAgent is null)
+            return null;
+
+        // Check if current agent implements IAgentWithContext and still matches
+        if (currentAgent is IAgentWithContext currentContextAgent && currentContextAgent.Matches(newContext))
+        {
+            return currentRunningAgent; // Keep current agent
+        }
+
+        // Find an agent that matches the new context
+        var matchingAgent = agentDefinitions
+            .Values.OfType<IAgentWithContext>()
+            .FirstOrDefault(a => a.Matches(newContext));
+
+        if (matchingAgent is not null)
+            return matchingAgent.Name;
+
+
+        // If current agent doesn't implement IAgentWithContext, keep it
+        if (currentAgent is not IAgentWithContext)
+            return currentRunningAgent;
+
+        // Default to null (which will use default routing)
+        return null;
     }
 
 
