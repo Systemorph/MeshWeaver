@@ -16,7 +16,7 @@ public static class LayoutAreaCatalogArea
         var layouts = host.GetLayoutAreaDefinitions();
         
         // Extract thumbnail base URL from the layout area ID if present
-        var thumbnailBaseUrl = ExtractThumbnailBaseUrl(host.Reference.Id?.ToString());
+        var thumbnailBaseUrl = host.LayoutDefinition.ThumbnailBase;
         
         // Group layouts by category, then order within groups
         var groupedLayouts = layouts
@@ -49,22 +49,6 @@ public static class LayoutAreaCatalogArea
         return sections;
     }
 
-    private static string? ExtractThumbnailBaseUrl(string? layoutAreaId)
-    {
-        // Look for thumbnail-base parameter in the layout area ID
-        // This could be passed as "someId?thumbnail-base=/content/Northwind/thumbnails"
-        if (!string.IsNullOrEmpty(layoutAreaId) && layoutAreaId.Contains("thumbnail-base="))
-        {
-            var parts = layoutAreaId.Split('?', '&');
-            var thumbnailBasePart = parts.FirstOrDefault(p => p.StartsWith("thumbnail-base="));
-            if (thumbnailBasePart != null)
-            {
-                return thumbnailBasePart.Substring("thumbnail-base=".Length);
-            }
-        }
-        
-        return null;
-    }
 
     private static LayoutAreaDefinitionControl CreateLayoutAreaControl(LayoutAreaDefinition definition, string? thumbnailBaseUrl)
     {

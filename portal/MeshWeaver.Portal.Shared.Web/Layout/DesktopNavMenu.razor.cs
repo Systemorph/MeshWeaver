@@ -49,11 +49,23 @@ public partial class DesktopNavMenu : ComponentBase
 
     public static Icon NorthwindLayoutAreaIcon(bool active = false)
         => active
-            ? new Icons.Filled.Size24.ShoppingBag()
-            : new Icons.Regular.Size24.ShoppingBag();
-    
+            ? new Icons.Filled.Size24.AppGeneric()
+            : new Icons.Regular.Size24.AppGeneric();
+
     public static Icon NorthwindIcon(bool active = false)
+    {
+        return active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.Northwind();
+    }
+
+    public static Icon BlogIcon(bool active = false)
         => active
-            ? new Icons.Filled.Size24.Globe()
-            : new Icons.Regular.Size24.Globe();
+            ? new Icons.Filled.Size24.Book()
+            : new Size24.Book();
+
+    public static Icon NorthwindArticlesIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.News()
+            : new Icons.Regular.Size24.News();
 }
