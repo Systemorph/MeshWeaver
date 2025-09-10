@@ -25,28 +25,36 @@ public partial class MobileNavMenu : ComponentBase
     private IEnumerable<MobileNavMenuEntry> GetMobileNavMenuEntries()
     {
         yield return new MobileNavMenuEntry(
-            "Articles",
+            "Blog",
             () => NavigateToAsync("/articles"),
-            DesktopNavMenu.ArticlesIcon(),
+            DesktopNavMenu.BlogIcon(),
             LinkMatchRegex: new Regex("^/articles")
         );
+
         yield return new MobileNavMenuEntry("Areas",
             () => NavigateToAsync("/content/Documentation/Readme"),
             DesktopNavMenu.DocumentationIcon(),
             LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
 
         yield return new MobileNavMenuEntry(
-            "Todos",
-            () => NavigateToAsync("/app/Todo/TodoList"),
+            "Todo Areas",
+            () => NavigateToAsync("/app/Todo/LayoutAreas"),
             DesktopNavMenu.TodoIcon(),
             LinkMatchRegex: new Regex("^/app/Todo")
         );
 
         yield return new MobileNavMenuEntry(
-            "Agents",
-            () => NavigateToAsync("/app/Agents/Overview"),
-            DesktopNavMenu.AgentsIcon(),
-            LinkMatchRegex: new Regex("^/app/Agents")
+            "Northwind Articles",
+            () => NavigateToAsync("/northwind/articles"),
+            DesktopNavMenu.NorthwindArticlesIcon(),
+            LinkMatchRegex: new Regex("^/northwind/articles")
+        );
+
+        yield return new MobileNavMenuEntry(
+            "Northwind Areas",
+            () => NavigateToAsync("/app/Northwind/LayoutAreas"),
+            DesktopNavMenu.NorthwindLayoutAreaIcon(),
+            LinkMatchRegex: new Regex("^/app/Northwind")
         );
 
         yield return new MobileNavMenuEntry(
@@ -54,13 +62,6 @@ public partial class MobileNavMenu : ComponentBase
             () => NavigateToAsync("/chat"),
             DesktopNavMenu.ChatIcon(),
             LinkMatchRegex: new Regex("^/chat")
-        );
-        
-        yield return new MobileNavMenuEntry(
-            "Northwind",
-            () => NavigateToAsync($"/area/{DesktopNavMenu.LayoutAreas("Northwind")}?thumbnail-base=/static/Northwind/thumbnails"),
-            DesktopNavMenu.NorthwindIcon(),
-            LinkMatchRegex: new Regex("^/area/.*/LayoutAreas")
         );
 
         yield return new MobileNavMenuEntry(

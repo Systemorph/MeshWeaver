@@ -22,44 +22,10 @@ public static class TopSalesRepresentativesArea
     /// <param name="layout">The layout definition to which the top sales representatives area will be added.</param>
     /// <returns>The updated layout definition with the top sales representatives area added.</returns>
     public static LayoutDefinition AddTopSalesRepresentatives(this LayoutDefinition layout)
-        => layout.WithView(nameof(TopSalesRepresentatives), TopSalesRepresentatives)
+        => layout
             .WithView(nameof(TopEmployeesTable), TopEmployeesTable)
             .WithView(nameof(TopEmployeesReport), TopEmployeesReport);
 
-    /// <summary>
-    /// Displays a horizontal bar chart ranking employees by total sales revenue.
-    /// Shows employee full names (first + last) with corresponding revenue amounts in a clean,
-    /// color-coded bar chart. Automatically filters to show top performers and sorts from
-    /// highest to lowest earnings for easy performance comparison.
-    /// </summary>
-    /// <param name="layoutArea">The layout area host.</param>
-    /// <param name="context">The rendering context.</param>
-    /// <returns>A horizontal bar chart with employee names and revenue totals.</returns>
-    public static IObservable<UiControl> TopSalesRepresentatives(this LayoutAreaHost layoutArea, RenderingContext context)
-        => layoutArea.GetNorthwindDataCubeData()
-            .CombineLatest(layoutArea.Workspace.GetStream<Employee>()!)
-            .Select(tuple =>
-            {
-                var data = tuple.First;
-                var employees = tuple.Second!.ToDictionary(e => e.EmployeeId, e => $"{e.FirstName} {e.LastName}");
-
-                var employeeData = data.GroupBy(x => x.Employee)
-                    .Select(g => new
-                    {
-                        Employee = employees.TryGetValue(g.Key, out var name) ? name : g.Key.ToString(),
-                        Revenue = g.Sum(x => x.Amount)
-                    })
-                    .OrderByDescending(x => x.Revenue)
-                    .Take(8)
-                    .ToArray();
-
-                var chart = (UiControl)Charting.Chart.Bar(employeeData.Select(e => e.Revenue), "Revenue")
-                    .WithLabels(employeeData.Select(e => e.Employee));
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Top Sales Representatives"))
-                    .WithView(chart);
-            });
 
     /// <summary>
     /// Generates a dynamic markdown table showing detailed employee earnings breakdown.
