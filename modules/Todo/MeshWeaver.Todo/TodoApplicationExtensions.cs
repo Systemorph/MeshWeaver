@@ -41,6 +41,10 @@ public static class TodoApplicationExtensions
                 layout.WithView(nameof(TodoLayoutArea.TodoList), TodoLayoutArea.TodoList)
                       .WithView(nameof(TodoLayoutArea.TodosByCategory), TodoLayoutArea.TodosByCategory)
                       .WithView(nameof(TodoLayoutArea.TodoSummary), TodoLayoutArea.TodoSummary)
+                      .WithView(nameof(TodoLayoutArea.PlanningView), TodoLayoutArea.PlanningView)
+                      .WithView(nameof(TodoLayoutArea.MyActiveTasks), TodoLayoutArea.MyActiveTasks)
+                      .WithView(nameof(TodoLayoutArea.UnassignedTasks), TodoLayoutArea.UnassignedTasks)
+                      .WithView(nameof(TodoLayoutArea.TodaysFocus), TodoLayoutArea.TodaysFocus)
             );
     }
 }
