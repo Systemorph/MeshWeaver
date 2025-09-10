@@ -12,7 +12,7 @@ namespace MeshWeaver.Northwind.AI;
 /// Northwind data agent that provides access to Northwind domain data and collections
 /// </summary>
 [ExposedInNavigator]
-public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
+public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutDefinitionMap;
@@ -54,11 +54,23 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     }
 
     private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");
+    
     async Task IInitializableAgent.InitializeAsync()
     {
         var typeResponse = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(NorthwindAddress));
         typeDefinitionMap = typeResponse.Message.Types.ToDictionary(x => x.Name);
         var layoutResponse = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(NorthwindAddress));
         layoutDefinitionMap = layoutResponse.Message.Areas.ToDictionary(x => x.Area);
+    }
+
+    public bool Matches(AgentContext? context)
+    {
+        if (context?.Address == null)
+            return false;
+
+        // Match if the address contains "Northwind" or starts with the Northwind address
+        var contextAddress = context.Address.ToString();
+        return contextAddress.Contains("Northwind", StringComparison.OrdinalIgnoreCase) ||
+               contextAddress.StartsWith(NorthwindAddress.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 }
