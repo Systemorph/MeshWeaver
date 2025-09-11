@@ -1,18 +1,15 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
 using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
-using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.Serialization;
 using Microsoft.Extensions.Logging;
@@ -72,8 +69,7 @@ public static class LayoutExtensions
 
     private static LayoutDefinition CreateDefaultLayoutConfiguration(IMessageHub hub)
     {
-        return new LayoutDefinition(hub)
-            .AddDocumentation();
+        return new LayoutDefinition(hub);
     }
 
     internal static ImmutableList<Func<LayoutDefinition, LayoutDefinition>> GetListOfLambdas(
@@ -320,30 +316,6 @@ public static class LayoutExtensions
     }
 
 
-    public static string DocumentationPath(this LayoutDefinition layout, Assembly assembly, string name)
-        => Controls.LayoutArea(layout.Hub.Address, new LayoutAreaReference(nameof(DocumentationLayout.Doc))
-        {
-            Id = $"{EmbeddedDocumentationSource.Embedded}/{assembly.GetName().Name!}/{name}"
-        }).ToString();
-
-    public static LayoutDefinition AddDocumentationMenuForAssemblies(this LayoutDefinition layout, params Assembly[] assemblies)
-        => layout.WithNavMenu
-        (
-            (menu, _, _) => assemblies.Aggregate
-            (
-                menu,
-                (mm, assembly) =>
-                    layout.Hub.GetDocumentationService().Context
-                        .GetSource(EmbeddedDocumentationSource.Embedded, assembly.GetName().Name!)
-                        ?.DocumentPaths
-                        .Aggregate
-                        (
-                            mm,
-                            (m, i) =>
-                                m.WithNavLink(i.Key, layout.DocumentationPath(assembly, i.Key))
-                        ) ?? mm
-            )
-        );
 
     private static IMessageDelivery HandleGetLayoutAreasRequest(IMessageHub hub, IMessageDelivery<GetLayoutAreasRequest> request)
     {

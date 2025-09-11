@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -32,7 +31,7 @@ public static class DataExtensions
 
         if (existingLambdas.Any())
             return ret;
-        return ret.AddDocumentation()
+        return ret
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>

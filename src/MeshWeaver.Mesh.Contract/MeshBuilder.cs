@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,30 @@ public record MeshBuilder
         this.Address = Address;
         Register();
     }
+
+    private List<MeshNode> MeshNodes { get; } = new();
+    public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
+    {
+        var attributes = assemblyLocations
+            .Select(Assembly.LoadFrom)
+            .SelectMany(a => a.GetCustomAttributes<MeshNodeAttribute>())
+            .ToArray();
+        MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
+        return this;
+    }
+
+    private IEnumerable<MeshNode> InstallServices(IEnumerable<MeshNode> nodes)
+    {
+        foreach (var meshNode in nodes)
+        {
+            foreach (var config in meshNode.GlobalServiceConfigurations)
+            {
+                ConfigureServices(config);
+            }
+            yield return meshNode;
+        }
+    }
+
 
     private List<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfiguration { get; } = new()    {
         AddMesh
@@ -46,7 +71,7 @@ public record MeshBuilder
     private void Register()
     {
         ConfigureServices(services => services
-            .AddSingleton(_ => BuildMeshConfiguration())
+            .AddSingleton(_ => new MeshConfiguration(MeshNodes.ToDictionary(x => x.Name), factories))
             .AddSingleton(BuildHub)
             .AddSingleton<AccessService>()
             );
@@ -75,6 +100,17 @@ public record MeshBuilder
         return configuration
             .AddMeshTypes();
     }
+    public MeshBuilder AddMeshNodes(params IEnumerable<MeshNode> nodes)
+    {
+        MeshNodes.AddRange(nodes);
+        return this;
+    } 
 
-    private MeshConfiguration BuildMeshConfiguration() => MeshConfiguration.Aggregate(new MeshConfiguration(), (x, y) => y.Invoke(x));
+    private readonly List<Func<Address, MeshNode?>> factories = new();
+    public MeshBuilder AddMeshNodeFactory(Func<Address, MeshNode?> meshNodeFactory)
+    {
+        factories.Add(meshNodeFactory);
+        return this;
+    }
+
 }

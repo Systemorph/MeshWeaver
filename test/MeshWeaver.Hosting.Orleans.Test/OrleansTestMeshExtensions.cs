@@ -8,9 +8,8 @@ public static class OrleansTestMeshExtensions
 {
     public static MeshBuilder ConfigurePortalMesh(this MeshBuilder builder)
     {
-        return builder.ConfigureMesh(mesh => mesh
-                .InstallAssemblies(typeof(OrleansTestMeshExtensions).Assembly.Location)
-            )
+        return builder
+            .InstallAssemblies(typeof(OrleansTestMeshExtensions).Assembly.Location)
             .AddKernel();
 
     }

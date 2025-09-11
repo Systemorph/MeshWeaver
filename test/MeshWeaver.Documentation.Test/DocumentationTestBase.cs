@@ -4,7 +4,6 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
@@ -37,8 +36,8 @@ namespace MeshWeaver.Documentation.Test
                 .AddKernel()
                 .ConfigureServices(ConfigureArticles)
                 .ConfigureServices(services => services.AddContentCollections())
-                .ConfigureMesh(config => config.InstallAssemblies(DocumentationAssemblyLocation)
-                );
+                .InstallAssemblies(DocumentationAssemblyLocation)
+                ;
 
         /// <summary>
         /// Location of the assembly

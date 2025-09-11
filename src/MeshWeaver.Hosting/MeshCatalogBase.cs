@@ -21,14 +21,8 @@ public abstract class MeshCatalogBase : IMeshCatalog
         Configuration = configuration;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshCatalogBase>>();
         persistence = hub.GetHostedHub(new PersistenceAddress())!;
-        foreach (var assemblyLocation in Configuration.InstallAtStartup)
-        {
-            var assembly = Assembly.LoadFrom(assemblyLocation);
-            foreach (var node in assembly.GetCustomAttributes<MeshNodeAttribute>().SelectMany(a => a.Nodes))
-            {
+        foreach (var node in Configuration.Nodes.Values)
                 UpdateNode(node);
-            }
-        }
 
     }
 

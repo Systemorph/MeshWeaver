@@ -9,9 +9,3 @@ public class ContentSourceConfig
     public string? BasePath { get; set; }
     public string[] HiddenFrom { get; set; } = [];
 }
-
-public interface IContentCollectionFactory
-{
-    ContentCollection Create(ContentSourceConfig config);
-}
-

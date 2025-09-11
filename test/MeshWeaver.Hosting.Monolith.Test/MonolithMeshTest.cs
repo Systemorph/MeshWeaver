@@ -51,8 +51,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
-            .ConfigureMesh(mesh => mesh
-                .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "HubFactory", "HubFactory")
+            .AddMeshNodes(new MeshNode(ApplicationAddress.TypeName, "HubFactory", "HubFactory")
                 {
                     HubConfiguration = x => x
                 })
@@ -60,5 +59,5 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 {
                     StartupScript = @$"using MeshWeaver.Messaging; Mesh.ServiceProvider.CreateMessageHub(new {typeof(ApplicationAddress).FullName}(""Kernel""))"
                 })
-            ).AddKernel();
+            .AddKernel();
 }

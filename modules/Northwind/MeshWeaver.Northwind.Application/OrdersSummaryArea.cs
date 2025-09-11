@@ -5,7 +5,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application;
@@ -28,8 +27,7 @@ public static class OrdersSummaryArea
     /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(OrderSummary), OrderSummary)
-            .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
-            .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
+
             
         ;
 

@@ -25,9 +25,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .AddKernel()
-            .ConfigureMesh(config => config.AddMeshNodes(
-                TestHubExtensions.Node
-            ));
+            .AddMeshNodes(TestHubExtensions.Node);
 
     [Fact]
     public async Task HelloWorld()
