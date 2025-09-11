@@ -12,6 +12,20 @@ namespace MeshWeaver.Portal.Shared.Web.Layout;
 
 public partial class DesktopNavMenu : ComponentBase
 {
+    public static Icon TodoArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticle();
+
+    public static Icon NorthwindArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticle();
+
+    public static Icon DocumentationArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticle();
     public static Icon ArticlesIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.Book()
