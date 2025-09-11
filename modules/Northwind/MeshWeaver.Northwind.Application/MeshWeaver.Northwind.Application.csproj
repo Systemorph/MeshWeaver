@@ -32,11 +32,20 @@
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
+
+    <ItemGroup>
+      <EmbeddedResource Remove="Markdown\images\rolandburgi.png" />
+    </ItemGroup>
     <ItemGroup>
         <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
             <LogicalName>$(AssemblyName).xml</LogicalName>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Embed>true</Embed>
         </EmbeddedResource>
+    </ItemGroup>
+    <ItemGroup>
+      <None Update="Markdown\images\rolandburgi.png">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 </Project>

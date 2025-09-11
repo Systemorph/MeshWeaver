@@ -5,7 +5,6 @@ Thumbnail: "images/OrdersOverview.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
   - "2023 Orders Analysis"
   - "Monthly Order Trends"

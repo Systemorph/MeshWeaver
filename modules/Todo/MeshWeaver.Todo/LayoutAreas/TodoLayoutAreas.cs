@@ -132,7 +132,7 @@ public static class TodoLayoutAreas
     /// Creates clean summary statistics without dummy buttons
     /// </summary>
     /// <param name="todoItems">The collection of todo items</param>
-    /// <param name="host">The layout area host for submitting changes</param>
+    /// <param name="_">The layout area host (unused parameter)</param>
     /// <returns>A clean LayoutGrid control with summary statistics only</returns>
     private static UiControl? CreateInteractiveTodoSummary(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost _)
     {
