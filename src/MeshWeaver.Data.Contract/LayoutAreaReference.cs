@@ -19,7 +19,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     private IReadOnlyDictionary<string, string?> ParseParameters()
     {
         if (Id is null)
-            return ImmutableDictionary<string,string?>.Empty;
+            return ImmutableDictionary<string, string?>.Empty;
 
         var parts = Id.ToString()!.Split('?').Skip(1).SelectMany(x => x.Split('&', StringSplitOptions.RemoveEmptyEntries)).ToArray();
         if (parts.Length == 0)
@@ -123,11 +123,30 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
 
     }
 
-    private Lazy<IReadOnlyDictionary<string, string?>> parameters = new();
+    private readonly Lazy<IReadOnlyDictionary<string, string?>> parameters = new();
     public string? GetParameterValue(string name)
     {
         return parameters.Value.GetValueOrDefault(name);
     }
 
     public bool HasParameter(string name) => parameters.Value.ContainsKey(name);
+
+    // Override the generated Equals and GetHashCode to exclude the parameters field
+    public virtual bool Equals(LayoutAreaReference? other)
+    {
+        if (ReferenceEquals(null, other)) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return string.Equals(Area, other.Area, StringComparison.Ordinal) &&
+               Equals(Id, other.Id) &&
+               string.Equals(Layout, other.Layout, StringComparison.Ordinal);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            Area ?? string.Empty,
+            Id ?? string.Empty,
+            Layout ?? string.Empty
+        );
+    }
 }
