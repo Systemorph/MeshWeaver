@@ -1,34 +1,19 @@
 ﻿using System.Collections.Immutable;
 using System.Reflection;
-using System.Text;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
 
-public class EmbeddedResourceContentCollection : ContentCollection
-{
-    private readonly Assembly assembly;
-    private readonly string resourcePrefix;
-    private readonly ImmutableDictionary<string, string> resourcePaths;
-
-    public EmbeddedResourceContentCollection(string collectionName, Assembly assembly, string resourcePrefix, IMessageHub hub, string[]? hiddenFrom = null)
-        : base(new ContentSourceConfig
-        {
-            Name = collectionName,
-            SourceType = "EmbeddedResource",
-            HiddenFrom = hiddenFrom ?? []
-        }, hub)
+public class EmbeddedResourceContentCollection(string collectionName, Assembly assembly, string resourcePrefix, IMessageHub hub, string[]? hiddenFrom = null)
+    : ContentCollection(new ContentSourceConfig
     {
-        this.assembly = assembly;
-        this.resourcePrefix = resourcePrefix.EndsWith('.') ? resourcePrefix : resourcePrefix + '.';
-        
-        resourcePaths = assembly.GetManifestResourceNames()
-            .Where(name => name.StartsWith(this.resourcePrefix, StringComparison.OrdinalIgnoreCase))
-            .ToImmutableDictionary(
-                name => ExtractPath(name),
-                name => name
-            );
-    }
+        Name = collectionName,
+        SourceType = "EmbeddedResource",
+        HiddenFrom = hiddenFrom ?? []
+    }, hub)
+{
+    private readonly string resourcePrefix = resourcePrefix.EndsWith('.') ? resourcePrefix : resourcePrefix + '.';
+    private ImmutableDictionary<string, string> resourcePaths;
 
     private string ExtractPath(string resourceName)
     {
@@ -43,16 +28,28 @@ public class EmbeddedResourceContentCollection : ContentCollection
         return withoutPrefix.Replace('.', '/');
     }
 
+    protected override Task InitializeInfrastructureAsync()
+    {
+        resourcePaths = assembly.GetManifestResourceNames()
+    .Where(name => name.StartsWith(this.resourcePrefix, StringComparison.OrdinalIgnoreCase))
+    .ToImmutableDictionary(
+        name => ExtractPath(name),
+        name => name
+    );
+        return Task.CompletedTask;
+    }
+
+
     public override Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
     {
         var normalizedPath = path.TrimStart('/');
-        
+
         // Try direct lookup first
         if (resourcePaths.TryGetValue(normalizedPath, out var resourceName))
         {
             return Task.FromResult<Stream?>(assembly.GetManifestResourceStream(resourceName));
         }
-        
+
         // Try with .md extension if not found
         if (!normalizedPath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
         {
@@ -62,7 +59,7 @@ public class EmbeddedResourceContentCollection : ContentCollection
                 return Task.FromResult<Stream?>(assembly.GetManifestResourceStream(resourceName));
             }
         }
-        
+
         return Task.FromResult<Stream?>(null);
     }
 
@@ -128,7 +125,7 @@ public class EmbeddedResourceContentCollection : ContentCollection
         var normalizedPath = path.TrimStart('/').Replace('/', '.');
         var files = resourcePaths.Keys
             .Where(p => p.StartsWith(normalizedPath, StringComparison.OrdinalIgnoreCase))
-            .Where(p => 
+            .Where(p =>
             {
                 var relativePath = p[(normalizedPath.Length == 0 ? 0 : normalizedPath.Length + 1)..];
                 return !relativePath.Contains('.') || relativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase);

@@ -28,9 +28,11 @@ public abstract class ContentCollection : IDisposable
         Hub,
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x.WithInitialization((_,ct) => InitializeAsync(ct)));
+            x => x.WithInitialization((_, ct) => InitializeAsync(ct)));
         return ret;
     }
+
+
     protected IMessageHub Hub { get; }
     public string Collection => config.Name!;
     public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
@@ -39,9 +41,9 @@ public abstract class ContentCollection : IDisposable
 
     public IObservable<object?> GetMarkdown(string path)
         => markdownStream
-            .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) 
-                ? path[..^3] 
-                : path.TrimStart('/')), 
+            .Reduce(new InstanceReference(path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                ? path[..^3]
+                : path.TrimStart('/')),
                 c => c.ReturnNullWhenNotPresent())!
             .Select(x => x.Value);
 
@@ -100,9 +102,9 @@ public abstract class ContentCollection : IDisposable
     protected static bool MarkdownFilter(string name)
         => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
-    public async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
+    public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        InitializeInfrastructure();
+        await InitializeInfrastructureAsync();
         Authors = await LoadAuthorsAsync(ct);
         var ret = new InstanceCollection(
             await GetStreams(MarkdownFilter, ct)
@@ -114,8 +116,9 @@ public abstract class ContentCollection : IDisposable
         return ret;
     }
 
-    protected virtual void InitializeInfrastructure()
+    protected virtual Task InitializeInfrastructureAsync()
     {
+        return Task.CompletedTask;
     }
 
     protected void UpdateArticle(string path)
@@ -130,7 +133,7 @@ public abstract class ContentCollection : IDisposable
                 return null;
             var key = article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path;
             return new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version);
-                
+
         }, _ => Task.CompletedTask);
     }
 
