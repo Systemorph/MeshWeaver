@@ -1,5 +1,9 @@
+using System.Reflection;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Todo;
+using Microsoft.Extensions.DependencyInjection;
 
 [assembly: TodoApplication]
 
@@ -19,7 +23,16 @@ public class TodoApplicationAttribute : MeshNodeAttribute
             Address,
             nameof(Todo),
             TodoApplicationExtensions.ConfigureTodoApplication
-        )
+        ).WithGlobalServiceRegistry(services => 
+            services.AddSingleton<IContentCollectionProvider>(sp =>
+                new ContentCollectionProvider(
+                    new EmbeddedResourceContentCollection(
+                        "Todo",
+                        Assembly.GetExecutingAssembly(),
+                        "MeshWeaver.Todo.Content",
+                        sp.GetRequiredService<IMessageHub>()
+                    )
+                )))
     ];
 
     /// <summary>

@@ -5,7 +5,6 @@ Thumbnail: "images/SalesReps.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
   - "Top Employees"
   - "Monthly Earnings"

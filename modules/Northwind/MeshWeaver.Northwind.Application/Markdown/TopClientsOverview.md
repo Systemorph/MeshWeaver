@@ -5,7 +5,6 @@ Thumbnail: "images/TopClients.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
   - "Top Clients"
   - "Purchase Analysis"

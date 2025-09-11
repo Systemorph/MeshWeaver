@@ -5,7 +5,6 @@ Thumbnail: "images/DiscountOverview.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
   - "Financial Analysis"
   - "Revenue Trends"

@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -11,6 +12,49 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Content\**\*.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Remove="Content\AI Agent Integration in MeshWeaver.md" />
+    <EmbeddedResource Remove="Content\authors.json" />
+    <EmbeddedResource Remove="Content\images\ai-integration.jpeg" />
+    <EmbeddedResource Remove="Content\images\architecture.jpeg" />
+    <EmbeddedResource Remove="Content\images\rolandburgi.png" />
+    <EmbeddedResource Remove="Content\images\todoapp.jpeg" />
+    <EmbeddedResource Remove="Content\Todo Application Template.md" />
+    <EmbeddedResource Remove="Content\Understanding MeshWeaver Architecture.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Content\AI Agent Integration in MeshWeaver.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\authors.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\images\ai-integration.jpeg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\images\architecture.jpeg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\images\rolandburgi.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\images\todoapp.jpeg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\Todo Application Template.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Content\Understanding MeshWeaver Architecture.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

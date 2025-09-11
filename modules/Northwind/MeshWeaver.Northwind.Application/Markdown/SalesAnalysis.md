@@ -5,7 +5,6 @@ Thumbnail: "images/SalesAnalysis.png"
 Published: "2024-09-24"
 Authors:
   - "Roland Bürgi"
-  - "Anna Kuleshova"
 Tags:
   - "Financial Report"
   - "Sales Analysis"
