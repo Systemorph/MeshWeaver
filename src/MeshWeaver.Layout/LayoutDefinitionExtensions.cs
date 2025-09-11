@@ -156,7 +156,7 @@ public static class LayoutDefinitionExtensions
             // Check method-level DisplayAttribute (takes precedence)
             if(method.GetCustomAttribute<DisplayAttribute>() is { } methodDisplayAttribute)
             {
-                ret = ret with{Order = methodDisplayAttribute.Order};
+                ret = ret with{Order = methodDisplayAttribute.GetOrder() ?? int.MaxValue};
                 if(methodDisplayAttribute.Description is not null)
                     ret = ret.WithDescription(methodDisplayAttribute.Description);
                 if(methodDisplayAttribute.Name is not null)

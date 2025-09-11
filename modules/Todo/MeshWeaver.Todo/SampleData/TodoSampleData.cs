@@ -8,7 +8,7 @@ namespace MeshWeaver.Todo.SampleData;
 /// </summary>
 public static class TodoSampleData
 {
-    private static readonly DateTime BaseDate = DateTime.UtcNow;
+    private static readonly DateTime BaseDate = DateTime.Now.Date;
 
     /// <summary>
     /// Gets sample todo categories for testing and demonstration
@@ -122,9 +122,8 @@ public static class TodoSampleData
             Category = "Work",
             ResponsiblePerson = "Riley Chen", // Team member
             DueDate = BaseDate, // Due today
-            Status = TodoStatus.InProgress,
-            CreatedAt = BaseDate.AddDays(-4),
-            UpdatedAt = BaseDate.AddHours(-6)
+            Status = TodoStatus.Pending,
+            CreatedAt = BaseDate.AddDays(-4)
         },
         new TodoItem
         {
@@ -133,9 +132,10 @@ public static class TodoSampleData
             Description = "Review Jordan's implementation of two-factor authentication",
             Category = "Work",
             ResponsiblePerson = ResponsiblePersons.GetCurrentUser(), // Current user
-            DueDate = BaseDate, // Due today
-            Status = TodoStatus.Pending,
-            CreatedAt = BaseDate.AddDays(-1)
+            DueDate = BaseDate.AddDays(5), // Future task
+            Status = TodoStatus.InProgress,
+            CreatedAt = BaseDate.AddDays(-1),
+            UpdatedAt = BaseDate.AddHours(-3)
         },
 
         // FUTURE TASKS - Mostly in progress or completed, fewer pending
@@ -145,10 +145,11 @@ public static class TodoSampleData
             Title = "Complete project documentation",
             Description = "Write comprehensive documentation for the MeshWeaver Todo module",
             Category = "Work",
-            ResponsiblePerson = "Unassigned",
+            ResponsiblePerson = "Avery Taylor",
             DueDate = BaseDate.AddDays(3),
-            Status = TodoStatus.Pending,
-            CreatedAt = BaseDate.AddDays(-5)
+            Status = TodoStatus.InProgress,
+            CreatedAt = BaseDate.AddDays(-5),
+            UpdatedAt = BaseDate.AddHours(-1)
         },
         new TodoItem
         {
@@ -167,11 +168,10 @@ public static class TodoSampleData
             Title = "Database migration script",
             Description = "Write and test migration scripts for the new user preferences table",
             Category = "Work",
-            ResponsiblePerson = "Casey Johnson",
+            ResponsiblePerson = "Unassigned",
             DueDate = BaseDate.AddDays(2),
-            Status = TodoStatus.InProgress,
-            CreatedAt = BaseDate.AddDays(-1),
-            UpdatedAt = BaseDate.AddHours(-4)
+            Status = TodoStatus.Pending,
+            CreatedAt = BaseDate.AddDays(-1)
         },
 
         // MORE UNASSIGNED TASKS - All future due dates for better planning demo
@@ -271,11 +271,10 @@ public static class TodoSampleData
             Title = "Design user interface mockups",
             Description = "Create wireframes and mockups for the new dashboard feature",
             Category = "Work",
-            ResponsiblePerson = "Avery Taylor",
+            ResponsiblePerson = "Unassigned",
             DueDate = BaseDate.AddDays(5),
-            Status = TodoStatus.InProgress,
-            CreatedAt = BaseDate.AddDays(-3),
-            UpdatedAt = BaseDate.AddDays(-1)
+            Status = TodoStatus.Pending,
+            CreatedAt = BaseDate.AddDays(-3)
         },
         new TodoItem
         {
@@ -294,11 +293,10 @@ public static class TodoSampleData
             Title = "Read technical book",
             Description = "Continue reading 'Clean Architecture' by Robert Martin",
             Category = "Learning",
-            ResponsiblePerson = "Quinn Rodriguez",
+            ResponsiblePerson = "Unassigned",
             DueDate = BaseDate.AddDays(7),
-            Status = TodoStatus.InProgress,
-            CreatedAt = BaseDate.AddDays(-14),
-            UpdatedAt = BaseDate.AddDays(-3)
+            Status = TodoStatus.Pending,
+            CreatedAt = BaseDate.AddDays(-14)
         },
         new TodoItem
         {

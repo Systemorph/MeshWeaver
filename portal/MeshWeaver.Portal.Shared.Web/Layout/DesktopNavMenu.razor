@@ -19,6 +19,7 @@
         Text="Chat" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
+            <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
             <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"
                 IconActive="CollectionsIcon(active: true)" Text="Collections" />
         </Authorized>

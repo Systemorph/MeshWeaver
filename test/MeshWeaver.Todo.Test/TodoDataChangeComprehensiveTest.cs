@@ -15,7 +15,7 @@ namespace MeshWeaver.Todo.Test;
 /// This test follows the exact steps requested by the user:
 /// 1. Set up data context with TodoItems
 /// 2. Register TODO views (via ConfigureTodoApplication)  
-/// 3. Create a subscription on TodoList layout area (simulated with data stream)
+/// 3. Create a subscription on AllItems layout area (simulated with data stream)
 /// 4. Wait for layout area to be rendered (simulated with data availability)
 /// 5. Get the first button and click it (simulated with DataChangeRequest)
 /// 6. Wait for LayoutArea to update (verify data stream updates)
