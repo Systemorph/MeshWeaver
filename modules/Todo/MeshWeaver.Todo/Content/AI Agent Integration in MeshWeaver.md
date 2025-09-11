@@ -6,7 +6,7 @@ Abstract: >
 Thumbnail: "images/ai-integration.jpeg"
 Published: "2025-08-12"
 VideoUrl: "https://www.youtube.com/embed/CnDxqGyhTkE?si=tB7wZTJ_Ooh3MLgQ"
-VideoDuration: "18:15"
+VideoDuration: "00:18:15"
 Authors:
   - "Roland Bürgi"
 Tags:
