@@ -20,9 +20,9 @@ public class AzureBlobContentCollection(
     private readonly ILogger<AzureBlobContentCollection> logger = hub.ServiceProvider.GetRequiredService<ILogger<AzureBlobContentCollection>>();
     private readonly ContentSourceConfig config = config;
 
-    protected override void InitializeInfrastructure()
+    protected override async Task InitializeInfrastructureAsync()
     {
-        base.InitializeInfrastructure();
+        await base.InitializeInfrastructureAsync();
         var containerName = config.BasePath;
         containerClient = client.GetBlobContainerClient(containerName);
 
