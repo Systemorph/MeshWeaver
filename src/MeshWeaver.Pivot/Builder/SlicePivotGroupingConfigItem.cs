@@ -45,7 +45,7 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             );
 
         PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>? subGroupManager = null;
-        for (int i = Dimensions.Length - 1; i >= 0; i++)
+        for (int i = Dimensions.Length - 1; i >= 0; i--)
         {
             subGroupManager = CreateSubGroupManager(
                 subGroupManager,
