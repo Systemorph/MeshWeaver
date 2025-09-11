@@ -4,7 +4,7 @@ namespace MeshWeaver.ThumbnailGenerator;
 
 public static class ThumbnailGenerator
 {
-    public static async Task GenerateThumbnailsAsync(List<string> areaUrls, string outputDir, string baseUrl, bool includeDarkMode = true)
+    public static async Task GenerateThumbnailsAsync(List<string> areaUrls, string outputDir, string baseUrl, bool includeDarkMode = true, int thumbnailWidth = 400, int thumbnailHeight = 300)
     {
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
@@ -17,7 +17,7 @@ public static class ThumbnailGenerator
 
         // Generate light mode thumbnails
         Console.WriteLine("📸 Generating light mode thumbnails...");
-        var (lightSuccess, lightFailure) = await GenerateThumbnailsForMode(browser, areaUrls, outputDir, baseUrl, false);
+        var (lightSuccess, lightFailure) = await GenerateThumbnailsForMode(browser, areaUrls, outputDir, baseUrl, false, thumbnailWidth, thumbnailHeight);
         totalSuccessCount += lightSuccess;
         totalFailureCount += lightFailure;
 
@@ -25,7 +25,7 @@ public static class ThumbnailGenerator
         if (includeDarkMode)
         {
             Console.WriteLine("\n🌙 Generating dark mode thumbnails...");
-            var (darkSuccess, darkFailure) = await GenerateThumbnailsForMode(browser, areaUrls, outputDir, baseUrl, true);
+            var (darkSuccess, darkFailure) = await GenerateThumbnailsForMode(browser, areaUrls, outputDir, baseUrl, true, thumbnailWidth, thumbnailHeight);
             totalSuccessCount += darkSuccess;
             totalFailureCount += darkFailure;
         }
@@ -36,13 +36,15 @@ public static class ThumbnailGenerator
         Console.WriteLine($"  Output directory: {outputDir}");
     }
 
-    private static async Task<(int successCount, int failureCount)> GenerateThumbnailsForMode(IBrowser browser, List<string> areaUrls, string outputDir, string baseUrl, bool isDarkMode)
+    private static async Task<(int successCount, int failureCount)> GenerateThumbnailsForMode(IBrowser browser, List<string> areaUrls, string outputDir, string baseUrl, bool isDarkMode, int thumbnailWidth, int thumbnailHeight)
     {
         // Create a persistent context to maintain localStorage across pages
+        // Use smaller viewport to ensure readable text size in thumbnails
         await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
         {
-            ViewportSize = new ViewportSize { Width = 1920, Height = 1080 },
-            ColorScheme = isDarkMode ? ColorScheme.Dark : ColorScheme.Light
+            ViewportSize = new ViewportSize { Width = 800, Height = 600 },
+            ColorScheme = isDarkMode ? ColorScheme.Dark : ColorScheme.Light,
+            DeviceScaleFactor = 1.0f // Ensure consistent scaling
         });
 
         // First, set cookie consent in localStorage for the domain
@@ -54,7 +56,7 @@ public static class ThumbnailGenerator
         // Use parallel processing with limited concurrency to avoid overwhelming the server
         const int maxConcurrency = 4; // Adjust based on server capacity
         var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-        var tasks = areaUrls.Select(url => ProcessUrlAsync(context, url, outputDir, isDarkMode, semaphore)).ToArray();
+        var tasks = areaUrls.Select(url => ProcessUrlAsync(context, url, outputDir, isDarkMode, semaphore, thumbnailWidth, thumbnailHeight)).ToArray();
         
         var results = await Task.WhenAll(tasks);
         var successCount = results.Count(r => r);
@@ -68,7 +70,7 @@ public static class ThumbnailGenerator
         return (successCount, failureCount);
     }
 
-    private static async Task<bool> ProcessUrlAsync(IBrowserContext context, string url, string outputDir, bool isDarkMode, SemaphoreSlim semaphore)
+    private static async Task<bool> ProcessUrlAsync(IBrowserContext context, string url, string outputDir, bool isDarkMode, SemaphoreSlim semaphore, int thumbnailWidth, int thumbnailHeight)
     {
         await semaphore.WaitAsync();
         try
@@ -100,12 +102,20 @@ public static class ThumbnailGenerator
                 // Additional wait for content to stabilize
                 await page.WaitForTimeoutAsync(2000);
 
-                // Take screenshot
+                // Take screenshot with fixed clip area to ensure consistent thumbnail size
+                // Capture top-left portion to show the most important content
                 await page.ScreenshotAsync(new PageScreenshotOptions
                 {
                     Path = filePath,
                     Type = ScreenshotType.Png,
-                    FullPage = false
+                    FullPage = false,
+                    Clip = new Clip
+                    {
+                        X = 0,
+                        Y = 0,
+                        Width = thumbnailWidth, // Configurable thumbnail width
+                        Height = thumbnailHeight // Configurable thumbnail height
+                    }
                 });
 
                 Console.WriteLine($"  ✅ Saved {currentModeText} thumbnail: {fileName}");
