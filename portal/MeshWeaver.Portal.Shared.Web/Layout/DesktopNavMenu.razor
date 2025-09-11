@@ -4,16 +4,23 @@
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
     <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="BlogIcon()"
         IconActive="BlogIcon(active: true)" Text="Blog" />
-    <FluentAppBarItem Href="/content/Documentation/Readme.md" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
-        IconActive="DocumentationIcon(active: true)" Text="Areas" />
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/app/Todo/LayoutAreas" Match="NavLinkMatch.All" IconRest="TodoIcon()"
-        IconActive="TodoIcon(true)" Text="Todo Areas" />
+        IconActive="TodoIcon(true)" Text="Todo" />
+
+    <FluentAppBarItem Href="/articles/Todo" Match="NavLinkMatch.All" IconRest="TodoArticleIcon()"
+					  IconActive="TodoArticleIcon(true)" Text="Articles" />
+
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
-    <FluentAppBarItem Href="/articles/Northwind" Match="NavLinkMatch.All" IconRest="NorthwindIcon()"
-        IconActive="NorthwindIcon(true)" Text="Northwind" />
     <FluentAppBarItem Href="/app/Northwind/LayoutAreas" Match="NavLinkMatch.All" IconRest="NorthwindIcon()"
-        IconActive="NorthwindIcon(true)" Text="Areas" />
+        IconActive="NorthwindIcon(true)" Text="Northwind" />
+    <FluentAppBarItem Href="/articles/Northwind" Match="NavLinkMatch.All" IconRest="NorthwindArticleIcon()"
+					  IconActive="NorthwindArticleIcon(true)" Text="Articles" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/app/Documentation/LayoutAreas" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
+        IconActive="DocumentationIcon(active: true)" Text="Docs" />
+    <FluentAppBarItem Href="/articles/Documentation" Match="NavLinkMatch.All" IconRest="DocumentationArticleIcon()"
+					  IconActive="DocumentationArticleIcon(true)" Text="Articles" />
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()" IconActive="ChatIcon(true)"
         Text="Chat" />

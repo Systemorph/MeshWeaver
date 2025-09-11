@@ -31,10 +31,22 @@ public partial class MobileNavMenu : ComponentBase
             LinkMatchRegex: new Regex("^/articles")
         );
 
-        yield return new MobileNavMenuEntry("Areas",
-            () => NavigateToAsync("/content/Documentation/Readme"),
+        yield return new MobileNavMenuEntry("Documentation Articles",
+            () => NavigateToAsync("/articles/Documentation"),
+            DesktopNavMenu.DocumentationArticleIcon(),
+            LinkMatchRegex: new Regex("^/articles/Documentation"));
+
+        yield return new MobileNavMenuEntry("Documentation Areas",
+            () => NavigateToAsync("/app/Documentation/LayoutAreas"),
             DesktopNavMenu.DocumentationIcon(),
-            LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
+            LinkMatchRegex: new Regex("^/app/Documentation"));
+
+        yield return new MobileNavMenuEntry(
+            "Todo Articles",
+            () => NavigateToAsync("/articles/Todo"),
+            DesktopNavMenu.TodoArticleIcon(),
+            LinkMatchRegex: new Regex("^/articles/Todo")
+        );
 
         yield return new MobileNavMenuEntry(
             "Todo Areas",
@@ -45,15 +57,15 @@ public partial class MobileNavMenu : ComponentBase
 
         yield return new MobileNavMenuEntry(
             "Northwind Articles",
-            () => NavigateToAsync("/northwind/articles"),
-            DesktopNavMenu.NorthwindArticlesIcon(),
-            LinkMatchRegex: new Regex("^/northwind/articles")
+            () => NavigateToAsync("/articles/Northwind"),
+            DesktopNavMenu.NorthwindArticleIcon(),
+            LinkMatchRegex: new Regex("^/articles/Northwind")
         );
 
         yield return new MobileNavMenuEntry(
             "Northwind Areas",
             () => NavigateToAsync("/app/Northwind/LayoutAreas"),
-            DesktopNavMenu.NorthwindLayoutAreaIcon(),
+            DesktopNavMenu.NorthwindIcon(),
             LinkMatchRegex: new Regex("^/app/Northwind")
         );
 
