@@ -16,7 +16,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
 {
 
     /// <summary>
-    /// Test that verifies TodoList layout area renders correctly with our WithKey fix
+    /// Test that verifies AllItems layout area renders correctly with our WithKey fix
     /// </summary>
     [Fact]
     public async Task TodoList_ShouldRenderLayoutGridWithData()
@@ -24,9 +24,9 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Arrange
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(nameof(TodoLayoutArea.TodoList));
+        var reference = new LayoutAreaReference(nameof(TodoLayoutAreas.AllItems));
 
-        // Act - Create a subscription on TodoList layout area
+        // Act - Create a subscription on AllItems layout area
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             TodoApplicationAttribute.Address,
             reference
@@ -160,7 +160,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
     {
         var client = GetClient();
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(nameof(TodoLayoutArea.TodoList));
+        var reference = new LayoutAreaReference(nameof(TodoLayoutAreas.AllItems));
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             TodoApplicationAttribute.Address,

@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -11,16 +12,17 @@ namespace MeshWeaver.Todo.LayoutAreas;
 /// <summary>
 /// Layout areas for the Todo application
 /// </summary>
-public static class TodoLayoutArea
+public static class TodoLayoutAreas
 {
     /// <summary>
-    /// Creates a TodoList layout area that subscribes to a stream of todo items
+    /// Creates a AllItems layout area that subscribes to a stream of todo items
     /// and displays them in an interactive format with action buttons
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control that updates when todo items change</returns>
-    public static IObservable<UiControl?> TodoList(LayoutAreaHost host, RenderingContext context)
+    [Display(GroupName = "2. Team Overview", Order = 2)]
+    public static IObservable<UiControl?> AllItems(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         // Subscribe to the stream of TodoItem entities from the data source
@@ -36,6 +38,7 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing todos grouped by category with action buttons</returns>
+    [Display(GroupName = "2. Team Overview", Order = 3)]
     public static IObservable<UiControl?> TodosByCategory(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
@@ -46,12 +49,13 @@ public static class TodoLayoutArea
     }
 
     /// <summary>
-    /// Creates a TodoSummary layout area that shows interactive summary statistics with action buttons
+    /// Creates a Summary layout area that shows interactive summary statistics with action buttons
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing interactive todo summary statistics</returns>
-    public static IObservable<UiControl?> TodoSummary(LayoutAreaHost host, RenderingContext context)
+    [Display(GroupName = "2. Team Overview", Order = 1)]
+    public static IObservable<UiControl?> Summary(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -66,7 +70,8 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing team workload and assignment interface</returns>
-    public static IObservable<UiControl?> PlanningView(LayoutAreaHost host, RenderingContext context)
+    [Display(GroupName = "3. Planning")]
+    public static IObservable<UiControl?> Planning(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -81,7 +86,8 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing current user's active tasks</returns>
-    public static IObservable<UiControl?> MyActiveTasks(LayoutAreaHost host, RenderingContext context)
+    [Display(GroupName = "1. My Overview")]
+    public static IObservable<UiControl?> MyTasks(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -96,7 +102,8 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing unassigned tasks</returns>
-    public static IObservable<UiControl?> UnassignedTasks(LayoutAreaHost host, RenderingContext context)
+    [Display(GroupName = "3. Planning")]
+    public static IObservable<UiControl?> Backlog(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
         return host.Workspace
@@ -111,6 +118,7 @@ public static class TodoLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="context">The rendering context</param>
     /// <returns>An observable UI control showing today's focus items</returns>
+    [Display(GroupName = "2. Team Overview", Order = 0)]
     public static IObservable<UiControl?> TodaysFocus(LayoutAreaHost host, RenderingContext context)
     {
         _ = context; // Unused parameter but required by interface
@@ -126,14 +134,14 @@ public static class TodoLayoutArea
     /// <param name="todoItems">The collection of todo items</param>
     /// <param name="host">The layout area host for submitting changes</param>
     /// <returns>A clean LayoutGrid control with summary statistics only</returns>
-    private static UiControl? CreateInteractiveTodoSummary(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
+    private static UiControl? CreateInteractiveTodoSummary(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost _)
     {
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
         // Simple header
         mainGrid = mainGrid
-            .WithView(Controls.H2("📊 Todo Dashboard")
-                .WithStyle(style => style.WithMarginBottom("20px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H4("📊 Todo Dashboard")
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12));
 
         if (!todoItems.Any())
@@ -149,13 +157,13 @@ public static class TodoLayoutArea
         var totalCount = todoItems.Count;
         mainGrid = mainGrid
             .WithView(Controls.Markdown($"**Total Items:** {totalCount}")
-                .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("15px")),
+                .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("8px")),
                 skin => skin.WithXs(12));
 
         // Status breakdown
         mainGrid = mainGrid
-            .WithView(Controls.H3("📈 Status Overview")
-                .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H5("📈 Status Overview")
+                .WithStyle(style => style.WithMarginTop("12px").WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12));
 
         var statusGroups = todoItems.GroupBy(t => t.Status);
@@ -177,8 +185,8 @@ public static class TodoLayoutArea
         var dueSoon = todoItems.Where(t => t.DueDate.HasValue && t.DueDate.Value.Date > now && t.DueDate.Value.Date <= now.AddDays(7) && t.Status != TodoStatus.Completed).ToList();
 
         mainGrid = mainGrid
-            .WithView(Controls.H3("⏰ Due Date Insights")
-                .WithStyle(style => style.WithMarginTop("30px").WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H5("⏰ Due Date Insights")
+                .WithStyle(style => style.WithMarginTop("16px").WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12));
 
         mainGrid = mainGrid
@@ -204,8 +212,8 @@ public static class TodoLayoutArea
         var unassignedTodos = todoItems.Where(t => t.ResponsiblePerson == "Unassigned").ToList();
 
         mainGrid = mainGrid
-            .WithView(Controls.H3("🟢 Responsibility Overview")
-                .WithStyle(style => style.WithMarginTop("30px").WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H5("🟢 Responsibility Overview")
+                .WithStyle(style => style.WithMarginTop("16px").WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12));
 
         mainGrid = mainGrid
@@ -317,7 +325,7 @@ public static class TodoLayoutArea
         // Header with title and global actions
         mainGrid = mainGrid
             .WithView(Controls.H2("📂 Todo Categories")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
@@ -352,8 +360,8 @@ public static class TodoLayoutArea
             var categoryActionButton = CreateCategoryActionButton(categoryTodos, host);
             
             mainGrid = mainGrid
-                .WithView(Controls.H3($"📁 {categoryGroup.Key} ({categoryGroup.Count()}) - {completedCount}✅ {inProgressCount}🔄 {pendingCount}⏳")
-                    .WithStyle(style => style.WithMarginTop("30px").WithMarginBottom("15px").WithColor("var(--color-fg-default)")),
+                .WithView(Controls.H5($"📁 {categoryGroup.Key} ({categoryGroup.Count()}) - {completedCount}✅ {inProgressCount}🔄 {pendingCount}⏳")
+                    .WithStyle(style => style.WithMarginTop("16px").WithMarginBottom("8px").WithColor("var(--color-fg-default)")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(categoryActionButton,
                     skin => skin.WithXs(12).WithSm(3).WithMd(2));
@@ -485,6 +493,20 @@ public static class TodoLayoutArea
     };
 
     /// <summary>
+    /// Gets the appropriate color for a todo status
+    /// </summary>
+    /// <param name="status">The todo status</param>
+    /// <returns>A CSS color variable for the status</returns>
+    private static string GetStatusColor(TodoStatus status) => status switch
+    {
+        TodoStatus.Pending => "var(--color-warning-fg)",
+        TodoStatus.InProgress => "var(--color-accent-fg)",
+        TodoStatus.Completed => "var(--color-success-fg)",
+        TodoStatus.Cancelled => "var(--color-danger-fg)",
+        _ => "var(--color-fg-default)"
+    };
+
+    /// <summary>
     /// Creates an interactive todo list with a clean layout grid structure and vertically aligned action buttons
     /// </summary>
     /// <param name="todoItems">The collection of todo items</param>
@@ -495,10 +517,10 @@ public static class TodoLayoutArea
         // Create main LayoutGrid with minimal spacing
         var mainGrid = Controls.LayoutGrid.WithSkin(skin => skin.WithSpacing(-1));
 
-        // First row: Title and Add New Todo button
+        // First row: Title and Add New Todo button - smaller heading with reduced spacing
         mainGrid = mainGrid
-            .WithView(Controls.H2("📝 Todo List with Actions")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H4("📝 Todo List with Actions")
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
@@ -531,11 +553,13 @@ public static class TodoLayoutArea
         var assignedStatusGroups = assignedTodos.GroupBy(t => t.Status).ToList();
         var unassignedStatusGroups = unassignedTodos.GroupBy(t => t.Status).ToList();
 
-        // First show assigned todos in normal status order
+        // First show assigned todos in collapsible status sections
         foreach (var statusGroup in assignedStatusGroups.OrderBy(g => (int)g.Key))
         {
             var statusIcon = GetStatusIcon(statusGroup.Key);
             var statusName = statusGroup.Key.ToString();
+            var statusColor = GetStatusColor(statusGroup.Key);
+            var defaultOpen = statusGroup.Key == TodoStatus.Pending || statusGroup.Key == TodoStatus.InProgress;
 
             // Create hierarchical action menu for status header
             var statusActionButton = statusGroup.Key switch
@@ -555,25 +579,8 @@ public static class TodoLayoutArea
                 _ => Controls.Html("") // Empty placeholder for other statuses
             };
 
-            // Status group header row with aligned content
-            mainGrid = mainGrid
-                .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
-                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-fg-default)").WithDisplay("flex").WithAlignItems("center")),
-                    skin => skin.WithXs(12).WithSm(9).WithMd(10))
-                .WithView(statusActionButton,
-                    skin => skin.WithXs(12).WithSm(3).WithMd(2));
-
-            // Todo items in this status group
-            foreach (var todo in statusGroup)
-            {
-                var (todoContent, todoActions) = CreateTodoItemContentAndActions(todo, host);
-
-                mainGrid = mainGrid
-                    .WithView(todoContent,
-                        skin => skin.WithXs(12).WithSm(9).WithMd(10))
-                    .WithView(todoActions,
-                        skin => skin.WithXs(12).WithSm(3).WithMd(2));
-            }
+            mainGrid = AddCollapsibleStatusSection(mainGrid, host, statusGroup.ToList(), 
+                $"{statusIcon} {statusName}", statusColor, statusActionButton, defaultOpen);
         }
 
         // Then show unassigned todos after all assigned todos
@@ -589,33 +596,8 @@ public static class TodoLayoutArea
                     (host, todos) => AutoAssignTasks(host, todos.ToList()),
                     host, statusGroup);
 
-                // Status group header row with aligned content
-                mainGrid = mainGrid
-                    .WithView(Controls.H3($"{statusIcon} {statusName} ({statusGroup.Count()})")
-                        .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-warning-fg)").WithDisplay("flex").WithAlignItems("center")),
-                        skin => skin.WithXs(12).WithSm(9).WithMd(10))
-                    .WithView(assignmentActionButton,
-                        skin => skin.WithXs(12).WithSm(3).WithMd(2));
-
-                // Todo items in this unassigned status group
-                foreach (var todo in statusGroup)
-                {
-                    var (todoContent, _) = CreateTodoItemContentAndActions(todo, host);
-                    var assignmentButton = CreateTaskAssignmentButton(todo, host);
-
-                    mainGrid = mainGrid
-                        .WithView(todoContent,
-                            skin => skin.WithXs(12).WithSm(9).WithMd(10))
-                        .WithView(Controls.Stack
-                            .WithView(assignmentButton)
-                            .WithStyle(style => style
-                                .WithDisplay("flex")
-                                .WithJustifyContent("center")
-                                .WithAlignItems("center")
-                                .WithPadding("12px")
-                                .WithMarginBottom("8px")),
-                            skin => skin.WithXs(12).WithSm(3).WithMd(2));
-                }
+                mainGrid = AddCollapsibleUnassignedSection(mainGrid, host, statusGroup.ToList(), 
+                    $"{statusIcon} {statusName}", "var(--color-warning-fg)", assignmentActionButton, true);
             }
         }
 
@@ -731,7 +713,7 @@ public static class TodoLayoutArea
 
         // Create an edit form for the new todo item with proper data binding
         var editForm = Controls.Stack
-            .WithView(Controls.H3("Create New Todo")
+            .WithView(Controls.H5("Create New Todo")
                 .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
             .WithView(host.Edit(newTodo, newTodoDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), newTodoDataId)
@@ -976,7 +958,7 @@ public static class TodoLayoutArea
 
         // Create an edit form for the todo item with proper data binding
         var editForm = Controls.Stack
-            .WithView(Controls.H3("Edit Todo")
+            .WithView(Controls.H5("Edit Todo")
                 .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
             .WithView(host.Edit(todoToEdit, editTodoDataId)?
                 .WithStyle(style => style.WithWidth("100%").WithDisplay("block")), editTodoDataId)
@@ -1057,7 +1039,7 @@ public static class TodoLayoutArea
         // Header
         mainGrid = mainGrid
             .WithView(Controls.H2("🎯 Task Planning & Assignment")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
@@ -1085,8 +1067,8 @@ public static class TodoLayoutArea
 
         // Team Workload Section
         mainGrid = mainGrid
-            .WithView(Controls.H3($"👥 Team Workload ({todoItems.Count(t => t.ResponsiblePerson != "Unassigned")} assigned)")
-                .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("15px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H5($"👥 Team Workload ({todoItems.Count(t => t.ResponsiblePerson != "Unassigned")} assigned)")
+                .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("8px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.Html(""),
                 skin => skin.WithXs(12).WithSm(3).WithMd(2));
@@ -1135,8 +1117,8 @@ public static class TodoLayoutArea
         if (unassignedTasks.Any())
         {
             mainGrid = mainGrid
-                .WithView(Controls.H3($"📋 Unassigned Tasks ({unassignedTasks.Count})")
-                    .WithStyle(style => style.WithMarginTop("30px").WithMarginBottom("15px").WithColor("var(--color-fg-default)")),
+                .WithView(Controls.H5($"📋 Unassigned Tasks ({unassignedTasks.Count})")
+                    .WithStyle(style => style.WithMarginTop("16px").WithMarginBottom("8px").WithColor("var(--color-fg-default)")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(unassignedTasks.Any(t => t.Status != TodoStatus.Completed)
                     ? Controls.MenuItem("🎯 Auto-Assign", "shuffle")
@@ -1191,7 +1173,7 @@ public static class TodoLayoutArea
         // Header
         mainGrid = mainGrid
             .WithView(Controls.H2($"🟢 My Active Tasks ({currentUser})")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem("➕ Add New Todo", "plus")
                 .WithClickAction(_ => { SubmitNewTodo(host); return Task.CompletedTask; })
@@ -1218,7 +1200,7 @@ public static class TodoLayoutArea
             .WithView(Controls.Markdown($"**{myActiveTasks.Count} active tasks** • {inProgressCount} in progress" +
                 (overdueCount > 0 ? $" • 🚨 {overdueCount} overdue" : "") +
                 (dueTodayCount > 0 ? $" • ⏰ {dueTodayCount} due today" : ""))
-                .WithStyle(style => style.WithMarginBottom("20px")),
+                .WithStyle(style => style.WithMarginBottom("12px")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(myActiveTasks.Any(t => t.Status == TodoStatus.Pending)
                 ? Controls.MenuItem("▶️ Start All", "play-circle")
@@ -1241,8 +1223,8 @@ public static class TodoLayoutArea
         if (urgentTasks.Any())
         {
             mainGrid = mainGrid
-                .WithView(Controls.H3("🚨 Urgent (Overdue/Due Today)")
-                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-danger-fg)")),
+                .WithView(Controls.H5("🚨 Urgent (Overdue/Due Today)")
+                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("6px").WithColor("var(--color-danger-fg)")),
                     skin => skin.WithXs(12));
 
             foreach (var task in urgentTasks)
@@ -1257,8 +1239,8 @@ public static class TodoLayoutArea
         if (todayTasks.Any())
         {
             mainGrid = mainGrid
-                .WithView(Controls.H3("⏰ Due Tomorrow")
-                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-warning-fg)")),
+                .WithView(Controls.H5("⏰ Due Tomorrow")
+                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("6px").WithColor("var(--color-warning-fg)")),
                     skin => skin.WithXs(12));
 
             foreach (var task in todayTasks)
@@ -1273,8 +1255,8 @@ public static class TodoLayoutArea
         if (upcomingTasks.Any())
         {
             mainGrid = mainGrid
-                .WithView(Controls.H3("📅 Upcoming")
-                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithView(Controls.H5("📅 Upcoming")
+                    .WithStyle(style => style.WithMarginTop("20px").WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                     skin => skin.WithXs(12));
 
             foreach (var task in upcomingTasks.Take(10)) // Limit to 10 upcoming tasks
@@ -1308,7 +1290,7 @@ public static class TodoLayoutArea
         // Header
         mainGrid = mainGrid
             .WithView(Controls.H2($"📋 Unassigned Tasks ({unassignedTasks.Count})")
-                .WithStyle(style => style.WithMarginBottom("10px").WithColor("var(--color-fg-default)")),
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(unassignedTasks.Any()
                 ? Controls.MenuItem("🎯 Auto-Assign All", "shuffle")
@@ -1381,10 +1363,12 @@ public static class TodoLayoutArea
             .ThenBy(t => t.CreatedAt)
             .ToList();
 
-        var inProgressTasks = todoItems
-            .Where(t => t.Status == TodoStatus.InProgress && 
-                       t.ResponsiblePerson != "Unassigned")
+        var ongoingTasks = todoItems
+            .Where(t => t.ResponsiblePerson != "Unassigned" &&
+                       t.Status != TodoStatus.Completed && t.Status != TodoStatus.Cancelled &&
+                       (!t.DueDate.HasValue || t.DueDate.Value.Date > today)) // Only future or no due date
             .OrderBy(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) ? 0 : 1)
+            .ThenBy(t => t.Status)
             .ThenBy(t => t.DueDate ?? DateTime.MaxValue)
             .ThenBy(t => t.CreatedAt)
             .ToList();
@@ -1395,21 +1379,19 @@ public static class TodoLayoutArea
         // Header with overall summary
         var myUrgentTasks = overdueTasks.Concat(dueTodayTasks).Count(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson));
         var teamUrgentTasks = totalUrgentTasks - myUrgentTasks;
-        var myInProgressTasks = inProgressTasks.Count(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson));
+        var myOngoingTasks = ongoingTasks.Count(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson));
 
-        var summaryText = totalUrgentTasks > 0 
-            ? $"🟢 **Your urgent**: {myUrgentTasks} • 🫂 **Team urgent**: {teamUrgentTasks} • 🔄 **Your in progress**: {myInProgressTasks}"
-            : $"🔄 **Your in progress**: {myInProgressTasks} • 🫂 **Team in progress**: {inProgressTasks.Count - myInProgressTasks}";
+        var summaryText = $"**Overdue**: {overdueTasks.Count} • **Due today**: {dueTodayTasks.Count} • **Ongoing**: {ongoingTasks.Count}";
 
         mainGrid = mainGrid
-            .WithView(Controls.H2("🎯 Today's Focus")
-                .WithStyle(style => style.WithMarginBottom("5px").WithColor("var(--color-fg-default)")),
+            .WithView(Controls.H4("🎯 Today's Focus")
+                .WithStyle(style => style.WithMarginBottom("6px").WithColor("var(--color-fg-default)")),
                 skin => skin.WithXs(12))
             .WithView(Controls.Markdown(summaryText)
-                .WithStyle(style => style.WithMarginBottom("20px")),
+                .WithStyle(style => style.WithMarginBottom("12px")),
                 skin => skin.WithXs(12));
 
-        if (totalUrgentTasks == 0 && inProgressTasks.Count == 0)
+        if (totalUrgentTasks == 0 && ongoingTasks.Count == 0)
         {
             mainGrid = mainGrid
                 .WithView(Controls.Markdown("🎉 **All caught up!** No urgent tasks or active work.")
@@ -1434,12 +1416,12 @@ public static class TodoLayoutArea
                 "▶️ Start All Today", "Start all due today tasks");
         }
 
-        // Section 3: 🔄 In Progress Tasks (lowest priority but important to track)
-        if (inProgressTasks.Any())
+        // Section 3: 📋 Ongoing Tasks (all assigned work not urgent)
+        if (ongoingTasks.Any())
         {
-            mainGrid = AddTimelineSection(mainGrid, host, inProgressTasks,
-                "🔄 In Progress", "var(--color-accent-fg)",
-                "✅ Complete All", "Complete all in progress tasks");
+            mainGrid = AddTimelineSection(mainGrid, host, ongoingTasks,
+                "📋 Ongoing", "var(--color-accent-fg)",
+                "✅ Complete All", "Complete all ongoing tasks");
         }
 
         return mainGrid;
@@ -1451,10 +1433,10 @@ public static class TodoLayoutArea
     private static LayoutGridControl AddTimelineSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
         string sectionTitle, string sectionColor, string actionText, string actionDescription)
     {
-        // Section header with action button
+        // Section header with action button - smaller heading with reduced spacing
         mainGrid = mainGrid
-            .WithView(Controls.H3($"{sectionTitle} ({tasks.Count})")
-                .WithStyle(style => style.WithMarginTop("30px").WithMarginBottom("10px").WithColor(sectionColor)),
+            .WithView(Controls.H5($"{sectionTitle} ({tasks.Count})")
+                .WithStyle(style => style.WithMarginTop("12px").WithMarginBottom("6px").WithColor(sectionColor)),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem(actionText, GetActionIcon(actionText))
                 .WithClickAction(_ => { 
@@ -1475,6 +1457,91 @@ public static class TodoLayoutArea
                 .WithView(todoContent, skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(todoActions, skin => skin.WithXs(12).WithSm(3).WithMd(2));
         }
+
+        return mainGrid;
+    }
+
+
+    /// <summary>
+    /// Adds a collapsible status section for assigned todos in the AllItems
+    /// </summary>
+    private static LayoutGridControl AddCollapsibleStatusSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
+        string sectionTitle, string sectionColor, UiControl actionButton, bool defaultOpen)
+    {
+        // Add collapsible section header with action button
+        var summaryHtml = $"<details{(defaultOpen ? " open" : "")} style=\"margin-top: 20px;\" id=\"status-{sectionTitle.Replace(" ", "-").ToLower()}\">" +
+                         $"<summary style=\"cursor: pointer; font-weight: bold; color: {sectionColor}; margin-bottom: 10px; font-size: 1.1em; list-style-position: outside;\">" +
+                         $"{sectionTitle} ({tasks.Count})" +
+                         "</summary>" +
+                         "<div style=\"margin-left: 10px;\">";
+
+        mainGrid = mainGrid
+            .WithView(Controls.Html(summaryHtml),
+                skin => skin.WithXs(12).WithSm(9).WithMd(10))
+            .WithView(actionButton,
+                skin => skin.WithXs(12).WithSm(3).WithMd(2));
+
+        // Add each task with its action buttons inside the collapsible section
+        foreach (var task in tasks)
+        {
+            var (todoContent, todoActions) = CreateTodoItemContentAndActions(task, host);
+            mainGrid = mainGrid
+                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")), 
+                    skin => skin.WithXs(12).WithSm(9).WithMd(10))
+                .WithView(todoActions, skin => skin.WithXs(12).WithSm(3).WithMd(2));
+        }
+
+        // Close the details section
+        mainGrid = mainGrid
+            .WithView(Controls.Html("</div></details>"),
+                skin => skin.WithXs(12));
+
+        return mainGrid;
+    }
+
+    /// <summary>
+    /// Adds a collapsible status section for unassigned todos in the AllItems
+    /// </summary>
+    private static LayoutGridControl AddCollapsibleUnassignedSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
+        string sectionTitle, string sectionColor, UiControl actionButton, bool defaultOpen)
+    {
+        // Add collapsible section header with action button
+        var summaryHtml = $"<details{(defaultOpen ? " open" : "")} style=\"margin-top: 20px;\" id=\"unassigned-{sectionTitle.Replace(" ", "-").ToLower()}\">" +
+                         $"<summary style=\"cursor: pointer; font-weight: bold; color: {sectionColor}; margin-bottom: 10px; font-size: 1.1em; list-style-position: outside;\">" +
+                         $"{sectionTitle} ({tasks.Count})" +
+                         "</summary>" +
+                         "<div style=\"margin-left: 10px;\">";
+
+        mainGrid = mainGrid
+            .WithView(Controls.Html(summaryHtml),
+                skin => skin.WithXs(12).WithSm(9).WithMd(10))
+            .WithView(actionButton,
+                skin => skin.WithXs(12).WithSm(3).WithMd(2));
+
+        // Add each unassigned task with assignment button
+        foreach (var task in tasks)
+        {
+            var (todoContent, _) = CreateTodoItemContentAndActions(task, host);
+            var assignmentButton = CreateTaskAssignmentButton(task, host);
+
+            mainGrid = mainGrid
+                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")), 
+                    skin => skin.WithXs(12).WithSm(9).WithMd(10))
+                .WithView(Controls.Stack
+                    .WithView(assignmentButton)
+                    .WithStyle(style => style
+                        .WithDisplay("flex")
+                        .WithJustifyContent("center")
+                        .WithAlignItems("center")
+                        .WithPadding("12px")
+                        .WithMarginBottom("8px")),
+                    skin => skin.WithXs(12).WithSm(3).WithMd(2));
+        }
+
+        // Close the details section
+        mainGrid = mainGrid
+            .WithView(Controls.Html("</div></details>"),
+                skin => skin.WithXs(12));
 
         return mainGrid;
     }
@@ -1654,18 +1721,18 @@ public static class TodoLayoutArea
 
         // Create the dialog content
         var reminderForm = Controls.Stack
-            .WithView(Controls.H3("Send Overdue Reminder")
+            .WithView(Controls.H5("Send Overdue Reminder")
                 .WithStyle(style => style.WithWidth("100%").WithTextAlign("center")))
             .WithView(Controls.Markdown($"**Task:** {todo.Title}")
                 .WithStyle(style => style.WithMarginBottom("5px")))
             .WithView(Controls.Markdown($"**Assigned to:** {ResponsiblePersons.GetDisplayName(todo.ResponsiblePerson)}")
                 .WithStyle(style => style.WithMarginBottom("5px")))
             .WithView(Controls.Markdown($"**Due:** {todo.DueDate:yyyy-MM-dd} ({Math.Abs((DateTime.Now - todo.DueDate!.Value).Days)} days overdue)")
-                .WithStyle(style => style.WithMarginBottom("15px").WithColor("var(--color-danger-fg)")))
+                .WithStyle(style => style.WithMarginBottom("8px").WithColor("var(--color-danger-fg)")))
             .WithView(Controls.Markdown("**Email Text:**")
                 .WithStyle(style => style.WithMarginBottom("5px")))
             .WithView(Controls.Html($"<textarea rows='8' style='width: 100%; padding: 8px; border: 1px solid var(--color-border-default); border-radius: 4px; font-family: inherit; resize: vertical;'>{defaultEmailText.Replace("<", "&lt;").Replace(">", "&gt;")}</textarea>")
-                .WithStyle(style => style.WithMarginBottom("15px")))
+                .WithStyle(style => style.WithMarginBottom("8px")))
             .WithView(Controls.Stack
                 .WithView(Controls.Button("📧 Send Reminder")
                     .WithClickAction(_ =>

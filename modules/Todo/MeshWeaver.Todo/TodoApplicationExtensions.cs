@@ -38,13 +38,13 @@ public static class TodoApplicationExtensions
                 )
             )
             .AddLayout(layout =>
-                layout.WithView(nameof(TodoLayoutArea.TodoList), TodoLayoutArea.TodoList)
-                      .WithView(nameof(TodoLayoutArea.TodosByCategory), TodoLayoutArea.TodosByCategory)
-                      .WithView(nameof(TodoLayoutArea.TodoSummary), TodoLayoutArea.TodoSummary)
-                      .WithView(nameof(TodoLayoutArea.PlanningView), TodoLayoutArea.PlanningView)
-                      .WithView(nameof(TodoLayoutArea.MyActiveTasks), TodoLayoutArea.MyActiveTasks)
-                      .WithView(nameof(TodoLayoutArea.UnassignedTasks), TodoLayoutArea.UnassignedTasks)
-                      .WithView(nameof(TodoLayoutArea.TodaysFocus), TodoLayoutArea.TodaysFocus)
+                layout.WithView(nameof(TodoLayoutAreas.AllItems), TodoLayoutAreas.AllItems)
+                      .WithView(nameof(TodoLayoutAreas.TodosByCategory), TodoLayoutAreas.TodosByCategory)
+                      .WithView(nameof(TodoLayoutAreas.Summary), TodoLayoutAreas.Summary)
+                      .WithView(nameof(TodoLayoutAreas.Planning), TodoLayoutAreas.Planning)
+                      .WithView(nameof(TodoLayoutAreas.MyTasks), TodoLayoutAreas.MyTasks)
+                      .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
+                      .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
             );
     }
 }
