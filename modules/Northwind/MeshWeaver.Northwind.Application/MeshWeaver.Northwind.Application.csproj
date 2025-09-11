@@ -6,6 +6,7 @@
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
@@ -20,10 +21,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <None Include="Markdown\**\*.*" Pack="true" PackagePath="Markdown\" />
-        <None Update="Markdown\**\*.*">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
+        <EmbeddedResource Include="Markdown\**\*.*" />
     </ItemGroup>
 
     <PropertyGroup>

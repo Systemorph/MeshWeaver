@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Messaging;
+﻿using System.Reflection;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
@@ -38,5 +40,6 @@ public static class MeshExtensions
             MeshAddress.TypeName => new MeshAddress(id),
             _ => throw new NotSupportedException($"Address type '{addressType}' is not supported.")
         };
+
 
 }

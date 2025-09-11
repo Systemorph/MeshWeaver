@@ -63,6 +63,11 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         layoutDefinitionMap = layoutResponse.Message.Areas.ToDictionary(x => x.Area);
     }
 
+    /// <summary>
+    /// Matches addresses with Northwind in.
+    /// </summary>
+    /// <param name="context"></param>
+    /// <returns></returns>
     public bool Matches(AgentContext? context)
     {
         if (context?.Address == null)

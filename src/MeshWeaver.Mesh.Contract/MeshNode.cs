@@ -1,7 +1,9 @@
 ﻿#nullable enable
+using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
@@ -55,6 +57,12 @@ public record MeshNode(
 
     public virtual Address CreateAddress(string addressType, string addressId)
         => MeshExtensions.MapAddress(addressType, addressId);
+
+    public ImmutableList<Func<IServiceCollection, IServiceCollection>> GlobalServiceConfigurations { get; set; } = [];
+
+    public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
+        => this with { GlobalServiceConfigurations = GlobalServiceConfigurations.Add(services) };
+
 }
 
 public enum InstantiationType

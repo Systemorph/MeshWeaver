@@ -3,7 +3,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
-using Xunit;
 
 namespace MeshWeaver.Todo.Test;
 
@@ -18,9 +17,8 @@ public abstract class TodoDataTestBase(ITestOutputHelper output) : MonolithMeshT
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return base.ConfigureMesh(builder)
-            .ConfigureMesh(mesh => mesh
-                .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
-            );
+            .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
+            ;
     }
 
     /// <summary>

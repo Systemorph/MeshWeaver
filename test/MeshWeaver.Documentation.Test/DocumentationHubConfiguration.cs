@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.Layout;
-using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Documentation.Test;
@@ -19,9 +18,7 @@ public static class DocumentationHubConfiguration
     {
         return configuration
                 .AddLayout(layout => layout
-                    .AddDocumentationMenuForAssemblies(typeof(DocumentationHubConfiguration).Assembly)
                     .WithView(HtmlView, Controls.Html("Hello World"))
-                    .WithSourcesForType(ctx => ctx.Area == HtmlView, typeof(DocumentationHubConfiguration))
                 )
             ;
     }

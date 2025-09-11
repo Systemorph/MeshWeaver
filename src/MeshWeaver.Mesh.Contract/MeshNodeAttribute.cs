@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
@@ -6,7 +7,7 @@ namespace MeshWeaver.Mesh;
 public abstract class MeshNodeAttribute : Attribute
 {
     public virtual IEnumerable<MeshNode> Nodes => [];
-
+    
     protected MeshNode CreateFromHubConfiguration(Address address, string name,
         Func<MessageHubConfiguration, MessageHubConfiguration> hubConfiguration)
         => new(address.Type, address.Id, name)
@@ -14,4 +15,6 @@ public abstract class MeshNodeAttribute : Attribute
             AssemblyLocation = GetType().Assembly.Location, 
             HubConfiguration = hubConfiguration
         };
+
+
 }
