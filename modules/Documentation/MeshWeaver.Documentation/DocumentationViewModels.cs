@@ -24,6 +24,7 @@ public static class DocumentationViewModels
             .AddDistributionStatistics()
             .AddProgress()
             .AddFileBrowser()
+            .WithThumbnailBasePath("/static/Documentation/thumbnails")
         );
 
 }

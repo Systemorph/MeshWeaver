@@ -49,7 +49,7 @@ public record LayoutDefinition(IMessageHub Hub)
     internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
     internal string? ThumbnailBase { get; init; }
 
-    public LayoutDefinition WithThumbnailBase(string basePath)
+    public LayoutDefinition WithThumbnailBasePath(string basePath)
         => this with { ThumbnailBase = basePath};
 
     public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition? layoutArea) => 
