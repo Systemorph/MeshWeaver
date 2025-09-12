@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular;
 using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
-using Size20 = Microsoft.FluentUI.AspNetCore.Components.Icons.Filled.Size20;
 
 namespace MeshWeaver.Portal.Shared.Web.Layout;
 

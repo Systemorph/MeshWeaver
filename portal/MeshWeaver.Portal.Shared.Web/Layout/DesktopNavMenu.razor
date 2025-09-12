@@ -1,4 +1,5 @@
-﻿@using MeshWeaver.ContentCollections
+﻿
+@using MeshWeaver.ContentCollections
 @using Microsoft.AspNetCore.Components.Authorization
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
@@ -8,9 +9,6 @@
     <FluentAppBarItem Href="/app/Todo/LayoutAreas" Match="NavLinkMatch.All" IconRest="TodoIcon()"
         IconActive="TodoIcon(true)" Text="Todo" />
 
-    <FluentAppBarItem Href="/articles/Todo" Match="NavLinkMatch.All" IconRest="TodoArticleIcon()"
-					  IconActive="TodoArticleIcon(true)" Text="Articles" />
-
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/app/Northwind/LayoutAreas" Match="NavLinkMatch.All" IconRest="NorthwindIcon()"
         IconActive="NorthwindIcon(true)" Text="Northwind" />
@@ -19,8 +17,6 @@
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/app/Documentation/LayoutAreas" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
         IconActive="DocumentationIcon(active: true)" Text="Docs" />
-    <FluentAppBarItem Href="/articles/Documentation" Match="NavLinkMatch.All" IconRest="DocumentationArticleIcon()"
-					  IconActive="DocumentationArticleIcon(true)" Text="Articles" />
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()" IconActive="ChatIcon(true)"
         Text="Chat" />
