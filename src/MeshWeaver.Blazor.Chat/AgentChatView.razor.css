@@ -60,7 +60,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 4px 20px;
     border-bottom: 1px solid var(--neutral-stroke-divider);
     background-color: var(--neutral-layer-2);
     flex-shrink: 0;
