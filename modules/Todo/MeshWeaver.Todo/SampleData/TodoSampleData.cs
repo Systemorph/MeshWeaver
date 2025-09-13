@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Todo.Domain;
-using MeshWeaver.ShortGuid;
+﻿using MeshWeaver.ShortGuid;
+using MeshWeaver.Todo.Domain;
 
 namespace MeshWeaver.Todo.SampleData;
 
@@ -74,7 +74,7 @@ public static class TodoSampleData
     {
         var random = new Random(42); // Fixed seed for consistent results
         var persons = ResponsiblePersons.AvailablePersons;
-        
+
         return [
         // OVERDUE TASKS - One assigned to current user, others to team members (no unassigned overdue)
         new TodoItem
@@ -120,7 +120,7 @@ public static class TodoSampleData
             Title = "Mobile app bug fixes",
             Description = "Fix critical bugs reported in the latest mobile app release",
             Category = "Work",
-            ResponsiblePerson = "Riley Chen", // Team member
+            ResponsiblePerson = "Unassigned",
             DueDate = BaseDate, // Due today
             Status = TodoStatus.Pending,
             CreatedAt = BaseDate.AddDays(-4)

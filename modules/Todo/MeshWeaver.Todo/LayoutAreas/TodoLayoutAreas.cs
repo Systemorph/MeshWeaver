@@ -845,20 +845,10 @@ public static class TodoLayoutAreas
 
         // Create content control with icon and text - more compact design
         var content = Controls.Stack
-            .WithView(
-                Controls.Stack
-                    .WithView(Controls.Markdown($"{statusIcon}"))
-                    .WithStyle(style => style
-                        .WithWidth("32px")
-                        .WithTextAlign("center")
-                        .WithFlexShrink("0")))
-            .WithView(
-                Controls.Stack
-                    .WithView(Controls.Markdown(contentMarkdown))
-                    .WithStyle(style => style
-                        .WithFlexGrow("1")
-                        .WithMinWidth("0")
-                        .WithPaddingLeft("12px")))
+            .WithView(Controls.Markdown($"{statusIcon}"))
+            .WithView(Controls.Markdown(contentMarkdown))
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
             .WithStyle(style => style
                 .WithDisplay("flex")
                 .WithFlexDirection("row")
