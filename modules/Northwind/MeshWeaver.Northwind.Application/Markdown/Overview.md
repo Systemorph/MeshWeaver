@@ -24,12 +24,12 @@ For the first time ever, we have created an annual report of Northwind, and
 we demonstrate our ideas to create interactive articles to report and explain data.
 Here is the major dashboard:
 
-@("app/Northwind/AnnualReportSummary?Year=2023")
+@("app/Northwind/AnnualReportSummary?Year=2025")
 
 ## Financial Summary
 
 Below is an overview of key financial metrics and performance indicators:
 
-@("app/Northwind/FinancialSummary?Year=2023")
+@("app/Northwind/FinancialSummary?Year=2025")
 
 Please have a look at the [Northwind Articles](/articles/Northwind) for a detailed look.

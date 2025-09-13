@@ -31,7 +31,7 @@ public static class EmployeesOverviewArea
     /// Displays a horizontal bar chart ranking the top 5 employees by total sales revenue.
     /// Shows employee names as labels with horizontal bars extending to represent their sales performance.
     /// Features data labels on each bar showing exact revenue amounts, and bars are automatically
-    /// sorted from highest to lowest performer. Uses November 2023 data for the analysis.
+    /// sorted from highest to lowest performer. Uses November 2025 data for the analysis.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
@@ -53,5 +53,5 @@ public static class EmployeesOverviewArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 11, 1) && x.OrderDate < new DateTime(2023, 11, 30)));
+            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2025, 11, 1) && x.OrderDate < new DateTime(2025, 11, 30)));
 }

@@ -37,13 +37,15 @@ public static class SalesComparisonWIthPreviousYearArea
     {
         return layoutArea.WithPrevYearNorthwindData()
             .SelectMany(data =>
-                layoutArea.Workspace
+            {
+                var currentYear = data.Max(d => d.OrderYear).ToString();
+                return layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
                     .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
                     .ToBarChart(
                         builder => builder
-                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals("2023") == true))
+                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals(currentYear) == true))
                             .WithChartBuilder(o =>
                                 o.WithDataLabels(d =>
                                     d.WithAnchor(DataLabelsAnchor.End)
@@ -51,7 +53,8 @@ public static class SalesComparisonWIthPreviousYearArea
                                 )
                     ).Select(chart => (UiControl)Controls.Stack
                         .WithView(Controls.H2("Sales by Category with Previous Year"))
-                        .WithView(chart.ToControl()))
-            );
+                        .WithView(chart.ToControl()));
+
+            });
     }
 }

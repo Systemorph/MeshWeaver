@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -23,7 +23,7 @@ public static class SalesAnalysisArea
         => layout.WithView(nameof(SalesGrowthSummary), SalesGrowthSummary);
 
     /// <summary>
-    /// Displays a markdown summary of sales growth comparing 2022 vs 2023 data.
+    /// Displays a markdown summary of sales growth comparing previous year vs current year data.
     /// Shows percentage changes, growth trends, and identifies top performing categories.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
@@ -37,43 +37,47 @@ public static class SalesAnalysisArea
                 var data = tuple.First.ToList();
                 var categories = tuple.Second!.ToDictionary(c => c.CategoryId, c => c);
 
-                var sales2022 = data
-                    .Where(od => od.OrderDate.Year == 2022)
+                // Get current and previous years from data
+                var currentYear = data.Max(d => d.OrderDate.Year);
+                var previousYear = currentYear - 1;
+
+                var salesPreviousYear = data
+                    .Where(od => od.OrderDate.Year == previousYear)
                     .GroupBy(od => od.Category)
                     .Select(g => new
                     {
-                        Category = categories.TryGetValue(g.Key, out var cat2022) ? cat2022.CategoryName : "Unknown",
+                        Category = categories.TryGetValue(g.Key, out var cat) ? cat.CategoryName : "Unknown",
                         Sales = g.Sum(od => od.UnitPrice * od.Quantity * (1 - od.Discount))
                     })
                     .OrderByDescending(x => x.Sales)
                     .ToList();
 
-                var sales2023 = data
-                    .Where(od => od.OrderDate.Year == 2023)
+                var salesCurrentYear = data
+                    .Where(od => od.OrderDate.Year == currentYear)
                     .GroupBy(od => od.Category)
                     .Select(g => new
                     {
-                        Category = categories.TryGetValue(g.Key, out var cat2023) ? cat2023.CategoryName : "Unknown",
+                        Category = categories.TryGetValue(g.Key, out var cat) ? cat.CategoryName : "Unknown",
                         Sales = g.Sum(od => od.UnitPrice * od.Quantity * (1 - od.Discount))
                     })
                     .OrderByDescending(x => x.Sales)
                     .ToList();
 
                 var markdown = new StringBuilder();
-                markdown.AppendLine("### 📈 Sales Growth Summary (2022 vs 2023)");
+                markdown.AppendLine($"### 📈 Sales Growth Summary ({previousYear} vs {currentYear})");
                 markdown.AppendLine();
 
-                var comparison = sales2023
-                    .Join(sales2022,
-                        s23 => s23.Category,
-                        s22 => s22.Category,
-                        (s23, s22) => new
+                var comparison = salesCurrentYear
+                    .Join(salesPreviousYear,
+                        current => current.Category,
+                        previous => previous.Category,
+                        (current, previous) => new
                         {
-                            Category = s23.Category,
-                            Sales2023 = s23.Sales,
-                            Sales2022 = s22.Sales,
-                            Difference = s23.Sales - s22.Sales,
-                            PercentageChange = ((s23.Sales - s22.Sales) / s22.Sales) * 100
+                            Category = current.Category,
+                            SalesCurrentYear = current.Sales,
+                            SalesPreviousYear = previous.Sales,
+                            Difference = current.Sales - previous.Sales,
+                            PercentageChange = ((current.Sales - previous.Sales) / previous.Sales) * 100
                         })
                     .OrderByDescending(x => x.PercentageChange)
                     .ToList();

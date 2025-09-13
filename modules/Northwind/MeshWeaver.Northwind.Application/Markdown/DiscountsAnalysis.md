@@ -1,4 +1,4 @@
----
+﻿---
 Title: "Discounts vs Revenue"
 Abstract: "The report meticulously compiles data to offer insights into the financial performance of the business, highlighting key trends and significant variations in both revenue and discounts over the months. It aims to assist in understanding the financial health and operational efficiency during the specified period. This detailed analysis provides valuable insights into the effectiveness of discount strategies and their influence on sales performance."
 Thumbnail: "images/DiscountOverview.png"
@@ -12,7 +12,7 @@ Tags:
   - "Monthly Breakdown"
   - "Sales Performance"
   - "Operational Efficiency"
-  - "2023 Financial Report"
+  - "2025 Financial Report"
   - "Revenue vs Discounts"
   - "Business Insights"
   - "Financial Health"
@@ -24,13 +24,13 @@ Tags:
 
 # Discounts vs Revenue Analysis
 
-This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2023. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
+This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2025. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
 
-@("app/Northwind/DiscountAnalysisReport?Year=2023")
+@("app/Northwind/DiscountAnalysisReport?Year=2025")
 
-@("app/Northwind/DiscountVsRevenue?Year=2023")
+@("app/Northwind/DiscountVsRevenue?Year=2025")
 
-@("app/Northwind/MonthlyBreakdownTable?Year=2023")
+@("app/Northwind/MonthlyBreakdownTable?Year=2025")
 
 ### Analysis
 - **Revenue Trends:** The analysis shows clear patterns in revenue generation throughout the year, with seasonal variations affecting overall performance.
@@ -51,9 +51,9 @@ The analysis reveals that the majority of sales were made without any discount, 
 
 ### Discount Effectiveness Table
 
-@("app/Northwind/DiscountPercentage?Year=2023")
+@("app/Northwind/DiscountPercentage?Year=2025")
 
-@("app/Northwind/DiscountEffectivenessReport?Year=2023")
+@("app/Northwind/DiscountEffectivenessReport?Year=2025")
 
 ### Strategic Recommendations
 

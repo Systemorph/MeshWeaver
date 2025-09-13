@@ -1,4 +1,4 @@
----
+﻿---
 Title: "Top Employees of the Month Based on Amounts Earned"
 Abstract: "The attached report highlights the top-performing employees of the month based on their earnings. It recognizes and rewards employees like Nancy Davolio and Margaret Peacock for their exceptional contributions, with Nancy earning the highest amount. The report underscores the importance of acknowledging hard work to boost morale and foster a culture of excellence within the company."
 Thumbnail: "images/SalesReps.png"
@@ -24,17 +24,17 @@ This report highlights the top-performing employees of the month based on the am
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/TopEmployeesTable?Year=2023")
+@("app/Northwind/TopEmployeesTable?Year=2025")
 
   </div>
   <div style="flex: 1;">
 
-@("app/Northwind/TopEmployees?Year=2023")
+@("app/Northwind/TopEmployees?Year=2025")
 
   </div>
 </div>
 
-@("app/Northwind/TopEmployeesReport?Year=2023")
+@("app/Northwind/TopEmployeesReport?Year=2025")
 
 ## Employee Recognition and Performance Impact
 
