@@ -25,7 +25,7 @@ public static class TopProductsByCategoryArea
 
     /// <summary>
     /// Displays top-performing products within a specified category as a horizontal bar chart.
-    /// For demonstration purposes, shows top products from all categories for year 2023.
+    /// Shows top products from all categories for the most recent year available in the data.
     /// Can be extended to support category filtering in the future.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
@@ -40,9 +40,12 @@ public static class TopProductsByCategoryArea
                 var data = tuple.First;
                 var products = tuple.Second!.ToDictionary(p => p.ProductId, p => p.ProductName);
 
+                // Get the most recent year from data
+                var currentYear = data.Max(d => d.OrderDate.Year);
+
                 // Filter data by year and get top 10 products by revenue
                 var topProducts = data
-                    .Where(d => d.OrderDate.Year == 2023)
+                    .Where(d => d.OrderDate.Year == currentYear)
                     .GroupBy(d => d.Product)
                     .Select(g => new
                     {
@@ -64,7 +67,7 @@ public static class TopProductsByCategoryArea
                     .WithLabels(topProducts.Select(p => p.ProductName));
 
                 return (UiControl)Controls.Stack
-                    .WithView(Controls.H2("Top 10 Products by Sales (2023)"))
+                    .WithView(Controls.H2($"Top 10 Products by Sales ({currentYear})"))
                     .WithView(chart);
             });
     }

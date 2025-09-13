@@ -1,4 +1,4 @@
----
+﻿---
 Title: "Top 5 Clients by Amount per Month"
 Abstract: "The report analyzes the top 5 clients based on their total purchase amounts, highlighting key clients such as QUICK-Stop and Ernst Handel. It suggests targeted reward strategies to enhance customer satisfaction and retention, including discounts, exclusive access, and personalized services. Additionally, the report provides general recommendations for creating effective reward programs to foster overall customer loyalty."
 Thumbnail: "images/TopClients.png"
@@ -24,17 +24,17 @@ This report provides an analysis of the top 5 clients based on their total purch
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/TopClientsTable?Year=2023")
+@("app/Northwind/TopClientsTable?Year=2025")
 
   </div>
   <div style="flex: 1;">
 
-@("app/Northwind/TopClients?Year=2023")
+@("app/Northwind/TopClients?Year=2025")
 
   </div>
 </div>
 
-@("app/Northwind/TopClientsRewardSuggestions?Year=2023")
+@("app/Northwind/TopClientsRewardSuggestions?Year=2025")
 
 In addition to targeted strategies for top clients, implementing general reward programs can significantly enhance overall customer satisfaction and loyalty. These programs can be designed to cater to a broader customer base, ensuring that all clients feel valued and appreciated. The following recommendations provide a framework for creating effective and engaging reward programs that can be adapted to various business models.
 

@@ -1,6 +1,6 @@
----
-Title: "Financial Report Comparing Sales by Category of Products in 2022 and 2023"
-Abstract: "This document provides a comprehensive financial report comparing sales by category of products for the years 2022 and 2023. It highlights the growth in sales across various categories, showcasing overall performance and market trends. The financial analysis underscores the leading categories, such as beverages and dairy products, which together account for nearly 40% of total sales. It also identifies opportunities for growth in grains/cereals and produce through strategic initiatives."
+﻿---
+Title: "Financial Report Comparing Sales by Category of Products in 2024 and 2025"
+Abstract: "This document provides a comprehensive financial report comparing sales by category of products for the years 2024 and 2025. It highlights the growth in sales across various categories, showcasing overall performance and market trends. The financial analysis underscores the leading categories, such as beverages and dairy products, which together account for nearly 40% of total sales. It also identifies opportunities for growth in grains/cereals and produce through strategic initiatives."
 Thumbnail: "images/SalesAnalysis.png"
 Published: "2024-09-24"
 Authors:
@@ -8,8 +8,8 @@ Authors:
 Tags:
   - "Financial Report"
   - "Sales Analysis"
-  - "2022"
-  - "2023"
+  - "2024"
+  - "2025"
   - "Product Categories"
   - "Market Trends"
   - "Revenue Growth"
@@ -18,24 +18,24 @@ Tags:
 
 # Sales Analysis by Category of Products
 
-This report provides a detailed comparison of sales across various product categories between the years 2022 and 2023. The analysis highlights the growth in sales for each category, showcasing the overall performance and trends within the market. The data reveals significant increases in sales across all categories, with some experiencing remarkable growth rates. 
+This report provides a detailed comparison of sales across various product categories between the years 2024 and 2025. The analysis highlights the growth in sales for each category, showcasing the overall performance and trends within the market. The data reveals significant increases in sales across all categories, with some experiencing remarkable growth rates. 
 
 Click the year above the chart to select which information to display.
 
 <div style="display: flex; gap: 20px; margin: 20px 0;">
   <div style="flex: 1;">
 
-@("app/Northwind/SalesGrowthSummary?Year=2023")
+@("app/Northwind/SalesGrowthSummary?Year=2025")
 
   </div>
   <div style="flex: 1;">
 
-@("app/Northwind/SalesByCategoryWithPrevYear?Year=2023")
+@("app/Northwind/SalesByCategoryWithPrevYear?Year=2025")
 
   </div>
 </div>
 
-@("app/Northwind/SalesByCategoryComparison?Years=2022,2023")
+@("app/Northwind/SalesByCategoryComparison?Years=2024,2025")
 
 ### 🎯 Category Performance Insights
 

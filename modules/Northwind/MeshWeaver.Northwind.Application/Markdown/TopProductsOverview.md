@@ -1,6 +1,6 @@
----
-Title: "Product Overview 2023"
-Abstract: "This comprehensive financial report provides an in-depth analysis of the top sales by category for the year 2023. It highlights the highest-grossing products and offers a detailed breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. The report presents all financial amounts in USD ($)."
+﻿---
+Title: "Product Overview 2025"
+Abstract: "This comprehensive financial report provides an in-depth analysis of the top sales by category for the year 2025. It highlights the highest-grossing products and offers a detailed breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. The report presents all financial amounts in USD ($)."
 Thumbnail: "images/TopProducts.png"
 Published: "2024-09-24"
 Authors:
@@ -8,7 +8,7 @@ Authors:
 Tags:
   - "Financial Analysis"
   - "Sales Report"
-  - "2023 Overview"
+  - "2025 Overview"
   - "Top Sales Categories"
   - "Revenue Insights"
   - "Product Performance"
@@ -52,13 +52,13 @@ Tags:
 
 </style>
 
-# Top Products Overview 2023
+# Top Products Overview 2025
 
 This financial report provides an analysis of the top sales by category based on the provided data. The report highlights the highest-grossing products and offers a breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. All amounts are presented in USD ($).
 
 <div class="product-overview-table">
 
-@("app/Northwind/ProductOverview?Year=2023")
+@("app/Northwind/ProductOverview?Year=2025")
 
 </div>
 
@@ -66,7 +66,7 @@ This financial report provides an analysis of the top sales by category based on
 
 The following interactive chart shows the top-performing products within each category. Use the category filter to explore specific product categories:
 
-@("app/Northwind/TopProductsByCategory?Category=&Year=2023")
+@("app/Northwind/TopProductsByCategory?Category=&Year=2025")
 
 ### Conclusion: Sales Analysis
 

@@ -22,7 +22,7 @@ public static class FinancialSummaryArea
         => layout.WithView(nameof(FinancialSummary), FinancialSummary);
 
     /// <summary>
-    /// Displays a comprehensive financial summary with key business metrics for 2023.
+    /// Displays a comprehensive financial summary with key business metrics for 2025.
     /// Shows total revenue, order statistics, customer metrics, and product performance indicators.
     /// Presents data in an organized layout for easy consumption.
     /// </summary>

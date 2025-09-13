@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Layout;
@@ -59,7 +59,7 @@ public static class OrdersAnalysisArea
                 var report = new StringBuilder();
                 report.AppendLine("#### Summary Statistics");
                 report.AppendLine($"- **Total Months Analyzed**: {monthlyOrders.Length}");
-                report.AppendLine($"- **Total Orders in 2023**: {totalOrders}");
+                report.AppendLine($"- **Total Orders in {filterYear}**: {totalOrders}");
                 report.AppendLine();
 
                 report.AppendLine("#### Monthly Breakdown");

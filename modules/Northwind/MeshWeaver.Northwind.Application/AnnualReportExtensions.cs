@@ -22,7 +22,7 @@ namespace MeshWeaver.Northwind.Application
                 return year;
             }
 
-            return 2023;
+            return 2025;
         }
     }
 }

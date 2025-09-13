@@ -23,7 +23,7 @@ public static class SalesByCategoryComparisonArea
         => layout.WithView(nameof(SalesByCategoryComparison), SalesByCategoryComparison);
 
     /// <summary>
-    /// Displays a comparison table showing sales figures by category between 2022 and 2023.
+    /// Displays a comparison table showing sales figures by category between previous and current year.
     /// Shows revenue for each year, absolute difference, and percentage change.
     /// Categories are sorted alphabetically for consistent presentation.
     /// </summary>
@@ -32,14 +32,17 @@ public static class SalesByCategoryComparisonArea
     /// <returns>A data table with category sales comparison across years.</returns>
     public static IObservable<UiControl> SalesByCategoryComparison(this LayoutAreaHost layoutArea, RenderingContext context)
     {
-        var years = new List<int> { 2022, 2023 }; // Hardcoded for demo
-
         return layoutArea.GetNorthwindDataCubeData()
             .CombineLatest(layoutArea.Workspace.GetStream<Category>()!)
             .Select(tuple =>
             {
                 var data = tuple.First;
                 var categories = tuple.Second!.ToDictionary(c => c.CategoryId, c => c.CategoryName);
+
+                // Get current and previous years from data
+                var currentYear = data.Max(d => d.OrderDate.Year);
+                var previousYear = currentYear - 1;
+                var years = new List<int> { previousYear, currentYear };
 
                 // Calculate sales by category and year
                 var salesByCategory = data
@@ -62,17 +65,17 @@ public static class SalesByCategoryComparisonArea
                         var categoryName = g.First().CategoryName;
                         var yearSales = g.ToDictionary(x => x.Year, x => x.Sales);
                         
-                        // Calculate comparison between 2022 and 2023
-                        var sales2022 = yearSales.GetValueOrDefault(2022, 0);
-                        var sales2023 = yearSales.GetValueOrDefault(2023, 0);
-                        var difference = sales2023 - sales2022;
-                        var percentageChange = sales2022 > 0 ? (difference / sales2022) * 100 : 0;
+                        // Calculate comparison between previous and current year
+                        var salesPreviousYear = yearSales.GetValueOrDefault(previousYear, 0);
+                        var salesCurrentYear = yearSales.GetValueOrDefault(currentYear, 0);
+                        var difference = salesCurrentYear - salesPreviousYear;
+                        var percentageChange = salesPreviousYear > 0 ? (difference / salesPreviousYear) * 100 : 0;
 
                         return new ComparisonRow
                         {
                             Category = categoryName,
-                            Sales2022 = Math.Round(sales2022),
-                            Sales2023 = Math.Round(sales2023),
+                            SalesPreviousYear = Math.Round(salesPreviousYear),
+                            SalesCurrentYear = Math.Round(salesCurrentYear),
                             Difference = Math.Round(difference),
                             PercentageChange = $"{Math.Round(percentageChange, 1)}%"
                         };
@@ -87,7 +90,7 @@ public static class SalesByCategoryComparisonArea
 
                 // Create data grid
                 return (UiControl)Controls.Stack
-                    .WithView(Controls.H2("Sales Comparison by Category (2022 vs 2023)"))
+                    .WithView(Controls.H2($"Sales Comparison by Category ({previousYear} vs {currentYear})"))
                     .WithView(layoutArea.ToDataGrid(comparisonData));
             });
     }
@@ -95,8 +98,8 @@ public static class SalesByCategoryComparisonArea
     private record ComparisonRow
     {
         public string Category { get; init; } = string.Empty;
-        public double Sales2022 { get; init; }
-        public double Sales2023 { get; init; }
+        public double SalesPreviousYear { get; init; }
+        public double SalesCurrentYear { get; init; }
         public double Difference { get; init; }
         public string PercentageChange { get; init; } = string.Empty;
     }
