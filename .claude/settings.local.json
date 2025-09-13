@@ -34,7 +34,10 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:github.com)",
       "WebSearch",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(tee:*)",
+      "Bash(git restore:*)",
+      "Bash(meshweaver-thumbnails:*)"
     ],
     "deny": []
   }

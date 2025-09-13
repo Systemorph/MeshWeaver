@@ -13,7 +13,7 @@ public class EmbeddedResourceContentCollection(string collectionName, Assembly a
     }, hub)
 {
     private readonly string resourcePrefix = resourcePrefix.EndsWith('.') ? resourcePrefix : resourcePrefix + '.';
-    private ImmutableDictionary<string, string> resourcePaths;
+    private ImmutableDictionary<string, string> resourcePaths = ImmutableDictionary<string, string>.Empty;
 
     private string ExtractPath(string resourceName)
     {
