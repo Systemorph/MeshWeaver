@@ -152,7 +152,7 @@ public static class SharedPortalConfiguration
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly)
+            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(MeshWeaver.Blazor.Chat.AgentChatView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();

@@ -49,7 +49,7 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            }); 
+            });
         services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
@@ -166,7 +166,7 @@ public static class SharedPortalConfiguration
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(MeshWeaver.Blazor.Chat.AgentChatView).Assembly)
+            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(Blazor.Chat.AgentChatView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();
