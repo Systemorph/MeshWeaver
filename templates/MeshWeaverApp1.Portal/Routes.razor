@@ -12,7 +12,7 @@
 }
 <CascadingAuthenticationState>
     <CascadingValue Value="@ViewportInformation">
-        <Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="[typeof(ApplicationPage).Assembly]">
+        <Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="[typeof(ApplicationPage).Assembly, typeof(MeshWeaver.Blazor.Chat.AgentChatView).Assembly]">
             <Found Context="routeData">
                 <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
                 <FocusOnNavigate RouteData="@routeData" Selector="h1" />

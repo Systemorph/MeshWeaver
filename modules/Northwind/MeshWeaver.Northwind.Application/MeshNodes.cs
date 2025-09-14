@@ -28,13 +28,13 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
         new ApplicationAddress(nameof(Northwind)),
         nameof(Northwind),
         NorthwindApplicationExtensions.ConfigureNorthwindApplication
-    ).WithGlobalServiceRegistry(services => 
+    ).WithGlobalServiceRegistry(services =>
         services.AddSingleton<IContentCollectionProvider>(sp =>
         new ContentCollectionProvider(
             new EmbeddedResourceContentCollection(
                 "Northwind",
                 Assembly.GetExecutingAssembly(),
-                "MeshWeaver.Northwind.Application.Markdown",
+                typeof(NorthwindApplicationAttribute).Namespace + ".Markdown",
                 sp.GetRequiredService<IMessageHub>()
             )
         )));

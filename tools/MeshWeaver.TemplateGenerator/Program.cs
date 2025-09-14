@@ -241,6 +241,10 @@ public class TemplateGenerator
                 <PackageReference Include="MeshWeaver.ContentCollections" />
               </ItemGroup>
 
+              <ItemGroup>
+                <EmbeddedResource Include="Content\**\*.*" />
+              </ItemGroup>
+
             </Project>
             """;
         File.WriteAllText(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"), todoCsproj);

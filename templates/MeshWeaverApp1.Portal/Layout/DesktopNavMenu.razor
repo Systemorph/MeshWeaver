@@ -3,12 +3,14 @@
 @using Microsoft.FluentUI.AspNetCore.Components
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
-    <FluentAppBarItem Href="/app/Todo/TodoList" Match="NavLinkMatch.All" IconRest="TodoIcon()"
+    <FluentAppBarItem Href="/app/Todo/LayoutAreas" Match="NavLinkMatch.All" IconRest="TodoIcon()"
         IconActive="TodoIcon(true)" Text="Todos" />
     <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="BlogIcon()" IconActive="BlogIcon(true)"
         Text="Articles" />
     <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
         IconActive="AgentsIcon(true)" Text="Agents" />
+    <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()" IconActive="ChatIcon(true)"
+        Text="Chat" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
             <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"
