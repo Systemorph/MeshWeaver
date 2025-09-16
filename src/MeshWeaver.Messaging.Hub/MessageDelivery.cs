@@ -101,6 +101,8 @@ public abstract record MessageDelivery : IMessageDelivery
         try
         {
             var message = GetMessage();
+            if (message is RawJson)
+                return this;
             var serialized = JsonSerializer.Serialize(message, options);
             var rawJson = new RawJson(serialized);
             return WithMessage(rawJson);
