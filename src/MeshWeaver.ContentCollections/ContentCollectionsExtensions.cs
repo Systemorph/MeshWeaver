@@ -1,16 +1,17 @@
-﻿#nullable enable
+﻿using System.Reflection;
 using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
-public static class MarkdownExtensions
+public static class ContentCollectionsExtensions
 {
     public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
         config
@@ -171,6 +172,17 @@ public static class MarkdownExtensions
         => $"content/{collection}/{path}";
 
 
+    public static MeshNode WithEmbeddedResourceContentCollection(this MeshNode node, string collectionName, Assembly assembly, string relativePath)
+        => node.WithGlobalServiceRegistry(services =>
+        services.AddSingleton<IContentCollectionProvider>(sp =>
+        new ContentCollectionProvider(
+            new EmbeddedResourceContentCollection(
+               collectionName,
+                assembly,
+                 $"{assembly.GetName().Name}.{relativePath}",
+                sp.GetRequiredService<IMessageHub>()
+            )
+        )));
 
 }
 
