@@ -7,7 +7,7 @@ using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using Xunit;
-using MarkdownExtensions = MeshWeaver.ContentCollections.MarkdownExtensions;
+using ContentCollectionsExtensions = MeshWeaver.ContentCollections.ContentCollectionsExtensions;
 
 namespace MeshWeaver.Search.Test;
 
@@ -27,7 +27,7 @@ public class ArticleParsingTest(ITestOutputHelper output) : HubTestBase(output)
         {
             var content = await File.ReadAllTextAsync(file);
             var path = Path.GetRelativePath(baseDir, file);
-            var markdownElement = MarkdownExtensions.ParseContent("demo", path, DateTime.UtcNow, content, ImmutableDictionary<string,Author>.Empty);
+            var markdownElement = ContentCollectionsExtensions.ParseContent("demo", path, DateTime.UtcNow, content, ImmutableDictionary<string,Author>.Empty);
             var article = markdownElement.Should().BeOfType<Article>().Subject;
             
             article.Title.Should().Be("Northwind Overview");

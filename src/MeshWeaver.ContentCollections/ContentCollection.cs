@@ -147,7 +147,7 @@ public abstract class ContentCollection : IDisposable
         var content = await reader.ReadToEndAsync(ct);
 
 
-        return MarkdownExtensions.ParseContent(
+        return ContentCollectionsExtensions.ParseContent(
             Collection,
             path,
             lastModified,

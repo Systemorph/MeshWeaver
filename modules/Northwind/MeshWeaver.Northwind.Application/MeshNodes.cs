@@ -1,9 +1,6 @@
-﻿using System.Reflection;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
-using Microsoft.Extensions.DependencyInjection;
 
 [assembly: NorthwindApplication]
 
@@ -28,16 +25,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
         new ApplicationAddress(nameof(Northwind)),
         nameof(Northwind),
         NorthwindApplicationExtensions.ConfigureNorthwindApplication
-    ).WithGlobalServiceRegistry(services =>
-        services.AddSingleton<IContentCollectionProvider>(sp =>
-        new ContentCollectionProvider(
-            new EmbeddedResourceContentCollection(
-                "Northwind",
-                Assembly.GetExecutingAssembly(),
-                typeof(NorthwindApplicationAttribute).Namespace + ".Markdown",
-                sp.GetRequiredService<IMessageHub>()
-            )
-        )));
+    ).WithEmbeddedResourceContentCollection("Northwind", typeof(NorthwindApplicationAttribute).Assembly, "Markdown");
 
 
 }
