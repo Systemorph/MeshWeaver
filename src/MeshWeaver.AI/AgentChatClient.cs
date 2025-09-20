@@ -25,6 +25,7 @@ public class AgentChatClient(
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentRunningAgent;
     private string? lastContextAddress;
+    private readonly AgentContext currentContext;
 
     public AgentContext? Context { get; private set; }
 
@@ -56,7 +57,7 @@ public class AgentChatClient(
                 };
 
                 yield return message;
-                
+
                 // Check for any queued layout area content and yield as messages
                 while (queuedLayoutAreaContent.Count > 0)
                 {
@@ -144,19 +145,19 @@ public class AgentChatClient(
 
         // Extract original text content
         var originalText = ExtractTextFromMessage(message);
-        
+
         // Determine the selected agent
         var selectedAgent = DetermineSelectedAgent(originalText);
-        
+
         // Update the current running agent if we're routing to a specific agent
         if (!string.IsNullOrEmpty(selectedAgent))
         {
             currentRunningAgent = selectedAgent;
         }
-        
+
         // Format the final message with context
         var messageWithContext = FormatMessageWithContext(originalText, selectedAgent);
-        
+
         // Always update the last context address after processing
         lastContextAddress = Context?.Address;
 
@@ -175,7 +176,7 @@ public class AgentChatClient(
             var trimmedText = originalText.TrimStart();
             var spaceIndex = trimmedText.IndexOf(' ');
             var agentName = spaceIndex > 0 ? trimmedText.Substring(1, spaceIndex - 1) : trimmedText.Substring(1);
-            
+
             var targetAgent = agentChat.Agents.FirstOrDefault(a => a.Name is not null && a.Name.Equals(agentName, StringComparison.OrdinalIgnoreCase));
             if (targetAgent != null)
             {
@@ -220,7 +221,7 @@ public class AgentChatClient(
     private string FormatMessageWithContext(string originalText, string? selectedAgent)
     {
         var contextJson = JsonSerializer.Serialize(Context!, hub.JsonSerializerOptions);
-        
+
         if (!string.IsNullOrEmpty(selectedAgent))
         {
             // Route to the selected agent
@@ -259,7 +260,7 @@ public class AgentChatClient(
 
                 yield return converted;
             }
-            
+
             // Check for any queued layout area content and yield as response updates
             while (queuedLayoutAreaContent.Count > 0)
             {
@@ -324,7 +325,7 @@ public class AgentChatClient(
             .Where(m => !m.Contents.Any(c => c is ChatLayoutAreaContent or ChatDelegationContent))
             .Select(ConvertToAgentChat)
             .ToArray();
-            
+
         agentChat.AddChatMessages(messagesToResume);
         return Task.CompletedTask;
     }
@@ -365,7 +366,7 @@ public class AgentChatClient(
         var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
         queuedLayoutAreaContent.Enqueue(layoutAreaContent);
     }
-    
+
     private ChatMessageContent ConvertToAgentChat(ChatMessage message)
     {
         ChatMessageContentItemCollection collection = new();
@@ -468,17 +469,17 @@ public class AgentChatClient(
         if (newContext is null)
             return currentRunningAgent;
 
-        if (currentRunningAgent is null)
-            return null;
 
-        var currentAgent = agentDefinitions.GetValueOrDefault(currentRunningAgent);
-        if (currentAgent is null)
-            return null;
-
-        // Check if current agent implements IAgentWithContext and still matches
-        if (currentAgent is IAgentWithContext currentContextAgent && currentContextAgent.Matches(newContext))
+        if (currentRunningAgent is not null)
         {
-            return currentRunningAgent; // Keep current agent
+            var currentAgent = agentDefinitions.GetValueOrDefault(currentRunningAgent);
+
+            // Check if current agent implements IAgentWithContext and still matches
+            if (currentAgent is IAgentWithContext currentContextAgent && !currentContextAgent.Matches(newContext))
+                currentRunningAgent = null; // current agent not applicable.
+
+            if (currentRunningAgent is not null)
+                return currentRunningAgent;
         }
 
         // Find an agent that matches the new context
@@ -490,12 +491,8 @@ public class AgentChatClient(
             return matchingAgent.Name;
 
 
-        // If current agent doesn't implement IAgentWithContext, keep it
-        if (currentAgent is not IAgentWithContext)
-            return currentRunningAgent;
-
         // Default to null (which will use default routing)
-        return null;
+        return currentRunningAgent;
     }
 
 
