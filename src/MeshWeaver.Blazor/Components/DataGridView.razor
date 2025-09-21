@@ -46,9 +46,26 @@
 </div>
 
 <div class="paginator">
-    @if (Pagination.TotalItemCount.HasValue && Pagination.TotalItemCount > Pagination.ItemsPerPage)
+    @if (Pagination.TotalItemCount.HasValue && (Pagination.TotalItemCount > Pagination.ItemsPerPage || showPageSizeSelector))
     {
-        <FluentPaginator State="@Pagination"/>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">   
+			@if (showPageSizeSelector)
+			{
+				<div style="display: flex; align-items: center; gap: 0.5rem;">
+					<FluentLabel>Items per page:</FluentLabel>
+					<FluentSelect TOption="string"
+									Value="@itemsPerPage.ToString()"
+									ValueChanged="@(async (string value) => await OnPageSizeChanged(int.Parse(value)))"
+									Width="80px">
+						@foreach (var size in pageSizeOptions)
+						{
+							<FluentOption TOption="string" Value="@size.ToString()">@size</FluentOption>
+						}
+					</FluentSelect>
+				</div>
+			}
+			<FluentPaginator State="@Pagination" />
+		</div>
     }
 </div>
 

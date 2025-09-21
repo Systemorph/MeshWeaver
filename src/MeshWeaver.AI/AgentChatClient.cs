@@ -25,7 +25,6 @@ public class AgentChatClient(
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentRunningAgent;
     private string? lastContextAddress;
-    private readonly AgentContext currentContext;
 
     public AgentContext? Context { get; private set; }
 

@@ -18,6 +18,9 @@
     <FluentAppBarItem Href="/app/Documentation/LayoutAreas" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
         IconActive="DocumentationIcon(active: true)" Text="Docs" />
     <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
+        IconActive="AgentsIcon(true)" Text="Agents" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()" IconActive="ChatIcon(true)"
         Text="Chat" />
     <AuthorizeView Roles="@Roles.PortalAdmin">

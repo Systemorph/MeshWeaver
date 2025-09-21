@@ -56,7 +56,12 @@ public partial class MobileNavMenu : ComponentBase
             DesktopNavMenu.DocumentationIcon(),
             LinkMatchRegex: new Regex("^/app/Documentation"));
 
-
+        yield return new MobileNavMenuEntry(
+            "Agents",
+            () => NavigateToAsync("/app/Agents/Overview"),
+            DesktopNavMenu.AgentsIcon(),
+            LinkMatchRegex: new Regex("^/app/Agents")
+        );
 
 
 

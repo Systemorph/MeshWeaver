@@ -34,6 +34,8 @@ public record DataGridControl(object Data)
     // Pagination
     public object? Pagination { get; init; }
     public object? ItemsProvider { get; init; }
+    public object? PageSizeOptions { get; init; } = new[] { 5, 10, 25, 50, 100 };
+    public object? ShowPageSizeSelector { get; init; } = true;
     
     // Accessibility
     public object? AriaLabel { get; init; }
@@ -72,6 +74,8 @@ public record DataGridControl(object Data)
     public DataGridControl WithAutoFocus(object? autoFocus = null) => This with { AutoFocus = autoFocus ?? true };
     public DataGridControl WithAutoItemsPerPage(object? autoItemsPerPage = null) => This with { AutoItemsPerPage = autoItemsPerPage ?? true };
     public DataGridControl WithItemsPerPage(object itemsPerPage) => This with { ItemsPerPage = itemsPerPage };
+    public DataGridControl WithPageSizeOptions(object pageSizeOptions) => This with { PageSizeOptions = pageSizeOptions };
+    public DataGridControl WithShowPageSizeSelector(object? showPageSizeSelector = null) => This with { ShowPageSizeSelector = showPageSizeSelector ?? true };
 }
 
 public record ContextProperty(string Property);

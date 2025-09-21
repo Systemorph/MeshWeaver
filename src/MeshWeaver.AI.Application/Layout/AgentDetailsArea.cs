@@ -1,9 +1,9 @@
-﻿using MeshWeaver.Layout;
+﻿using System.Text;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
-using System.Text;
 
 namespace MeshWeaver.AI.Application.Layout;
 
@@ -64,9 +64,7 @@ public static class AgentDetailsArea
         // Instructions
         markdown.AppendLine("## Instructions");
         markdown.AppendLine();
-        markdown.AppendLine("```markdown");
         markdown.AppendLine(agent.Instructions);
-        markdown.AppendLine("```");
         markdown.AppendLine();
 
         // Attributes
