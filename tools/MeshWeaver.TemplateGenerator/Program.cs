@@ -56,10 +56,15 @@ public class TemplateGenerator
         UpdateProgramCs();
         UpdateProjectFiles();
         GenerateDirectoryPackagesProps();
-        CopyClaude();
+
+        // Generate unique ports for each installation
+        var httpPort = GenerateUniquePort(5000, 6000);
+        var httpsPort = httpPort + 1;
+
+        CopyClaude(httpPort, httpsPort);
         CreateTemplateConfigs();
         CreateSolutionFile();
-        CreateReadme();
+        CreateReadme(httpsPort);
     }
 
     private void CleanOutputDirectory()
@@ -365,19 +370,15 @@ public class TemplateGenerator
         return packages;
     }
 
-    private void CopyClaude()
+    private void CopyClaude(int httpPort, int httpsPort)
     {
         Console.WriteLine("Creating template-specific CLAUDE.md...");
-        
-        // Generate unique ports for each installation
-        var httpPort = GenerateUniquePort(5000, 6000);
-        var httpsPort = httpPort + 1;
-        
+
         var claudeContent = CreateTemplateClaude(httpPort, httpsPort);
         var targetFile = Path.Combine(_outputPath, "CLAUDE.md");
         File.WriteAllText(targetFile, claudeContent);
         Console.WriteLine($"  Created template CLAUDE.md with ports {httpPort}/{httpsPort}");
-        
+
         // Update launch settings with the generated ports
         UpdateLaunchSettingsPorts(httpPort, httpsPort);
     }
@@ -787,7 +788,7 @@ Current MeshWeaver version: {_version}
         File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.sln"), solutionContent);
     }
 
-    private void CreateReadme()
+    private void CreateReadme(int httpsPort)
     {
         var readmeContent = $"""
             # MeshWeaver Portal Solution Template
@@ -836,7 +837,7 @@ Current MeshWeaver version: {_version}
 
             1. Navigate to the Portal project: `cd portal/MeshWeaverApp1.Portal`
             2. Run: `dotnet run`
-            3. Open browser to: `https://localhost:5001`
+            3. Open browser to: `https://localhost:{httpsPort}`
 
             The Todo application will be available in the portal with sample data.
             """;
