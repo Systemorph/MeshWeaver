@@ -44,8 +44,23 @@ public static class SharedPortalConfiguration
         services.AddTodoAI();
         services.AddMemoryChatPersistence();
 
-        // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(builder.Configuration.GetSection("AzureInference"));
+        // configure AzureOpenAI chat (supports Azure OpenAI, GitHub Models, and other OpenAI-compatible APIs)
+        services.Configure<AzureOpenAIConfiguration>(config =>
+        {
+            builder.Configuration.GetSection("AzureInference").Bind(config);
+
+            // Override with GitHub token if available in environment
+            var githubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            if (!string.IsNullOrEmpty(githubToken))
+            {
+                config.ApiKey = githubToken;
+                // If URL is not set or is Azure's default, use GitHub Models endpoint
+                if (string.IsNullOrEmpty(config.Url) || config.Url.Contains("inference.ai.azure.com"))
+                {
+                    config.Url = "https://models.inference.ai.azure.com";
+                }
+            }
+        });
         services.AddAzureOpenAI();
 
         // configure Azure Foundry chat
