@@ -6,12 +6,20 @@ namespace MeshWeaver.TemplateGenerator;
 
 public class Program
 {
-    private const string DefaultVersion = "2.2.0-local";
     private const string DefaultOutputPath = "dist/templates";
 
     public static void Main(string[] args)
     {
-        var version = args.Length > 0 ? args[0] : DefaultVersion;
+        if (args.Length == 0)
+        {
+            Console.WriteLine("Error: Version parameter is required.");
+            Console.WriteLine("Usage: MeshWeaver.TemplateGenerator <version> [outputPath]");
+            Console.WriteLine("Example: MeshWeaver.TemplateGenerator 2.4.0");
+            Console.WriteLine("Note: Use 'dotnet run -- <version>' when running via dotnet run");
+            Environment.Exit(1);
+        }
+
+        var version = args[0];
         var outputPath = args.Length > 1 ? args[1] : DefaultOutputPath;
 
         Console.WriteLine($"Creating MeshWeaver Project Templates v{version}");
