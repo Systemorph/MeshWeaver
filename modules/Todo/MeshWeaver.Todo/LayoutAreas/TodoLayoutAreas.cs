@@ -4,8 +4,8 @@ using System.Text;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Todo.Domain;
 using MeshWeaver.ShortGuid;
+using MeshWeaver.Todo.Domain;
 
 namespace MeshWeaver.Todo.LayoutAreas;
 
@@ -292,15 +292,15 @@ public static class TodoLayoutAreas
         var currentUser = ResponsiblePersons.GetCurrentUser();
         var myTodos = todoItems.Where(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson)).ToList();
         var otherTodos = todoItems.Where(t => !ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson)).ToList();
-        
+
         sb.AppendLine($"- 🟢 **My Tasks ({currentUser})**: {myTodos.Count}");
         sb.AppendLine($"- 🫂 **Others' Tasks**: {otherTodos.Count}");
-        
+
         // Show top responsible persons
         var personGroups = todoItems.GroupBy(t => t.ResponsiblePerson)
             .OrderByDescending(g => g.Count())
             .Take(5);
-            
+
         sb.AppendLine();
         sb.AppendLine("## Top Contributors");
         foreach (var group in personGroups)
@@ -358,7 +358,7 @@ public static class TodoLayoutAreas
 
             // Category header with actions
             var categoryActionButton = CreateCategoryActionButton(categoryTodos, host);
-            
+
             mainGrid = mainGrid
                 .WithView(Controls.H5($"📁 {categoryGroup.Key} ({categoryGroup.Count()}) - {completedCount}✅ {inProgressCount}🔄 {pendingCount}⏳")
                     .WithStyle(style => style.WithMarginTop("16px").WithMarginBottom("8px").WithColor("var(--color-fg-default)")),
@@ -450,7 +450,7 @@ public static class TodoLayoutAreas
 
         sb.AppendLine($"**Status:** {todo.Status}");
         sb.AppendLine($"**Category:** {todo.Category}");
-        
+
         var currentUserIndicator = ResponsiblePersons.GetCurrentUserIndicator(todo.ResponsiblePerson);
         sb.AppendLine($"**Responsible:** {currentUserIndicator}{todo.ResponsiblePerson}");
 
@@ -579,7 +579,7 @@ public static class TodoLayoutAreas
                 _ => Controls.Html("") // Empty placeholder for other statuses
             };
 
-            mainGrid = AddCollapsibleStatusSection(mainGrid, host, statusGroup.ToList(), 
+            mainGrid = AddCollapsibleStatusSection(mainGrid, host, statusGroup.ToList(),
                 $"{statusIcon} {statusName}", statusColor, statusActionButton, defaultOpen);
         }
 
@@ -596,7 +596,7 @@ public static class TodoLayoutAreas
                     (host, todos) => AutoAssignTasks(host, todos.ToList()),
                     host, statusGroup);
 
-                mainGrid = AddCollapsibleUnassignedSection(mainGrid, host, statusGroup.ToList(), 
+                mainGrid = AddCollapsibleUnassignedSection(mainGrid, host, statusGroup.ToList(),
                     $"{statusIcon} {statusName}", "var(--color-warning-fg)", assignmentActionButton, true);
             }
         }
@@ -634,7 +634,7 @@ public static class TodoLayoutAreas
         }
 
         // Add overdue reminder button if task is overdue
-        if (todo.DueDate.HasValue && todo.DueDate.Value.Date < DateTime.Now.Date && 
+        if (todo.DueDate.HasValue && todo.DueDate.Value.Date < DateTime.Now.Date &&
             todo.Status != TodoStatus.Completed && todo.Status != TodoStatus.Cancelled)
         {
             var reminderButton = CreateOverdueReminderButton(todo, host);
@@ -943,9 +943,6 @@ public static class TodoLayoutAreas
         // Define the area ID for the edit todo data
         var editTodoDataId = $"EditTodoData_{todoToEdit.Id}";
 
-        // Capture the original todo item in a closure for cancel functionality
-        var originalTodo = todoToEdit;
-
         // Create an edit form for the todo item with proper data binding
         var editForm = Controls.Stack
             .WithView(Controls.H5("Edit Todo")
@@ -957,19 +954,6 @@ public static class TodoLayoutAreas
                     .WithClickAction(_ =>
                     {
                         // is updated on the fly, so we just need to close the dialog
-                        // Close the dialog by clearing the dialog area
-                        host.UpdateArea(DialogControl.DialogArea, null!);
-                        return Task.CompletedTask;
-                    }))
-                .WithView(Controls.Button("❌ Cancel")
-                    .WithClickAction(_ =>
-                    {
-                        // Revert to original todo state
-                        var changeRequest = new DataChangeRequest()
-                            .WithUpdates(originalTodo);
-
-                        host.Hub.Post(changeRequest, o => o.WithTarget(TodoApplicationAttribute.Address));
-
                         // Close the dialog by clearing the dialog area
                         host.UpdateArea(DialogControl.DialogArea, null!);
                         return Task.CompletedTask;
@@ -1069,7 +1053,7 @@ public static class TodoLayoutAreas
             var overdueCount = personGroup.Count(t => t.DueDate.HasValue && t.DueDate.Value.Date < DateTime.Now.Date && t.Status != TodoStatus.Completed);
             var isCurrentUser = ResponsiblePersons.IsCurrentUser(personGroup.Key);
             var displayName = ResponsiblePersons.GetDisplayName(personGroup.Key);
-            
+
             var workloadColor = activeCount switch
             {
                 <= 2 => "🟢", // Light workload
@@ -1079,12 +1063,14 @@ public static class TodoLayoutAreas
 
             var assignButton = unassignedTasks.Any()
                 ? Controls.MenuItem("📥 Assign", "user-plus")
-                    .WithClickAction(_ => { 
+                    .WithClickAction(_ =>
+                    {
                         // Assign the first unassigned task to this person
                         var taskToAssign = unassignedTasks.First();
-                        var updatedTask = taskToAssign with { 
+                        var updatedTask = taskToAssign with
+                        {
                             ResponsiblePerson = personGroup.Key,
-                            UpdatedAt = DateTime.UtcNow 
+                            UpdatedAt = DateTime.UtcNow
                         };
                         SubmitTodoUpdate(host, updatedTask);
                         return Task.CompletedTask;
@@ -1095,7 +1081,7 @@ public static class TodoLayoutAreas
                 : (UiControl)Controls.Html("");
 
             mainGrid = mainGrid
-                .WithView(Controls.Markdown($"{workloadColor} **{displayName}**: {activeCount} active" + 
+                .WithView(Controls.Markdown($"{workloadColor} **{displayName}**: {activeCount} active" +
                     (overdueCount > 0 ? $" 🚨 {overdueCount} overdue" : ""))
                     .WithStyle(style => style.WithPaddingLeft("20px").WithMarginBottom("5px")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
@@ -1112,9 +1098,10 @@ public static class TodoLayoutAreas
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(unassignedTasks.Any(t => t.Status != TodoStatus.Completed)
                     ? Controls.MenuItem("🎯 Auto-Assign", "shuffle")
-                        .WithClickAction(_ => { 
+                        .WithClickAction(_ =>
+                        {
                             AutoAssignTasks(host, unassignedTasks.Where(t => t.Status != TodoStatus.Completed));
-                            return Task.CompletedTask; 
+                            return Task.CompletedTask;
                         })
                         .WithWidth(MenuWidth)
                         .WithAppearance(Appearance.Neutral)
@@ -1124,13 +1111,13 @@ public static class TodoLayoutAreas
 
             foreach (var task in unassignedTasks.Where(t => t.Status != TodoStatus.Completed).OrderBy(t => t.DueDate ?? DateTime.MaxValue).Take(8))
             {
-                var urgencyIndicator = task.DueDate.HasValue && task.DueDate.Value.Date <= DateTime.Now.Date ? "🚨" : 
+                var urgencyIndicator = task.DueDate.HasValue && task.DueDate.Value.Date <= DateTime.Now.Date ? "🚨" :
                                      task.DueDate.HasValue && task.DueDate.Value.Date <= DateTime.Now.Date.AddDays(1) ? "⏰" : "📅";
-                
+
                 var assignmentButton = CreateTaskAssignmentButton(task, host);
 
                 mainGrid = mainGrid
-                    .WithView(Controls.Markdown($"{urgencyIndicator} **{task.Title}** - `{task.Category}`" + 
+                    .WithView(Controls.Markdown($"{urgencyIndicator} **{task.Title}** - `{task.Category}`" +
                         (task.DueDate.HasValue ? $" *Due: {task.DueDate.Value:MMM dd}*" : ""))
                         .WithStyle(style => style.WithPaddingLeft("20px").WithMarginBottom("5px")),
                         skin => skin.WithXs(12).WithSm(9).WithMd(10))
@@ -1152,7 +1139,7 @@ public static class TodoLayoutAreas
     {
         var currentUser = ResponsiblePersons.GetCurrentUser();
         var myActiveTasks = todoItems
-            .Where(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) && 
+            .Where(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) &&
                        (t.Status == TodoStatus.Pending || t.Status == TodoStatus.InProgress))
             .OrderBy(t => t.DueDate ?? DateTime.MaxValue)
             .ThenBy(t => t.CreatedAt)
@@ -1194,10 +1181,11 @@ public static class TodoLayoutAreas
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(myActiveTasks.Any(t => t.Status == TodoStatus.Pending)
                 ? Controls.MenuItem("▶️ Start All", "play-circle")
-                    .WithClickAction(_ => { 
+                    .WithClickAction(_ =>
+                    {
                         var pendingTasks = myActiveTasks.Where(t => t.Status == TodoStatus.Pending);
                         UpdateAllTodosInGroup(host, pendingTasks, TodoStatus.InProgress);
-                        return Task.CompletedTask; 
+                        return Task.CompletedTask;
                     })
                     .WithWidth(MenuWidth)
                     .WithAppearance(Appearance.Neutral)
@@ -1284,9 +1272,10 @@ public static class TodoLayoutAreas
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(unassignedTasks.Any()
                 ? Controls.MenuItem("🎯 Auto-Assign All", "shuffle")
-                    .WithClickAction(_ => { 
+                    .WithClickAction(_ =>
+                    {
                         AutoAssignTasks(host, unassignedTasks);
-                        return Task.CompletedTask; 
+                        return Task.CompletedTask;
                     })
                     .WithWidth(MenuWidth)
                     .WithAppearance(Appearance.Neutral)
@@ -1310,7 +1299,7 @@ public static class TodoLayoutAreas
         // Show unassigned tasks with assignment buttons
         foreach (var task in unassignedTasks)
         {
-            var urgencyIndicator = task.DueDate.HasValue && task.DueDate.Value.Date < DateTime.Now.Date ? "🚨" : 
+            var urgencyIndicator = task.DueDate.HasValue && task.DueDate.Value.Date < DateTime.Now.Date ? "🚨" :
                                  task.DueDate.HasValue && task.DueDate.Value.Date <= DateTime.Now.Date.AddDays(1) ? "⏰" : "📅";
 
             var (todoContent, _) = CreateTodoItemContentAndActions(task, host);
@@ -1335,10 +1324,10 @@ public static class TodoLayoutAreas
     private static UiControl? CreateTodaysFocus(IReadOnlyCollection<TodoItem> todoItems, LayoutAreaHost host)
     {
         var today = DateTime.Now.Date;
-        
+
         // Categorize tasks by timeline
         var overdueTasks = todoItems
-            .Where(t => t.DueDate.HasValue && t.DueDate.Value.Date < today && 
+            .Where(t => t.DueDate.HasValue && t.DueDate.Value.Date < today &&
                        t.Status != TodoStatus.Completed && t.Status != TodoStatus.Cancelled)
             .OrderBy(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) ? 0 : 1)
             .ThenBy(t => t.Status)
@@ -1346,7 +1335,7 @@ public static class TodoLayoutAreas
             .ToList();
 
         var dueTodayTasks = todoItems
-            .Where(t => t.DueDate.HasValue && t.DueDate.Value.Date == today && 
+            .Where(t => t.DueDate.HasValue && t.DueDate.Value.Date == today &&
                        t.Status != TodoStatus.Completed && t.Status != TodoStatus.Cancelled)
             .OrderBy(t => ResponsiblePersons.IsCurrentUser(t.ResponsiblePerson) ? 0 : 1)
             .ThenBy(t => t.Status)
@@ -1393,8 +1382,8 @@ public static class TodoLayoutAreas
         // Section 1: 🚨 Overdue Tasks (highest priority)
         if (overdueTasks.Any())
         {
-            mainGrid = AddTimelineSection(mainGrid, host, overdueTasks, 
-                "🚨 Overdue", "var(--color-danger-fg)", 
+            mainGrid = AddTimelineSection(mainGrid, host, overdueTasks,
+                "🚨 Overdue", "var(--color-danger-fg)",
                 "▶️ Start All Overdue", "Start all overdue tasks");
         }
 
@@ -1420,7 +1409,7 @@ public static class TodoLayoutAreas
     /// <summary>
     /// Adds a timeline section to the Today's Focus view
     /// </summary>
-    private static LayoutGridControl AddTimelineSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
+    private static LayoutGridControl AddTimelineSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks,
         string sectionTitle, string sectionColor, string actionText, string actionDescription)
     {
         // Section header with action button - smaller heading with reduced spacing
@@ -1429,10 +1418,11 @@ public static class TodoLayoutAreas
                 .WithStyle(style => style.WithMarginTop("12px").WithMarginBottom("6px").WithColor(sectionColor)),
                 skin => skin.WithXs(12).WithSm(9).WithMd(10))
             .WithView(Controls.MenuItem(actionText, GetActionIcon(actionText))
-                .WithClickAction(_ => { 
+                .WithClickAction(_ =>
+                {
                     var targetStatus = actionText.Contains("Complete") ? TodoStatus.Completed : TodoStatus.InProgress;
                     UpdateAllTodosInGroup(host, tasks, targetStatus);
-                    return Task.CompletedTask; 
+                    return Task.CompletedTask;
                 })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
@@ -1455,7 +1445,7 @@ public static class TodoLayoutAreas
     /// <summary>
     /// Adds a collapsible status section for assigned todos in the AllItems
     /// </summary>
-    private static LayoutGridControl AddCollapsibleStatusSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
+    private static LayoutGridControl AddCollapsibleStatusSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks,
         string sectionTitle, string sectionColor, UiControl actionButton, bool defaultOpen)
     {
         // Add collapsible section header with action button
@@ -1476,7 +1466,7 @@ public static class TodoLayoutAreas
         {
             var (todoContent, todoActions) = CreateTodoItemContentAndActions(task, host);
             mainGrid = mainGrid
-                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")), 
+                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(todoActions, skin => skin.WithXs(12).WithSm(3).WithMd(2));
         }
@@ -1492,7 +1482,7 @@ public static class TodoLayoutAreas
     /// <summary>
     /// Adds a collapsible status section for unassigned todos in the AllItems
     /// </summary>
-    private static LayoutGridControl AddCollapsibleUnassignedSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks, 
+    private static LayoutGridControl AddCollapsibleUnassignedSection(LayoutGridControl mainGrid, LayoutAreaHost host, List<TodoItem> tasks,
         string sectionTitle, string sectionColor, UiControl actionButton, bool defaultOpen)
     {
         // Add collapsible section header with action button
@@ -1515,7 +1505,7 @@ public static class TodoLayoutAreas
             var assignmentButton = CreateTaskAssignmentButton(task, host);
 
             mainGrid = mainGrid
-                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")), 
+                .WithView(todoContent.WithStyle(style => style.WithMarginLeft("10px")),
                     skin => skin.WithXs(12).WithSm(9).WithMd(10))
                 .WithView(Controls.Stack
                     .WithView(assignmentButton)
@@ -1562,10 +1552,12 @@ public static class TodoLayoutAreas
         {
             var displayName = ResponsiblePersons.GetDisplayName(person);
             var assignToPerson = Controls.MenuItem(displayName, "user")
-                .WithClickAction(_ => {
-                    var updatedTask = task with { 
+                .WithClickAction(_ =>
+                {
+                    var updatedTask = task with
+                    {
                         ResponsiblePerson = person,
-                        UpdatedAt = DateTime.UtcNow 
+                        UpdatedAt = DateTime.UtcNow
                     };
                     SubmitTodoUpdate(host, updatedTask);
                     return Task.CompletedTask;
@@ -1573,7 +1565,7 @@ public static class TodoLayoutAreas
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => HeadingButtonStyle(style));
-            
+
             assignButton = assignButton.WithView(assignToPerson);
         }
 
@@ -1594,9 +1586,10 @@ public static class TodoLayoutAreas
         foreach (var task in tasksToAssign)
         {
             var assignedPerson = availablePersons[personIndex % availablePersons.Count];
-            var updatedTask = task with { 
+            var updatedTask = task with
+            {
                 ResponsiblePerson = assignedPerson,
-                UpdatedAt = DateTime.UtcNow 
+                UpdatedAt = DateTime.UtcNow
             };
             updatedTasks.Add(updatedTask);
             personIndex++;
@@ -1627,25 +1620,25 @@ public static class TodoLayoutAreas
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end")),
-            
+
             TodoStatus.InProgress => Controls.MenuItem("✅ Complete All", "check-circle")
                 .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.Completed); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end")),
-            
+
             TodoStatus.Completed => Controls.MenuItem("📦 Archive All", "archive")
                 .WithClickAction(_ => { DeleteAllTodosInGroup(host, statusGroup); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end")),
-            
+
             TodoStatus.Cancelled => Controls.MenuItem("🔄 Restore All", "refresh-cw")
                 .WithClickAction(_ => { UpdateAllTodosInGroup(host, statusGroup, TodoStatus.Pending); return Task.CompletedTask; })
                 .WithWidth(MenuWidth)
                 .WithAppearance(Appearance.Neutral)
                 .WithStyle(style => style.WithDisplay("flex").WithAlignItems("center").WithJustifyContent("flex-end")),
-            
+
             _ => Controls.Html("")
         };
     }
@@ -1769,7 +1762,8 @@ public static class TodoLayoutAreas
     {
         return Controls.MenuItem("📧 Send Reminder", "send")
             .WithAppearance(Appearance.Neutral)
-            .WithClickAction(_ => {
+            .WithClickAction(_ =>
+            {
                 // Show the overdue reminder dialog
                 ShowOverdueReminderDialog(todo, host);
                 return Task.CompletedTask;
