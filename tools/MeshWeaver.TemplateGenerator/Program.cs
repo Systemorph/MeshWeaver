@@ -423,6 +423,10 @@ public class TemplateGenerator
     
     private string CreateTemplateClaude(int httpPort, int httpsPort)
     {
+        // Read the design patterns from separate file
+        var designPatternsPath = Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!, "DesignPatterns.md");
+        var designPatterns = File.Exists(designPatternsPath) ? File.ReadAllText(designPatternsPath) : "";
+
         return $@"# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this MeshWeaverApp1 solution.
@@ -469,37 +473,25 @@ dotnet run
 ### Project Structure
 
 - **`portal/MeshWeaverApp1.Portal/`** - Web application (Blazor Server)
-- **`src/MeshWeaverApp1.Todo/`** - Todo business domain module
+- **`src/MeshWeaverApp1.Todo/`** - Todo business domain module (reference implementation)
 - **`src/MeshWeaverApp1.Todo.AI/`** - AI agents for Todo functionality
 - **`test/MeshWeaverApp1.Todo.Test/`** - Unit tests for Todo module
 
 ### Architectural Patterns
 
-**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results. 
+**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results.
 The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`.
 
 **Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
 
-**Address-Based Routing**: Services register at specific addresses (e.g., `app/todo`). 
+**Address-Based Routing**: Services register at specific addresses (e.g., `app/todo`).
 Layout areas follow the pattern `@{{address}}/{{areaName}}/{{areaId}}`. The areaId is optional and depends on the view.
 
 **Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
 
+{designPatterns}
+
 ## Development Patterns
-
-### Adding New Layout Areas
-```csharp
-public static class MyLayoutArea
-{{
-    public static void AddMyLayoutArea(this LayoutConfiguration config) =>
-        config.AddLayoutArea(nameof(MyLayout), MyLayout);
-
-    public static UiControl MyLayout(LayoutAreaHost host, RenderingContext ctx) => 
-        Controls.Stack
-            .WithView(Controls.Html(""Some text""))
-            .WithView(Controls.Markdown(""Some markdown view""));
-}}
-```
 
 ### Message Handling
 ```csharp
@@ -515,7 +507,17 @@ public static class MyHubConfiguration
     {{
         // Process the request
         var result = await SomeService.ProcessAsync(request.Message);
-        
+
+        // Send response
+        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
+        return request.Processed();
+    }}
+
+    public static IMessageDelivery HandleMyRequest(MessageHub hub, IMessageDelivery<MyRequest> request)
+    {{
+        // Process the request
+        var result = SomeService.Process(request.Input);
+
         // Send response
         await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
         return request.Processed();
@@ -531,10 +533,19 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
     [Description(""Description on how to use"")]
     public async Task<string> DoSomething([Description(""Description for input"")]string input)
     {{
-        var request = new MyRequest(input);
-        var address = chat.Context.Address;
+        var request = new MyRequest(input); // Create a request object
+        var address = GetAddress(request); // Get the address for the plugin, e.g., ""app/northwind""
+        // Use the message hub to send a request and receive a response
         var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(address));
         return JsonSerializer.Serialize(response.Message, hub.JsonSerializationOptions);
+    }}
+
+    public Address GetAddress(MyRequest request)
+    {{
+        // Logic to determine the address based on the request
+        // the chat contains a context, which is usually good to use.
+        // can also contain agent specific mapping logic.
+        return chat.Context.Address;
     }}
 }}
 ```
@@ -542,7 +553,7 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
 ## Key Dependencies
 
 - **.NET 9.0** - Target framework
-- **Blazor Server** - Web UI framework  
+- **Blazor Server** - Web UI framework
 - **Semantic Kernel** - AI integration
 - **xUnit v3** - Testing framework
 - **FluentAssertions** - Test assertions
@@ -570,7 +581,7 @@ public class MyTest : HubTestBase, IAsyncLifetime
 
         // Act
         var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
-        
+
         // Assert
         response.Should().NotBeNull();
         response.Message.Result.Should().Be(""expected result"");
