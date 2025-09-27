@@ -1,10 +1,12 @@
 ﻿using System.Collections;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
-using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -226,12 +228,16 @@ public record LayoutAreaHost : IDisposable
             .DistinctUntilChanged();
     }
 
-    private static T? Convert<T>(ChangeItem<object> ci) where T : class
+    private T? Convert<T>(ChangeItem<object> ci) where T : class
     {
         var result = ci.Value;
         if (result is null)
             return null;
 
+        if (result is JsonElement je)
+            return je.Deserialize<T?>(Hub.JsonSerializerOptions);
+        if (result is JsonNode jn)
+            return jn.Deserialize<T?>(Hub.JsonSerializerOptions);
 
         if (result is T t)
             return t;
@@ -277,7 +283,7 @@ public record LayoutAreaHost : IDisposable
         foreach (var disposable in disposablesByArea.ToArray())
             disposable.Value.ForEach(d => d.Dispose());
         disposablesByArea.Clear();
-   }
+    }
 
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback)
     {
@@ -395,5 +401,5 @@ public record LayoutAreaHost : IDisposable
     }
 
     internal IEnumerable<LayoutAreaDefinition> GetLayoutAreaDefinitions()
-        => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible() );
+        => LayoutDefinition.AreaDefinitions.Values.Where(l => l.IsVisible());
 }
