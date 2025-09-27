@@ -424,7 +424,15 @@ public class TemplateGenerator
     private string CreateTemplateClaude(int httpPort, int httpsPort)
     {
         // Read the design patterns from separate file
-        var designPatternsPath = Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!, "DesignPatterns.md");
+        var currentDirectory = Directory.GetCurrentDirectory();
+        var designPatternsPath = Path.Combine(currentDirectory, "tools", "MeshWeaver.TemplateGenerator", "DesignPatterns.md");
+
+        // Fallback to assembly location if not found in current directory structure
+        if (!File.Exists(designPatternsPath))
+        {
+            designPatternsPath = Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!, "DesignPatterns.md");
+        }
+
         var designPatterns = File.Exists(designPatternsPath) ? File.ReadAllText(designPatternsPath) : "";
 
         return $@"# CLAUDE.md
