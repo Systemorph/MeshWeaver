@@ -570,3 +570,47 @@ private static UiControl CreateMetricCard(string label, string value)
         .WithStyle(style => style.WithPadding("16px").WithBorder("1px solid var(--color-border-default)").WithBorderRadius("8px"));
 }
 ```
+
+**Key Data Binding Concepts**:
+
+1. **JsonPointerReference**: Points to specific array indices in the data stream
+   - `LayoutAreaReference.GetDataPointer(key)` gets the pointer to your data
+   - `/{i}` references the specific array index for each month/item
+
+2. **Data Stream Pattern**: Two-way binding with reactive streams
+   - **Load**: `host.Workspace.GetStream<T>()` → `host.UpdateData(key, array)`
+   - **Save**: `host.GetDataStream<double[]>(key)` → `DataChangeRequest`
+
+3. **ImmutableDictionary Caching**: Efficient change detection
+   - Cache entities by key for fast lookups
+   - Detect actual changes before posting updates
+   - Handle both updates and deletions
+
+4. **Controls.Number Binding**: Real-time editable number fields
+   - `Controls.Number(JsonPointerReference, typeof(Double))` for double values
+   - Automatically syncs UI changes to data stream
+   - Supports various numeric types (int, double, decimal)
+
+**Alternative: Template.Bind Pattern** 
+
+Use this pattern to data bind entity types to views.
+```csharp
+private static UiControl UpdatingView()
+{
+    var toolbar = new Toolbar(2024);
+
+    return Controls
+        .Stack
+        .WithView(Template.Bind(toolbar, tb => Controls.Text(tb.Year), nameof(toolbar)), "Toolbar")
+        .WithView((area, _) =>
+            area.GetDataStream<Toolbar>(nameof(toolbar))
+                .Select(tb => Controls.Html($"Report for year {tb?.Year}")), "Content");
+}
+```
+
+If you have an array of types, use BindMany:
+
+```csharp
+private object ItemTemplate(IReadOnlyCollection<DataRecord> data) =>
+    data.BindMany(record => Controls.Text(record.DisplayName).WithId(record.SystemName));
+```
