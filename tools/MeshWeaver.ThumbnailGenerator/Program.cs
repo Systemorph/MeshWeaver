@@ -1,13 +1,34 @@
-﻿
 using System.CommandLine;
+using System.CommandLine.NamingConventionBinder;
 using MeshWeaver.ThumbnailGenerator;
 
-var catalogUrlOption = new Option<string>(name: "--catalogUrl", description: "Full URL to the LayoutArea catalog page");
-var singleAreaOption = new Option<string>(name: "--area", description: "URL of a single area to screenshot (alternative to --catalogUrl)");
-var outDirOption = new Option<string>(name: "--output", description: "Output directory for thumbnails", getDefaultValue: () => Path.Combine(Environment.CurrentDirectory, "thumbnails"));
-var darkModeOption = new Option<bool>(name: "--dark-mode", description: "Generate dark mode thumbnails in addition to light mode", getDefaultValue: () => true);
-var thumbnailWidthOption = new Option<int>(name: "--width", description: "Thumbnail width in pixels", getDefaultValue: () => 400);
-var thumbnailHeightOption = new Option<int>(name: "--height", description: "Thumbnail height in pixels", getDefaultValue: () => 300);
+var catalogUrlOption = new Option<string>(
+    name: "--catalogUrl",
+    description: "Full URL to the LayoutArea catalog page");
+
+var singleAreaOption = new Option<string>(
+    name: "--area",
+    description: "URL of a single area to screenshot (alternative to --catalogUrl)");
+
+var outDirOption = new Option<string>(
+    name: "--output",
+    getDefaultValue: () => Path.Combine(Environment.CurrentDirectory, "thumbnails"),
+    description: "Output directory for thumbnails");
+
+var darkModeOption = new Option<bool>(
+    name: "--dark-mode",
+    getDefaultValue: () => true,
+    description: "Generate dark mode thumbnails in addition to light mode");
+
+var thumbnailWidthOption = new Option<int>(
+    name: "--width",
+    getDefaultValue: () => 400,
+    description: "Thumbnail width in pixels");
+
+var thumbnailHeightOption = new Option<int>(
+    name: "--height",
+    getDefaultValue: () => 300,
+    description: "Thumbnail height in pixels");
 
 var root = new RootCommand("Generates thumbnails for layout areas (scaffold)");
 root.AddOption(catalogUrlOption);
@@ -17,16 +38,16 @@ root.AddOption(darkModeOption);
 root.AddOption(thumbnailWidthOption);
 root.AddOption(thumbnailHeightOption);
 
-root.SetHandler(async (catalogUrl, singleArea, output, includeDarkMode, thumbnailWidth, thumbnailHeight) =>
+root.Handler = CommandHandler.Create<string, string, string, bool, int, int>(async (catalogUrl, area, output, darkMode, width, height) =>
 {
-    // Validate input - either catalogUrl or singleArea must be provided
-    if (string.IsNullOrWhiteSpace(catalogUrl) && string.IsNullOrWhiteSpace(singleArea))
+    // Validate input - either catalogUrl or area must be provided
+    if (string.IsNullOrWhiteSpace(catalogUrl) && string.IsNullOrWhiteSpace(area))
     {
         Console.WriteLine("Error: Either --catalogUrl or --area is required.");
         return;
     }
-    
-    if (!string.IsNullOrWhiteSpace(catalogUrl) && !string.IsNullOrWhiteSpace(singleArea))
+
+    if (!string.IsNullOrWhiteSpace(catalogUrl) && !string.IsNullOrWhiteSpace(area))
     {
         Console.WriteLine("Error: Cannot specify both --catalogUrl and --area. Use one or the other.");
         return;
@@ -37,20 +58,20 @@ root.SetHandler(async (catalogUrl, singleArea, output, includeDarkMode, thumbnai
     List<string> areaUrls = new();
     string baseUrl;
 
-    if (!string.IsNullOrWhiteSpace(singleArea))
+    if (!string.IsNullOrWhiteSpace(area))
     {
         // Single area mode
-        Console.WriteLine($"[ThumbnailGenerator] Single area mode: {singleArea}");
-        areaUrls.Add(singleArea);
-        
-        var singleAreaUri = new Uri(singleArea);
+        Console.WriteLine($"[ThumbnailGenerator] Single area mode: {area}");
+        areaUrls.Add(area);
+
+        var singleAreaUri = new Uri(area);
         baseUrl = $"{singleAreaUri.Scheme}://{singleAreaUri.Authority}";
     }
     else
     {
         // Catalog mode
         Console.WriteLine($"[ThumbnailGenerator] Catalog mode: {catalogUrl}");
-        
+
         try
         {
             areaUrls = await AreaUrlExtractor.GetAreaUrlsAsync(catalogUrl);
@@ -76,16 +97,16 @@ root.SetHandler(async (catalogUrl, singleArea, output, includeDarkMode, thumbnai
     }
 
     // Generate thumbnails
-    if (includeDarkMode)
+    if (darkMode)
     {
-        Console.WriteLine($"\nGenerating light and dark mode thumbnails for {areaUrls.Count} area(s) at {thumbnailWidth}x{thumbnailHeight}...");
-        await ThumbnailGenerator.GenerateThumbnailsAsync(areaUrls, output, baseUrl, true, thumbnailWidth, thumbnailHeight);
+        Console.WriteLine($"\nGenerating light and dark mode thumbnails for {areaUrls.Count} area(s) at {width}x{height}...");
+        await ThumbnailGenerator.GenerateThumbnailsAsync(areaUrls, output, baseUrl, true, width, height);
     }
     else
     {
-        Console.WriteLine($"\nGenerating light mode thumbnails for {areaUrls.Count} area(s) at {thumbnailWidth}x{thumbnailHeight}...");
-        await ThumbnailGenerator.GenerateThumbnailsAsync(areaUrls, output, baseUrl, false, thumbnailWidth, thumbnailHeight);
+        Console.WriteLine($"\nGenerating light mode thumbnails for {areaUrls.Count} area(s) at {width}x{height}...");
+        await ThumbnailGenerator.GenerateThumbnailsAsync(areaUrls, output, baseUrl, false, width, height);
     }
-}, catalogUrlOption, singleAreaOption, outDirOption, darkModeOption, thumbnailWidthOption, thumbnailHeightOption);
+});
 
 return await root.InvokeAsync(args);
