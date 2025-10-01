@@ -24,6 +24,35 @@
             <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
                 <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
             </FluentButton>
+            <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
+                <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
+            </FluentButton>
+            <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">
+                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Right))">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
+                    Right
+                    @if (currentPosition == ChatPosition.Right)
+                    {
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                    }
+                </FluentMenuItem>
+                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Left))">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelLeft())" />
+                    Left
+                    @if (currentPosition == ChatPosition.Left)
+                    {
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                    }
+                </FluentMenuItem>
+                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Bottom))">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.ArrowDown())" />
+                    Bottom
+                    @if (currentPosition == ChatPosition.Bottom)
+                    {
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                    }
+                </FluentMenuItem>
+            </FluentMenu>
             <FluentButton BackgroundColor="transparent" OnClick="CloseChatAsync" Title="Close Chat">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
             </FluentButton>
@@ -59,10 +88,10 @@
             }
             else
             {
-                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage">
+                <ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage"
+                                OnNewMessage="@OnNewMessageReceived">
                     <NoMessagesContent>
-                        <div>You can ask me questions about your pricing or submit documents such as risk profiles or
-                            claims.
+                        <div>You can ask me questions about your data or submit documents to import.
                         </div>
                     </NoMessagesContent>
                 </ChatMessageList>

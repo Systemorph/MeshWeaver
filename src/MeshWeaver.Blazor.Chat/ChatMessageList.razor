@@ -1,16 +1,17 @@
 @using ChatMessage = Microsoft.Extensions.AI.ChatMessage
 @inject IJSRuntime JS
+@implements IDisposable
 
 <div class="message-list-container">
     <chat-messages class="page-width message-list" in-progress="@(InProgressMessage is not null)">
-        @foreach (var message in Messages)
+        @foreach (var message in stableMessages)
         {
-            <ChatMessageItem @key="@message" Message="@message" />
+            <MessageWrapper @key="@message.GetHashCode()" Message="@message" />
         }
 
         @if (InProgressMessage is not null)
         {
-            <ChatMessageItem Message="@InProgressMessage" InProgress="true" />
+            <MessageWrapper Message="@InProgressMessage" InProgress="true" />
             <FluentProgressRing />
         }
         else if (IsEmpty)
@@ -21,6 +22,8 @@
 </div>
 
 @code {
+    private readonly List<ChatMessage> stableMessages = new();
+
     [Parameter]
     public required IEnumerable<ChatMessage> Messages { get; set; }
 
@@ -30,7 +33,35 @@
     [Parameter]
     public RenderFragment? NoMessagesContent { get; set; }
 
-    private bool IsEmpty => !Messages.Any(m => (m.Role == ChatRole.User || m.Role == ChatRole.Assistant) && !string.IsNullOrEmpty(m.Text));
+    [Parameter]
+    public EventCallback<ChatMessage> OnNewMessage { get; set; }
+
+    private bool IsEmpty => !stableMessages.Any(m => (m.Role == ChatRole.User || m.Role == ChatRole.Assistant) && !string.IsNullOrEmpty(m.Text));
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var currentMessages = Messages.ToList();
+        
+        // Only add new messages to prevent re-rendering existing ones
+        foreach (var message in currentMessages)
+        {
+            if (!stableMessages.Contains(message))
+            {
+                stableMessages.Add(message);
+                if (OnNewMessage.HasDelegate)
+                {
+                    await OnNewMessage.InvokeAsync(message);
+                }
+            }
+        }
+
+        // Remove messages that are no longer in the source (rare case)
+        var messagesToRemove = stableMessages.Where(sm => !currentMessages.Contains(sm)).ToList();
+        foreach (var messageToRemove in messagesToRemove)
+        {
+            stableMessages.Remove(messageToRemove);
+        }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -39,5 +70,10 @@
             // Activates the auto-scrolling behavior
             await JS.InvokeVoidAsync("import", "./_content/MeshWeaver.Blazor.Chat/ChatMessageList.razor.js");
         }
+    }
+
+    public void Dispose()
+    {
+        // Clean up if needed
     }
 }

@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -11,6 +12,12 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Content\**\*.*" />
+  </ItemGroup>
+
 
 </Project>

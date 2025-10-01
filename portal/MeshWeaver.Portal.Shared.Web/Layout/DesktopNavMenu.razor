@@ -1,19 +1,31 @@
-﻿@using MeshWeaver.ContentCollections
+﻿
+@using MeshWeaver.ContentCollections
 @using Microsoft.AspNetCore.Components.Authorization
 
 <FluentAppBar PopoverShowSearch="false" Class="desktop-nav-menu">
-    <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="ArticlesIcon()"
-        IconActive="ArticlesIcon(active: true)" Text="Blog" />
-    <FluentAppBarItem Href="/content/Documentation/Readme.md" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
-        IconActive="DocumentationIcon(active: true)" Text="Areas" />
-    <FluentAppBarItem Href="/app/Todo/TodoList" Match="NavLinkMatch.All" IconRest="TodoIcon()"
-        IconActive="TodoIcon(true)" Text="Todos" />
+    <FluentAppBarItem Href="/articles" Match="NavLinkMatch.All" IconRest="BlogIcon()"
+        IconActive="BlogIcon(active: true)" Text="Blog" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/app/Todo/LayoutAreas" Match="NavLinkMatch.All" IconRest="TodoIcon()"
+        IconActive="TodoIcon(true)" Text="Todo" />
+
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/app/Northwind/LayoutAreas" Match="NavLinkMatch.All" IconRest="NorthwindIcon()"
+        IconActive="NorthwindIcon(true)" Text="Northwind" />
+    <FluentAppBarItem Href="/articles/Northwind" Match="NavLinkMatch.All" IconRest="NorthwindArticleIcon()"
+					  IconActive="NorthwindArticleIcon(true)" Text="Articles" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/app/Documentation/LayoutAreas" Match="NavLinkMatch.All" IconRest="DocumentationIcon()"
+        IconActive="DocumentationIcon(active: true)" Text="Docs" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
     <FluentAppBarItem Href="/app/Agents/Overview" Match="NavLinkMatch.All" IconRest="AgentsIcon()"
         IconActive="AgentsIcon(true)" Text="Agents" />
-    <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()"
-        IconActive="ChatIcon(true)" Text="Chat" />
+    <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
+    <FluentAppBarItem Href="/chat" Match="NavLinkMatch.All" IconRest="ChatIcon()" IconActive="ChatIcon(true)"
+        Text="Chat" />
     <AuthorizeView Roles="@Roles.PortalAdmin">
         <Authorized>
+            <FluentDivider Style="width: 100%;" Role="DividerRole.Presentation"></FluentDivider>
             <FluentAppBarItem Href="/collections" Match="NavLinkMatch.All" IconRest="CollectionsIcon()"
                 IconActive="CollectionsIcon(active: true)" Text="Collections" />
         </Authorized>

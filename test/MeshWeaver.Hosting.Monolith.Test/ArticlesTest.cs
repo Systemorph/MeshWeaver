@@ -30,10 +30,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .AddKernel()
             .ConfigureServices(ConfigureArticles)
             .ConfigureServices(services => services.AddContentCollections())
-            .ConfigureMesh(config => config.AddMeshNodes(
-                    TestHubExtensions.Node
-                )
-            );
+            .AddMeshNodes(TestHubExtensions.Node)
+            ;
 
     protected virtual IServiceCollection ConfigureArticles(IServiceCollection services)
     {

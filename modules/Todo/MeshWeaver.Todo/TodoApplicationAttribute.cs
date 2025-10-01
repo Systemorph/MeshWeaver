@@ -1,3 +1,4 @@
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Todo;
 
@@ -19,7 +20,7 @@ public class TodoApplicationAttribute : MeshNodeAttribute
             Address,
             nameof(Todo),
             TodoApplicationExtensions.ConfigureTodoApplication
-        )
+        ).WithEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
     ];
 
     /// <summary>

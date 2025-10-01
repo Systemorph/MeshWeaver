@@ -1,5 +1,6 @@
 @using System.Runtime.CompilerServices
 @using System.Text.RegularExpressions
+@using System.Text
 @using System.Linq
 @using MeshWeaver.Blazor.Components
 @using MeshWeaver.Layout
@@ -16,8 +17,37 @@ else if (Message.Role != ChatRole.User)
 {
     foreach (var content in Message.Contents)
     {
-        if (content is TextContent { Text: { Length: > 0 } text })
+        if (content is ChatDelegationContent delegationContent)
         {
+            <ChatDelegationView DelegationContent="@delegationContent" />
+        }
+        else if (content is ChatLayoutAreaContent layoutAreaContent)
+        {
+            <ChatLayoutAreaView LayoutAreaContent="@layoutAreaContent" />
+        }
+        else if (content is TextContent { Text: { Length: > 0 } text })
+        {
+            // Check if this is a delegation message that wasn't properly typed
+            if (text.StartsWith("Delegating to @") || text.StartsWith("Requesting user feedback before delegating to @"))
+            {
+                // Parse delegation info from text
+                var isDelegationWithFeedback = text.StartsWith("Requesting user feedback");
+                var targetAgentStart = text.IndexOf('@') + 1;
+                var targetAgentEnd = text.IndexOf(':', targetAgentStart);
+                var targetAgent = text.Substring(targetAgentStart, targetAgentEnd - targetAgentStart);
+                var delegationMessageText = text.Substring(targetAgentEnd + 2); // Skip ": "
+
+                // Create a delegation content for display
+                var parsedDelegationContent = new ChatDelegationContent(
+                    Message.AuthorName ?? "Assistant",
+                    targetAgent,
+                    delegationMessageText,
+                    isDelegationWithFeedback);
+
+                <ChatDelegationView DelegationContent="parsedDelegationContent" />
+            }
+            else
+            {
             <div class="assistant-message">
                 <div>
                     <div class="assistant-message-icon">
@@ -30,7 +60,55 @@ else if (Message.Role != ChatRole.User)
                 </div>
                 <div class="assistant-message-header">@Message.Role.Value.Wordify()</div>
                 <div class="assistant-message-text">
-                    <MarkdownView ViewModel="@(new MarkdownControl(FormatTextForMarkdown(text)))" />
+                    @{
+                        var (beforeCode, language,  isIncomplete, afterCode) = ParseIncompleteCodeBlock(text);
+                    }
+                    
+                    @if (isIncomplete)
+                    {
+                        @* Render text before the incomplete code block *@
+                        @if (!string.IsNullOrEmpty(beforeCode))
+                        {
+                            <MarkdownView ViewModel="@(new MarkdownControl(FormatTextForMarkdown(beforeCode)))" />
+                        }
+                        
+                        @* Render the incomplete code block with spinner only - no preview *@
+                        <div class="incomplete-code-block">
+                            <div class="code-block-header">
+                                <span class="code-language">@(!string.IsNullOrEmpty(language) ? language : "code")</span>
+                            </div>
+                            <div class="code-loading-area">
+                                <div class="centered-spinner">
+                                    <div class="spinner-container">
+                                        <div class="pulse-spinner"></div>
+                                        <svg class="rotating-spinner" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <circle class="spinner-track" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" opacity="0.25"></circle>
+                                            <circle class="spinner-fill" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="31.416" stroke-dashoffset="23.562" stroke-linecap="round"></circle>
+                                        </svg>
+                                    </div>
+                                    <div class="loading-text">
+                                        <span class="typing-dots">Writing code</span>
+                                        <span class="dots">
+                                            <span class="dot">.</span>
+                                            <span class="dot">.</span>
+                                            <span class="dot">.</span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        @* Render text after the incomplete code block *@
+                        @if (!string.IsNullOrEmpty(afterCode))
+                        {
+                            <MarkdownView ViewModel="@(new MarkdownControl(FormatTextForMarkdown(afterCode)))" />
+                        }
+                    }
+                    else
+                    {
+                        @* Normal markdown rendering for complete text - no formatting to preserve code blocks *@
+                        <MarkdownView ViewModel="@(new MarkdownControl(text))" />
+                    }
 
                     @foreach (var citation in Citations ?? [])
                     {
@@ -38,6 +116,7 @@ else if (Message.Role != ChatRole.User)
                     }
                 </div>
             </div>
+            }
         }
         else if (content is FunctionCallContent fcc)
         {
@@ -115,13 +194,13 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
 
         for (int i = 0; i < lines.Length; i++)
         {
-            var line = lines[i].Trim();
+            var line = lines[i];
 
             // If this line starts with a bullet point
-            if (line.StartsWith("•"))
+            if (line.Trim().StartsWith("•"))
             {
                 // Convert • to - for proper markdown bullet points
-                formattedLines.Add("- " + line.Substring(1).TrimStart());
+                formattedLines.Add("- " + line.Trim().Substring(1).TrimStart());
             }
             else
             {
@@ -129,6 +208,64 @@ page_number='(?<page>\d*)'>(?<quote>.*?)</citation>", RegexOptions.NonBacktracki
             }
         }
         return string.Join("\n", formattedLines);
+    }
+
+    /// <summary>
+    /// Checks if the text contains an incomplete code block and returns the components needed for rendering.
+    /// </summary>
+    private (string beforeCodeBlock, string language, bool isIncomplete, string afterCodeBlock) ParseIncompleteCodeBlock(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return (text, "", false, "");
+
+        // Look for code block start pattern
+        var codeBlockStartPattern = new Regex(@"```(\w*)?");
+        var lines = text.Split('\n');
+        var inCodeBlock = false;
+        var language = "";
+        var codeContent = new StringBuilder();
+        var beforeCodeBlock = new StringBuilder();
+        
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            
+            if (!inCodeBlock)
+            {
+                var startMatch = codeBlockStartPattern.Match(line.Trim());
+                if (startMatch.Success && line.Trim() == startMatch.Value)
+                {
+                    inCodeBlock = true;
+                    language = startMatch.Groups[1].Value;
+                    continue;
+                }
+                
+                if (beforeCodeBlock.Length > 0)
+                    beforeCodeBlock.AppendLine();
+                beforeCodeBlock.Append(line);
+            }
+            else
+            {
+                // We're in a code block
+                if (line.Trim() == "```")
+                {
+                    // Code block is complete - this is handled by normal markdown
+                    return (text, "", false, "");
+                }
+                
+                if (codeContent.Length > 0)
+                    codeContent.AppendLine();
+                codeContent.Append(line);
+            }
+        }
+        
+        // If we're still in a code block at the end, it's incomplete
+        if (inCodeBlock)
+        {
+            return (beforeCodeBlock.ToString(), language, true, "");
+        }
+        
+        return (text, "",  false, "");
     }
 
 }

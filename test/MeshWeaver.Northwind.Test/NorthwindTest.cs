@@ -1,15 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
-using System.Xml.Serialization;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Charting;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Documentation.Model;
 using MeshWeaver.Fixture;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
@@ -157,27 +154,6 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
     }
 
-    [Fact]
-    public void DocumentationTest()
-    {
-        var assembly = typeof(Customer).Assembly;
-        var resourceName = $"{assembly.GetName().Name}.xml";
-        using (var stream = assembly.GetManifestResourceStream(resourceName))
-        {
-            if (stream != null)
-            {
-                // Read the resource stream and process it as needed
-                // For example, you can use StreamReader to read the content
-                using var reader = new StreamReader(stream);
-                var serializer = new XmlSerializer(typeof(Doc));
-                var doc = serializer.Deserialize(reader) as Doc;
-            }
-            else
-            {
-                // Resource not found
-            }
-        }
-    }
 
     [Fact]
     public async Task TopProductsChart()

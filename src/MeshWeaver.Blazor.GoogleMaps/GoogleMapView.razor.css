@@ -1,0 +1,19 @@
+.google-map-container {
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    background: var(--surface-color);
+}
+
+.map-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+}
+
+[data-theme="dark"] .google-map-container {
+    border: 1px solid var(--border-color);
+}

@@ -14,7 +14,7 @@ public record Address(string Type, string Id)
 
     public override int GetHashCode() => HashCode.Combine(Type, Id);
 
-    public static implicit operator string(Address address) => address.ToString();
+    public static implicit operator string?(Address? address) => address?.ToString();
 
     public static implicit operator Address(string address)
     {

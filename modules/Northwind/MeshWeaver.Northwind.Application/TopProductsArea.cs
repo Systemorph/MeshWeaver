@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
@@ -11,8 +12,11 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application
 {
     /// <summary>
-    /// Provides extension methods for adding top products to a layout definition.
+    /// Creates a top products visualization showing the 5 highest-performing products by revenue.
+    /// Displays an interactive horizontal bar chart with data labels and product names,
+    /// automatically sorted from highest to lowest sales performance.
     /// </summary>
+    [Display(GroupName = "Products", Order = 402)]
     public static class TopProductsArea
     {
         /// <summary>
@@ -27,11 +31,14 @@ namespace MeshWeaver.Northwind.Application
         ;
 
         /// <summary>
-        /// Renders the top products view.
+        /// Displays a horizontal bar chart showing the top 5 products ranked by total revenue.
+        /// Features product names as labels with corresponding revenue bars extending horizontally.
+        /// Each bar includes data labels showing exact revenue amounts, and bars are color-coded
+        /// with the highest revenue product appearing at the top. Updates automatically with yearly data.
         /// </summary>
         /// <param name="layoutArea">The layout area host.</param>
         /// <param name="context">The rendering context.</param>
-        /// <returns>An observable sequence of objects representing the rendered top products view.</returns>
+        /// <returns>A horizontal bar chart control with top 5 products and revenue amounts.</returns>
         public static IObservable<UiControl> TopProducts(this LayoutAreaHost layoutArea, RenderingContext context)
             => layoutArea.YearlyNorthwindData()
                 .SelectMany(d =>

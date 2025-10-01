@@ -91,7 +91,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
-    ) where T:UiControl => WithView(
+    ) where T:UiControl? => WithView(
         layout,
         context, 
         Observable.Return<ViewDefinition>((async (x, y, z) => await generator(x, y, z))));
@@ -100,7 +100,7 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
-    ) where T : UiControl => layout.WithView(c => c.Area == area, generator);
+    ) where T : UiControl? => layout.WithView(c => c.Area == area, generator);
     public static LayoutDefinition WithView(this LayoutDefinition layout, Func<RenderingContext, bool> context, ViewDefinition generator) =>
         WithView(
             layout,
@@ -129,7 +129,7 @@ public static class LayoutDefinitionExtensions
         string area,
         IObservable<ViewDefinition<T>> generator,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
-    ) where T:UiControl =>
+    ) where T:UiControl? =>
         layout.WithView(c => c.Area == area, generator)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
         ;
@@ -142,14 +142,29 @@ public static class LayoutDefinitionExtensions
             var method = delgate.Method;
             var doc = method.GetXmlDocsSummary();
             ret = ret.WithDescription(doc);
-            if(method.GetCustomAttribute<DisplayAttribute>() is { } displayAttribute)
+            
+            // Check class-level DisplayAttribute for GroupName and fallback Order
+            var declaringType = method.DeclaringType;
+            if (declaringType?.GetCustomAttribute<DisplayAttribute>() is { } classDisplayAttribute)
             {
-                ret = ret with{Order = displayAttribute.Order};
-                if(displayAttribute.Description is not null)
-                    ret = ret.WithDescription(displayAttribute.Description);
-                if(displayAttribute.Name is not null)
-                    ret = ret.WithTitle(displayAttribute.Name);
+                if (classDisplayAttribute.GroupName is not null)
+                    ret = ret.WithGroup(classDisplayAttribute.GroupName);
+                if (ret.Order is null or 0 && classDisplayAttribute.GetOrder() is not null and not 0)
+                    ret = ret with { Order = classDisplayAttribute.Order };
             }
+            
+            // Check method-level DisplayAttribute (takes precedence)
+            if(method.GetCustomAttribute<DisplayAttribute>() is { } methodDisplayAttribute)
+            {
+                ret = ret with{Order = methodDisplayAttribute.GetOrder() ?? int.MaxValue};
+                if(methodDisplayAttribute.Description is not null)
+                    ret = ret.WithDescription(methodDisplayAttribute.Description);
+                if(methodDisplayAttribute.Name is not null)
+                    ret = ret.WithTitle(methodDisplayAttribute.Name);
+                if(methodDisplayAttribute.GroupName is not null)
+                    ret = ret.WithGroup(methodDisplayAttribute.GroupName);
+            }
+            
             if (method.GetCustomAttribute<BrowsableAttribute>() is { } browsableAtt)
                 ret = ret with{IsInvisible = !browsableAtt.Browsable};
         }
@@ -169,16 +184,16 @@ public static class LayoutDefinitionExtensions
     public static LayoutDefinition WithView(
         this LayoutDefinition layout, 
         string area, 
-        UiControl view,
+        UiControl? view,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
         ) =>
         layout
-            .WithView(c => c.Area == area, view)
+            .WithView(c => c.Area == area, view!)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null));
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
-        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl?>> view,
         LayoutAreaDefinition? areaDefinition = null)
         => layout
             .WithRenderer(context,
@@ -188,11 +203,11 @@ public static class LayoutDefinitionExtensions
 
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
-        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view)
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl?>> view)
         => layout.WithView(area, view, null);
     public static LayoutDefinition WithView(this LayoutDefinition layout,
         string area,
-        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl>> view,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<UiControl?>> view,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition)
         => layout.WithView(c => c.Area == area, view)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
@@ -201,11 +216,11 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        LayoutAreaDefinition? areaDefinition = null) where T:UiControl
+        LayoutAreaDefinition? areaDefinition = null) where T:UiControl?
         => layout
             .WithView(context, 
                 (a, ctx) 
-                    => Observable.Return<UiControl>(view(a, ctx)))
+                    => Observable.Return<UiControl?>(view(a, ctx)))
             .WithAreaDefinition(areaDefinition);
 
     public static LayoutDefinition WithView<T>(
@@ -213,11 +228,11 @@ public static class LayoutDefinitionExtensions
         string area,
         Func<LayoutAreaHost, RenderingContext, T> view,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
-    ) where T : UiControl => layout.WithView(c => c.Area == area, view)
+    ) where T : UiControl? => layout.WithView(c => c.Area == area, view)
         .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 
-    public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl control)
-        => new (store.Update(LayoutAreaReference.Areas, i => i.Update(id, control)), [new EntityUpdate(LayoutAreaReference.Areas, id, control)], null);
+    public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl? control)
+        => new (store.Update(LayoutAreaReference.Areas, i => i.Update(id, control!)), [new EntityUpdate(LayoutAreaReference.Areas, id, control!)], null);
     public static EntityStoreAndUpdates UpdateData(this EntityStore store, string id, object control)
         => new(store.Update(LayoutAreaReference.Data, i => i.Update(id, control)), [new EntityUpdate(LayoutAreaReference.Data, id, control)], null);
 

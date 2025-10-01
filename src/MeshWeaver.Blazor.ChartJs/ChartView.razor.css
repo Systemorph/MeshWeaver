@@ -18,9 +18,30 @@
     padding: 1rem;
     border-radius: 8px;
     min-height: 300px;
+    max-height: 500px;
+    width: 100%;
+    overflow: hidden;
+    resize: both;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .chart-container {
+        padding: 0.5rem;
+        min-height: 250px;
+        max-height: 400px;
+    }
+}
+
+/* Ensure proper aspect ratio maintenance */
+@media (min-width: 769px) {
+    .chart-container {
+        height: 350px;
+    }
 }
 
 canvas {
     width: 100% !important;
     height: 100% !important;
+    max-width: 100%;
 }

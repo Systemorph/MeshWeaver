@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -12,6 +13,7 @@ namespace MeshWeaver.Northwind.Application;
 /// <summary>
 /// Provides methods to add sales comparison with the previous year to a layout.
 /// </summary>
+[Display(GroupName = "Sales", Order = 300)]
 public static class SalesComparisonWIthPreviousYearArea
 {
     /// <summary>
@@ -35,19 +37,24 @@ public static class SalesComparisonWIthPreviousYearArea
     {
         return layoutArea.WithPrevYearNorthwindData()
             .SelectMany(data =>
-                layoutArea.Workspace
+            {
+                var currentYear = data.Max(d => d.OrderYear).ToString();
+                return layoutArea.Workspace
                     .Pivot(data.ToDataCube())
                     .SliceColumnsBy(nameof(Category))
                     .SliceRowsBy(nameof(NorthwindDataCube.OrderYear))
                     .ToBarChart(
                         builder => builder
-                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals("2023") == true))
+                            .WithOptions(o => o.OrderByValueDescending(r => r.Descriptor.Id.ToString()?.Equals(currentYear) == true))
                             .WithChartBuilder(o =>
                                 o.WithDataLabels(d =>
                                     d.WithAnchor(DataLabelsAnchor.End)
                                         .WithAlign(DataLabelsAlign.End))
                                 )
-                    ).Select(x => x.ToControl())
-            );
+                    ).Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Category with Previous Year"))
+                        .WithView(chart.ToControl()));
+
+            });
     }
 }

@@ -72,14 +72,11 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
             }
         };
 
-        var ret = new AgentChatClient(agentChat, Hub.ServiceProvider);
+        var ret = new AgentChatClient(agentChat, agentDefinitions, Hub.ServiceProvider);
 
         // Add ChatPlugin to agents that implement IAgentWithDelegations or are marked as default
         var delegationPlugin = KernelPluginFactory.CreateFromObject(new ChatPlugin(ret), "ChatPlugin");
 
-        // Find the default agent definition
-        var defaultAgentDefinition = agentDefinitions.Values
-            .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
 
         foreach (var agentDefinition in agentDefinitions.Values)
         {

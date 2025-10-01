@@ -1,0 +1,239 @@
+﻿using Microsoft.AspNetCore.Components;
+using Microsoft.JSInterop;
+using Microsoft.Extensions.Logging;
+using MeshWeaver.GoogleMaps;
+using MeshWeaver.Layout;
+using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.Options;
+
+namespace MeshWeaver.Blazor.GoogleMaps;
+
+public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
+{
+    [Inject] private IOptions<GoogleMapsConfiguration> Configuration { get; set; } = null!;
+
+    private string ApiKey => Configuration.Value.ApiKey;
+    private string MapId { get; set; } = null!;
+    private IJSObjectReference? jsModule;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Logger.LogDebug("OnAfterRenderAsync - first render");
+            Logger.LogDebug("API Key: {ApiKeyStatus}", string.IsNullOrEmpty(ApiKey) ? "MISSING" : "Present");
+            
+            try
+            {
+                Logger.LogDebug("Loading JavaScript module...");
+                jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>("import", "./_content/MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.js");
+                Logger.LogDebug("JavaScript module loaded successfully");
+                
+                await InitializeMap();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error in Initializing map");
+            }
+        }
+
+        // Only update markers and circles after first render is complete
+        if (!firstRender)
+        {
+            try
+            {
+                await UpdateMarkers();
+                await UpdateCircles();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error in UpdateMarkers/UpdateCircles");
+            }
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+
+    private async Task InitializeMap()
+    {
+        try
+        {
+            Logger.LogDebug("InitializeMap starting...");
+            
+            if (jsModule == null)
+            {
+                Logger.LogError("JavaScript module not loaded");
+                return;
+            }
+            
+            // Initialize the map (JavaScript will handle Google Maps API loading)
+            Logger.LogDebug("Initializing map with ID: {MapId}", MapId);
+            
+            var mapOptions = GetMapOptions();
+            Logger.LogDebug("Map options: {@MapOptions}", mapOptions);
+            
+            // Pass API key to JavaScript for dynamic loading and register marker click callback
+            await jsModule.InvokeVoidAsync("initializeMap", MapId, mapOptions, ApiKey);
+            
+            // Small delay to let map initialization settle
+            await Task.Delay(200);
+            
+            await jsModule.InvokeVoidAsync("setMarkerClickCallback", MapId, DotNetObjectReference.Create(this));
+            await jsModule.InvokeVoidAsync("setCircleClickCallback", MapId, DotNetObjectReference.Create(this));
+            Logger.LogDebug("Map initialized successfully");
+            
+            // Update markers and circles after map is fully initialized
+            await UpdateMarkers();
+            await UpdateCircles();
+            
+            StateHasChanged();
+            Logger.LogDebug("Map loading complete");
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected during map initialization");
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed during map initialization");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to initialize Google Map");
+        }
+    }
+
+    private async Task UpdateMarkers()
+    {
+        if (string.IsNullOrEmpty(MapId) || ViewModel.Markers == null || jsModule == null || !ViewModel.Markers.Any())
+            return;
+
+        try
+        {
+            // Check if the JavaScript module is still valid before calling
+            var markerConfigs = ViewModel.Markers.Select(m => new
+            {
+                id = m.Id ?? Guid.NewGuid().ToString(),
+                position = new { lat = m.Position.Lat, lng = m.Position.Lng },
+                title = m.Title ?? "",
+                label = m.Label ?? "",
+                draggable = m.Draggable,
+                icon = m.Icon
+            }).ToArray();
+
+            // Add a small delay to ensure map is ready for marker updates
+            await Task.Delay(100); 
+            
+            await jsModule.InvokeVoidAsync("updateMarkers", MapId, markerConfigs);
+            
+            Logger.LogDebug("Successfully updated {MarkerCount} markers for map {MapId}", markerConfigs.Length, MapId);
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected, skipping marker update for map {MapId}", MapId);
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed, skipping marker update for map {MapId}", MapId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to update markers for map {MapId}", MapId);
+        }
+    }
+
+    private async Task UpdateCircles()
+    {
+        if (string.IsNullOrEmpty(MapId) || ViewModel.Circles == null || jsModule == null || !ViewModel.Circles.Any())
+            return;
+
+        try
+        {
+            var circleConfigs = ViewModel.Circles.Select(c => new
+            {
+                id = c.Id ?? Guid.NewGuid().ToString(),
+                center = new { lat = c.Center.Lat, lng = c.Center.Lng },
+                radius = c.Radius,
+                fillColor = c.FillColor ?? "#FF0000",
+                fillOpacity = c.FillOpacity,
+                strokeColor = c.StrokeColor ?? "#FF0000",
+                strokeOpacity = c.StrokeOpacity,
+                strokeWeight = c.StrokeWeight
+            }).ToArray();
+
+            await Task.Delay(100);
+            
+            await jsModule.InvokeVoidAsync("updateCircles", MapId, circleConfigs);
+            
+            Logger.LogDebug("Successfully updated {CircleCount} circles for map {MapId}", circleConfigs.Length, MapId);
+        }
+        catch (JSDisconnectedException)
+        {
+            Logger.LogDebug("JavaScript runtime disconnected, skipping circle update for map {MapId}", MapId);
+        }
+        catch (ObjectDisposedException)
+        {
+            Logger.LogDebug("JavaScript module disposed, skipping circle update for map {MapId}", MapId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to update circles for map {MapId}", MapId);
+        }
+    }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Id, x => x.MapId, (o, curr) =>
+        {
+            if (curr != null)
+                return curr;
+            var toString = o?.ToString();
+            return string.IsNullOrWhiteSpace(toString) ? $"google-map-{Guid.NewGuid().AsString()}" : toString;
+        });
+
+        DataBind(ViewModel.Style, x => x.Style);
+    }
+
+
+
+    private object GetMapOptions()
+    {
+        var controlOptions = ViewModel.Options;
+        
+        return new
+        {
+            zoom = controlOptions?.Zoom ?? 10,
+            center = controlOptions?.Center != null 
+                ? new { lat = controlOptions.Center.Lat, lng = controlOptions.Center.Lng }
+                : new { lat = 0.0, lng = 0.0 },
+            mapTypeId = controlOptions?.MapTypeId switch
+            {
+                "satellite" => "satellite",
+                "hybrid" => "hybrid", 
+                "terrain" => "terrain",
+                _ => "roadmap"
+            },
+            disableDefaultUI = controlOptions?.DisableDefaultUI ?? false,
+            zoomControl = controlOptions?.ZoomControl ?? true,
+            mapTypeControl = controlOptions?.MapTypeControl ?? true,
+            scaleControl = controlOptions?.ScaleControl ?? false,
+            streetViewControl = controlOptions?.StreetViewControl ?? true,
+            rotateControl = controlOptions?.RotateControl ?? false,
+            fullscreenControl = controlOptions?.FullscreenControl ?? false
+        };
+    }
+
+    [JSInvokable]
+    public void OnClicked(string id)
+    {
+        // Post ClickedEvent to the hub with id as payload
+        var clickedEvent = new ClickedEvent(Area, Stream!.StreamId)
+        {
+            Payload = id
+        };
+
+        // Post the event through the Hub
+        Hub.Post(clickedEvent, o => o.WithTarget(Stream.Owner));
+    }
+
+}

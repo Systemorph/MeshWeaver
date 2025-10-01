@@ -35,6 +35,7 @@ public static class JsonSynchronizationStream
                 workspace.ReduceManager.ReduceTo<TReduced>(),
                 config => config
                     .WithClientId(config.Stream.StreamId)
+                    .WithDeferral(d => d.Message is not DataChangedEvent { ChangeType: ChangeType.Full })
             );
 
 

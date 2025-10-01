@@ -2,5 +2,21 @@
 @using MeshWeaver.Blazor.Layouts
 @layout EmptyLayout
 
-<LayoutAreaView ViewModel="@ViewModel" />
+<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
+<PageTitle>@PageTitle</PageTitle>
+<div class="area-page-container @(IsContentReady ? "content-ready" : "content-loading")" data-area-loaded="@(IsContentReady ? "true" : "false")">
+    <CascadingValue Value="@Mode" Name="ThemeMode">
+        <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+    </CascadingValue>
+</div>
 
+<FluentDialogProvider />
+<FluentTooltipProvider />
+<FluentMenuProvider />
+<FluentToastProvider MaxToastCount="3" Timeout="5000" />
+<FluentKeyCodeProvider />
+
+@code
+{
+    private DesignThemeModes Mode;
+}

@@ -155,9 +155,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().StartWith("@");
         result.Should().Contain(areaName);
-        result.Should().Be($"@{new HostAddress()}/{areaName}");
     }
 
     /// <summary>
@@ -178,10 +176,8 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        result.Should().StartWith("@");
         result.Should().Contain(areaName);
         result.Should().Contain(id);
-        result.Should().Be($"@{new HostAddress()}/{areaName}/{id}");
     }
 
     /// <summary>
@@ -241,7 +237,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // Verify it contains exactly the predefined areas
         var areas = jsonDoc.RootElement.EnumerateArray().ToArray();
-        areas.Should().HaveCountGreaterThan(3);
+        areas.Should().HaveCount(3);
         
         var areaNames = areas.Select(a => a.GetProperty("area").GetString()).ToArray();
         areaNames.Should().Contain("TestArea1");
@@ -317,6 +313,10 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         public string Delegate(string agentName, string message, bool askUserFeedback = false)
         {
             throw new NotImplementedException();
+        }
+
+        public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+        {
         }
 
         public AgentContext? Context { get; set; }

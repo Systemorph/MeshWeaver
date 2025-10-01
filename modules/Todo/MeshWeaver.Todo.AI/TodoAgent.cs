@@ -3,6 +3,7 @@ using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
 using Microsoft.SemanticKernel;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Todo.AI;
@@ -11,10 +12,11 @@ namespace MeshWeaver.Todo.AI;
 /// Todo data agent that provides access to Todo domain data and collections
 /// </summary>
 [ExposedInNavigator]
-public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
+public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
 {
     private static readonly ApplicationAddress TodoApplicationAddress = new("Todo");
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
+    private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
     public string Name => "TodoAgent";
     public string Description => "Handles all questions and actions related to todo items, categories, and task management. Provides access to todo data, allows creation, categorization, and management of todo items.";
     public string Instructions =>
@@ -37,13 +39,26 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
 
     IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
     {
-        var data = new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress);
-        yield return data.CreateKernelPlugin();
+        yield return new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress).CreateKernelPlugin();
+        yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap, _ => TodoApplicationAddress).CreateKernelPlugin();
     }
 
     async Task IInitializableAgent.InitializeAsync()
     {
-        var response = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(TodoApplicationAddress));
-        typeDefinitionMap = response.Message.Types.ToDictionary(x => x.Name);
+        var typesResponse = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(TodoApplicationAddress));
+        typeDefinitionMap = typesResponse.Message.Types.ToDictionary(x => x.Name);
+        var layoutAreaResponse = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(TodoApplicationAddress));
+        layoutAreaMap = layoutAreaResponse.Message.Areas.ToDictionary(x => x.Area);
+    }
+
+    public bool Matches(AgentContext? context)
+    {
+        if (context?.Address == null)
+            return false;
+
+        // Match if the address contains "Todo" or starts with the Todo address
+        var contextAddress = context.Address.ToString();
+        return contextAddress.Contains("Todo", StringComparison.OrdinalIgnoreCase) ||
+               contextAddress.StartsWith(TodoApplicationAddress.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 }

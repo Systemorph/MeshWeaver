@@ -26,7 +26,7 @@ public record ActivityLog(string Category)
             End = DateTime.UtcNow,
         };
 
-    public ActivityLog Finish(int version, ActivityStatus? status) =>
+    public ActivityLog Finish(int version, ActivityStatus? _) =>
         this with
         {
             Status = GetFinalStatus(),

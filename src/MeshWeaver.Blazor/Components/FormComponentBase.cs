@@ -47,7 +47,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     protected void SetValue(TValue? v)
         => this.data = v;
 
-    private static readonly int DebounceWindow = 20;
+    private const int DebounceWindow = 20;
     protected override void BindData()
     {
         base.BindData();
@@ -69,10 +69,9 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             .Debounce(TimeSpan.FromMilliseconds(DebounceWindow))
             .DistinctUntilChanged()
             .Skip(1)
-            .Subscribe(x => { if (Pointer is not null) UpdatePointer(ConvertToData(x)!, Pointer); })
+            .Subscribe(x => { if (DataPointer is not null) UpdatePointer(ConvertToData(x)!, DataPointer); })
         );
         DataBind(ViewModel.Data, x => x.data, ConversionToValue!);
-        Pointer = ViewModel.Data as JsonPointerReference;
     }
 
     protected virtual TValue? ConversionToValue(object v, TValue defaultValue)
@@ -150,6 +149,5 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         return !Equals(data, v);
     }
 
-    protected JsonPointerReference? Pointer { get; set; }
 
 }

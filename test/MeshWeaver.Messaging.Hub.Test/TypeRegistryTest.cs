@@ -1,4 +1,5 @@
-﻿using System.Threading.Tasks;
+﻿using System.Collections.Generic;
+using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
@@ -17,7 +18,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
 
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
-    ) => configuration.WithTypes(typeof(GenericRequest<>));
+    ) => configuration.WithTypes(typeof(GenericRequest<>), typeof(List<>));
 
     [Fact]
     public void GenericTypes()
@@ -31,5 +32,30 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         canMap = typeRegistry.TryGetType(typeName, out var mappedType);
         canMap.Should().BeTrue();
         mappedType!.Type.Should().Be(typeof(GenericRequest<int>));
+    }
+
+    [Fact]
+    public void GenericTypesWithNullableArguments()
+    {
+        var host = GetHost();
+        var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
+        
+        // Test List<int?>
+        var canMap = typeRegistry.TryGetCollectionName(typeof(List<int?>), out var typeName);
+        canMap.Should().BeTrue();
+        typeName.Should().Be("System.Collections.Generic.List`1[Int32?]");
+
+        canMap = typeRegistry.TryGetType(typeName, out var mappedType);
+        canMap.Should().BeTrue();
+        mappedType!.Type.Should().Be(typeof(List<int?>));
+        
+        // Test GenericRequest<int?>
+        canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int?>), out typeName);
+        canMap.Should().BeTrue();
+        typeName.Should().Be("MeshWeaver.Messaging.Hub.Test.TypeRegistryTest.GenericRequest`1[Int32?]");
+
+        canMap = typeRegistry.TryGetType(typeName, out mappedType);
+        canMap.Should().BeTrue();
+        mappedType!.Type.Should().Be(typeof(GenericRequest<int?>));
     }
 }

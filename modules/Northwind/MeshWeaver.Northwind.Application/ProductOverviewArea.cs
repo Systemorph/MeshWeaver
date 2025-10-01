@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -8,8 +10,11 @@ using MeshWeaver.Northwind.Domain;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and render the product overview area.
+/// Creates a product overview display showing detailed product performance metrics in a searchable data grid.
+/// Features product details including names, categories, unit prices, quantities sold, discounts given, and total revenue.
+/// Includes toolbar filtering by category and displays products ranked by total sales amount.
 /// </summary>
+[Display(GroupName = "Products", Order = 400)]
 public static class ProductOverviewArea
 {
     /// <summary>
@@ -24,11 +29,14 @@ public static class ProductOverviewArea
     ;
 
     /// <summary>
-    /// Generates the product overview layout.
+    /// Renders a complete product overview interface with category filtering toolbar and product performance grid.
+    /// The top section contains category selection controls, while the bottom displays a sortable data grid
+    /// showing product names, categories, unit prices, units sold, discount amounts, and total revenue.
+    /// Products are automatically sorted by total revenue in descending order.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An object representing the product overview layout.</returns>
+    /// <returns>A stacked layout with toolbar controls and product data grid.</returns>
     public static UiControl ProductOverview(this LayoutAreaHost layoutArea, RenderingContext context) =>
         Controls.Stack
             .WithView(ProductOverviewToolbarArea.ProductOverviewToolbar)

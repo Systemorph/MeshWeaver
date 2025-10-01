@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,11 +15,16 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
-public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvider) : IAgentChat
+public class AgentChatClient(
+    AgentChat agentChat,
+    IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
+    IServiceProvider serviceProvider) : IAgentChat
 {
     private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly DelegationState delegationState = new();
+    private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentRunningAgent;
+    private string? lastContextAddress;
 
     public AgentContext? Context { get; private set; }
 
@@ -43,12 +49,24 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 // Track the current running agent
                 currentRunningAgent = content.AuthorName ?? "Assistant";
 
+
                 var message = new ChatMessage(ChatRole.Assistant, [aiContent])
                 {
                     AuthorName = new(content.AuthorName ?? "Assistant")
                 };
 
                 yield return message;
+
+                // Check for any queued layout area content and yield as messages
+                while (queuedLayoutAreaContent.Count > 0)
+                {
+                    var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+                    var layoutAreaMessage = new ChatMessage(ChatRole.Assistant, [layoutAreaContent])
+                    {
+                        AuthorName = new(currentRunningAgent ?? "Assistant")
+                    };
+                    yield return layoutAreaMessage;
+                }
             }
 
             // Only check for delegations if we actually got content from an agent
@@ -65,16 +83,18 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
-                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
-                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
+                    var delegationContent = new ChatDelegationContent(
+                        delegationInstruction.DelegatingAgent,
+                        delegationInstruction.AgentName,
+                        delegationInstruction.Message,
+                        delegationInstruction.Type == DelegationType.ReplyTo);
 
-                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
+                    var delegationChatMessage = new ChatMessage(ChatRole.Assistant, [delegationContent])
                     {
                         AuthorName = new(delegationInstruction.DelegatingAgent)
                     };
 
-                    yield return delegationGuiMessage;
+                    yield return delegationChatMessage;
 
                     // Add delegation message and continue the loop
                     agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
@@ -119,20 +139,99 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     private ChatMessage ProcessMessageWithContext(ChatMessage message)
     {
-        if (Context == null || message.Role != ChatRole.User)
+        if (message.Role != ChatRole.User)
             return message;
 
         // Extract original text content
         var originalText = ExtractTextFromMessage(message);
 
-        // Create new message with context template
-        var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
-        var messageWithContext = $"{originalText}\n<Context>\n{contextJson}\n</Context>";
+        // Determine the selected agent
+        var selectedAgent = DetermineSelectedAgent(originalText);
+
+        // Update the current running agent if we're routing to a specific agent
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            currentRunningAgent = selectedAgent;
+        }
+
+        // Format the final message with context
+        var messageWithContext = FormatMessageWithContext(originalText, selectedAgent);
+
+        // Always update the last context address after processing
+        lastContextAddress = Context?.Address;
 
         return new ChatMessage(ChatRole.User, [new TextContent(messageWithContext)])
         {
             AuthorName = message.AuthorName
         };
+    }
+
+    private string? DetermineSelectedAgent(string originalText)
+    {
+        // Check for explicit agent targeting
+        if (originalText.TrimStart().StartsWith("@"))
+        {
+            // Validate that it's actually targeting a valid agent
+            var trimmedText = originalText.TrimStart();
+            var spaceIndex = trimmedText.IndexOf(' ');
+            var agentName = spaceIndex > 0 ? trimmedText.Substring(1, spaceIndex - 1) : trimmedText.Substring(1);
+
+            var targetAgent = agentChat.Agents.FirstOrDefault(a => a.Name is not null && a.Name.Equals(agentName, StringComparison.OrdinalIgnoreCase));
+            if (targetAgent != null)
+            {
+                // Valid agent targeted - track it and don't override the message
+                currentRunningAgent = targetAgent.Name;
+                return null; // Don't add another agent directive
+            }
+            // If not a valid agent name, continue with normal agent selection logic
+        }
+
+        // Check if we should trigger agent reselection
+        var currentAddress = Context?.Address;
+        var shouldReselectAgent = ShouldReselectAgent(currentAddress);
+
+        if (shouldReselectAgent)
+        {
+            // Trigger agent selection logic
+            return SelectAgentForContext(Context);
+        }
+        else if (!string.IsNullOrEmpty(currentRunningAgent))
+        {
+            // Continue with current agent
+            return currentRunningAgent;
+        }
+
+        return null; // Use default routing
+    }
+
+    private bool ShouldReselectAgent(string? currentAddress)
+    {
+        // If the address actually changed, reselect agent
+        if (lastContextAddress != currentAddress)
+            return true;
+
+        // If we don't have a current running agent, try to select one
+        if (string.IsNullOrEmpty(currentRunningAgent))
+            return true;
+
+        return false; // Keep current agent
+    }
+
+    private string FormatMessageWithContext(string originalText, string? selectedAgent)
+    {
+        var contextJson = JsonSerializer.Serialize(Context!, hub.JsonSerializerOptions);
+
+        if (!string.IsNullOrEmpty(selectedAgent))
+        {
+            // Route to the selected agent
+            var agentDirective = $"@{selectedAgent} {originalText}";
+            return $"{agentDirective}\n<Context>\n{contextJson}\n</Context>";
+        }
+        else
+        {
+            // Use default routing or user-specified agent targeting
+            return $"{originalText}\n<Context>\n{contextJson}\n</Context>";
+        }
     }
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
@@ -161,6 +260,16 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 yield return converted;
             }
 
+            // Check for any queued layout area content and yield as response updates
+            while (queuedLayoutAreaContent.Count > 0)
+            {
+                var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [layoutAreaContent])
+                {
+                    AuthorName = currentRunningAgent ?? "Assistant"
+                };
+            }
+
             // Only check for delegations if we actually got content from an agent
             if (!hasContent)
             {
@@ -175,16 +284,16 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
                 if (delegationMessage != null && delegationInstruction != null)
                 {
                     // Create and yield delegation message for the GUI
-                    var delegationDisplayMessage = delegationInstruction.Type == DelegationType.ReplyTo
-                        ? $"Requesting user feedback before delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}"
-                        : $"Delegating to @{delegationInstruction.AgentName}: {delegationInstruction.Message}";
+                    var delegationContent = new ChatDelegationContent(
+                        delegationInstruction.DelegatingAgent,
+                        delegationInstruction.AgentName,
+                        delegationInstruction.Message,
+                        delegationInstruction.Type == DelegationType.ReplyTo);
 
-                    var delegationGuiMessage = new ChatMessage(ChatRole.Assistant, [new TextContent(delegationDisplayMessage)])
+                    yield return new ChatResponseUpdate(ChatRole.Assistant, [delegationContent])
                     {
-                        AuthorName = new(delegationInstruction.DelegatingAgent)
+                        AuthorName = delegationInstruction.DelegatingAgent
                     };
-
-                    yield return ConvertToStreamingUpdate(delegationGuiMessage);
 
                     // Add delegation message and continue the loop
                     agentChat.AddChatMessage(ConvertToAgentChat(ProcessMessageWithContext(delegationMessage)));
@@ -210,7 +319,13 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
 
     public Task ResumeAsync(ChatConversation conversation)
     {
-        agentChat.AddChatMessages(conversation.Messages.Select(ConvertToAgentChat).ToArray());
+        // Filter out UI-specific content that should not be passed to agents
+        var messagesToResume = conversation.Messages
+            .Where(m => !m.Contents.Any(c => c is ChatLayoutAreaContent or ChatDelegationContent))
+            .Select(ConvertToAgentChat)
+            .ToArray();
+
+        agentChat.AddChatMessages(messagesToResume);
         return Task.CompletedTask;
     }
 
@@ -244,6 +359,13 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
             return $"Delegation to {agentName} scheduled. It will be processed after you return.";
         }
     }
+
+    public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+    {
+        var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
+        queuedLayoutAreaContent.Enqueue(layoutAreaContent);
+    }
+
     private ChatMessageContent ConvertToAgentChat(ChatMessage message)
     {
         ChatMessageContentItemCollection collection = new();
@@ -290,14 +412,24 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
     {
         return content switch
         {
-            StreamingChatMessageContent chatMessage => new ChatResponseUpdate(ChatRole.Assistant, chatMessage.Content ?? string.Empty) { AuthorName = chatMessage.AuthorName },
-            StreamingTextContent text => new ChatResponseUpdate(ChatRole.Assistant, text.Text ?? string.Empty),
+            StreamingChatMessageContent chatMessage => ProcessStreamingText(chatMessage.Content ?? string.Empty, chatMessage.AuthorName),
+            StreamingTextContent text => ProcessStreamingText(text.Text ?? string.Empty),
             StreamingFunctionCallUpdateContent functionContent => new ChatResponseUpdate(
                 ChatRole.Assistant,
                 [new Microsoft.Extensions.AI.FunctionCallContent(functionContent.CallId!, functionContent.Name!,
                     string.IsNullOrEmpty(functionContent.Arguments) ? null :
                     JsonSerializer.Deserialize<IDictionary<string, object?>>(functionContent.Arguments))]),
             _ => null
+        };
+    }
+
+    private ChatResponseUpdate ProcessStreamingText(string text, string? authorName = null)
+    {
+        // For now, just pass through the text directly
+        // The UI will handle code block detection and rendering
+        return new ChatResponseUpdate(ChatRole.Assistant, text)
+        {
+            AuthorName = authorName
         };
     }
 
@@ -326,6 +458,42 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         }
         return textBuilder.ToString();
     }
+
+    /// <summary>
+    /// Selects the appropriate agent based on context changes and agent capabilities.
+    /// </summary>
+    private string? SelectAgentForContext(AgentContext? newContext)
+    {
+        // If no context, use current agent or default
+        if (newContext is null)
+            return currentRunningAgent;
+
+
+        if (currentRunningAgent is not null)
+        {
+            var currentAgent = agentDefinitions.GetValueOrDefault(currentRunningAgent);
+
+            // Check if current agent implements IAgentWithContext and still matches
+            if (currentAgent is IAgentWithContext currentContextAgent && !currentContextAgent.Matches(newContext))
+                currentRunningAgent = null; // current agent not applicable.
+
+            if (currentRunningAgent is not null)
+                return currentRunningAgent;
+        }
+
+        // Find an agent that matches the new context
+        var matchingAgent = agentDefinitions
+            .Values.OfType<IAgentWithContext>()
+            .FirstOrDefault(a => a.Matches(newContext));
+
+        if (matchingAgent is not null)
+            return matchingAgent.Name;
+
+
+        // Default to null (which will use default routing)
+        return currentRunningAgent;
+    }
+
 
     /// <summary>
     /// Manages the state for delegation scenarios within this chat client.
@@ -451,5 +619,6 @@ public class AgentChatClient(AgentChat agentChat, IServiceProvider serviceProvid
         /// </summary>
         ReplyTo
     }
+
 
 }

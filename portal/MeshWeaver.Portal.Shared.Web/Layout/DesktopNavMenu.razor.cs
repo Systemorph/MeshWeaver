@@ -6,12 +6,25 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular;
 using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
-using Size20 = Microsoft.FluentUI.AspNetCore.Components.Icons.Filled.Size20;
 
 namespace MeshWeaver.Portal.Shared.Web.Layout;
 
 public partial class DesktopNavMenu : ComponentBase
 {
+    public static Icon TodoArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.TodoArticle();
+
+    public static Icon NorthwindArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindArticle();
+
+    public static Icon DocumentationArticleIcon(bool active = false) =>
+        active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticleActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.DocumentationArticle();
     public static Icon ArticlesIcon(bool active = false)
         => active
             ? new Icons.Filled.Size24.Book()
@@ -49,6 +62,23 @@ public partial class DesktopNavMenu : ComponentBase
 
     public static Icon NorthwindLayoutAreaIcon(bool active = false)
         => active
-            ? new Icons.Filled.Size24.ShoppingBag()
-            : new Icons.Regular.Size24.ShoppingBag();
+            ? new Icons.Filled.Size24.AppGeneric()
+            : new Icons.Regular.Size24.AppGeneric();
+
+    public static Icon NorthwindIcon(bool active = false)
+    {
+        return active
+            ? new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.NorthwindActive()
+            : new Portal.Shared.Web.Infrastructure.PortalIcons.Size24.Northwind();
+    }
+
+    public static Icon BlogIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Book()
+            : new Size24.Book();
+
+    public static Icon NorthwindArticlesIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.News()
+            : new Icons.Regular.Size24.News();
 }

@@ -21,7 +21,7 @@ namespace MeshWeaver.Data.Persistence
                 InitializePartitions = InitializePartitions.Concat(partitions).ToArray()
             };
 
-        private object[] InitializePartitions { get; init; } = Array.Empty<object>();
+        private object[] InitializePartitions { get; init; } = [];
 
 
         protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
@@ -36,6 +36,7 @@ namespace MeshWeaver.Data.Persistence
             var stream = Workspace.GetRemoteStream(partition, partitionedReference);
             return stream;
         }
+
 
         public override void Initialize()
         {

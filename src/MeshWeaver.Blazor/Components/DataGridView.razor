@@ -8,8 +8,16 @@
                         Virtualize="@virtualize"
                         ItemSize="@itemSize"
                         ResizableColumns="@resizableColumns"
-                        GenerateHeader="GenerateHeaderOption.Sticky"
+                        GenerateHeader="@GetGenerateHeaderOption()"
+                        GridTemplateColumns="@gridTemplateColumns"
+                        Loading="@loading"
+                        ShowHover="@showHover"
                         Pagination="@Pagination"
+                        AutoFit="@autoFit"
+                        AutoFocus="@autoFocus"
+                        Class="@Class"
+                        AutoItemsPerPage="@autoItemsPerPage"
+                        OnCellClick="@OnCellClick"
                         Style="@Style">
             @foreach (var column in ViewModel.Columns)
             {
@@ -19,7 +27,10 @@
                 }
                 else if(column is TemplateColumnControl templateColumn)
                 {
-                    <TemplateColumn TGridItem="JsonObject">
+                    <TemplateColumn TGridItem="JsonObject" 
+                                    Title="@GetTemplateColumnTitle(templateColumn)"
+                                    Width="@GetTemplateColumnWidth(templateColumn)"
+                                    Align="@GetTemplateColumnAlign(templateColumn)">
                         <CascadingValue Name="Context" Value="@context">
                             <DispatchView ViewModel="@templateColumn.Template" Stream="@Stream" Area="@Area"></DispatchView>
                         </CascadingValue>
@@ -27,7 +38,7 @@
                 }
                 else
                 {
-                    throw new NotImplementedException();
+                    throw new NotImplementedException($"Column type {column.GetType().Name} is not supported.");
                 }
             }
         </FluentDataGrid>
@@ -35,9 +46,26 @@
 </div>
 
 <div class="paginator">
-    @if (Pagination.TotalItemCount.HasValue && Pagination.TotalItemCount > Pagination.ItemsPerPage)
+    @if (Pagination.TotalItemCount.HasValue && (Pagination.TotalItemCount > Pagination.ItemsPerPage || showPageSizeSelector))
     {
-        <FluentPaginator State="@Pagination"/>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">   
+			@if (showPageSizeSelector)
+			{
+				<div style="display: flex; align-items: center; gap: 0.5rem;">
+					<FluentLabel>Items per page:</FluentLabel>
+					<FluentSelect TOption="string"
+									Value="@itemsPerPage.ToString()"
+									ValueChanged="@(async (string value) => await OnPageSizeChanged(int.Parse(value)))"
+									Width="80px">
+						@foreach (var size in pageSizeOptions)
+						{
+							<FluentOption TOption="string" Value="@size.ToString()">@size</FluentOption>
+						}
+					</FluentSelect>
+				</div>
+			}
+			<FluentPaginator State="@Pagination" />
+		</div>
     }
 </div>
 

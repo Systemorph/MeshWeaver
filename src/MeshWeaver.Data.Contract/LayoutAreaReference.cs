@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Collections.Immutable;
+using System.Text.Json;
 using Json.Pointer;
 using MeshWeaver.Messaging;
 
@@ -7,11 +8,53 @@ namespace MeshWeaver.Data;
 /// <summary>
 /// Provides methods and constants for working with layout area references.
 /// </summary>
-public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
+public record LayoutAreaReference : WorkspaceReference<EntityStore>
 {
-    public object? Id { get; init; }
-    public string Layout { get; init; } = null!;
+    public LayoutAreaReference(string area)
+    {
+        Area = area;
+        parameters = new(ParseParameters);
+    }
 
+    private IReadOnlyDictionary<string, string?> ParseParameters()
+    {
+        if (Id is null)
+            return ImmutableDictionary<string, string?>.Empty;
+
+        var parts = Id.ToString()!.Split('?').Skip(1).SelectMany(x => x.Split('&', StringSplitOptions.RemoveEmptyEntries)).ToArray();
+        if (parts.Length == 0)
+            return ImmutableDictionary<string, string?>.Empty;
+
+        return parts.Select(p =>
+            {
+                var split = p.Split('=');
+                if (split.Length == 1)
+                    return new KeyValuePair<string, string?>(Uri.UnescapeDataString(split[0]), null);
+                if (split.Length == 2)
+                    return new KeyValuePair<string, string?>(Uri.UnescapeDataString(split[0]),
+                        Uri.UnescapeDataString(split[1]));
+                throw new InvalidOperationException($"Invalid parameter format: {p}");
+            })
+            .ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Name of the layout area.
+    /// </summary>
+    public string Area { get; init; }
+    /// <summary>
+    /// Id of the layout area. Can contain optional parameters after a ? in URL format.
+    /// </summary>
+    public object? Id { get; init; }
+
+    /// <summary>
+    /// Can specify a separate layout.
+    /// </summary>
+    public string? Layout { get; init; }
+
+    /// <summary>
+    /// Constant for the data area.
+    /// </summary>
     public const string Data = "data";
 
     /// <summary>
@@ -78,5 +121,32 @@ public record LayoutAreaReference(string Area) : WorkspaceReference<EntityStore>
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
         return ret;
 
+    }
+
+    private readonly Lazy<IReadOnlyDictionary<string, string?>> parameters = new();
+    public string? GetParameterValue(string name)
+    {
+        return parameters.Value.GetValueOrDefault(name);
+    }
+
+    public bool HasParameter(string name) => parameters.Value.ContainsKey(name);
+
+    // Override the generated Equals and GetHashCode to exclude the parameters field
+    public virtual bool Equals(LayoutAreaReference? other)
+    {
+        if (ReferenceEquals(null, other)) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return string.Equals(Area, other.Area, StringComparison.Ordinal) &&
+               Equals(Id, other.Id) &&
+               string.Equals(Layout, other.Layout, StringComparison.Ordinal);
+    }
+
+    public override int GetHashCode()
+    {
+        return HashCode.Combine(
+            Area ?? string.Empty,
+            Id ?? string.Empty,
+            Layout ?? string.Empty
+        );
     }
 }

@@ -5,11 +5,11 @@ namespace MeshWeaver.GridModel
     {
         public static string AutoSizeColumns = @"event => {
                 var allColumnIds = [];
-                event.columnApi.getAllGridColumns().forEach(function (column) {
-                allColumnIds.push(column.colId);
+                event.api.getAllColumns().forEach(function (column) {
+                    allColumnIds.push(column.getColId());
                 });
-
-                event.columnApi.autoSizeColumns(allColumnIds);
+                
+                event.api.autoSizeColumns(allColumnIds, false);
         }";
 
         public static string DefaultValueFormatter = "typeof(value) == 'number' ? new Intl.NumberFormat([], { maximumFractionDigits: 2 }).format(value) : value";

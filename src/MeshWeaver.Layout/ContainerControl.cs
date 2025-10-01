@@ -95,15 +95,15 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         WithView(view, opt => opt.WithId(GetAutoName()));
     public TControl WithView(UiControl? view, string area) =>
         WithView(view, opt => opt.WithId(area));
-    public TControl WithView<T>(ViewDefinition<T> viewDefinition) where T : UiControl =>
+    public TControl WithView<T>(ViewDefinition<T> viewDefinition) where T : UiControl? =>
         WithView(Observable.Return(viewDefinition), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, string area) where T : UiControl =>
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, string area) where T : UiControl? =>
         WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl =>
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl? =>
         WithView((h, c, _) => viewDefinition.Invoke(h, c), options);
 
 
-    public TControl WithView<T>(IObservable<ViewDefinition<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl
+    public TControl WithView<T>(IObservable<ViewDefinition<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options) where T : UiControl?
     {
         var area = Evaluate(options);
         return This with
@@ -142,9 +142,9 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
 
     public TControl WithView(IObservable<ViewDefinition> viewDefinition, string area) =>
         WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView(IObservable<UiControl> viewDefinition) =>
+    public TControl WithView(IObservable<UiControl?> viewDefinition) =>
         WithView(viewDefinition, x => x);
-    public TControl WithView(IObservable<UiControl> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
+    public TControl WithView(IObservable<UiControl?> viewDefinition, Func<NamedAreaControl, NamedAreaControl> options)
     {
         var area = Evaluate(options);
         return This with
@@ -159,22 +159,22 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         };
     }
 
-    public TControl WithView(IObservable<UiControl> viewDefinition, string area) =>
+    public TControl WithView(IObservable<UiControl?> viewDefinition, string area) =>
         WithView(viewDefinition, control => control.WithId(area));
     public TControl WithView(IObservable<ViewDefinition> viewDefinition)
         => WithView(viewDefinition, x => x);
 
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, T> viewDefinition) where T : UiControl?
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options = null) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options = null) where T : UiControl?
         => WithView(Observable.Return((ViewDefinition)(async (h, c, ct) => await viewDefinition.Invoke(h, c, ct))), options ?? (x => x));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition) where T : UiControl?
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
-    public TControl WithView<T>(ViewStream<T> viewDefinition) where T : UiControl
+    public TControl WithView<T>(ViewStream<T> viewDefinition) where T : UiControl?
         => WithView(viewDefinition, x => x);
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl?
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), options);
-    public TControl WithView<T>(ViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl
+    public TControl WithView<T>(ViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl?
     {
         var area = Evaluate(options);
 
@@ -190,23 +190,23 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         };
     }
 
-    public TControl WithView<T>(ViewStream<T> viewDefinition, string area) where T : UiControl
+    public TControl WithView<T>(ViewStream<T> viewDefinition, string area) where T : UiControl?
         => WithView(viewDefinition, control => control.WithId(area));
 
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options)
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl?> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options)
         => WithView((la, ctx, s) => Observable.Return(viewDefinition.Invoke(la, ctx, s)), options);
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl> viewDefinition, string area)
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl?> viewDefinition, string area)
         => WithView(viewDefinition, control => control.WithId(area));
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, string area) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, EntityStore, IObservable<T>> viewDefinition, string area) where T : UiControl?
         => This with
         {
             Areas = Areas.Add(new(null!) { Id = area ?? GetAutoName() }),
             Views = Views.Add(viewDefinition),
             Renderers = Renderers.Add((a, ctx, s) => a.RenderArea(ctx, viewDefinition.Invoke(a, ctx, s), s))
         };
-    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, string area) where T : UiControl
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, string area) where T : UiControl?
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), control => control.WithId(area));
-    public TControl WithView(Func<LayoutAreaHost, RenderingContext, UiControl> viewDefinition)
+    public TControl WithView(Func<LayoutAreaHost, RenderingContext, UiControl?> viewDefinition)
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
 
     protected override EntityStoreAndUpdates Render(LayoutAreaHost host, RenderingContext context, EntityStore store) =>

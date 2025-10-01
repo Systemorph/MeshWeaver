@@ -48,6 +48,14 @@ public partial class MarkdownView
                 case HtmlTextNode text:
                     builder.AddMarkupContent(1, text.Text);
                     break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("layout-area-error"):
+                    // Render layout area error messages as styled div
+                    builder.OpenElement(1, "div");
+                    builder.AddAttribute(2, "class", "layout-area-error");
+                    builder.AddAttribute(3, "style", node.GetAttributeValue("style", ""));
+                    builder.AddMarkupContent(4, node.InnerHtml);
+                    builder.CloseElement();
+                    break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.LayoutArea):
                     var address = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Address}", null);
                     var area = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.Area}", null);

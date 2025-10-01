@@ -8,7 +8,7 @@
     <PageTitle>@PageTitle</PageTitle>
 }
 
-@if(MetaAttributes is not null)
+@if (MetaAttributes is not null)
 {
     <HeadContent>
         @foreach (var kvp in @MetaAttributes)
@@ -20,9 +20,7 @@
 
 @if (ShowProgress && RootControl == null)
 {
-    <FluentStack 
-        HorizontalAlignment="HorizontalAlignment.Center" 
-        VerticalAlignment="VerticalAlignment.Center" 
+    <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
         Orientation="Orientation.Vertical">
         <h3>@ProgressMessage</h3>
         <FluentProgressRing style="width: 102px; height: 102px;" />
@@ -31,6 +29,14 @@
 @if (@RootControl != null)
 {
     <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Area" />
+
+    @* Signal for thumbnail generator when LayoutAreas catalog has loaded *@
+    @if (Area.ToString() == "LayoutAreas")
+    {
+        <script>
+            // Signal that the LayoutAreas catalog has finished loading
+            document.body.setAttribute('data-catalog-loaded', 'true');
+            console.log('LayoutAreas catalog content loaded via SignalR');
+        </script>
+    }
 }
-
-

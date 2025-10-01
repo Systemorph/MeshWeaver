@@ -1,8 +1,6 @@
-﻿using Markdig.Helpers;
-using Markdig.Renderers;
+﻿using Markdig.Renderers;
 using Markdig.Renderers.Html;
 using Markdig.Syntax;
-using MeshWeaver.Kernel;
 
 namespace MeshWeaver.Markdown;
 
@@ -21,6 +19,33 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
             base.Write(renderer, obj);
             return;
         }
+        fenced.Initialize();
+
+        var args = fenced.Args;
+        if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
+        {
+            renderer.Write("<div class=\"code-content\">");
+            renderer.Write($"<pre><code class='language-{fenced.Info}'>");
+            renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
+
+            renderer.WriteLeafRawLines(obj, true, true);
+
+            renderer.WriteLine("```");
+            renderer.Write("</code></pre>");
+            renderer.Write("</div>");
+        }
+        else if (args.TryGetValue(ShowCode, out var showCode) && showCode is null ||
+                 (bool.TryParse(showCode, out var sc) && sc))
+        {
+            renderer.Write("<div class=\"code-content\">");
+            base.Write(renderer, obj);
+            renderer.Write("</div>");
+        }
+
+        if (fenced.SubmitCode is not null)
+            renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null));
+
+        renderer.EnsureLine();
 
         if (string.IsNullOrWhiteSpace(fenced.Arguments))
         {
@@ -36,35 +61,29 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
                 base.Write(renderer, obj);
             return;
         }
-        fenced.Initialize();
+        
 
-        renderer.EnsureLine();
-        var args = fenced.Args;
-        if (args.TryGetValue(ShowHeader, out var showHeader) && showHeader is null || bool.TryParse(showHeader, out var sh) && sh)
+        // Handle layout blocks separately from executable code blocks
+        if (fenced.Info == "layout")
         {
-            renderer.Write("<div class=\"code-content\">");
-            renderer.Write("<pre><code class='language-csharp'>");
             renderer.EnsureLine();
-            renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
-
-            renderer.WriteLeafRawLines(obj, true, true);
-
-            renderer.WriteLine("```");
-            renderer.Write("</code></pre>");
-            renderer.WriteLine("<div class=\"copy-to-clipboard\"></div>");
-            renderer.Write("</div>");
+            
+            if (fenced.LayoutAreaComponent is not null)
+            {
+                renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(fenced.LayoutAreaComponent.Address, fenced.LayoutAreaComponent.Area, fenced.LayoutAreaComponent.Id));
+            }
+            else if (!string.IsNullOrEmpty(fenced.LayoutAreaError))
+            {
+                // Render error message as a styled div
+                renderer.Write("<div class=\"layout-area-error\" style=\"border: 1px solid #e74c3c; background-color: #fdf2f2; color: #c0392b; padding: 12px; border-radius: 4px; margin: 8px 0;\">");
+                renderer.Write("<strong>Layout Area Error:</strong> ");
+                renderer.WriteEscape(fenced.LayoutAreaError);
+                renderer.Write("</div>");
+            }
+            
+            renderer.EnsureLine();
+            return;
         }
-        else if (args.TryGetValue(ShowCode, out var showCode) && showCode is null ||
-                 (bool.TryParse(showCode, out var sc) && sc))
-        {
-            renderer.Write("<div class=\"code-content\">");
-            base.Write(renderer, obj);
-            renderer.WriteLine("<div class=\"copy-to-clipboard\"></div>");
-            renderer.Write("</div>");
-        }
-
-        if (fenced.SubmitCode is not null)
-            renderer.Writer.Write(LayoutAreaMarkdownRenderer.GetLayoutAreaDiv(KernelAddressPlaceholder, fenced.SubmitCode.Id, null));
 
         renderer.EnsureLine();
     }

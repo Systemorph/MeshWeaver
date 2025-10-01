@@ -37,6 +37,11 @@ public record TodoItem
     public string Category { get; init; } = "General";
 
     /// <summary>
+    /// Gets the responsible person assigned to this to-do item.
+    /// </summary>
+    public string ResponsiblePerson { get; init; } = "Unassigned";
+
+    /// <summary>
     /// Gets the due date of the to-do item, if any.
     /// </summary>
     public DateTime? DueDate { get; init; }

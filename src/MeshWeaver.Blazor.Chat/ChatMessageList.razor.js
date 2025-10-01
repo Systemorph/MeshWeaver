@@ -6,7 +6,18 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
 
     connectedCallback() {
         this._observer = new MutationObserver(mutations => this._scheduleAutoScroll(mutations));
-        this._observer.observe(this, { childList: true, attributes: true });
+        this._observer.observe(this, {
+            childList: true,
+            attributes: true,
+            subtree: true,
+            characterData: true,
+            attributeOldValue: true
+        });
+
+        // Track the in-progress state to detect when chat ends
+        const inProgressAttr = this.getAttribute('in-progress');
+        this._previousInProgressState = inProgressAttr === 'true' || (this.hasAttribute('in-progress') && inProgressAttr !== 'false');
+        console.log('Initial in-progress state:', this._previousInProgressState, 'attr:', inProgressAttr);
     }
 
     disconnectedCallback() {
@@ -18,8 +29,82 @@ window.customElements.define('chat-messages', class ChatMessages extends HTMLEle
         cancelAnimationFrame(this._nextAutoScroll);
         this._nextAutoScroll = requestAnimationFrame(() => {
             const addedUserMessage = mutations.some(m => Array.from(m.addedNodes).some(n => n.parentElement === this && n.classList?.contains('user-message')));
+
+            // Check if chat is in progress (only auto-scroll during active responses)
+            const inProgressAttr = this.getAttribute('in-progress');
+            const isInProgress = inProgressAttr === 'true' || (this.hasAttribute('in-progress') && inProgressAttr !== 'false');
+
+            console.log('Auto-scroll check - in-progress attr:', inProgressAttr, 'isInProgress:', isInProgress, 'previous:', this._previousInProgressState);
+
+            // Check if chat just ended (in-progress changed from true to false)
+            const chatJustEnded = this._previousInProgressState && !isInProgress;
+            if (chatJustEnded) {
+                console.log('Chat just ended! Scrolling to bottom');
+                this._previousInProgressState = isInProgress;
+                // Always scroll to bottom when chat ends
+                const elem = this.lastElementChild;
+                if (elem) {
+                    elem.scrollIntoView({ behavior: 'smooth' });
+                    console.log('Scrolled to bottom after chat completion');
+                }
+                return;
+            }
+
+            // Check for attribute changes that indicate chat completion
+            const hasInProgressChange = mutations.some(m => {
+                if (m.type === 'attributes' && m.attributeName === 'in-progress') {
+                    const oldValue = m.oldValue;
+                    const newValue = this.getAttribute('in-progress');
+                    console.log('in-progress attribute changed from', oldValue, 'to', newValue);
+
+                    // Chat ended if it went from having the attribute to not having it, or from 'true' to 'false'
+                    const wasInProgress = oldValue === 'true' || (oldValue !== null && oldValue !== 'false');
+                    const nowInProgress = newValue === 'true' || (newValue !== null && newValue !== 'false');
+
+                    if (wasInProgress && !nowInProgress) {
+                        console.log('Detected chat completion via attribute change');
+                        return true;
+                    }
+                }
+                return false;
+            });
+
+            if (hasInProgressChange) {
+                console.log('Chat completed - scrolling to bottom');
+                const elem = this.lastElementChild;
+                if (elem) {
+                    elem.scrollIntoView({ behavior: 'smooth' });
+                }
+                return;
+            }
+
+            this._previousInProgressState = isInProgress;
+
+            // Check for text content changes in assistant messages (streaming text)
+            const hasTextUpdates = mutations.some(m => {
+                // Text content changes
+                if (m.type === 'characterData') {
+                    // Check if this text change is within an assistant message
+                    const assistantMessage = m.target.parentElement?.closest('.assistant-message-text, .assistant-message');
+                    return assistantMessage && isInProgress;
+                }
+
+                // New text nodes added to assistant messages during streaming
+                if (m.type === 'childList') {
+                    return Array.from(m.addedNodes).some(node => {
+                        if (node.nodeType === Node.TEXT_NODE) {
+                            const assistantMessage = node.parentElement?.closest('.assistant-message-text, .assistant-message');
+                            return assistantMessage && isInProgress;
+                        }
+                        return false;
+                    });
+                }
+
+                return false;
+            });
+
             const elem = this.lastElementChild;
-            if (ChatMessages._isFirstAutoScroll || addedUserMessage || this._elemIsNearScrollBoundary(elem, 300)) {
+            if (ChatMessages._isFirstAutoScroll || addedUserMessage || (hasTextUpdates && this._elemIsNearScrollBoundary(elem, 300))) {
                 elem.scrollIntoView({ behavior: ChatMessages._isFirstAutoScroll ? 'instant' : 'smooth' });
                 ChatMessages._isFirstAutoScroll = false;
             }

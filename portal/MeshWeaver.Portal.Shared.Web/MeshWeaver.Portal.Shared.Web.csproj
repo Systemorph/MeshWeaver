@@ -8,6 +8,8 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureFoundry\MeshWeaver.AI.AzureFoundry.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureOpenAI\MeshWeaver.AI.AzureOpenAI.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
         <ProjectReference Include="..\MeshWeaver.Portal.AI\MeshWeaver.Portal.AI.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.ChartJs\MeshWeaver.Blazor.ChartJs.csproj" />

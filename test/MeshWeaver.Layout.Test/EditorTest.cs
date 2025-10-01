@@ -40,11 +40,11 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
 
     private record MyDimension([property: Key] int Code, string DisplayName) : INamed;
-    private UiControl EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
+    private UiControl? EditorWithoutResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new Calculator(), "calc");
-    private UiControl EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
+    private UiControl? EditorWithResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new Calculator(), c => Controls.Markdown($"{c.X + c.Y}"));
-    private UiControl EditorWithDelayedResult(LayoutAreaHost host, RenderingContext ctx) =>
+    private UiControl? EditorWithDelayedResult(LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new Calculator(), c =>
         {
             Thread.Sleep(100);
@@ -52,7 +52,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         });
     #endregion
 
-    private UiControl EditorWithListFormProperties
+    private UiControl? EditorWithListFormProperties
     (LayoutAreaHost host, RenderingContext ctx) =>
         host.Hub.Edit(new ListForms());
 
@@ -162,7 +162,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
-    [Fact]
+    [Fact(Skip = "Debounce disabled for now")]
     public async Task TestEditorWithDelayed()
     {
         var client = GetClient();

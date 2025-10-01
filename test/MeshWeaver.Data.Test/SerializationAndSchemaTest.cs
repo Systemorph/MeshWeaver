@@ -482,7 +482,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
             .GetWorkspace()
             .GetObservable<SerializationTestData>()
             .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(items => items?.Any(x => x.Details.Flag == false) == true);
+            .FirstAsync(items => items?.Any(x => x.Details.Flag == false) == true);
 
         var item = retrievedData.First(x => x.Name == originalData.Name);
         item.Details.Flag.Should().BeFalse();

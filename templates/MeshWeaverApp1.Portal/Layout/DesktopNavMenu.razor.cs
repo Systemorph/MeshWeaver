@@ -35,6 +35,11 @@ public partial class DesktopNavMenu : ComponentBase
         => active
             ? new Icons.Filled.Size24.TasksApp()
             : new Icons.Regular.Size24.TasksApp();
+			
+    public static Icon ChatIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Chat()
+            : new Icons.Regular.Size24.Chat();
 
     public static Icon DocumentationLayoutAreaIcon(bool active = false)
         => active

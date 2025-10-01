@@ -15,9 +15,32 @@ public class ContentService : IContentService
     {
         this.hub = hub;
         this.accessService = accessService;
-        var configs = serviceProvider.GetRequiredService<IOptions<List<ContentSourceConfig>>>();
-        collections = configs.Value.Select(CreateCollection).ToDictionary(x => x.Collection);
+        
+        var collectionsDict = new Dictionary<string, ContentCollection>();
+        
+        // Add collections from configuration
+        var configs = serviceProvider.GetService<IOptions<List<ContentSourceConfig>>>();
+        if (configs?.Value != null)
+        {
+            foreach (var collection in configs.Value.Select(CreateCollection))
+            {
+                collectionsDict[collection.Collection] = collection;
+            }
+        }
+        
+        // Add collections from providers
+        var providers = serviceProvider.GetServices<IContentCollectionProvider>();
+        foreach (var provider in providers)
+        {
+            foreach (var collection in provider.GetCollections())
+            {
+                collectionsDict[collection.Collection] = collection;
+            }
+        }
+        
+        collections = collectionsDict;
     }
+
 
     private ContentCollection CreateCollection(ContentSourceConfig config)
     {

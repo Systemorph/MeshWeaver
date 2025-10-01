@@ -1,16 +1,25 @@
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 
 namespace MeshWeaver.TemplateGenerator;
 
 public class Program
 {
-    private const string DefaultVersion = "2.2.0-local";
     private const string DefaultOutputPath = "dist/templates";
 
     public static void Main(string[] args)
     {
-        var version = args.Length > 0 ? args[0] : DefaultVersion;
+        if (args.Length == 0)
+        {
+            Console.WriteLine("Error: Version parameter is required.");
+            Console.WriteLine("Usage: MeshWeaver.TemplateGenerator <version> [outputPath]");
+            Console.WriteLine("Example: MeshWeaver.TemplateGenerator 2.4.0");
+            Console.WriteLine("Note: Use 'dotnet run -- <version>' when running via dotnet run");
+            Environment.Exit(1);
+        }
+
+        var version = args[0];
         var outputPath = args.Length > 1 ? args[1] : DefaultOutputPath;
 
         Console.WriteLine($"Creating MeshWeaver Project Templates v{version}");
@@ -54,9 +63,16 @@ public class TemplateGenerator
         RenameProjectFiles();
         UpdateProgramCs();
         UpdateProjectFiles();
+        GenerateDirectoryPackagesProps();
+
+        // Generate unique ports for each installation
+        var httpPort = GenerateUniquePort(5000, 6000);
+        var httpsPort = httpPort + 1;
+
+        CopyClaude(httpPort, httpsPort);
         CreateTemplateConfigs();
         CreateSolutionFile();
-        CreateReadme();
+        CreateReadme(httpsPort);
     }
 
     private void CleanOutputDirectory()
@@ -72,56 +88,20 @@ public class TemplateGenerator
     private void CopyTemplateProjects()
     {
         Console.WriteLine("Copying template projects...");
-        CopyDirectory("templates/MeshWeaverApp1.Portal", Path.Combine(_outputPath, "MeshWeaverApp1.Portal"));
+        CopyDirectory("templates/MeshWeaverApp1.Portal", Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal"));
     }
 
-    private void CopyMarkdownDocumentation()
-    {
-        Console.WriteLine("Copying markdown documentation to template...");
-
-        var markdownTargetDir = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "Markdown");
-        Directory.CreateDirectory(markdownTargetDir);
-
-        // Copy specific markdown files from root directory
-        var rootMarkdownFiles = new[] { "Readme.md", "AREA_NESTING_BUG_FIX.md" };
-        foreach (var file in rootMarkdownFiles)
-        {
-            var sourceFile = file;
-            if (File.Exists(sourceFile))
-            {
-                var targetFile = Path.Combine(markdownTargetDir, file);
-                File.Copy(sourceFile, targetFile, true);
-                Console.WriteLine($"  Copied {file} to template");
-            }
-        }
-
-        // Look for other documentation files that might be relevant
-        var docDirectories = new[] { "modules/Documentation", "test/MeshWeaver.Documentation.Test/Markdown" };
-        foreach (var docDir in docDirectories)
-        {
-            if (Directory.Exists(docDir))
-            {
-                foreach (var mdFile in Directory.GetFiles(docDir, "*.md"))
-                {
-                    var fileName = Path.GetFileName(mdFile);
-                    var targetFile = Path.Combine(markdownTargetDir, fileName);
-                    File.Copy(mdFile, targetFile, true);
-                    Console.WriteLine($"  Copied {fileName} from {docDir}");
-                }
-            }
-        }
-    }
 
     private void CopyModules()
     {
         Console.WriteLine("Copying Todo module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
+        CopyDirectory("modules/Todo/MeshWeaver.Todo", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo"), ["bin", "obj", ".gitignore"]);
 
         Console.WriteLine("Copying Todo.AI module from modules...");
-        CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
+        CopyDirectory("modules/Todo/MeshWeaver.Todo.AI", Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"), ["bin", "obj", ".gitignore"]);
 
         Console.WriteLine("Copying Todo test project...");
-        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults", ".gitignore"]);
+        CopyDirectory("test/MeshWeaver.Todo.Test", Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test"), ["bin", "obj", "TestResults", ".gitignore"]);
     }
 
     private void UpdateNamespaces()
@@ -129,22 +109,22 @@ public class TemplateGenerator
         Console.WriteLine("Updating namespaces in all projects...");
 
         // Update Todo project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo"),
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo"),
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo"],
             ["namespace MeshWeaverApp1.Todo", "using MeshWeaverApp1.Todo"]);
 
         // Update Todo.AI project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI"),
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI"),
             ["namespace MeshWeaver.Todo.AI", "using MeshWeaver.Todo"],
             ["namespace MeshWeaverApp1.Todo.AI", "using MeshWeaverApp1.Todo"]);
 
         // Update Todo test project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test"),
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test"),
             ["namespace MeshWeaver.Todo", "using MeshWeaver.Todo", "typeof(TodoApplicationAttribute)"],
             ["namespace MeshWeaverApp1.Todo", "using MeshWeaverApp1.Todo", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)"]);
 
         // Update Portal project namespaces
-        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "MeshWeaverApp1.Portal"),
+        UpdateNamespacesInDirectory(Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal"),
             ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaver.Todo", "MeshWeaver.Todo.AI", "typeof(TodoApplicationAttribute)", "typeof(AgentsApplicationAttribute)"],
             ["namespace MeshWeaverApp1.Portal", "using MeshWeaverApp1.Portal", "using MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.AI", "typeof(MeshWeaverApp1.Todo.TodoApplicationAttribute)", "typeof(MeshWeaver.AI.Application.AgentsApplicationAttribute)"]);
     }
@@ -154,21 +134,21 @@ public class TemplateGenerator
         // Note: Portal project file should already be correctly named
 
         File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo", "MeshWeaver.Todo.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"));
+            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaver.Todo.csproj"),
+            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"));
 
         File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI", "MeshWeaver.Todo.AI.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"));
+            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaver.Todo.AI.csproj"),
+            Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"));
 
         File.Move(
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaver.Todo.Test.csproj"),
-            Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"));
+            Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test", "MeshWeaver.Todo.Test.csproj"),
+            Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"));
     }
 
     private void UpdateProgramCs()
     {
-        var programCsPath = Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "Program.cs");
+        var programCsPath = Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal", "Program.cs");
         var content = File.ReadAllText(programCsPath);
 
         // Update the template portal structure to include Todo references
@@ -187,35 +167,31 @@ public class TemplateGenerator
                 <TargetFramework>net9.0</TargetFramework>
                 <Nullable>enable</Nullable>
                 <ImplicitUsings>enable</ImplicitUsings>
+                <IsPackable>true</IsPackable>
+                <NoWarn>$(NoWarn);NU5111</NoWarn>
               </PropertyGroup>
 
               <ItemGroup>
-                <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
-                <ProjectReference Include="..\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
+                <ProjectReference Include="..\..\src\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
+                <ProjectReference Include="..\..\src\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj" />
               </ItemGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.AI.Application" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Blazor" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Blazor.Chat" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.ContentCollections" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Kernel.Hub" Version="{_version}" />
-                <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+                <PackageReference Include="MeshWeaver.AI.Application" />
+                <PackageReference Include="MeshWeaver.AI.AzureOpenAI" />
+                <PackageReference Include="MeshWeaver.Blazor" />
+                <PackageReference Include="MeshWeaver.Blazor.Chat" />
+                <PackageReference Include="MeshWeaver.ContentCollections" />
+                <PackageReference Include="MeshWeaver.Hosting.Blazor" />
+                <PackageReference Include="MeshWeaver.Hosting.Monolith" />
+                <PackageReference Include="MeshWeaver.Kernel.Hub" />
+                <PackageReference Include="Microsoft.Extensions.Logging" />
               </ItemGroup>
 
-              <ItemGroup>
-                <Content Include="Markdown\**\*.md" CopyToOutputDirectory="PreserveNewest" />
-                <Content Include="Markdown\**\*.png" CopyToOutputDirectory="PreserveNewest" />
-                <Content Include="Markdown\**\*.jpg" CopyToOutputDirectory="PreserveNewest" />
-                <Content Include="Markdown\**\*.jpeg" CopyToOutputDirectory="PreserveNewest" />
-              </ItemGroup>
 
             </Project>
             """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal.csproj"), portalCsproj);
+        File.WriteAllText(Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal.csproj"), portalCsproj);
 
         Console.WriteLine("Updating Todo project with package references...");
         var todoCsproj = $"""
@@ -225,18 +201,24 @@ public class TemplateGenerator
                 <TargetFramework>net9.0</TargetFramework>
                 <ImplicitUsings>enable</ImplicitUsings>
                 <Nullable>enable</Nullable>
+                <NoWarn>$(NoWarn);NU5111</NoWarn>
               </PropertyGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.Mesh.Contract" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Messaging.Hub" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Data" Version="{_version}" />
-                <PackageReference Include="MeshWeaver.Layout" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.Mesh.Contract" />
+                <PackageReference Include="MeshWeaver.Messaging.Hub" />
+                <PackageReference Include="MeshWeaver.Data" />
+                <PackageReference Include="MeshWeaver.Layout" />
+                <PackageReference Include="MeshWeaver.ContentCollections" />
+              </ItemGroup>
+
+              <ItemGroup>
+                <EmbeddedResource Include="Content\**\*.*" />
               </ItemGroup>
 
             </Project>
             """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"), todoCsproj);
+        File.WriteAllText(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo.csproj"), todoCsproj);
 
         Console.WriteLine("Updating Todo.AI project with package references...");
         var todoAICsproj = $"""
@@ -246,15 +228,16 @@ public class TemplateGenerator
                 <TargetFramework>net9.0</TargetFramework>
                 <ImplicitUsings>enable</ImplicitUsings>
                 <Nullable>enable</Nullable>
+                <NoWarn>$(NoWarn);NU5111</NoWarn>
               </PropertyGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.AI" Version="{_version}" />
+                <PackageReference Include="MeshWeaver.AI" />
               </ItemGroup>
 
             </Project>
             """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"), todoAICsproj);
+        File.WriteAllText(Path.Combine(_outputPath, "src", "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI.csproj"), todoAICsproj);
 
         Console.WriteLine("Updating Test project with package references...");
         var testCsproj = $"""
@@ -266,24 +249,360 @@ public class TemplateGenerator
                 <Nullable>enable</Nullable>
                 <IsPackable>false</IsPackable>
                 <IsTestProject>true</IsTestProject>
+                <NoWarn>$(NoWarn);NU5111</NoWarn>
               </PropertyGroup>
 
               <ItemGroup>
-                <ProjectReference Include="..\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
+                <ProjectReference Include="..\..\src\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj" />
               </ItemGroup>
 
               <ItemGroup>
-                <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" Version="{_version}" />
-                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
-                <PackageReference Include="xunit.v3" Version="3.0.0" />
-                <PackageReference Include="xunit.v3.extensibility.core" Version="3.0.0" />
-                <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
-                <PackageReference Include="FluentAssertions" Version="6.12.2" />
+                <PackageReference Include="MeshWeaver.Hosting.Monolith.TestBase" />
+                <PackageReference Include="Microsoft.NET.Test.Sdk" />
+                <PackageReference Include="xunit.v3" />
+                <PackageReference Include="xunit.v3.extensibility.core" />
+                <PackageReference Include="xunit.runner.visualstudio" />
+                <PackageReference Include="FluentAssertions" />
               </ItemGroup>
 
             </Project>
             """;
-        File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"), testCsproj);
+        File.WriteAllText(Path.Combine(_outputPath, "test", "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test.csproj"), testCsproj);
+    }
+
+    private void GenerateDirectoryPackagesProps()
+    {
+        Console.WriteLine("Generating Directory.Packages.props with dynamic versions...");
+
+        // Read versions from main solution's Directory.Packages.props
+        var mainPackages = GetPackageVersions("Directory.Packages.props");
+        
+        // Read versions from test Directory.Packages.props
+        var testPackages = GetPackageVersions("test/Directory.Packages.props");
+        
+        // Merge packages (test packages override main packages for conflicts)
+        var allPackages = new Dictionary<string, string>(mainPackages);
+        foreach (var package in testPackages)
+        {
+            allPackages[package.Key] = package.Value;
+        }
+        
+        // Define MeshWeaver packages that should use the build version
+        var meshWeaverPackages = new[]
+        {
+            "MeshWeaver.AI",
+            "MeshWeaver.AI.Application", 
+            "MeshWeaver.AI.AzureFoundry",
+            "MeshWeaver.AI.AzureOpenAI",
+            "MeshWeaver.Blazor",
+            "MeshWeaver.Blazor.AgGrid",
+            "MeshWeaver.Blazor.ChartJs", 
+            "MeshWeaver.Blazor.Chat",
+            "MeshWeaver.ContentCollections",
+            "MeshWeaver.Data",
+            "MeshWeaver.Hosting.Blazor",
+            "MeshWeaver.Hosting.Monolith",
+            "MeshWeaver.Hosting.Monolith.TestBase",
+            "MeshWeaver.Kernel.Hub",
+            "MeshWeaver.Layout",
+            "MeshWeaver.Mesh.Contract",
+            "MeshWeaver.Messaging.Hub"
+        };
+        
+        // Override MeshWeaver package versions with the build version
+        foreach (var package in meshWeaverPackages)
+        {
+            allPackages[package] = _version;
+        }
+        
+        // Generate Directory.Packages.props content
+        var sb = new StringBuilder();
+        sb.AppendLine("<Project>");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine("    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>");
+        sb.AppendLine("  </PropertyGroup>");
+        sb.AppendLine("  <ItemGroup>");
+        sb.AppendLine($"    <!-- MeshWeaver packages - using build version {_version} -->");
+        
+        // Add MeshWeaver packages first
+        foreach (var package in meshWeaverPackages.OrderBy(p => p))
+        {
+            if (allPackages.ContainsKey(package))
+            {
+                sb.AppendLine($"    <PackageVersion Include=\"{package}\" Version=\"{allPackages[package]}\" />");
+            }
+        }
+        
+        sb.AppendLine();
+        sb.AppendLine("    <!-- Other packages -->");
+        
+        // Add all other packages
+        foreach (var package in allPackages.OrderBy(p => p.Key))
+        {
+            if (!meshWeaverPackages.Contains(package.Key))
+            {
+                sb.AppendLine($"    <PackageVersion Include=\"{package.Key}\" Version=\"{package.Value}\" />");
+            }
+        }
+        
+        sb.AppendLine("  </ItemGroup>");
+        sb.AppendLine("</Project>");
+        
+        // Write Directory.Packages.props to the output directory
+        File.WriteAllText(Path.Combine(_outputPath, "Directory.Packages.props"), sb.ToString());
+        
+        Console.WriteLine($"Directory.Packages.props generated with MeshWeaver version {_version}");
+    }
+    
+    private Dictionary<string, string> GetPackageVersions(string filePath)
+    {
+        var packages = new Dictionary<string, string>();
+        
+        if (File.Exists(filePath))
+        {
+            var xml = XDocument.Load(filePath);
+            var packageVersions = xml.Descendants("PackageVersion");
+            
+            foreach (var packageVersion in packageVersions)
+            {
+                var include = packageVersion.Attribute("Include")?.Value;
+                var version = packageVersion.Attribute("Version")?.Value;
+                
+                if (!string.IsNullOrEmpty(include) && !string.IsNullOrEmpty(version))
+                {
+                    packages[include] = version;
+                }
+            }
+        }
+        
+        return packages;
+    }
+
+    private void CopyClaude(int httpPort, int httpsPort)
+    {
+        Console.WriteLine("Creating template-specific CLAUDE.md...");
+
+        var claudeContent = CreateTemplateClaude(httpPort, httpsPort);
+        var targetFile = Path.Combine(_outputPath, "CLAUDE.md");
+        File.WriteAllText(targetFile, claudeContent);
+        Console.WriteLine($"  Created template CLAUDE.md with ports {httpPort}/{httpsPort}");
+
+        // Update launch settings with the generated ports
+        UpdateLaunchSettingsPorts(httpPort, httpsPort);
+    }
+    
+    private int GenerateUniquePort(int minPort, int maxPort)
+    {
+        var random = new Random();
+        return random.Next(minPort, maxPort);
+    }
+    
+    private void UpdateLaunchSettingsPorts(int httpPort, int httpsPort)
+    {
+        Console.WriteLine($"Updating launch settings with ports {httpPort}/{httpsPort}...");
+        
+        var launchSettingsPath = Path.Combine(_outputPath, "portal", "MeshWeaverApp1.Portal", "Properties", "launchSettings.json");
+        if (!File.Exists(launchSettingsPath))
+        {
+            Console.WriteLine("  Warning: launchSettings.json not found");
+            return;
+        }
+        
+        var content = File.ReadAllText(launchSettingsPath);
+        
+        // Replace port numbers in the JSON
+        content = content.Replace("\"applicationUrl\": \"http://localhost:5000\"", 
+                                $"\"applicationUrl\": \"http://localhost:{httpPort}\"");
+        content = content.Replace("\"applicationUrl\": \"https://localhost:5001;http://localhost:5000\"", 
+                                $"\"applicationUrl\": \"https://localhost:{httpsPort};http://localhost:{httpPort}\"");
+        content = content.Replace("\"sslPort\": 5001", $"\"sslPort\": {httpsPort}");
+        
+        File.WriteAllText(launchSettingsPath, content);
+        Console.WriteLine("  Updated launchSettings.json with new ports");
+    }
+    
+    private string CreateTemplateClaude(int httpPort, int httpsPort)
+    {
+        // Read the design patterns from separate file
+        var currentDirectory = Directory.GetCurrentDirectory();
+        var designPatternsPath = Path.Combine(currentDirectory, "tools", "MeshWeaver.TemplateGenerator", "DesignPatterns.md");
+
+        // Fallback to assembly location if not found in current directory structure
+        if (!File.Exists(designPatternsPath))
+        {
+            designPatternsPath = Path.Combine(Path.GetDirectoryName(typeof(Program).Assembly.Location)!, "DesignPatterns.md");
+        }
+
+        var designPatterns = File.Exists(designPatternsPath) ? File.ReadAllText(designPatternsPath) : "";
+
+        return $@"# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this MeshWeaverApp1 solution.
+
+## Development Commands
+
+### Build and Test
+```bash
+# Build entire solution
+dotnet build
+
+# Run tests (uses xUnit v3)
+dotnet test
+
+# Run specific test project
+dotnet test test/MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj
+
+# Clean solution
+dotnet clean
+
+# Restore packages
+dotnet restore
+```
+
+### Running the Application
+
+#### Portal Application
+```bash
+cd portal/MeshWeaverApp1.Portal
+dotnet run
+# Access at http://localhost:{httpPort} or https://localhost:{httpsPort}
+```
+
+## Architecture Overview
+
+### Core Concepts
+
+**Message Hub Architecture**: MeshWeaver is built on an actor-model message hub system (`MeshWeaver.Messaging.Hub`). All application interactions flow through hierarchical message routing with address-based partitioning (e.g., `@app/Address/AreaName`).
+
+**Layout Areas**: The UI system uses reactive Layout Areas - framework-agnostic UI abstractions that render in Blazor Server. Layout areas are addressed by route and automatically update via reactive streams.
+
+**AI-First Design**: First-class AI integration using Semantic Kernel with plugins that provide agents access to application state and functionality.
+
+### Project Structure
+
+- **`portal/MeshWeaverApp1.Portal/`** - Web application (Blazor Server)
+- **`src/MeshWeaverApp1.Todo/`** - Todo business domain module (reference implementation)
+- **`src/MeshWeaverApp1.Todo.AI/`** - AI agents for Todo functionality
+- **`test/MeshWeaverApp1.Todo.Test/`** - Unit tests for Todo module
+
+### Architectural Patterns
+
+**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results.
+The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`.
+
+**Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
+
+**Address-Based Routing**: Services register at specific addresses (e.g., `app/todo`).
+Layout areas follow the pattern `@{{address}}/{{areaName}}/{{areaId}}`. The areaId is optional and depends on the view.
+
+**Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
+
+{designPatterns}
+
+## Development Patterns
+
+### Message Handling
+```csharp
+public static class MyHubConfiguration
+{{
+    public static MessageHubConfiguration AddMyHub(this MessageHubConfiguration config)
+    {{
+        return config.AddHandler<MyRequestAsync>(HandleMyRequestAsync)
+                     .AddHandler<MyRequest>(HandleMyRequest);
+    }}
+
+    public static async Task<IMessageDelivery> HandleMyRequestAsync(MessageHub hub, IMessageDelivery<MyRequestAsync> request, CancellationToken ct)
+    {{
+        // Process the request
+        var result = await SomeService.ProcessAsync(request.Message);
+
+        // Send response
+        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
+        return request.Processed();
+    }}
+
+    public static IMessageDelivery HandleMyRequest(MessageHub hub, IMessageDelivery<MyRequest> request)
+    {{
+        // Process the request
+        var result = SomeService.Process(request.Input);
+
+        // Send response
+        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
+        return request.Processed();
+    }}
+}}
+```
+
+### AI Plugin Development
+```csharp
+public class MyPlugin(IMessageHub hub, IAgentChat chat)
+{{
+    [KernelFunction]
+    [Description(""Description on how to use"")]
+    public async Task<string> DoSomething([Description(""Description for input"")]string input)
+    {{
+        var request = new MyRequest(input); // Create a request object
+        var address = GetAddress(request); // Get the address for the plugin, e.g., ""app/northwind""
+        // Use the message hub to send a request and receive a response
+        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(address));
+        return JsonSerializer.Serialize(response.Message, hub.JsonSerializationOptions);
+    }}
+
+    public Address GetAddress(MyRequest request)
+    {{
+        // Logic to determine the address based on the request
+        // the chat contains a context, which is usually good to use.
+        // can also contain agent specific mapping logic.
+        return chat.Context.Address;
+    }}
+}}
+```
+
+## Key Dependencies
+
+- **.NET 9.0** - Target framework
+- **Blazor Server** - Web UI framework
+- **Semantic Kernel** - AI integration
+- **xUnit v3** - Testing framework
+- **FluentAssertions** - Test assertions
+- **MeshWeaver** - Framework packages
+
+## Testing Guidelines
+
+Tests use xUnit v3 with MeshWeaver.Hosting.Monolith.TestBase:
+
+```csharp
+public class MyTest : HubTestBase, IAsyncLifetime
+{{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
+    {{
+        return base.ConfigureHost(config)
+            .AddTodoHub(); // Register your hub
+    }}
+
+    [Fact]
+    public async Task MyTestMethod()
+    {{
+        // Arrange
+        var request = new MyRequest(""test input"");
+        var hub = GetClient();
+
+        // Act
+        var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
+
+        // Assert
+        response.Should().NotBeNull();
+        response.Message.Result.Should().Be(""expected result"");
+    }}
+}}
+```
+
+## Configuration
+
+The solution uses centralized package management via `Directory.Packages.props`. All package versions are managed centrally.
+
+Current MeshWeaver version: {_version}
+";
     }
 
     private void CreateTemplateConfigs()
@@ -314,7 +633,7 @@ public class TemplateGenerator
                     replaces = "net9.0"
                 }
             },
-            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Portal.csproj" } },
+            PrimaryOutputs = new[] { new { path = "portal/MeshWeaverApp1.Portal/MeshWeaverApp1.Portal.csproj" } },
             PostActions = new[]
             {
                 new
@@ -351,7 +670,7 @@ public class TemplateGenerator
                     replaces = "net9.0"
                 }
             },
-            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Todo.csproj" } }
+            PrimaryOutputs = new[] { new { path = "src/MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" } }
         });
 
         CreateTemplateConfig("MeshWeaverApp1.Todo.AI", new TemplateConfig
@@ -378,7 +697,7 @@ public class TemplateGenerator
                     replaces = "net9.0"
                 }
             },
-            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Todo.AI.csproj" } }
+            PrimaryOutputs = new[] { new { path = "src/MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" } }
         });
 
         CreateTemplateConfig("MeshWeaverApp1.Todo.Test", new TemplateConfig
@@ -405,7 +724,7 @@ public class TemplateGenerator
                     replaces = "net9.0"
                 }
             },
-            PrimaryOutputs = new[] { new { path = "MeshWeaverApp1.Todo.Test.csproj" } }
+            PrimaryOutputs = new[] { new { path = "test/MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj" } }
         });
 
         // Solution template
@@ -435,10 +754,10 @@ public class TemplateGenerator
             },
             PrimaryOutputs = new[]
             {
-                new { path = "MeshWeaverApp1.Portal/MeshWeaverApp1.Portal.csproj" },
-                new { path = "MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" },
-                new { path = "MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" },
-                new { path = "MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj" }
+                new { path = "portal/MeshWeaverApp1.Portal/MeshWeaverApp1.Portal.csproj" },
+                new { path = "src/MeshWeaverApp1.Todo/MeshWeaverApp1.Todo.csproj" },
+                new { path = "src/MeshWeaverApp1.Todo.AI/MeshWeaverApp1.Todo.AI.csproj" },
+                new { path = "test/MeshWeaverApp1.Todo.Test/MeshWeaverApp1.Todo.Test.csproj" }
             },
             PostActions = new[]
             {
@@ -460,13 +779,13 @@ public class TemplateGenerator
             # Visual Studio Version 17
             VisualStudioVersion = 17.0.31903.59
             MinimumVisualStudioVersion = 10.0.40219.1
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Portal", "MeshWeaverApp1.Portal\MeshWeaverApp1.Portal.csproj", "{11111111-1111-1111-1111-111111111111}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Portal", "portal\MeshWeaverApp1.Portal\MeshWeaverApp1.Portal.csproj", "{11111111-1111-1111-1111-111111111111}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo", "MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj", "{22222222-2222-2222-2222-222222222222}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo", "src\MeshWeaverApp1.Todo\MeshWeaverApp1.Todo.csproj", "{22222222-2222-2222-2222-222222222222}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.AI", "MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj", "{44444444-4444-4444-4444-444444444444}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.AI", "src\MeshWeaverApp1.Todo.AI\MeshWeaverApp1.Todo.AI.csproj", "{44444444-4444-4444-4444-444444444444}"
             EndProject
-            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.Test", "MeshWeaverApp1.Todo.Test\MeshWeaverApp1.Todo.Test.csproj", "{33333333-3333-3333-3333-333333333333}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MeshWeaverApp1.Todo.Test", "test\MeshWeaverApp1.Todo.Test\MeshWeaverApp1.Todo.Test.csproj", "{33333333-3333-3333-3333-333333333333}"
             EndProject
             Global
             	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -496,7 +815,7 @@ public class TemplateGenerator
         File.WriteAllText(Path.Combine(_outputPath, "MeshWeaverApp1.sln"), solutionContent);
     }
 
-    private void CreateReadme()
+    private void CreateReadme(int httpsPort)
     {
         var readmeContent = $"""
             # MeshWeaver Portal Solution Template
@@ -543,9 +862,9 @@ public class TemplateGenerator
 
             To run the application locally:
 
-            1. Navigate to the Portal project: `cd MeshWeaverApp1.Portal`
+            1. Navigate to the Portal project: `cd portal/MeshWeaverApp1.Portal`
             2. Run: `dotnet run`
-            3. Open browser to: `https://localhost:5001`
+            3. Open browser to: `https://localhost:{httpsPort}`
 
             The Todo application will be available in the portal with sample data.
             """;

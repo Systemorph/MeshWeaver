@@ -33,7 +33,11 @@ public record InstanceCollection
     {
         var ret = this;
         if (request.Updates.Any())
-            ret = ret.Update(request.Updates.ToImmutableDictionary(GetKey, x => x));
+            ret = ret.Update(request.Updates
+                .Reverse()
+                .Select(x => new{Key=GetKey(x), Instance = x})
+                .DistinctBy(x => x.Key)
+                .ToImmutableDictionary(GetKey, x => x));
         if (request.Deletions.Any())
             ret = ret.Delete(request.Deletions.Select(GetKey));
 

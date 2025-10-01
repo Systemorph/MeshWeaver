@@ -1,9 +1,15 @@
 @using Microsoft.Extensions.DependencyInjection
 @using static Microsoft.Extensions.Logging.LoggerExtensions;
 @using MeshWeaver.Layout.Client
+@using Microsoft.AspNetCore.Components
 @inherits BlazorView<UiControl, DispatchView>
+@inject NavigationManager NavigationManager
 
-@if(ViewDescriptor != null)
+@if(ViewModel is RedirectControl redirect)
+{
+    @* Handle redirect immediately *@
+}
+else if(ViewDescriptor != null)
 {
     <CascadingValue Value=@ViewModelDataContext Name="DataContext">
         @((RenderFragment)(builder =>
@@ -28,6 +34,18 @@
     public override async Task SetParametersAsync(ParameterView parameters)
     {
         await base.SetParametersAsync(parameters);
+        
+        // Handle redirect control directly
+        if (ViewModel is RedirectControl redirectControl)
+        {
+            if (redirectControl.Href is string href)
+            {
+                Logger.LogDebug($"Redirecting from Area {Area} to {href}");
+                NavigationManager.NavigateTo(href);
+                return;
+            }
+        }
+        
         var client = Hub.ServiceProvider.GetRequiredService<ILayoutClient>();
         ViewDescriptor = client.GetViewDescriptor(ViewModel, Stream, Area);
         ViewModelDataContext = ViewModel?.DataContext  != null 

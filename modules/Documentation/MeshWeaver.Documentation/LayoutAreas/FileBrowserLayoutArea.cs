@@ -17,6 +17,12 @@ namespace MeshWeaver.Documentation.LayoutAreas
         public static LayoutDefinition AddFileBrowser(this LayoutDefinition layout)
             => layout.WithView(nameof(FileBrowser), FileBrowser);
 
+        /// <summary>
+        /// Creates a file browser control that displays a demo folder structure.
+        /// </summary>
+        /// <param name="host">The layout area host to which the file browser will be added.</param>
+        /// <param name="ctx">The rendering context for the view.</param>
+        /// <returns>A UI control containing the file browser demo with a header and file browser component.</returns>
         private static UiControl FileBrowser(LayoutAreaHost host, RenderingContext ctx)
         {
             return Stack

@@ -18,6 +18,8 @@ public static class BlazorHostingExtensions
             .ConfigureServices(services => services
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
+                .Configure<RouteOptions>(options =>
+                    options.ConstraintMap.Add("addresstype", typeof(AddressTypeRouteConstraint)))
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
@@ -25,6 +27,12 @@ public static class BlazorHostingExtensions
     {
         app.MapStaticContent(app.Services.GetRequiredService<IContentService>());
         app.UseMiddleware<UserContextMiddleware>();
+
+        // Thumbnail preview stub (returns 501 until implemented)
+        app.MapGet("/layout-preview/{area}", (string area) =>
+        {
+            return Results.StatusCode(StatusCodes.Status501NotImplemented);
+        });
 
         //app.MapRazorComponents<ApplicationPage>();
     }
@@ -42,29 +50,29 @@ public static class BlazorHostingExtensions
             //var contentType = "application/octet-stream";
             var contentType = GetContentType(path);
 
-        // Configure caching headers
+            // Configure caching headers
 
-        if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
-        {
-            var cacheDuration = TimeSpan.FromDays(30);
-            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+            if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
+            {
+                var cacheDuration = TimeSpan.FromDays(30);
+                context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
+                context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
 
-            //Add ETag for cache
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-            ms.Position = 0;
-            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
-            context.Response.Headers.ETag = $"\"{hash}\"";
-            return Results.File(ms.ToArray(), contentType, Path.GetFileName(path));
-        }
+                //Add ETag for cache
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                ms.Position = 0;
+                var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
+                context.Response.Headers.ETag = $"\"{hash}\"";
+                return Results.File(ms.ToArray(), contentType, Path.GetFileName(path));
+            }
 
-        // Return the stream directly without loading it all into memory
-        return Results.Stream(
-                stream,
-                contentType,
-                Path.GetFileName(path),
-                enableRangeProcessing: true);
+            // Return the stream directly without loading it all into memory
+            return Results.Stream(
+                    stream,
+                    contentType,
+                    Path.GetFileName(path),
+                    enableRangeProcessing: true);
         });
 
     private static string GetContentType(string path)

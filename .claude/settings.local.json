@@ -24,7 +24,20 @@
       "Bash(dotnet remove:*)",
       "Bash(dotnet run:*)",
       "Bash(cp:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(dotnet tool install:*)",
+      "Bash(dotnet:*)",
+      "Bash(pwsh:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(mkdir:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(git checkout:*)",
+      "Bash(tee:*)",
+      "Bash(git restore:*)",
+      "Bash(meshweaver-thumbnails:*)"
     ],
     "deny": []
   }

@@ -8,9 +8,6 @@
 
     <ItemGroup>
         <None Include="Markdown\**\*.*" Pack="true" PackagePath="Markdown\" />
-        <None Update="Markdown\**\*.*">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
     </ItemGroup>
 
     <PropertyGroup>
@@ -21,13 +18,6 @@
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
-    <ItemGroup>
-        <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
-            <LogicalName>$(AssemblyName).xml</LogicalName>
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-            <Embed>true</Embed>
-        </EmbeddedResource>
-    </ItemGroup>
     <ItemGroup>
       <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
       <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -10,8 +12,11 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage discount summary areas in the layout.
+/// Creates discount impact analysis showing total discount amounts distributed across monthly periods.
+/// Displays a vertical bar chart with data labels showing how much discount money was given per month,
+/// helping track promotional spending and its distribution over time.
 /// </summary>
+[Display(GroupName = "Discounting", Order = 300)]
 public static class DiscountSummaryArea
 {
     /// <summary>
@@ -20,16 +25,21 @@ public static class DiscountSummaryArea
     /// <param name="layout">The layout definition to which the discount summary view will be added.</param>
     /// <returns>The updated layout definition with the discount summary view.</returns>
     public static LayoutDefinition AddDiscountSummary(this LayoutDefinition layout)
-        => layout.WithView(nameof(DiscountSummary), Controls.Stack.WithView(DiscountSummary))
+        => layout.WithView(nameof(DiscountSummary), DiscountSummary)
         
         ;
 
     /// <summary>
-    /// Generates a discount summary view for the specified layout area and rendering context.
+    /// Displays a vertical bar chart showing total discount amounts given each month.
+    /// Each bar represents the sum of all discounts applied in that month, with data labels
+    /// positioned at the end of bars showing exact dollar amounts. Features the "Monthly Discount Summary"
+    /// header and helps visualize promotional spending patterns across different months.
+    /// Useful for understanding seasonal discount trends and promotional budget allocation.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the discount summary view.</returns>
+    /// <returns>A vertical bar chart with monthly discount totals and descriptive header.</returns>
+    [Display(Name = "Monthly Discount Summary", GroupName = "Discounting", Order = 1)]
     public static IObservable<UiControl> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
@@ -45,10 +55,12 @@ public static class DiscountSummaryArea
                                         .WithAlign(DataLabelsAlign.End)
                                 )
                             )
-                    ).Select(x => x.ToControl())
+                    ).Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Monthly Discount Summary"))
+                        .WithView(chart.ToControl()))
             );
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 1, 1)));
+            ;
 }

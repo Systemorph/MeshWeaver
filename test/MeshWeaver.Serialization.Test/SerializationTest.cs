@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -18,6 +19,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration c)
     {
         return base.ConfigureHost(c)
+            .WithTypes(typeof(BoomerangResponse), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f => f.RouteAddress<ClientAddress>(
                     (routedAddress, d) =>
                     {
@@ -38,14 +40,13 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
                     o => o.ResponseFor(request)
                 );
                 return request.Processed();
-            }
-        );
+            });
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .WithTypes(typeof(BoomerangResponse), typeof(MyEvent))
+            .WithTypes(typeof(BoomerangResponse), typeof(MyEvent), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f =>
             f.RouteAddress<HostAddress>(
                 (routedAddress, d) =>
@@ -294,6 +295,42 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         hostedCollectionDeserialized.Should().NotBeNull();
         hostedCollectionDeserialized.Should().AllBeOfType<GenericTestClass<string>>("generic types should be properly deserialized, not as JsonElement");
     }
+
+    [Fact]
+    public async Task TestSerializationFailureHandling()
+    {
+        Output.WriteLine("Testing serialization failure handling...");
+        
+        // This test verifies that when no handler exists for a request message type,
+        // AwaitResponse should throw DeliveryFailureException instead of hanging
+        
+        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        
+        // Send an UnknownRequest to the host 
+        // The host has no handler for this type at all
+        // This should result in a DeliveryFailure being sent back to the client
+        var unknownRequest = new GetDataRequest(new EntityReference("collection", "id"));
+
+        Output.WriteLine("Sending UnknownRequest to host (no handler exists for this type)...");
+        
+        // AwaitResponse should now throw DeliveryFailureException due to no handler being found
+        var exception = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
+            client.AwaitResponse(
+                unknownRequest,
+                o => o.WithTarget(new HostAddress()),
+                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
+            )
+        );
+
+        // Verify the exception contains useful information about the failure
+        exception.Should().NotBeNull();
+        exception.Message.Should().NotBeEmpty();
+        Output.WriteLine($"Exception message: {exception.Message}");
+        
+        // The message should indicate no handler was found
+        var message = exception.Message.ToLowerInvariant();
+        message.Should().Contain("could not deserialize");
+    }
 }
 
 public record Boomerang(object Object) : IRequest<BoomerangResponse>;
@@ -311,3 +348,7 @@ public class GenericTestClass<T>
     public string Property { get; set; } = null!;
     public string Title { get; set; } = null!;
 }
+
+
+
+

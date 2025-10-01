@@ -28,8 +28,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 forward
                     .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
                     .RouteAddressToHostedHub<TransactionalDataAddress>(c => c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
-                    .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel((ComputedDataAddress)c.Address))
-                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub((ImportAddress)c.Address))
+                    .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
+                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
             );
     }
 

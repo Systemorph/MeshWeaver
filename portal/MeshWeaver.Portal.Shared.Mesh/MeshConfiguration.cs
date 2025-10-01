@@ -12,12 +12,11 @@ public static  class SharedMeshConfiguration
     public static TBuilder ConfigurePortalMesh<TBuilder>(this TBuilder builder)
     where TBuilder:MeshBuilder
     {
-        return (TBuilder)builder.ConfigureMesh(mesh => mesh
-                .InstallAssemblies(typeof(DocumentationApplicationAttribute).Assembly.Location)
-                .InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location)
-                .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
-                .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
-            )
+        return (TBuilder)builder
+            .InstallAssemblies(typeof(DocumentationApplicationAttribute).Assembly.Location)
+            .InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location)
+            .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
+            .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
             .AddKernel();
     }
 
