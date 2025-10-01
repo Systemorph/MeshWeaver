@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <NoWarn>$(NoWarn);NU5111</NoWarn>
+
+    <!-- Tool packaging configuration -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>meshweaver-thumbnails</ToolCommandName>
+    <PackageId>MeshWeaver.ThumbnailGenerator</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>MeshWeaver</Authors>
+    <Description>A tool for generating thumbnails of MeshWeaver Layout Areas</Description>
+    <PackageProjectUrl>https://github.com/meshweaver/meshweaver</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/meshweaver/meshweaver</RepositoryUrl>
+    <PackageTags>meshweaver;thumbnails;screenshot;playwright</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+  <ItemGroup>
+      <PackageReference Include="Microsoft.Playwright" />
+      <PackageReference Include="System.CommandLine" />
+      <PackageReference Include="System.CommandLine.NamingConventionBinder" />
+      <PackageReference Include="System.Net.Http" />
+      <PackageReference Include="System.Text.RegularExpressions" />
+  </ItemGroup>
+</Project>

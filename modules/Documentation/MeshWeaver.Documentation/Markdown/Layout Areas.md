@@ -41,9 +41,22 @@ The pattern for referencing layout areas is simple. It consists of
 @("{addressType}/{addressId}/{area}/{**id}")
 ```
 
+An alternative syntax is to put it in a layout code block:
+```layout --show-header
+app/Northwind/AnnualReportSummary?Year=2023
+```
+
+It is also possible to specify the layout area via a yaml-like syntax:
+```layout --show-header
+address: app/Northwind
+area: AnnualReportSummary
+id: Year=2023
+```
+
+
 The same can be achieved programmatically by instantiating a LayoutArea control:
 
-```csharp --render LayoutArea --show-code
+```csharp --render LayoutArea --show-header
 using static MeshWeaver.Layout.Controls;
 using MeshWeaver.Mesh;
 LayoutArea(new ApplicationAddress("Northwind"), "TopClients")
@@ -61,7 +74,7 @@ we can visualize the data model under the area `DataModel`. See here the
 For each type in the data model, you can access its catalog using the pattern
 `{addressType}/{addressId}/Catalog/{TypeName}`:
 
-```csharp --render Catalog --show-code
+```csharp --render Catalog --show-header
 LayoutArea(new ApplicationAddress("Northwind"), "Catalog", "Territory")
 ```
 
@@ -73,9 +86,33 @@ which is non-trivial to implement and takes normally a large part of projects to
 Furthermore, we have standard views for
 single instances in form of `{addressType}/{addressId}/Details/{TypeName}/{Id}`. Example for a territory:
 
-```csharp --render Details --show-code
+```csharp --render Details --show-header
 LayoutArea(new ApplicationAddress("Northwind"), "Details", "Territory/06897")
 ```
 
 Please note that data is editable wherever the user has edit rights. This means, that 
 data can be literally updated from anywhere where it is visible. Obviously, edit rights can be controlled.
+
+
+## Error Examples
+
+### Missing Address Field
+```layout --show-header
+area: Dashboard
+id: main
+```
+
+### Missing Area Field  
+```layout --show-header
+address: app/Northwind
+id: main
+```
+
+### Empty Content
+```layout --show-header
+```
+
+### Invalid Backward Compatible Format
+```layout --show-header
+invalid-address-format
+```

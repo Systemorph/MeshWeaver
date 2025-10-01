@@ -289,7 +289,45 @@ public sealed class MessageHub : IMessageHub
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
-        return delivery.State == MessageDeliveryState.Submitted ? delivery.Ignored() : delivery;
+        logger.LogDebug("FinishDelivery called for {MessageType} (ID: {MessageId}) with state {State} in {Address}", 
+            delivery.Message.GetType().Name, delivery.Id, delivery.State, Address);
+            
+        if (delivery.State == MessageDeliveryState.Submitted)
+        {
+            // Check if this is a request that expects a response
+            var messageType = delivery.Message.GetType();
+            var isRequest = messageType.GetInterfaces()
+                .Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
+                
+            logger.LogDebug("Message {MessageType} (ID: {MessageId}) is request: {IsRequest} in {Address}", 
+                messageType.Name, delivery.Id, isRequest, Address);
+                
+            if (isRequest)
+            {
+                // Send DeliveryFailure response for unhandled requests
+                var failure = DeliveryFailure.FromException(delivery, 
+                    new InvalidOperationException($"No handler found for message type {messageType.Name}"));
+                failure = failure with { ErrorType = ErrorType.NotFound };
+                
+                logger.LogWarning("No handler found for request {MessageType} (ID: {MessageId}) in {Address} - sending DeliveryFailure response", 
+                    messageType.Name, delivery.Id, Address);
+                
+                try
+                {
+                    Post(failure, o => o.ResponseFor(delivery));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to post DeliveryFailure message for unhandled request {MessageType} (ID: {MessageId}) in {Address}", 
+                        messageType.Name, delivery.Id, Address);
+                }
+                
+                return delivery.Failed($"No handler found for {messageType.Name}");
+            }
+            
+            return delivery.Ignored();
+        }
+        return delivery;
     }
 
     private readonly TaskCompletionSource hasStarted = new();
@@ -394,11 +432,13 @@ public sealed class MessageHub : IMessageHub
             d => d,
             cancellationToken
         );
-        var task = response
-            .ContinueWith(t =>
-                    InnerCallback(id, t.Result, selector),
-                cancellationToken
-            );
+        var task = response.ContinueWith(async t =>
+        {
+            // Await the task to propagate the original exception
+            var result = await t;
+            return InnerCallback(id, result, selector);
+        }, cancellationToken).Unwrap();
+
         return task;
     }
 
@@ -407,6 +447,7 @@ public sealed class MessageHub : IMessageHub
         IMessageDelivery response,
         Func<IMessageDelivery<TResponse>, TResult> selector)
     {
+
         try
         {
             if (response is IMessageDelivery<TResponse> tResponse)
@@ -671,8 +712,8 @@ public sealed class MessageHub : IMessageHub
                 logger.LogWarning("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
                 return;
             }
-            logger.LogDebug("STARTING DISPOSAL of hub {address} with parent {parent}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
-                Address, Configuration.ParentHub?.Address, Version, hostedHubs.Hubs.Count());
+            logger.LogDebug("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
+                Address,  Version, hostedHubs.Hubs.Count());
             
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
@@ -683,8 +724,8 @@ public sealed class MessageHub : IMessageHub
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
         {
-            logger.LogDebug("Hub {address} with parent {parent} has {count} hosted hubs to dispose: [{hubAddresses}]", 
-                Address, Configuration.ParentHub?.Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
+            logger.LogDebug("Hub {address} has {count} hosted hubs to dispose: [{hubAddresses}]", 
+                Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
         }
         else
         {

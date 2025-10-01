@@ -7,7 +7,6 @@ public static class KernelExtensions
 {
     public static MeshBuilder AddKernel(this MeshBuilder builder)
         => builder
-            .ConfigureMesh(mesh => mesh
             .AddMeshNodeFactory(address =>
                 address.Type == KernelAddress.TypeName
                     ? new(address.Type, address.Id, address.ToString())
@@ -16,8 +15,7 @@ public static class KernelExtensions
                         HubConfiguration = ConfigureHub
                     }
                     : null
-            )
-        );
+            );
 
     private static MessageHubConfiguration ConfigureHub(this MessageHubConfiguration config)
     {

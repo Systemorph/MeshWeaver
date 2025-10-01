@@ -1,9 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Json.Patch;
-using MeshWeaver.Data.Documentation;
 using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
@@ -32,7 +32,7 @@ public static class DataExtensions
 
         if (existingLambdas.Any())
             return ret;
-        return ret.AddDocumentation()
+        return ret
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
@@ -96,14 +96,31 @@ public static class DataExtensions
 
     private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
     {
-        if (request.Message is not StreamMessage streamMessage)
+        if (request.Target is not null && !request.Target.Equals(hub.Address))
             return Task.FromResult(request);
-        if(request.Target is not null && !request.Target.Equals(hub.Address))
+
+        var message = request.Message;
+        if (message is RawJson rawJson)
+        {
+            try
+            {
+                var deserialized = JsonNode.Parse(rawJson.Content).Deserialize<object>(hub.JsonSerializerOptions);
+                if (deserialized is null)
+                    return Task.FromResult(request.Failed("Error deserializing RawJson: Result is null"));
+                request = request.WithMessage(deserialized);
+                message = deserialized;
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(request.Failed($"Error deserializing RawJson: {ex}"));
+            }
+        }
+        if (message is not StreamMessage streamMessage)
             return Task.FromResult(request);
 
         request = request.ForwardTo(new SynchronizationAddress(streamMessage.StreamId));
-        var syncHub = hub.GetHostedHub(request.Target!, create:HostedHubCreation.Never);
-        if(syncHub is null)
+        var syncHub = hub.GetHostedHub(request.Target!, create: HostedHubCreation.Never);
+        if (syncHub is null)
             return Task.FromResult(request.Ignored());
         syncHub.DeliverMessage(request);
         return Task.FromResult(request.Forwarded());
@@ -154,7 +171,7 @@ public static class DataExtensions
             .WithHandler<GetDomainTypesRequest>(HandleGetDomainTypesRequest)
             .WithHandler<GetDataRequest>(HandleGetDataRequest);
 
-    private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request) 
+    private static IMessageDelivery HandleGetDomainTypesRequest(IMessageHub hub, IMessageDelivery<GetDomainTypesRequest> request)
     {
         var types = GetDomainTypes(hub);
         hub.Post(new DomainTypesResponse(types), o => o.ResponseFor(request));
@@ -189,11 +206,11 @@ public static class DataExtensions
             {
                 hub.Post(new DataChangeResponse(hub.Version, log),
                     o => o.ResponseFor(request));
-                
+
             });
         }
         else
-            hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate){Status = ActivityStatus.Succeeded}),
+            hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
                 o => o.ResponseFor(request));
         return request.Processed();
     }
@@ -268,7 +285,7 @@ public static class DataExtensions
                     // Get the actual PropertyInfo from the declaring type
                     var declaringType = ctx.PropertyInfo.DeclaringType;
                     var propertyName = ctx.PropertyInfo.Name;
-                    var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!); 
+                    var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!);
                     if (actualPropertyInfo != null)
                     {
                         var propertyDescription = actualPropertyInfo.GetXmlDocsSummary();

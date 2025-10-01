@@ -26,9 +26,9 @@ public class NotebookConnectionTest(ITestOutputHelper output) : AspNetCoreMeshBa
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .AddKernel()
-            .ConfigureMesh(config => config.AddMeshNodes(
+            .AddMeshNodes(
                 TestHubExtensions.Node
-            ));
+            );
 
 
 

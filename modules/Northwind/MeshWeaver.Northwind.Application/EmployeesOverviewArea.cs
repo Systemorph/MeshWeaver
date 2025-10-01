@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -10,8 +12,11 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add and manage the Employees Overview area in the layout.
+/// Creates employee performance visualization showing the top 5 employees by sales revenue.
+/// Displays a horizontal bar chart with employee names and their corresponding sales figures,
+/// featuring data labels and automatic sorting from highest to lowest performance.
 /// </summary>
+[Display(GroupName = "Employees", Order = 500)]
 public static class EmployeesOverviewArea
 {
     /// <summary>
@@ -23,11 +28,14 @@ public static class EmployeesOverviewArea
         => layout.WithView(nameof(TopEmployees), TopEmployees);
 
     /// <summary>
-    /// Generates a bar chart of the top 5 employees based on the provided data cube.
+    /// Displays a horizontal bar chart ranking the top 5 employees by total sales revenue.
+    /// Shows employee names as labels with horizontal bars extending to represent their sales performance.
+    /// Features data labels on each bar showing exact revenue amounts, and bars are automatically
+    /// sorted from highest to lowest performer. Uses November 2025 data for the analysis.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence containing the bar chart object.</returns>
+    /// <returns>A horizontal bar chart control showing top 5 employee performers with data labels.</returns>
     public static IObservable<UiControl> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
@@ -45,5 +53,5 @@ public static class EmployeesOverviewArea
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2023, 11, 1) && x.OrderDate < new DateTime(2023, 11, 30)));
+            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(2025, 11, 1) && x.OrderDate < new DateTime(2025, 11, 30)));
 }

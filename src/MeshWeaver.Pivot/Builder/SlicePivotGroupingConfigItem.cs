@@ -1,4 +1,5 @@
-﻿using MeshWeaver.DataCubes;
+﻿using System;
+using MeshWeaver.DataCubes;
 using MeshWeaver.Hierarchies;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Grouping;
@@ -44,15 +45,16 @@ public record SlicePivotGroupingConfigItem<TElement, TGroup>
             );
 
         PivotGroupManager<DataSlice<TElement>, TIntermediate, TAggregate, TGroup>? subGroupManager = null;
-        foreach (var tuple in Dimensions.Reverse())
+        for (int i = Dimensions.Length - 1; i >= 0; i--)
         {
             subGroupManager = CreateSubGroupManager(
                 subGroupManager,
                 aggregationFunctions,
-                tuple.GroupBuilder.GetGrouper(
+                Dimensions[i].GroupBuilder.GetGrouper(
                     dimensionCache
                 )
             );
+
         }
 
         return subGroupManager!;

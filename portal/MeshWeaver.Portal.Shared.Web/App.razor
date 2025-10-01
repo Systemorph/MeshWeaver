@@ -1,9 +1,6 @@
 ﻿@using Microsoft.Extensions.Configuration
-@using MeshWeaver.Blazor.Components
-@inject IConfiguration Configuration
 
-<!DOCTYPE html>
-<html lang="en">
+@inject IConfiguration Configuration
 
 <head>
     <meta charset="utf-8" />
@@ -18,22 +15,16 @@
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Mesh Weaver</PageTitle>
 </head>
-
+<FluentDesignTheme StorageName="theme"></FluentDesignTheme>
 <body>
-    <CascadingValue Name="ThemeMode" Value="@(Mode)">
-        <ThemeSync @bind-Mode="@Mode" @rendermode="RenderMode.InteractiveServer" />
-        <Routes @rendermode="RenderMode.InteractiveServer" />
-    </CascadingValue>
-    <CookiePolicy @rendermode="RenderMode.InteractiveServer" />
-    <script src="_framework/blazor.web.js"></script>
-    <script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
-    <script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
-    <script src="_content/MeshWeaver.Portal.Shared.Web/Layout/MainLayout.razor.js"></script>
+
+<Routes @rendermode="RenderMode.InteractiveServer" />
+<CookiePolicy @rendermode="RenderMode.InteractiveServer" />
+<script src="_framework/blazor.web.js"></script>
+<script src="_content/MeshWeaver.Blazor/js/theme-handler.js"></script>
+<script src="_content/MeshWeaver.Portal.Shared.Web/js/app.js"></script>
+<script src="_content/MeshWeaver.Portal.Shared.Web/Layout/MainLayout.razor.js"></script>
 </body>
 
-</html>
 
-@code {
-    private DesignThemeModes Mode;
 
-}

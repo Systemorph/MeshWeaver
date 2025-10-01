@@ -20,6 +20,12 @@ public static class ProgressLayoutArea
         => layout.WithView(nameof(Progress), Progress);
 
     private record ProgressSettings(int MillisecondsToTick = 10, int MaxProgress = 100);
+    /// <summary>
+    /// Creates the main progress demo control containing settings and run button.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="ctx">The rendering context.</param>
+    /// <returns>A UI control with progress demo header, settings editor, and run button.</returns>
     private static UiControl Progress(LayoutAreaHost host, RenderingContext ctx)
     {
         return Stack.WithView(H2("Progress Demo").WithStyle(s => s.WithMarginBottom("1em")))
@@ -27,11 +33,24 @@ public static class ProgressLayoutArea
                 RunButton(host, s)));
     }
 
+    /// <summary>
+    /// Creates a button that starts the progress simulation when clicked.
+    /// </summary>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="s">The progress settings configuration.</param>
+    /// <returns>A button control configured to start the progress simulation.</returns>
     private static ButtonControl RunButton(LayoutAreaHost host, ProgressSettings s)
     {
         return Button("Run").WithClickAction(c => RenderProgress(host, c.Area, s));
     }
 
+    /// <summary>
+    /// Renders and manages the progress bar simulation with real-time updates.
+    /// </summary>
+    /// <param name="host">The layout area host for updating the UI.</param>
+    /// <param name="area">The area identifier where the progress will be rendered.</param>
+    /// <param name="progressSettings">Configuration settings for the progress simulation.</param>
+    /// <returns>A task representing the asynchronous progress simulation operation.</returns>
     private static async Task RenderProgress(LayoutAreaHost host, string area, ProgressSettings progressSettings)
     {
         var progress = new Subject<int>();

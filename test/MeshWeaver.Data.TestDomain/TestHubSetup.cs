@@ -1,6 +1,5 @@
 ﻿using System.Linq;
 using System.Threading;
-using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import;
 using MeshWeaver.Messaging;
@@ -43,8 +42,7 @@ public static class TestHubSetup
         );
 
     public static MessageHubConfiguration ConfigureComputedModel(
-        this MessageHubConfiguration configuration,
-        ComputedDataAddress address
+        this MessageHubConfiguration configuration
     ) =>
         configuration.AddData(data =>
             data.AddSource(
@@ -55,8 +53,7 @@ public static class TestHubSetup
     public const string CashflowImportFormat = nameof(CashflowImportFormat);
 
     public static MessageHubConfiguration ConfigureImportHub(
-        this MessageHubConfiguration config,
-        ImportAddress address
+        this MessageHubConfiguration config
     ) =>
         config
             .AddData(data =>

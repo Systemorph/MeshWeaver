@@ -4,9 +4,11 @@ using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
+using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Mesh;
@@ -47,7 +49,8 @@ public static class SharedPortalConfiguration
             .AddHubOptions(opt =>
             {
                 opt.DisableImplicitFromServicesParameters = true;
-            }); services.AddPortalAI();
+            });
+        services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
@@ -60,6 +63,8 @@ public static class SharedPortalConfiguration
         //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
         //services.AddAzureAIFoundry();
 
+        // setting up google maps configuration
+        services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
@@ -108,6 +113,7 @@ public static class SharedPortalConfiguration
 
         builder.Services.AddSignalR();
         builder.Services.Configure<List<ContentSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
+
         builder.Services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
     }
@@ -116,7 +122,7 @@ public static class SharedPortalConfiguration
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
-                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs())
+                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddGoogleMaps())
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
                             c.AddArticles()
@@ -160,7 +166,7 @@ public static class SharedPortalConfiguration
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(MeshWeaver.Blazor.Chat.AgentChatView).Assembly)
+            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(Blazor.Chat.AgentChatView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();

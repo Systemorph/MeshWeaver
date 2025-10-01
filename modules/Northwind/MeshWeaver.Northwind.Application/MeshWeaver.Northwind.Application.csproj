@@ -6,6 +6,7 @@
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\..\src\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
@@ -15,14 +16,12 @@
         <ProjectReference Include="..\..\..\src\MeshWeaver.Pivot\MeshWeaver.Pivot.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Charting.Pivot\MeshWeaver.Charting.Pivot.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Reporting\MeshWeaver.Reporting.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
         <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
     </ItemGroup>
 
     <ItemGroup>
-        <None Include="Markdown\**\*.*" Pack="true" PackagePath="Markdown\" />
-        <None Update="Markdown\**\*.*">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
+        <EmbeddedResource Include="Markdown\**\*.*" />
     </ItemGroup>
 
     <PropertyGroup>
@@ -33,11 +32,5 @@
         <!-- Embed source files in the PDB -->
         <EmbedAllSources>true</EmbedAllSources>
     </PropertyGroup>
-    <ItemGroup>
-        <EmbeddedResource Include="bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml">
-            <LogicalName>$(AssemblyName).xml</LogicalName>
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-            <Embed>true</Embed>
-        </EmbeddedResource>
-    </ItemGroup>
+
 </Project>

@@ -3,7 +3,7 @@
 @using MeshWeaver.Blazor.Chat
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
-<div class="layout @(IsAIChatVisible ? "chat-visible" : "")"
+<div class="layout @(IsAIChatVisible ? $"chat-visible chat-{currentChatPosition.ToString().ToLower()}" : "")"
     style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
@@ -33,7 +33,7 @@
                 <NotificationCenter />
             </div>
             <div class="chat">
-                <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
+                <FluentButton BackgroundColor="transparent" OnClick="@(async () => await ToggleAIChatVisibility())" Title="AI Chat">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
                 </FluentButton>
             </div>
@@ -84,7 +84,7 @@
             <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
             <div class="ai-chat-container">
                 <div class="ai-chat-content">
-                    <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
+                    <AgentChatView @ref="chatComponent" OnCloseRequested="@(async () => await ToggleAIChatVisibility())" OnPositionChanged="OnChatPositionChanged"></AgentChatView>
                 </div>
             </div>
         </div>

@@ -1,17 +1,20 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Layout.Documentation;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Defines a static class within the MeshWeaver.Northwind.ViewModel namespace for creating and managing an Orders Summary view. This view aggregates and displays data from various sources in a data grid format, providing a comprehensive overview of orders.
+/// Creates a top orders summary displaying the 5 highest-value orders in a formatted data grid.
+/// Shows customer company names, order amounts (formatted as currency), and purchase dates
+/// with year filtering capability to analyze high-value orders across different time periods.
 /// </summary>
+[Display(GroupName = "Orders", Order = 602)]
 public static class OrdersSummaryArea
 {
     /// <summary>
@@ -24,21 +27,21 @@ public static class OrdersSummaryArea
     /// </remarks>
     public static LayoutDefinition AddOrdersSummary(this LayoutDefinition layout)
         => layout.WithView(nameof(OrderSummary), OrderSummary)
-            .WithSourcesForType(ctx => ctx.Area == nameof(OrderSummary), typeof(OrdersSummaryArea), typeof(NorthwindViewModels))
-            .WithEmbeddedDocument(ctx => ctx.Area == nameof(OrderSummary),typeof(OrdersSummaryArea).Assembly, "Readme.md")
+
             
         ;
 
     /// <summary>
-    /// Generates the Orders Summary view for a given layout area and rendering context.
+    /// Displays a data grid table showing the top 5 orders by value with year filtering.
+    /// Features three columns: Customer (company name), Amount (formatted as currency with thousands separator),
+    /// and Purchased (date in YYYY-MM-DD format). Orders are automatically sorted by amount descending
+    /// to show the highest-value orders first. Includes a year filter toolbar to focus on specific time periods.
+    /// Perfect for identifying major customers and significant sales transactions.
     /// </summary>
     /// <param name="layoutArea">The layout area host where the Orders Summary view will be displayed.</param>
     /// <param name="ctx">The rendering context for generating the view.</param>
-    /// <returns>A LayoutStackControl object representing the Orders Summary view.</returns>
-    /// <remarks>
-    /// This method constructs the Orders Summary view, incorporating a data grid to display aggregated order data. The specific contents and layout of the view are determined at runtime based on the rendering context.
-    /// </remarks>
-    public static UiControl OrderSummary(
+    /// <returns>A data grid with top 5 orders and year filtering toolbar.</returns>
+    public static UiControl? OrderSummary(
         this LayoutAreaHost layoutArea,
         RenderingContext ctx
     )

@@ -25,22 +25,36 @@ public partial class MobileNavMenu : ComponentBase
     private IEnumerable<MobileNavMenuEntry> GetMobileNavMenuEntries()
     {
         yield return new MobileNavMenuEntry(
-            "Articles",
+            "Blog",
             () => NavigateToAsync("/articles"),
-            DesktopNavMenu.ArticlesIcon(),
+            DesktopNavMenu.BlogIcon(),
             LinkMatchRegex: new Regex("^/articles")
         );
-        yield return new MobileNavMenuEntry("Areas",
-            () => NavigateToAsync("/content/Documentation/Readme"),
-            DesktopNavMenu.DocumentationIcon(),
-            LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
+
 
         yield return new MobileNavMenuEntry(
-            "Todos",
-            () => NavigateToAsync("/app/Todo/TodoList"),
+            "Todo Areas",
+            () => NavigateToAsync("/app/Todo/LayoutAreas"),
             DesktopNavMenu.TodoIcon(),
             LinkMatchRegex: new Regex("^/app/Todo")
         );
+
+        yield return new MobileNavMenuEntry(
+            "Northwind Areas",
+            () => NavigateToAsync("/app/Northwind/LayoutAreas"),
+            DesktopNavMenu.NorthwindIcon(),
+            LinkMatchRegex: new Regex("^/app/Northwind")
+        );
+        yield return new MobileNavMenuEntry(
+            "Northwind Articles",
+            () => NavigateToAsync("/articles/Northwind"),
+            DesktopNavMenu.NorthwindArticleIcon(),
+            LinkMatchRegex: new Regex("^/articles/Northwind")
+        );
+        yield return new MobileNavMenuEntry("Documentation Areas",
+            () => NavigateToAsync("/app/Documentation/LayoutAreas"),
+            DesktopNavMenu.DocumentationIcon(),
+            LinkMatchRegex: new Regex("^/app/Documentation"));
 
         yield return new MobileNavMenuEntry(
             "Agents",
@@ -48,6 +62,8 @@ public partial class MobileNavMenu : ComponentBase
             DesktopNavMenu.AgentsIcon(),
             LinkMatchRegex: new Regex("^/app/Agents")
         );
+
+
 
         yield return new MobileNavMenuEntry(
             "Chat",

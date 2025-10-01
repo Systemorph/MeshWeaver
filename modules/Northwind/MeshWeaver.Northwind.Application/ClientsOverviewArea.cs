@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
@@ -10,8 +11,11 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides extension methods for adding client overview functionality to a layout.
+/// Creates client performance visualization displaying the top 5 clients by total revenue.
+/// Shows a vertical bar chart with customer identifiers and their corresponding sales amounts,
+/// featuring data labels positioned for optimal visibility and automatic ranking by performance.
 /// </summary>
+[Display(GroupName = "Customers")]
 public static class ClientsOverviewArea
 {
     /// <summary>
@@ -24,11 +28,14 @@ public static class ClientsOverviewArea
         ;
 
     /// <summary>
-    /// Generates a bar chart of the top clients for the specified layout area and rendering context.
+    /// Displays a vertical bar chart showing the top 5 clients ranked by total revenue.
+    /// Features customer identifiers as x-axis labels with vertical bars representing their sales amounts.
+    /// Data labels are positioned at the start of each bar with end alignment for clear visibility.
+    /// Automatically sorts clients from highest to lowest revenue to highlight top performers.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence of objects representing the top clients bar chart.</returns>
+    /// <returns>A vertical bar chart control displaying top 5 client revenues with positioned data labels.</returns>
     public static IObservable<UiControl> TopClients(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
             .SelectMany(data =>
@@ -54,5 +61,5 @@ public static class ClientsOverviewArea
     /// <returns>An observable sequence of Northwind data cubes.</returns>
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()
-            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(1997, 12, 1) && x.OrderDate < new DateTime(2023, 1, 1)));
+            .Select(dc => dc.Where(x => x.OrderDate >= new DateTime(1997, 12, 1) && x.OrderDate < new DateTime(2025, 1, 1)));
 }

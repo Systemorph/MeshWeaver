@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks.Dataflow;
+using Json.More;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
 
@@ -120,7 +121,8 @@ public class MessageService : IMessageService
         {
             try
             {
-                Post(new DeliveryFailure(delivery), new PostOptions(Address).ResponseFor(delivery));
+                var message = delivery.Properties.TryGetValue("Error", out var error) ? error?.ToString() : $"Message delivery failed in address {Address}d}}";
+                Post(new DeliveryFailure(delivery, message), new PostOptions(Address).ResponseFor(delivery));
             }
             catch (Exception ex)
             {
@@ -193,8 +195,12 @@ public class MessageService : IMessageService
             delivery = UnpackIfNecessary(delivery);
             logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
+
+            if(delivery.State == MessageDeliveryState.Failed)
+                return ReportFailure(delivery);
         }
 
+        
 
         logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
@@ -308,8 +314,12 @@ public class MessageService : IMessageService
         {
             logger.LogWarning(ex, "Failed to deserialize delivery {MessageType} (ID: {MessageId}) in {Address} - marking as failed to prevent endless propagation", 
                 delivery.Message.GetType().Name, delivery.Id, Address);
-            // Return a failed delivery instead of continuing with malformed data
             return delivery.Failed($"Deserialization failed: {ex.Message}");
+        }
+
+        if (delivery.Message is JsonElement je)
+        {
+            return delivery.Failed($"Could not deserialize message {je.ToJsonString()}");
         }
 
         return delivery;

@@ -4,6 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+	<IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,15 +13,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MeshWeaver.AI.Application" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.AI.AzureOpenAI" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.Blazor" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.Blazor.Chat" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.ContentCollections" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.Hosting.Blazor" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.Hosting.Monolith" Version="2.2.0-rc6" />
-    <PackageReference Include="MeshWeaver.Kernel.Hub" Version="2.2.0-rc6" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
+    <PackageReference Include="MeshWeaver.AI.Application" />
+    <PackageReference Include="MeshWeaver.AI.AzureOpenAI" />
+    <PackageReference Include="MeshWeaver.Blazor" />
+    <PackageReference Include="MeshWeaver.Blazor.Chat" />
+    <PackageReference Include="MeshWeaver.ContentCollections" />
+    <PackageReference Include="MeshWeaver.Hosting.Blazor" />
+    <PackageReference Include="MeshWeaver.Hosting.Monolith" />
+    <PackageReference Include="MeshWeaver.Kernel.Hub" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 
   <ItemGroup>

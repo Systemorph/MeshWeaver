@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
@@ -11,15 +12,39 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
-public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(output)
+// Helper class to provide lazy Azure client factory
+internal class LazyBlobServiceClientFactory : IAzureClientFactory<BlobServiceClient>
 {
+    private readonly Func<string> _connectionStringProvider;
+    private BlobServiceClient? _client;
 
-    private readonly IContainer azuriteContainer = ContainerExtensions.Azurite();
+    public LazyBlobServiceClientFactory(Func<string> connectionStringProvider)
+    {
+        _connectionStringProvider = connectionStringProvider;
+    }
+
+    public BlobServiceClient CreateClient(string name)
+    {
+        return _client ??= new BlobServiceClient(_connectionStringProvider(), new BlobClientOptions(BlobClientOptions.ServiceVersion.V2021_12_02));
+    }
+}
+
+public class ArticlesBlobStorageTest : ArticlesTest
+{
+    private readonly IContainer azuriteContainer;
+    private readonly string azuriteConnectionString;
+
+    public ArticlesBlobStorageTest(ITestOutputHelper output) : base(output)
+    {
+        var (container, connectionString) = ContainerExtensions.CreateAzurite();
+        azuriteContainer = container;
+        azuriteConnectionString = connectionString;
+    }
 
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-
+        
         // Start containers
         await azuriteContainer.StartAsync();
         await UploadMarkdownFiles();
@@ -31,8 +56,9 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
         var markdownPath = Path.Combine(GetAssemblyLocation(), "Markdown");
         var files = Directory.GetFiles(markdownPath, "*", SearchOption.AllDirectories);
 
-        // Get blob service client
-        var blobServiceClient = new BlobServiceClient(ContainerExtensions.AzuriteConnectionString);
+        // Get blob service client with compatible API version
+        var blobClientOptions = new BlobClientOptions(BlobClientOptions.ServiceVersion.V2021_12_02);
+        var blobServiceClient = new BlobServiceClient(azuriteConnectionString, blobClientOptions);
 
         // Get or create container
         var containerClient = blobServiceClient.GetBlobContainerClient(StorageProviders.Articles);
@@ -63,9 +89,10 @@ public class ArticlesBlobStorageTest(ITestOutputHelper output) : ArticlesTest(ou
 
     protected override IServiceCollection ConfigureArticles(IServiceCollection services)
     {
-        services.AddAzureClients(clientBuilder =>
+        // Register a factory that creates the BlobServiceClient lazily when needed
+        services.AddSingleton<IAzureClientFactory<BlobServiceClient>>(serviceProvider =>
         {
-            clientBuilder.AddBlobServiceClient(ContainerExtensions.AzuriteConnectionString).WithName(StorageProviders.Articles); 
+            return new LazyBlobServiceClientFactory(() => azuriteConnectionString);
         });
         return services
             .AddAzureBlobArticles()

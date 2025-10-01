@@ -3,7 +3,6 @@
 @using MeshWeaver.Blazor.Components
 <PageTitle>Mesh Weaver</PageTitle>
 
-<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 <div class="page-container">
     <h1>Welcome to MeshWeaver</h1>
     <div class="main-text">
@@ -24,7 +23,7 @@
 
         For more information, have a look at our resources
     </div>
-    <div class="info-links @DarkModeClass">
+    <div class="info-links">
         <a href="/articles" class="info-link" title="Read our Blog">
             <FluentIcon Color="Color.FillInverse" Icon="@Icons.Regular.Size24.Book"></FluentIcon>
             <span>Blog</span>
@@ -37,9 +36,9 @@
             <MeshWeaverLogo Height="24px" Width="24px"></MeshWeaverLogo>
             <span>Landing Page</span>
         </a>
-        <a href="https://github.com/Systemorph/MeshWeaver" class="info-link" title="Visit our GitParentHub Repository" target="_blank">
+        <a href="https://github.com/Systemorph/MeshWeaver" class="info-link" title="Visit our GitHub Repository" target="_blank">
             <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.GitHub"></FluentIcon>
-            <span>GitParentHub</span>
+            <span>GitHub</span>
         </a>
         <a href="https://discord.gg/wMTug8qtvc" class="info-link" title="Join our Discord Community" target="_blank">
             <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Discord"></FluentIcon>
@@ -50,7 +49,7 @@
         or follow us on Social Media
     </div>
     <h4>Roland Bürgi</h4>
-    <div class="info-links @DarkModeClass">
+    <div class="info-links">
         <a href="https://www.linkedin.com/in/rolandb" class="info-link" title="Follow Roland Bürgi on LinkedIn" target="_blank">
             <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
             <span>LinkedIn</span>
@@ -66,7 +65,3 @@
     </div>
 </div>
 
-@code {
-    private DesignThemeModes Mode;
-    private string DarkModeClass => Mode == DesignThemeModes.Dark ? "fluent-dark-theme" : string.Empty;
-}

@@ -48,10 +48,13 @@ public class ExecutableCodeBlockParser : FencedCodeBlockParser
 
 public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 {
+    private readonly BlockParser parser = parser;
     public const string Execute = "execute";
     public const string Render = "render";
     public IReadOnlyDictionary<string, string?> Args { get; set; } = ImmutableDictionary<string,string?>.Empty;
     public SubmitCodeRequest? SubmitCode { get; set; }
+    public LayoutAreaComponentInfo? LayoutAreaComponent { get; set; }
+    public string? LayoutAreaError { get; set; }
 
     public static IEnumerable<KeyValuePair<string, string?>> ParseArguments(string? arguments)
     {
@@ -80,6 +83,9 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
     public SubmitCodeRequest? GetSubmitCodeRequest()
     {
+        if (Info == "layout")
+            return null;
+
         if(Args.TryGetValue(Execute, out var executionId))
             return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString() };
         if (SubmitCode is not null)
@@ -89,9 +95,112 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         return null;
     }
 
+    public LayoutAreaComponentInfo? GetLayoutAreaComponent()
+    {
+        if (Info != "layout")
+            return null;
+
+        var content = string.Join('\n', Lines.Lines ?? []).Trim();
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            LayoutAreaError = "Layout area content is empty. Please specify address and area.";
+            return null;
+        }
+
+        // Try to parse as YAML-like structure first
+        var yamlData = ParseYamlLike(content);
+        if (yamlData != null)
+        {
+            var address = yamlData.GetValueOrDefault("address", "");
+            var area = yamlData.GetValueOrDefault("area", Args.GetValueOrDefault(Render, ""));
+            var id = yamlData.GetValueOrDefault("id", null);
+            
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                LayoutAreaError = "Missing required 'address' field in layout area configuration.";
+                return null;
+            }
+            
+            if (string.IsNullOrWhiteSpace(area))
+            {
+                LayoutAreaError = "Missing required 'area' field in layout area configuration.";
+                return null;
+            }
+            
+            try
+            {
+                return new LayoutAreaComponentInfo(address, area, id, parser);
+            }
+            catch (ArgumentException ex)
+            {
+                LayoutAreaError = $"Layout area validation error: {ex.Message}";
+                return null;
+            }
+        }
+
+
+        // Validate that content looks like an address for backward compatibility
+        if (!content.Contains('/'))
+        {
+            LayoutAreaError = $"Invalid address format '{content}'. Expected format: 'addressType/addressId' or use YAML format with separate 'address' and 'area' fields.";
+            return null;
+        }
+
+        try
+        {
+            // For backward compatibility, construct URL in expected format
+            var url = $"{content}";
+            return new LayoutAreaComponentInfo(url, parser);
+        }
+        catch (ArgumentException ex)
+        {
+            LayoutAreaError = $"Layout area validation error: {ex.Message}";
+            return null;
+        }
+    }
+
+    private static Dictionary<string, string?>? ParseYamlLike(string content)
+    {
+        try
+        {
+            var result = new Dictionary<string, string?>();
+            var lines = content.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                var colonIndex = trimmed.IndexOf(':');
+                if (colonIndex == -1)
+                    return null; // Not YAML-like format
+
+                var key = trimmed[..colonIndex].Trim();
+                var value = trimmed[(colonIndex + 1)..].Trim();
+                
+                // Remove quotes if present
+                if (value.StartsWith('"') && value.EndsWith('"'))
+                    value = value[1..^1];
+                else if (value.StartsWith('\'') && value.EndsWith('\''))
+                    value = value[1..^1];
+
+                result[key] = value;
+            }
+
+            return result.Count > 0 ? result : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void Initialize()
     {
         Args = ParseArguments(Arguments).ToDictionary();
         SubmitCode = GetSubmitCodeRequest();
+        LayoutAreaError = null; // Reset error state
+        LayoutAreaComponent = GetLayoutAreaComponent();
     }
 }

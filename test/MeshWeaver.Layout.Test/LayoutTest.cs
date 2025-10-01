@@ -89,7 +89,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area.ToString()!)
+        var control = await stream.GetControlStream(reference.Area)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -110,7 +110,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
 
-    private static async Task<UiControl> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)
+    private static async Task<UiControl?> ViewWithProgress(LayoutAreaHost area, RenderingContext ctx, CancellationToken ct)
     {
         var percentage = 0;
         var progress = Controls.Progress("Processing", percentage);

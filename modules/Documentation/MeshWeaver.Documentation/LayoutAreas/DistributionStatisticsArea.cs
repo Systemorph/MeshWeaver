@@ -146,7 +146,7 @@ Execution Time: {tuple.Time}" );
     /// <param name="host"></param>
     /// <param name="context"></param>
     /// <returns></returns>
-    public static UiControl DistributionStatistics(LayoutAreaHost host, RenderingContext context)
+    public static UiControl? DistributionStatistics(LayoutAreaHost host, RenderingContext context)
     {
         host.UpdateData(nameof(DistributionTypes), DistributionTypes);
         var subject = new Subject<(double[] Samples, TimeSpan Time)>();

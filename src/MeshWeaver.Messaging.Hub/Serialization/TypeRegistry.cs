@@ -100,7 +100,22 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
             for (var i = 0; i < genericArgs.Length; i++)
             {
-                if (TryGetType(genericArgs[i].Trim(), out var genericTypeArg) && genericTypeArg != null)
+                var argName = genericArgs[i].Trim();
+                
+                // Handle nullable syntax (e.g., "Int32?" -> "System.Nullable`1[Int32]")
+                if (argName.EndsWith('?'))
+                {
+                    var underlyingTypeName = argName.Substring(0, argName.Length - 1);
+                    if (TryGetType(underlyingTypeName, out var underlyingType) && underlyingType != null)
+                    {
+                        genericTypeArgs[i] = typeof(Nullable<>).MakeGenericType(underlyingType.Type);
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else if (TryGetType(argName, out var genericTypeArg) && genericTypeArg != null)
                 {
                     genericTypeArgs[i] = genericTypeArg.Type;
                 }
@@ -136,9 +151,19 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
             var genericTypeArguments = new string[genericArguments.Length];
             for (var i = 0; i < genericArguments.Length; i++)
             {
-                if (!TryGetCollectionName(genericArguments[i], out var genericTypeArgument) || genericTypeArgument == null)
+                // For nullable types, use the special formatting (e.g., "Int32?" instead of "System.Nullable`1[Int32]")
+                if (genericArguments[i].IsGenericType && genericArguments[i].GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    genericTypeArguments[i] = FormatType(genericArguments[i]);
+                }
+                else if (!TryGetCollectionName(genericArguments[i], out var genericTypeArgument) || genericTypeArgument == null)
+                {
                     return false;
-                genericTypeArguments[i] = genericTypeArgument;
+                }
+                else
+                {
+                    genericTypeArguments[i] = genericTypeArgument;
+                }
             }
             typeName =
                 $"{FormatType(genericTypeDefinition)}[{string.Join(',', genericTypeArguments)}]";
@@ -214,6 +239,10 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
     public string FormatType(Type mainType)
     {
+        // Check if the type is already registered with a name (e.g., basic types like "Int32")
+        if (nameByType.TryGetValue(mainType, out var registeredName))
+            return registeredName;
+            
         var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType || mainType.IsGenericTypeDefinition)
             return mainTypeName;

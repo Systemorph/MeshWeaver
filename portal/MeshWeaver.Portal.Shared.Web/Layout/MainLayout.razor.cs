@@ -47,11 +47,19 @@ public partial class MainLayout
     }
     public bool IsAIChatVisible { get; private set; }
     private AgentChatView? chatComponent;
+    private ChatPosition currentChatPosition = ChatPosition.Right;
 
-    public void ToggleAIChatVisibility()
+    public async Task ToggleAIChatVisibility()
     {
         IsAIChatVisible = !IsAIChatVisible;
         StateHasChanged();
+        
+        // Small delay to ensure proper rendering, especially for bottom position
+        if (IsAIChatVisible && currentChatPosition == ChatPosition.Bottom)
+        {
+            await Task.Delay(50);
+            StateHasChanged();
+        }
     }
     private async Task StartResize()
     {
@@ -65,6 +73,25 @@ public partial class MainLayout
         {
             await chatComponent.ResetConversationAsync();
         }
+    }
+
+    private async Task OnChatPositionChanged(ChatPosition newPosition)
+    {
+        var previousPosition = currentChatPosition;
+        currentChatPosition = newPosition;
+        
+        // Reset CSS variables when switching position types
+        if (previousPosition != newPosition)
+        {
+            await JSRuntime.InvokeVoidAsync("eval", 
+                $"document.querySelector('.layout')?.style.removeProperty('--chat-width'); document.querySelector('.layout')?.style.removeProperty('--chat-height');");
+        }
+        
+        StateHasChanged();
+        
+        // Small delay to allow DOM to update before applying new styles
+        await Task.Delay(10);
+        StateHasChanged();
     }
 
 

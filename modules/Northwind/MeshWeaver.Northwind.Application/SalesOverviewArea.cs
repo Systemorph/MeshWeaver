@@ -1,4 +1,6 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
 using MeshWeaver.Charting;
 using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
@@ -11,8 +13,10 @@ using MeshWeaver.Pivot.Builder;
 namespace MeshWeaver.Northwind.Application;
 
 /// <summary>
-/// Provides methods to add sales overview views to a layout.
+/// Creates sales overview visualizations showing revenue performance across different product categories.
+/// Displays interactive bar charts with data labels and customizable ordering options to analyze sales patterns.
 /// </summary>
+[Display(GroupName = "Sales", Order = 200)]
 public static class SalesOverviewArea
 {
     /// <summary>
@@ -27,11 +31,14 @@ public static class SalesOverviewArea
     ;
 
     /// <summary>
-    /// Generates a bar chart view of sales by category.
+    /// Displays a vertical bar chart showing total sales revenue for each product category.
+    /// Categories are automatically ordered from highest to lowest revenue with data labels positioned
+    /// at the end of each bar. Features vibrant colors and includes a "Sales by Category" header.
+    /// The chart updates dynamically based on selected year data and shows precise revenue amounts.
     /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
     /// <param name="context">The rendering context.</param>
-    /// <returns>An observable sequence containing the bar chart view.</returns>
+    /// <returns>A styled bar chart with category names and revenue amounts, plus header title.</returns>
     public static IObservable<UiControl> SalesByCategory(this LayoutAreaHost layoutArea, RenderingContext context)
     {
         return layoutArea.YearlyNorthwindData()
@@ -48,7 +55,9 @@ public static class SalesOverviewArea
                                         .WithAlign(DataLabelsAlign.End))
                                 )
                     )
-                    .Select(x => new ChartControl(x).WithClass("chart sales-by-category-chart"))
+                    .Select(chart => (UiControl)Controls.Stack
+                        .WithView(Controls.H2("Sales by Category"))
+                        .WithView(new ChartControl(chart).WithClass("chart sales-by-category-chart")))
                     
             );
     }

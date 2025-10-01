@@ -40,13 +40,18 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public int Count => AsyncRenderers.Count;
 
-    public LayoutDefinition AddRendering(Func<object, UiControl> rule)
+    public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
     {
         Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
         return this;
     }
 
     internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
+    internal string? ThumbnailBase { get; init; }
+
+    public LayoutDefinition WithThumbnailBasePath(string basePath)
+        => this with { ThumbnailBase = basePath};
+
     public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition? layoutArea) => 
         layoutArea == null 
             ? this 

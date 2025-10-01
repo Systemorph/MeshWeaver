@@ -4,9 +4,17 @@ using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
+using Microsoft.JSInterop;
 using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.Blazor.Chat;
+
+public enum ChatPosition
+{
+    Right,
+    Left,
+    Bottom
+}
 
 public partial class AgentChatView
 {
@@ -22,12 +30,43 @@ public partial class AgentChatView
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
 
+    [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
+
     [Parameter] public bool UseStreaming { get; set; } = true;
     // Chat history panel state
     private bool showChatHistory;
+    
+    // Chat position state
+    private ChatPosition currentPosition = ChatPosition.Right;
+    private bool positionMenuVisible = false;
+    [Parameter] public EventCallback<ChatPosition> OnPositionChanged { get; set; }
+    [Parameter] public EventCallback<ChatMessage> OnMessageAdded { get; set; }
+
+    private async Task OnNewMessageReceived(ChatMessage message)
+    {
+        // Handle new message events (e.g., auto-scroll, notifications, analytics)
+        if (OnMessageAdded.HasDelegate)
+        {
+            await OnMessageAdded.InvokeAsync(message);
+        }
+    }
+
 
     protected override async Task OnInitializedAsync()
     {
+        // Remove padding/margin from body-content when this is a standalone chat page
+        var currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        if (currentPath == "chat")
+        {
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                const bodyContent = document.querySelector('.body-content, .custom-body-content');
+                if (bodyContent) {
+                    bodyContent.style.padding = '0';
+                    bodyContent.style.margin = '0';
+                }
+            ");
+        }
+
         // Try to load the most recent conversation on startup
         try
         {
@@ -320,6 +359,8 @@ public partial class AgentChatView
         // Stream and display a new response from the IChatClient
         await foreach (var update in chat.GetResponseAsync([userMessage], currentResponseCancellation.Token))
         {
+            
+
             if (lastRole == update.AuthorName)
             {
                 messages.AddMessages(new ChatResponseUpdate(new(update.AuthorName ?? update.Role.Value), update.Text), filter: c => c is not TextContent);
@@ -349,6 +390,8 @@ public partial class AgentChatView
         {
             var currentAuthor = update.AuthorName ?? "Assistant";
 
+
+
             if (lastRole == currentAuthor)
             {
                 // Same author - concatenate to existing message
@@ -375,6 +418,8 @@ public partial class AgentChatView
 
             StateHasChanged();
         }
+        
+        // Delegation messages are now added immediately during streaming, no need to defer them
     }
 
     private void SetAgentContext(IAgentChat chat)
@@ -488,7 +533,28 @@ public partial class AgentChatView
         }
     }
 
+    private async Task ChangeChatPosition(ChatPosition newPosition)
+    {
+        positionMenuVisible = false;
+        
+        if (currentPosition != newPosition)
+        {
+            currentPosition = newPosition;
+            StateHasChanged(); // Update UI immediately
+            
+            if (OnPositionChanged.HasDelegate)
+            {
+                await OnPositionChanged.InvokeAsync(currentPosition);
+            }
+        }
+        else
+        {
+            StateHasChanged();
+        }
+    }
+
     public void Dispose()
     => currentResponseCancellation.Cancel();
+
 
 }

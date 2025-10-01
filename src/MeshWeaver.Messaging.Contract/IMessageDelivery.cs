@@ -1,6 +1,5 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Messaging.Hub")]
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting")]
@@ -14,13 +13,13 @@ public interface IMessageDelivery
     string Id { get; }
     Address Sender { get; }
     Address? Target { get; }
-    string State { get; }
+    MessageDeliveryState State { get; }
     object Message { get; }
 
     IMessageDelivery Package();
 
     internal IMessageDelivery SetAccessContext(AccessContext accessObject);
-    internal IMessageDelivery ChangeState(string state);
+    internal IMessageDelivery ChangeState(MessageDeliveryState state);
     IMessageDelivery SetProperty(string name, object value);
     IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties);
     IMessageDelivery ForwardTo(Address target);
