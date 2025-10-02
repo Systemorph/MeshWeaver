@@ -37,7 +37,8 @@
       "Bash(git checkout:*)",
       "Bash(tee:*)",
       "Bash(git restore:*)",
-      "Bash(meshweaver-thumbnails:*)"
+      "Bash(meshweaver-thumbnails:*)",
+      "Bash(findstr:*)"
     ],
     "deny": []
   }

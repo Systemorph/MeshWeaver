@@ -1,6 +1,6 @@
-﻿#nullable enable
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,7 +46,7 @@ public record MeshNode(
     public string? StreamProvider { get; init; }
     public string? Namespace { get; init; }
     public string? AssemblyLocation { get; init; }
-    [JsonIgnore]
+    [JsonIgnore, NotMapped]
     public Func<MessageHubConfiguration, MessageHubConfiguration>? HubConfiguration { get; init; }
     public string? StartupScript
     {
@@ -58,6 +58,7 @@ public record MeshNode(
     public virtual Address CreateAddress(string addressType, string addressId)
         => MeshExtensions.MapAddress(addressType, addressId);
 
+    [JsonIgnore, NotMapped]
     public ImmutableList<Func<IServiceCollection, IServiceCollection>> GlobalServiceConfigurations { get; set; } = [];
 
     public MeshNode WithGlobalServiceRegistry(Func<IServiceCollection, IServiceCollection> services)
