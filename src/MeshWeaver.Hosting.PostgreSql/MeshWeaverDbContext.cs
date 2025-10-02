@@ -107,6 +107,7 @@ public class MeshWeaverDbContext(DbContextOptions<MeshWeaverDbContext> options)
 
             // Ignore the HubConfiguration as it's not serializable
             entity.Ignore(e => e.HubConfiguration);
+            entity.Ignore(e => e.GlobalServiceConfigurations);
         });
 
         // Configure DataProtectionKey entity

@@ -16,7 +16,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MeshWeaver.Hosting.PostgreSql.Migrations
 {
     [DbContext(typeof(MeshWeaverDbContext))]
-    [Migration("20250406154839_InitialCreate")]
+    [Migration("20251002064151_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -24,12 +24,12 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.3")
+                .HasAnnotation("ProductVersion", "9.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity(typeof(Article).FullName, b =>
+            modelBuilder.Entity("MeshWeaver.ContentCollections.Article", b =>
                 {
                     b.Property<string>("Url")
                         .HasColumnType("text");
@@ -57,6 +57,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("Content")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<Icon>("Icon")
@@ -92,6 +93,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("integer");
 
                     b.PrimitiveCollection<ValueTuple<ArticleStatus, DateTime>[]>("StatusHistory")
+                        .IsRequired()
                         .HasColumnType("jsonb");
 
                     b.PrimitiveCollection<List<string>>("Tags")
@@ -112,7 +114,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.Property<string>("VideoDescription")
                         .HasColumnType("text");
 
-                    b.Property<TimeSpan>("VideoDuration")
+                    b.Property<TimeSpan?>("VideoDuration")
                         .HasColumnType("interval");
 
                     b.Property<string>("VideoTagLine")
@@ -135,7 +137,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     b.ToTable("Articles");
                 });
 
-            modelBuilder.Entity("MeshWeaver.Articles.Author", b =>
+            modelBuilder.Entity("MeshWeaver.ContentCollections.Author", b =>
                 {
                     b.Property<string>("FirstName")
                         .HasColumnType("text");
@@ -211,12 +213,14 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Address")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<IReadOnlyDictionary<string, object>>("Message")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("MessageId")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<IReadOnlyDictionary<string, object>>("Properties")
@@ -226,9 +230,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Service")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("ServiceId")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("State")
@@ -258,18 +264,22 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Level")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Message")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<IReadOnlyDictionary<string, object>>("Properties")
                         .HasColumnType("jsonb");
 
                     b.Property<string>("Service")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("ServiceId")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("Timestamp")

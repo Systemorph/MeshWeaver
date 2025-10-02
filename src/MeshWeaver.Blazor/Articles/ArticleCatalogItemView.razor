@@ -53,19 +53,15 @@
             : Data.Published.Value.ToString("dd MMM yyyy");
     private bool IsNewArticle => Data.Published is not null && (DateTime.Now - Data.Published.Value).TotalDays <= 7;
     private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
-    private string VideoDuration => Data.VideoDuration.ToString(@"hh\:mm\:ss");
+    private string? VideoDuration => Data.VideoDuration?.ToString(@"hh\:mm\:ss");
 
     private string ImageBasePath => $"static/{Data.Collection}";
-    private string Avatar => $"{ImageBasePath}/avatars/{Data.AuthorAvatar}";
     private string Thumbnail => $"{ImageBasePath}/{Data.Thumbnail}";
 
     protected override void BindData()
     {
         base.BindData();
 
-        if (ViewModel != null)
-        {
-            DataBind(ViewModel.Article, x => x.Data);
-        }
+        DataBind(ViewModel.Article, x => x.Data);
     }
 }

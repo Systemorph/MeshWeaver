@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                 columns: table => new
                 {
                     Url = table.Column<string>(type: "text", nullable: false),
-                    VideoDuration = table.Column<TimeSpan>(type: "interval", nullable: false),
+                    VideoDuration = table.Column<TimeSpan>(type: "interval", nullable: true),
                     VideoUrl = table.Column<string>(type: "text", nullable: true),
                     VideoTitle = table.Column<string>(type: "text", nullable: true),
                     VideoDescription = table.Column<string>(type: "text", nullable: true),
@@ -36,7 +36,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     Comments = table.Column<int>(type: "integer", nullable: false),
                     Published = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     Status = table.Column<int>(type: "integer", nullable: false),
-                    StatusHistory = table.Column<ValueTuple<ArticleStatus, DateTime>[]>(type: "jsonb", nullable: true),
+                    StatusHistory = table.Column<ValueTuple<ArticleStatus, DateTime>[]>(type: "jsonb", nullable: false),
                     Icon = table.Column<Icon>(type: "jsonb", nullable: true),
                     Source = table.Column<string>(type: "text", nullable: true),
                     Authors = table.Column<List<string>>(type: "jsonb", nullable: true),
@@ -49,7 +49,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                     Collection = table.Column<string>(type: "text", nullable: false),
                     PrerenderedHtml = table.Column<string>(type: "text", nullable: true),
                     LastUpdated = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    Content = table.Column<string>(type: "text", nullable: true),
+                    Content = table.Column<string>(type: "text", nullable: false),
                     Path = table.Column<string>(type: "text", nullable: false),
                     CodeSubmissions = table.Column<IReadOnlyList<SubmitCodeRequest>>(type: "jsonb", nullable: true)
                 },
@@ -113,11 +113,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                 {
                     Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityAlwaysColumn),
-                    Service = table.Column<string>(type: "text", nullable: true),
-                    ServiceId = table.Column<string>(type: "text", nullable: true),
+                    Service = table.Column<string>(type: "text", nullable: false),
+                    ServiceId = table.Column<string>(type: "text", nullable: false),
                     Timestamp = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    Address = table.Column<string>(type: "text", nullable: true),
-                    MessageId = table.Column<string>(type: "text", nullable: true),
+                    Address = table.Column<string>(type: "text", nullable: false),
+                    MessageId = table.Column<string>(type: "text", nullable: false),
                     Message = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true),
                     Sender = table.Column<string>(type: "text", nullable: true),
                     Target = table.Column<string>(type: "text", nullable: true),
@@ -136,11 +136,11 @@ namespace MeshWeaver.Hosting.PostgreSql.Migrations
                 {
                     Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityAlwaysColumn),
-                    Service = table.Column<string>(type: "text", nullable: true),
-                    ServiceId = table.Column<string>(type: "text", nullable: true),
-                    Level = table.Column<string>(type: "text", nullable: true),
+                    Service = table.Column<string>(type: "text", nullable: false),
+                    ServiceId = table.Column<string>(type: "text", nullable: false),
+                    Level = table.Column<string>(type: "text", nullable: false),
                     Timestamp = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    Message = table.Column<string>(type: "text", nullable: true),
+                    Message = table.Column<string>(type: "text", nullable: false),
                     Exception = table.Column<string>(type: "text", nullable: true),
                     Properties = table.Column<IReadOnlyDictionary<string, object>>(type: "jsonb", nullable: true)
                 },
