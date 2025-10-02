@@ -5,6 +5,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>MeshWeaver.TemplateGenerator</AssemblyName>
     <RootNamespace>MeshWeaver.TemplateGenerator</RootNamespace>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

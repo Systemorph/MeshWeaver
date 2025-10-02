@@ -69,7 +69,7 @@ public class TemplateGenerator
         var httpPort = GenerateUniquePort(5000, 6000);
         var httpsPort = httpPort + 1;
 
-        CopyClaude(httpPort, httpsPort);
+        CopyAgents(httpPort, httpsPort);
         CreateTemplateConfigs();
         CreateSolutionFile();
         CreateReadme(httpsPort);
@@ -378,14 +378,14 @@ public class TemplateGenerator
         return packages;
     }
 
-    private void CopyClaude(int httpPort, int httpsPort)
+    private void CopyAgents(int httpPort, int httpsPort)
     {
-        Console.WriteLine("Creating template-specific CLAUDE.md...");
+        Console.WriteLine("Creating template-specific AGENTS.md...");
 
-        var claudeContent = CreateTemplateClaude(httpPort, httpsPort);
-        var targetFile = Path.Combine(_outputPath, "CLAUDE.md");
-        File.WriteAllText(targetFile, claudeContent);
-        Console.WriteLine($"  Created template CLAUDE.md with ports {httpPort}/{httpsPort}");
+        var agentsContent = CreateTemplateAgents(httpPort, httpsPort);
+        var targetFile = Path.Combine(_outputPath, "AGENTS.md");
+        File.WriteAllText(targetFile, agentsContent);
+        Console.WriteLine($"  Created template AGENTS.md with ports {httpPort}/{httpsPort}");
 
         // Update launch settings with the generated ports
         UpdateLaunchSettingsPorts(httpPort, httpsPort);
@@ -421,7 +421,7 @@ public class TemplateGenerator
         Console.WriteLine("  Updated launchSettings.json with new ports");
     }
     
-    private string CreateTemplateClaude(int httpPort, int httpsPort)
+    private string CreateTemplateAgents(int httpPort, int httpsPort)
     {
         // Read the design patterns from separate file
         var currentDirectory = Directory.GetCurrentDirectory();
@@ -435,9 +435,9 @@ public class TemplateGenerator
 
         var designPatterns = File.Exists(designPatternsPath) ? File.ReadAllText(designPatternsPath) : "";
 
-        return $@"# CLAUDE.md
+        return $@"# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this MeshWeaverApp1 solution.
+This file provides guidance to AI agents when working with code in this MeshWeaverApp1 solution.
 
 ## Development Commands
 
