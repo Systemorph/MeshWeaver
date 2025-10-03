@@ -1,0 +1,8 @@
+@page "/chat"
+@using MeshWeaver.AI
+
+<AgentChatView ViewModel="@chatControl" />
+
+@code {
+    private AgentChatControl chatControl = new AgentChatControl();
+}

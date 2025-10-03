@@ -84,7 +84,7 @@
             <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
             <div class="ai-chat-container">
                 <div class="ai-chat-content">
-                    <AgentChatView @ref="chatComponent" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
+                    <AgentChatView @ref="chatComponent" ViewModel="@chatControl" OnCloseRequested="ToggleAIChatVisibility"></AgentChatView>
                 </div>
             </div>
         </div>
