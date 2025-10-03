@@ -16,7 +16,7 @@ public enum ChatPosition
     Bottom
 }
 
-public partial class AgentChatView
+public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 {
     private Lazy<Task<IAgentChat>> lazyChat;
     private CancellationTokenSource currentResponseCancellation = new();
@@ -30,7 +30,8 @@ public partial class AgentChatView
     private bool isLoadingConversation;
     private bool isGeneratingResponse;
 
-    [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
+    // Bound context from the control
+    private AgentContext? boundContext;
 
     [Parameter] public bool UseStreaming { get; set; } = true;
     // Chat history panel state
@@ -92,6 +93,12 @@ public partial class AgentChatView
     public AgentChatView()
     {
         lazyChat = GetLazyChat();
+    }
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.Context, x => x.boundContext);
     }
 
     private Lazy<Task<IAgentChat>> GetLazyChat()
@@ -424,71 +431,17 @@ public partial class AgentChatView
 
     private void SetAgentContext(IAgentChat chat)
     {
-        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-
-        // Skip if path is empty or just "lazyChat"
-        if (string.IsNullOrEmpty(path) || path == "lazyChat")
-            return;
-
-        // Split the path into segments
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        // Need at least addressType and addressId
-        if (segments.Length < 2)
-            return;
-
-        var addressType = segments[0];
-        var addressId = segments[1];
-
-        // Create the Address with the extracted values
-        var address = new Address(addressType, addressId);
-
-        var layoutArea = segments.Length == 2 ? null : new LayoutAreaReference(segments[2])
+        // Use the bound context from the control
+        if (boundContext != null)
         {
-            Id =
-        string.Join('/', segments.Skip(3))
-        };
-
-        // Create a new AgentContext with the extracted values
-        chat.SetContext(new AgentContext
-        {
-            Address = address,
-            LayoutArea = layoutArea
-        });
+            chat.SetContext(boundContext);
+        }
     }
 
     private AgentContext? GetCurrentAgentContext()
     {
-        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
-
-        // Skip if path is empty or just "chat"
-        if (string.IsNullOrEmpty(path) || path == "chat")
-            return null;
-
-        // Split the path into segments
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-        // Need at least addressType and addressId
-        if (segments.Length < 2)
-            return null;
-
-        var addressType = segments[0];
-        var addressId = segments[1];
-
-        // Create the Address with the extracted values
-        var address = new Address(addressType, addressId);
-
-        var layoutArea = segments.Length == 2 ? null : new LayoutAreaReference(segments[2])
-        {
-            Id = string.Join('/', segments.Skip(3))
-        };
-
-        // Create a new AgentContext with the extracted values
-        return new AgentContext
-        {
-            Address = address,
-            LayoutArea = layoutArea
-        };
+        // Return the bound context from the control
+        return boundContext;
     }
 
 
