@@ -6,7 +6,7 @@
         <FluentStack Orientation="Orientation.Vertical">
             <div class="header">
                 <div class="author-info">
-                    @foreach (var author in Data.AuthorDetails)
+                    @foreach (var author in Data.AuthorDetails ?? [])
                     {
                         <div class="author">
                             <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>

@@ -47,8 +47,11 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBeNull();
         var kernelAddress = new KernelAddress();
-        foreach (var s in article.CodeSubmissions)
-            client.Post(s, o => o.WithTarget(kernelAddress));
+        if (article.CodeSubmissions != null)
+        {
+            foreach (var s in article.CodeSubmissions)
+                client.Post(s, o => o.WithTarget(kernelAddress));
+        }
 
         var html = article.PrerenderedHtml!.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
 

@@ -65,7 +65,7 @@ public static class ContentCollectionsExtensions
         if (article.Published.HasValue)
             markdownBuilder.AppendLine($"Published: \"{article.Published.Value:yyyy-MM-dd}\"");
 
-        if (article.Authors.Count > 0)
+        if (article.Authors?.Count > 0)
         {
             markdownBuilder.AppendLine("Authors:");
             foreach (var author in article.Authors)
@@ -74,7 +74,7 @@ public static class ContentCollectionsExtensions
             }
         }
 
-        if (article.Tags.Count > 0)
+        if (article.Tags?.Count > 0)
         {
             markdownBuilder.AppendLine("Tags:");
             foreach (var tag in article.Tags)
@@ -153,7 +153,7 @@ public static class ContentCollectionsExtensions
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
-            AuthorDetails = ret.Authors.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray()
+            AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? []
         };
     }
 
