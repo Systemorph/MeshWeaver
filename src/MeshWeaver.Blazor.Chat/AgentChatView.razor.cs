@@ -33,6 +33,9 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     // Bound context from the control
     private AgentContext? boundContext;
 
+    // Bound title from the control
+    private string chatTitle = "AI Chat";
+
     [Parameter] public bool UseStreaming { get; set; } = true;
     // Chat history panel state
     private bool showChatHistory;
@@ -99,6 +102,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     {
         base.BindData();
         DataBind(ViewModel.Context, x => x.boundContext);
+        DataBind(ViewModel.Title, x => x.chatTitle, defaultValue: "AI Chat");
     }
 
     private Lazy<Task<IAgentChat>> GetLazyChat()
