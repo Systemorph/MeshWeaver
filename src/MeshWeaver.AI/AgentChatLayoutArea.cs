@@ -7,6 +7,7 @@ public static class AgentChatLayoutArea
 {
     public const string AreaName = "AgentChat";
     public const string ContextPointer = "/context";
+    public const string TitlePointer = "/title";
 
     public static LayoutDefinition AddAgentChat(this LayoutDefinition layout)
     {
@@ -15,12 +16,14 @@ public static class AgentChatLayoutArea
 
     private static UiControl RenderChat(LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get the context from the store using the pointer
+        // Get the context and title from the store using pointers
         var contextReference = ctx.Area + ContextPointer;
+        var titleReference = ctx.Area + TitlePointer;
 
         var control = new AgentChatControl
         {
-            Context = contextReference
+            Context = contextReference,
+            Title = titleReference
         };
 
         return control;
