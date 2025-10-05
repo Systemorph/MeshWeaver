@@ -33,7 +33,7 @@ public class OrleansRoutingService(
                 return delivery.Forwarded();
 
             default:
-                logger.LogError("No stream info found for {MessageType} (ID: {MessageId})", 
+                logger.LogError("No stream info found for {MessageType} (ID: {MessageId})",
                     delivery.Message.GetType().Name, delivery.Id);
                 return delivery.Failed($"No route found for {delivery.Target}");
         }
@@ -42,6 +42,8 @@ public class OrleansRoutingService(
 
     private async Task<StreamInfo?> GetStreamInfoAsync(Address target)
     {
+        if (target is HostedAddress ha)
+            return await GetStreamInfoAsync(ha.Host);
         var streamInfo = cache.TryGetValue(target, out var cached)
             ? cached as StreamInfo
             : await GetStreamInfoFromRoutingGrainAsync(target);
@@ -67,7 +69,7 @@ public class OrleansRoutingService(
 
         var stream = serviceProvider.GetRequiredKeyedService<IStreamProvider>(streamInfo.Provider)
             .GetStream<IMessageDelivery>(address.ToString());
-        var subscription = await stream.SubscribeAsync((v, _) => 
+        var subscription = await stream.SubscribeAsync((v, _) =>
             callback.Invoke(v, CancellationToken.None));
         return new AnonymousAsyncDisposable(async () =>
         {

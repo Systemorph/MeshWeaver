@@ -1,5 +1,4 @@
-﻿#nullable enable
-namespace MeshWeaver.Messaging;
+﻿namespace MeshWeaver.Messaging;
 
 public record Address(string Type, string Id)
 {
@@ -25,4 +24,22 @@ public record Address(string Type, string Id)
 public record MeshAddress(string? Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().ToString())
 {
     public const string TypeName = "mesh";
+}
+public class AddressComparer : IEqualityComparer<Address>
+{
+    internal static readonly AddressComparer Instance = new();
+
+    public bool Equals(Address? x, Address? y)
+    {
+        if (ReferenceEquals(x, y))
+            return true;
+        if (x is null || y is null)
+            return false;
+        return x.Type.Equals(y.Type) && x.Id.Equals(y.Id);
+    }
+
+    public int GetHashCode(Address obj)
+    {
+        return HashCode.Combine(obj.Type, obj.Id);
+    }
 }
