@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.Messaging;
+﻿using MeshWeaver.ShortGuid;
+
+namespace MeshWeaver.Messaging;
 
 public record Address(string Type, string Id)
 {
@@ -21,7 +23,7 @@ public record Address(string Type, string Id)
         return new Address(parts[0], parts.Length > 1 ? string.Join('/', parts.Skip(1)) : string.Empty);
     }
 }
-public record MeshAddress(string? Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().ToString())
+public record MeshAddress(string? Id = null) : Address(MeshAddress.TypeName, Id ?? Guid.NewGuid().AsString())
 {
     public const string TypeName = "mesh";
 }

@@ -2,11 +2,13 @@
 
 namespace MeshWeaver.ContentCollections;
 
-public class FileSystemContentCollectionFactory(IMessageHub hub) : IContentCollectionFactory
+public class FileSystemContentCollectionFactory : IContentCollectionFactory
 {
     public const string SourceType = "FileSystem";
-    public ContentCollection Create(ContentSourceConfig config)
+
+    public ContentCollection Create(ContentSourceConfig config, IMessageHub hub)
     {
-        return new FileSystemContentCollection(config, hub);
+        var provider = new FileSystemStreamProvider(config.BasePath!);
+        return new ContentCollection(config, provider, hub);
     }
 }

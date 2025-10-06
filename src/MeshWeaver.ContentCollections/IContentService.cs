@@ -1,4 +1,6 @@
-﻿namespace MeshWeaver.ContentCollections;
+﻿using MeshWeaver.Messaging;
+
+namespace MeshWeaver.ContentCollections;
 
 public interface IContentService
 {
@@ -10,4 +12,10 @@ public interface IContentService
     IReadOnlyCollection<ContentCollection> GetCollections(bool includeHidden = false);
     IReadOnlyCollection<ContentCollection> GetCollections(string context);
     ContentCollection? GetCollection(string collectionName);
+
+    /// <summary>
+    /// Gets the collection mapped to the specified address.
+    /// Returns null if no collection is mapped to this address.
+    /// </summary>
+    ContentCollection? GetCollectionForAddress(Address address);
 }

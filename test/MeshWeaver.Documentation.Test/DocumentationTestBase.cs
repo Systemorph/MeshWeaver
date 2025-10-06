@@ -35,7 +35,6 @@ namespace MeshWeaver.Documentation.Test
             base.ConfigureMesh(builder)
                 .AddKernel()
                 .ConfigureServices(ConfigureArticles)
-                .ConfigureServices(services => services.AddContentCollections())
                 .InstallAssemblies(DocumentationAssemblyLocation)
                 ;
 

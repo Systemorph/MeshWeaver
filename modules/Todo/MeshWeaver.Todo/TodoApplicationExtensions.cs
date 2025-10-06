@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
@@ -46,6 +47,8 @@ public static class TodoApplicationExtensions
                       .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
                       .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
                       .WithThumbnailBasePath("/static/Todo/thumbnails")
-            );
+            )
+            .AddContentCollections()
+            ;
     }
 }

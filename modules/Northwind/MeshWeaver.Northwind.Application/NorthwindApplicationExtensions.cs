@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Model;
 
 namespace MeshWeaver.Northwind.Application;
@@ -21,5 +22,6 @@ public static class NorthwindApplicationExtensions
                 .AddNorthwindSuppliers()
                 .AddNorthwindProducts()
                 .AddNorthwindCustomers()
-                .AddNorthwindReferenceData();
+                .AddNorthwindReferenceData()
+                .AddContentCollections();
 }

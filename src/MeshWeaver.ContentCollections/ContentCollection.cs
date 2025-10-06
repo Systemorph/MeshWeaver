@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -9,15 +9,18 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.ContentCollections;
 
-public abstract class ContentCollection : IDisposable
+public class ContentCollection : IDisposable
 {
     private readonly ISynchronizationStream<InstanceCollection> markdownStream;
-    private readonly ContentSourceConfig config;
+    private readonly IStreamProvider provider;
+    public readonly ContentSourceConfig Config;
+    private IDisposable? monitorDisposable;
 
-    protected ContentCollection(ContentSourceConfig config, IMessageHub hub)
+    public ContentCollection(ContentSourceConfig config, IStreamProvider provider, IMessageHub hub)
     {
         Hub = hub;
-        this.config = config;
+        Config = config;
+        this.provider = provider;
         markdownStream = CreateStream();
     }
 
@@ -33,11 +36,11 @@ public abstract class ContentCollection : IDisposable
     }
 
 
-    protected IMessageHub Hub { get; }
-    public string Collection => config.Name!;
-    public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
-    public bool IsHidden => config.HiddenFrom.Length > 0;
-    public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
+    public IMessageHub Hub { get; }
+    public string Collection => Config.Name!;
+    public string DisplayName => Config.DisplayName ?? Config.Name!.Wordify();
+    public bool IsHidden => Config.HiddenFrom.Length > 0;
+    public bool IsHiddenFrom(string context) => Config.HiddenFrom.Contains(context);
 
     public IObservable<object?> GetMarkdown(string path)
         => markdownStream
@@ -53,10 +56,129 @@ public abstract class ContentCollection : IDisposable
             .Select(x => x.Value!.Instances.Values);
 
 
-    public abstract Task<Stream?> GetContentAsync(string path, CancellationToken ct = default);
+    public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
+        => provider.GetStreamAsync(path, ct);
+
+    public async Task<GetStaticContentResponse> GetStaticContentResponseAsync(string path, CancellationToken ct = default)
+    {
+        var contentType = GetContentType(path);
+        var fileName = Path.GetFileName(path);
+
+        // Get stream from provider
+        var stream = await provider.GetStreamAsync(path, ct);
+        if (stream == null)
+        {
+            return new GetStaticContentResponse(null, null);
+        }
+
+        // For embedded resources, always inline content
+        if (provider.ProviderType == "EmbeddedResource")
+        {
+            using (stream)
+            {
+                if (IsTextContent(contentType))
+                {
+                    using var reader = new StreamReader(stream);
+                    var content = await reader.ReadToEndAsync(ct);
+                    return new GetStaticContentResponse(contentType, fileName)
+                    {
+                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        InlineContent = content
+                    };
+                }
+                else
+                {
+                    using var memoryStream = new MemoryStream();
+                    await stream.CopyToAsync(memoryStream, ct);
+                    var base64Content = Convert.ToBase64String(memoryStream.ToArray());
+                    return new GetStaticContentResponse(contentType, fileName)
+                    {
+                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        InlineContent = base64Content
+                    };
+                }
+            }
+        }
+
+        // For FileSystem with small text files, inline them
+        if (provider.ProviderType == "FileSystem" && Config.BasePath != null)
+        {
+            var fullPath = Path.Combine(Config.BasePath, path.TrimStart('/'));
+            if (ShouldInlineContent(contentType, fullPath))
+            {
+                using (stream)
+                using (var reader = new StreamReader(stream))
+                {
+                    var content = await reader.ReadToEndAsync(ct);
+                    return new GetStaticContentResponse(contentType, fileName)
+                    {
+                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        InlineContent = content
+                    };
+                }
+            }
+        }
+
+        // For all other cases, return provider reference
+        stream.Dispose();
+        var providerReference = GetProviderReference(path);
+        return new GetStaticContentResponse(contentType, fileName)
+        {
+            SourceType = provider.ProviderType,
+            ProviderName = Collection,
+            ProviderReference = providerReference
+        };
+    }
+
+    private string? GetProviderReference(string path)
+    {
+        return provider.ProviderType switch
+        {
+            "FileSystem" => Path.Combine(Config.BasePath!, path.TrimStart('/')),
+            "EmbeddedResource" => GetEmbeddedResourceName(path),
+            "AzureBlob" => path.TrimStart('/'),
+            _ => path.TrimStart('/')
+        };
+    }
+
+    private string? GetEmbeddedResourceName(string path)
+    {
+        if (provider is EmbeddedResourceStreamProvider embeddedProvider)
+        {
+            return embeddedProvider.GetResourceName(path);
+        }
+        return null;
+    }
+
+    private static bool IsTextContent(string contentType)
+    {
+        var textTypes = new[]
+        {
+            "text/css",
+            "application/javascript",
+            "text/html",
+            "application/json",
+            "text/plain",
+            "image/svg+xml"
+        };
+
+        return textTypes.Contains(contentType) || contentType.StartsWith("text/");
+    }
+
+    private static bool ShouldInlineContent(string contentType, string filePath)
+    {
+        if (!IsTextContent(contentType))
+        {
+            return false;
+        }
+
+        var fileInfo = new FileInfo(filePath);
+        return fileInfo.Exists && fileInfo.Length < 100_000;
+    }
 
     public virtual void Dispose()
     {
+        monitorDisposable?.Dispose();
         markdownStream.Dispose();
     }
 
@@ -77,10 +199,14 @@ public abstract class ContentCollection : IDisposable
                 })).ToImmutableDictionary() ?? ImmutableDictionary<string, Author>.Empty;
     }
 
-    public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
+    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+        => provider.GetFoldersAsync(path);
 
-    public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
-    public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
+    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+        => provider.GetFilesAsync(path);
+
+    public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+        => provider.SaveFileAsync(path, fileName, openReadStream);
 
     public async Task SaveArticleAsync(Article article)
     {
@@ -99,15 +225,15 @@ public abstract class ContentCollection : IDisposable
             .Concat(files)
             .ToArray();
     }
+
     protected static bool MarkdownFilter(string name)
         => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        await InitializeInfrastructureAsync();
-        Authors = await LoadAuthorsAsync(ct);
+        Authors = await provider.LoadAuthorsAsync(ct);
         var ret = new InstanceCollection(
-            await GetStreams(MarkdownFilter, ct)
+            await provider.GetStreamsAsync(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
                 .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
@@ -116,16 +242,11 @@ public abstract class ContentCollection : IDisposable
         return ret;
     }
 
-    protected virtual Task InitializeInfrastructureAsync()
-    {
-        return Task.CompletedTask;
-    }
-
     protected void UpdateArticle(string path)
     {
         markdownStream.Update(async (x, ct) =>
         {
-            var tuple = await GetStreamAsync(path, ct);
+            var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
             if (tuple.Stream is null)
                 return null;
             var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
@@ -136,8 +257,6 @@ public abstract class ContentCollection : IDisposable
 
         }, _ => Task.CompletedTask);
     }
-
-    protected abstract Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
     {
@@ -156,18 +275,19 @@ public abstract class ContentCollection : IDisposable
         );
     }
 
-    protected abstract void AttachMonitor();
+    protected void AttachMonitor()
+    {
+        monitorDisposable = provider.AttachMonitor(UpdateArticle);
+    }
 
-    protected abstract Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct);
+    public Task CreateFolderAsync(string folderPath)
+        => provider.CreateFolderAsync(folderPath);
 
-    public abstract Task CreateFolderAsync(string folderPath);
+    public Task DeleteFolderAsync(string folderPath)
+        => provider.DeleteFolderAsync(folderPath);
 
-    public abstract Task DeleteFolderAsync(string folderPath);
-
-    public abstract Task DeleteFileAsync(string filePath);
-    protected abstract IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
-
-
+    public Task DeleteFileAsync(string filePath)
+        => provider.DeleteFileAsync(filePath);
 
     public virtual string GetContentType(string path)
     {
@@ -176,20 +296,29 @@ public abstract class ContentCollection : IDisposable
             return "text/markdown";
         return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }
+
     private static readonly Dictionary<string, string> MimeTypes = new()
     {
         { ".txt", "text/plain" },
         { ".md", "text/markdown" },
         { ".html", "text/html" },
         { ".htm", "text/html" },
+        { ".css", "text/css" },
+        { ".js", "application/javascript" },
         { ".jpg", "image/jpeg" },
         { ".jpeg", "image/jpeg" },
         { ".png", "image/png" },
         { ".gif", "image/gif" },
         { ".bmp", "image/bmp" },
         { ".svg", "image/svg+xml" },
+        { ".webp", "image/webp" },
+        { ".ico", "image/x-icon" },
         { ".json", "application/json" },
         { ".pdf", "application/pdf" },
-        // Add more mappings as needed
+        { ".woff", "font/woff" },
+        { ".woff2", "font/woff2" },
+        { ".ttf", "font/ttf" },
+        { ".eot", "application/vnd.ms-fontobject" },
+        { ".otf", "font/otf" },
     };
 }

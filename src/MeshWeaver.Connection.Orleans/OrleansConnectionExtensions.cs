@@ -1,5 +1,4 @@
-﻿using System.Threading.Channels;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -16,7 +15,7 @@ public static class OrleansConnectionExtensions
     {
         var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? new MeshAddress());
         ConfigureMeshWeaver(builder);
-        builder.ConfigureServices(services => 
+        builder.ConfigureServices(services =>
             services.AddOrleansMeshServices());
 
         return builder;
@@ -38,7 +37,7 @@ public static class OrleansConnectionExtensions
 
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
-        builder.ConfigureServices(services => 
+        builder.ConfigureServices(services =>
             services.AddSerializer(serializerBuilder =>
             {
                 serializerBuilder.AddJsonSerializer(
