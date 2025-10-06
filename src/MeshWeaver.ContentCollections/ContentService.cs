@@ -15,9 +15,9 @@ public class ContentService : IContentService
     {
         this.hub = hub;
         this.accessService = accessService;
-        
+
         var collectionsDict = new Dictionary<string, ContentCollection>();
-        
+
         // Add collections from configuration
         var configs = serviceProvider.GetService<IOptions<List<ContentSourceConfig>>>();
         if (configs?.Value != null)
@@ -27,7 +27,7 @@ public class ContentService : IContentService
                 collectionsDict[collection.Collection] = collection;
             }
         }
-        
+
         // Add collections from providers
         var providers = serviceProvider.GetServices<IContentCollectionProvider>();
         foreach (var provider in providers)
@@ -37,7 +37,7 @@ public class ContentService : IContentService
                 collectionsDict[collection.Collection] = collection;
             }
         }
-        
+
         collections = collectionsDict;
     }
 
@@ -47,7 +47,7 @@ public class ContentService : IContentService
         var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
-        return factory.Create(config);
+        return factory.Create(config, hub);
     }
 
     private readonly IReadOnlyDictionary<string, ContentCollection> collections;
@@ -110,7 +110,7 @@ public class ContentService : IContentService
         return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
     }
 
-    public IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default)
+    public IReadOnlyCollection<ContentCollection> GetCollections()
     {
         return collections.Values.ToArray();
     }
@@ -130,5 +130,27 @@ public class ContentService : IContentService
         return collections.Values
             .Where(c => !c.IsHiddenFrom(context))
             .ToArray();
+    }
+
+    public ContentCollection? GetCollectionForAddress(Address address)
+    {
+        // First, try to find a collection with a custom AddressFilter
+        var collectionWithFilter = collections.Values
+            .FirstOrDefault(c => c.Config.AddressFilter?.Invoke(address) == true);
+
+        if (collectionWithFilter != null)
+            return collectionWithFilter;
+
+        // Then, try to find a collection with AddressMappings that match the address ID or Type
+        var collectionWithMapping = collections.Values
+            .FirstOrDefault(c => c.Config.AddressMappings != null &&
+                (c.Config.AddressMappings.Contains(address.Id) ||
+                 c.Config.AddressMappings.Contains(address.Type)));
+
+        if (collectionWithMapping != null)
+            return collectionWithMapping;
+
+        // Default: try to find a collection by address ID
+        return GetCollection(address.Id);
     }
 }

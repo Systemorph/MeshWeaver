@@ -1,5 +1,6 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
+using MeshWeaver.Mesh;
 [assembly: DocumentationApplication]
 
 namespace MeshWeaver.Documentation;
@@ -22,6 +23,6 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
     public MeshNode Documentation => CreateFromHubConfiguration(
         new ApplicationAddress(nameof(Documentation)),
         nameof(Documentation),
-        DocumentationViewModels.AddDocumentation
-    );
+        DocumentationApplicationExtensions.AddDocumentation
+    ).WithEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly, "Markdown");
 }

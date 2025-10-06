@@ -118,11 +118,11 @@ public static class SharedPortalConfiguration
             builder.Configuration.GetSection("Styles"));
     }
 
-    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
+    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder, IConfiguration configuration)
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
-                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddGoogleMaps())
+                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddGoogleMaps().AddContentCollections(configuration))
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
                             c.AddArticles()

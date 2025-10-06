@@ -67,11 +67,7 @@ public class MessageService : IMessageService
               startupCompletionSource.SetResult(true);
 
               logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
-              if (startupDeferral is not null)
-              {
-                  startupDeferral.Dispose();
-                  startupDeferral = null;
-              }
+              startupDeferral.Dispose();
               logger.LogInformation("MessageService startup completed for {Address}", Address);
           }
           catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
@@ -384,7 +380,7 @@ public class MessageService : IMessageService
         return delivery;
     }
     private readonly Lock locker = new();
-    private IDisposable startupDeferral;
+    private readonly IDisposable startupDeferral;
 
     public async ValueTask DisposeAsync()
     {

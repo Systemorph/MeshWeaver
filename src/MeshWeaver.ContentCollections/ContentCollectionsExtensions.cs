@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Text;
+using Azure.Storage.Blobs;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -7,6 +8,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Azure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
@@ -15,19 +18,98 @@ public static class ContentCollectionsExtensions
 {
     public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
         config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogSkin))
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogSkin), typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
             .AddLayout(layout => layout
-                .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog));
+                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog))
+            .AddContentCollections();
+    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null) =>
+        config
+            .WithServices(services => services.AddContentCollections(configuration))
+            .WithTypes(typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
+            .AddLayout(layout => layout
+                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog))
+            .WithHandler<GetStaticContentRequest>(async (hub, request, ct) =>
+            {
+                var response = await GetStaticContentHandler(hub, request, ct);
+                hub.Post(response, o => o.ResponseFor(request));
+                return request.Processed();
+            });
 
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    public static IServiceCollection AddContentCollections(this IServiceCollection services)
-        => services
-                .AddSingleton<IContentService, ContentService>()
-                .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
-            ;
+    private static async Task<GetStaticContentResponse> GetStaticContentHandler(
+        IMessageHub hub,
+        IMessageDelivery<GetStaticContentRequest> delivery,
+        CancellationToken cancellationToken)
+    {
+        var request = delivery.Message;
+        var contentService = hub.GetContentService();
+
+        // Get the collection mapped to this address
+        var contentCollection = contentService.GetCollectionForAddress(hub.Address);
+
+        if (contentCollection is null)
+        {
+            return new GetStaticContentResponse(null, null);
+        }
+
+        // Delegate to the content collection to prepare the response
+        return await contentCollection.GetStaticContentResponseAsync(request.Path, cancellationToken);
+    }
+
+
+    private static IServiceCollection AddContentCollections(this IServiceCollection services, IConfiguration? configuration = null)
+    {
+        services
+            .AddSingleton<IContentService, ContentService>()
+            .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType);
+
+        // Register stream providers if configuration is provided
+        if (configuration != null)
+        {
+            var config = configuration.GetSection("StreamProviders").Get<StreamProvidersConfiguration>();
+            if (config?.Providers != null)
+            {
+                foreach (var providerConfig in config.Providers)
+                {
+                    services.AddStreamProvider(providerConfig);
+                }
+            }
+        }
+
+        return services;
+    }
+
+    private static IServiceCollection AddStreamProvider(this IServiceCollection services, StreamProviderConfiguration config)
+    {
+        switch (config.ProviderType)
+        {
+            case "FileSystem":
+                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, key) =>
+                {
+                    var basePath = config.Settings.GetValueOrDefault("BasePath", "");
+                    return new FileSystemStreamProvider(basePath);
+                });
+                break;
+
+            case "AzureBlob":
+                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, key) =>
+                {
+                    var factory = sp.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
+                    var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
+                    var containerName = config.Settings.GetValueOrDefault("ContainerName", config.Name);
+                    var blobServiceClient = factory.CreateClient(clientName);
+                    return new AzureBlobStreamProvider(blobServiceClient, containerName);
+                });
+                break;
+
+            default:
+                throw new InvalidOperationException($"Unknown stream provider type: {config.ProviderType}");
+        }
+
+        return services;
+    }
 
     public static string ConvertToMarkdown(this Article article)
     {
@@ -172,17 +254,39 @@ public static class ContentCollectionsExtensions
         => $"content/{collection}/{path}";
 
 
-    public static MeshNode WithEmbeddedResourceContentCollection(this MeshNode node, string collectionName, Assembly assembly, string relativePath)
+    public static MeshNode WithEmbeddedResourceContentCollection(
+        this MeshNode node,
+        string collectionName,
+        Assembly assembly,
+        string relativePath,
+        string[]? addressMappings = null)
         => node.WithGlobalServiceRegistry(services =>
-        services.AddSingleton<IContentCollectionProvider>(sp =>
-        new ContentCollectionProvider(
-            new EmbeddedResourceContentCollection(
-               collectionName,
-                assembly,
-                 $"{assembly.GetName().Name}.{relativePath}",
-                sp.GetRequiredService<IMessageHub>()
-            )
-        )));
+        {
+            var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
+
+            // Register the stream provider for this embedded resource collection
+            services.AddKeyedSingleton<IStreamProvider>(collectionName, (sp, key) =>
+                new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
+
+            // Register the content collection provider
+            services.AddSingleton<IContentCollectionProvider>(sp =>
+            {
+                var hub = sp.GetRequiredService<IMessageHub>();
+                var provider = new EmbeddedResourceStreamProvider(assembly, resourcePrefix);
+                var config = new ContentSourceConfig
+                {
+                    Name = collectionName,
+                    SourceType = "EmbeddedResource",
+                    AddressMappings = addressMappings ?? [collectionName] // Default to collection name
+                };
+                return new ContentCollectionProvider(
+                    new ContentCollection(config, provider, hub)
+                );
+            });
+
+            return services;
+        });
+
 
 }
 

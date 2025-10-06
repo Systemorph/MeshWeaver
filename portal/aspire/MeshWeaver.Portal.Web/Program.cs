@@ -33,7 +33,7 @@ builder.UseOrleansMeshClient(address, client =>
     )
     .AddEfCoreSerilog("Frontend", address.Id)
     .AddEfCoreMessageLog("Frontend", address.Id)
-    .ConfigureWebPortal()
+    .ConfigureWebPortal(builder.Configuration)
     .ConfigureServices(services =>
     {
         services.Configure<ConnectionOptions>(options =>
@@ -42,7 +42,8 @@ builder.UseOrleansMeshClient(address, client =>
         });
         // Configure Data Protection to persist keys to PostgreSQL using MeshWeaverDbContext
         services.AddDataProtection().PersistKeysToDbContext<MeshWeaverDbContext>();
-        return services.AddAzureBlobArticles();
+        return services
+            .AddAzureBlobArticles();
     });
 
 var app = builder.Build();

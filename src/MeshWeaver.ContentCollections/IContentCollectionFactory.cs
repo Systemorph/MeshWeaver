@@ -1,6 +1,8 @@
-﻿namespace MeshWeaver.ContentCollections;
+﻿using MeshWeaver.Messaging;
+
+namespace MeshWeaver.ContentCollections;
 
 public interface IContentCollectionFactory
 {
-    ContentCollection Create(ContentSourceConfig config);
+    ContentCollection Create(ContentSourceConfig config, IMessageHub hub);
 }

@@ -29,7 +29,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         base.ConfigureMesh(builder)
             .AddKernel()
             .ConfigureServices(ConfigureArticles)
-            .ConfigureServices(services => services.AddContentCollections())
+            .ConfigureHub(hub => hub.AddContentCollections())
             .AddMeshNodes(TestHubExtensions.Node)
             ;
 
@@ -39,7 +39,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Configure<List<ContentSourceConfig>>(
                 options => options.Add(new ContentSourceConfig()
                 {
-                    Name = Test, BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+                    Name = Test,
+                    BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
                 })
             );
     }
@@ -56,7 +57,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task BasicArticle()
     {
         var client = GetClient();
-        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content") {Id = "Test/Overview"});
+        var articleStream = client.GetWorkspace().GetStream(new LayoutAreaReference("Content") { Id = "Test/Overview" });
 
         var control = await articleStream
             .GetControlStream("Content")
@@ -76,7 +77,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task NotFound()
     {
         var client = GetClient();
-        var articleStream = client.RenderArticle("Test","NotFound");
+        var articleStream = client.RenderArticle("Test", "NotFound");
 
         var control = await articleStream
             .Timeout(20.Seconds())

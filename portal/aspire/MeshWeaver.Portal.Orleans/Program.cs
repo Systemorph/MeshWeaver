@@ -2,7 +2,6 @@
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.ServiceDefaults;
 using MeshWeaver.Portal.Shared.Mesh;
-using MeshWeaver.ShortGuid;
 using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,7 +12,7 @@ builder.ConfigurePostgreSqlContext("meshweaverdb");
 
 // Configure Orleans with Azure Table Storage
 var serviceId = OrleansConstants.ServiceId;
-builder.UseOrleansMeshServer(new MeshAddress(serviceId), silo =>
+builder.UseOrleansMeshServer(new MeshAddress(), silo =>
         silo.Configure<ClusterOptions>(opts =>
         {
             opts.ClusterId = OrleansConstants.ClusterId;
