@@ -57,6 +57,7 @@ public class ContentService : IContentService
     public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
 
+
     public Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
     {
         var coll = GetCollection(collection);
@@ -68,12 +69,20 @@ public class ContentService : IContentService
     public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
         CancellationToken ct)
     {
-        var allCollections =
-            string.IsNullOrEmpty(catalogOptions.Collection)
-            ? collections.Values
-            : collections.TryGetValue(catalogOptions.Collection, out var collection)
-                ? [collection]
-                : [];
+
+        var allCollections = (catalogOptions.Collections ?? [])
+            .Select(x => collections.GetValueOrDefault(x))
+            .Where(x => x is not null)
+            .ToArray();
+        if (catalogOptions.Addresses.Any())
+        {
+            var collectionsFromAddresses = await catalogOptions.Addresses
+                .ToAsyncEnumerable()
+                .SelectAwait(async c => await GetCollectionForAddressAsync(c, ct))
+                .ToArrayAsync(ct);
+
+            allCollections = allCollections.Concat(collectionsFromAddresses).ToArray();
+        }
         return (await allCollections.Select(c => c.GetMarkdown(catalogOptions))
                 .CombineLatest()
                 .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
@@ -112,7 +121,7 @@ public class ContentService : IContentService
         return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
     }
 
-    public IReadOnlyCollection<ContentCollection> GetCollections()
+    public IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default)
     {
         return collections.Values.ToArray();
     }

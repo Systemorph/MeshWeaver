@@ -14,12 +14,6 @@ public interface IContentService
     ContentCollection? GetCollection(string collectionName);
 
     /// <summary>
-    /// Gets the collection mapped to the specified address.
-    /// Returns null if no collection is mapped to this address.
-    /// </summary>
-    ContentCollection? GetCollectionForAddress(Address address);
-
-    /// <summary>
     /// Gets the collection mapped to the specified address asynchronously.
     /// If the collection is not found locally, attempts to load it dynamically from the remote hub.
     /// Returns null if no collection is found.

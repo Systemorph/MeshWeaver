@@ -18,9 +18,10 @@ public static class ContentCollectionsExtensions
 {
     public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
         config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogSkin), typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin), typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
             .AddLayout(layout => layout
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog))
+                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog)
+                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
             .AddContentCollections();
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null) =>
         config
@@ -53,7 +54,7 @@ public static class ContentCollectionsExtensions
         var contentService = hub.GetContentService();
 
         // Get the collection mapped to this address
-        var contentCollection = contentService.GetCollectionForAddress(hub.Address);
+        var contentCollection = await contentService.GetCollectionForAddressAsync(hub.Address, cancellationToken);
 
         if (contentCollection is null)
         {
@@ -64,7 +65,7 @@ public static class ContentCollectionsExtensions
         return await contentCollection.GetStaticContentResponseAsync(request.Path, cancellationToken);
     }
 
-    private static Task<GetContentCollectionResponse> GetContentCollectionHandler(
+    private static async Task<GetContentCollectionResponse> GetContentCollectionHandler(
         IMessageHub hub,
         IMessageDelivery<GetContentCollectionRequest> delivery,
         CancellationToken cancellationToken)
@@ -72,11 +73,11 @@ public static class ContentCollectionsExtensions
         var contentService = hub.GetContentService();
 
         // Get the collection mapped to this address
-        var contentCollection = contentService.GetCollectionForAddress(hub.Address);
+        var contentCollection = await contentService.GetCollectionForAddressAsync(hub.Address, cancellationToken);
 
         if (contentCollection is null)
         {
-            return Task.FromResult(new GetContentCollectionResponse());
+            return new();
         }
 
         // Build configuration based on provider type
@@ -117,12 +118,12 @@ public static class ContentCollectionsExtensions
                 break;
         }
 
-        return Task.FromResult(new GetContentCollectionResponse
+        return new GetContentCollectionResponse
         {
             ProviderType = providerType,
             CollectionName = contentCollection.Collection,
             Configuration = config
-        });
+        };
     }
 
 
@@ -364,7 +365,8 @@ public static class ContentCollectionsExtensions
 
 public record ArticleCatalogOptions
 {
-    public string Collection { get; init; } = string.Empty;
+    public IReadOnlyCollection<string> Collections { get; init; } = [];
+    public IReadOnlyCollection<Address> Addresses { get; init; } = [];
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
 

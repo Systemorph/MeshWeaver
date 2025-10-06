@@ -39,7 +39,8 @@
       "Bash(git restore:*)",
       "Bash(meshweaver-thumbnails:*)",
       "Bash(findstr:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Read(//c/**)"
     ],
     "deny": []
   }

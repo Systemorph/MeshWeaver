@@ -48,7 +48,7 @@ public static class TodoApplicationExtensions
                       .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
                       .WithThumbnailBasePath("/static/Todo/thumbnails")
             )
-            .AddContentCollections()
+            .AddArticles()
             ;
     }
 }
