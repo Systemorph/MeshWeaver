@@ -10,6 +10,8 @@ public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
+    private readonly Dictionary<string, ContentCollection> dynamicCollections = new();
+    private readonly object lockObject = new();
 
     public ContentService(IServiceProvider serviceProvider, IMessageHub hub, AccessService accessService)
     {
@@ -150,7 +152,112 @@ public class ContentService : IContentService
         if (collectionWithMapping != null)
             return collectionWithMapping;
 
+        // Check dynamic collections
+        lock (lockObject)
+        {
+            if (dynamicCollections.TryGetValue(address.Id, out var dynamicCollection))
+                return dynamicCollection;
+        }
+
         // Default: try to find a collection by address ID
         return GetCollection(address.Id);
+    }
+
+    public async Task<ContentCollection?> GetCollectionForAddressAsync(Address address, CancellationToken cancellationToken = default)
+    {
+        // First check if it's already configured
+        var existing = GetCollectionForAddress(address);
+        if (existing != null)
+            return existing;
+
+        // Try to load it dynamically from the remote hub
+        try
+        {
+            var request = new GetContentCollectionRequest();
+            var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+            );
+
+            var response = await hub.AwaitResponse(request, o => o.WithTarget(address), timeout.Token);
+
+            if (!response.Message.IsFound)
+                return null;
+
+            // Create and register the collection
+            var collection = await CreateCollectionFromResponseAsync(response.Message, address);
+
+            lock (lockObject)
+            {
+                dynamicCollections[address.Id] = collection;
+            }
+
+            return collection;
+        }
+        catch (TaskCanceledException)
+        {
+            return null;
+        }
+    }
+
+    private Task<ContentCollection> CreateCollectionFromResponseAsync(
+        GetContentCollectionResponse response,
+        Address address)
+    {
+        // Create provider based on type
+        IStreamProvider provider = response.ProviderType switch
+        {
+            "FileSystem" => CreateFileSystemProvider(response.Configuration),
+            "EmbeddedResource" => CreateEmbeddedResourceProvider(response.Configuration),
+            "AzureBlob" => CreateAzureBlobProvider(response.Configuration),
+            _ => throw new NotSupportedException($"Unknown provider type: {response.ProviderType}")
+        };
+
+        // Create config
+        var config = new ContentSourceConfig
+        {
+            Name = response.CollectionName ?? address.Id,
+            SourceType = response.ProviderType ?? "Unknown",
+            AddressMappings = [address.Id],
+            Settings = response.Configuration
+        };
+
+        // Create collection
+        var collection = new ContentCollection(config, provider, hub);
+        return Task.FromResult(collection);
+    }
+
+    private static IStreamProvider CreateFileSystemProvider(Dictionary<string, string>? config)
+    {
+        var basePath = config?.GetValueOrDefault("BasePath") ?? "";
+        return new FileSystemStreamProvider(basePath);
+    }
+
+    private static IStreamProvider CreateEmbeddedResourceProvider(Dictionary<string, string>? config)
+    {
+        var assemblyName = config?.GetValueOrDefault("AssemblyName")
+            ?? throw new ArgumentException("AssemblyName required for EmbeddedResource");
+        var resourcePrefix = config?.GetValueOrDefault("ResourcePrefix")
+            ?? throw new ArgumentException("ResourcePrefix required for EmbeddedResource");
+
+        var assembly = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == assemblyName)
+            ?? throw new InvalidOperationException($"Assembly not found: {assemblyName}");
+
+        return new EmbeddedResourceStreamProvider(assembly, resourcePrefix);
+    }
+
+    private IStreamProvider CreateAzureBlobProvider(Dictionary<string, string>? config)
+    {
+        var containerName = config?.GetValueOrDefault("ContainerName")
+            ?? throw new ArgumentException("ContainerName required for AzureBlob");
+        var clientName = config?.GetValueOrDefault("ClientName", "default");
+
+        var factory = hub.ServiceProvider.GetService<Microsoft.Extensions.Azure.IAzureClientFactory<Azure.Storage.Blobs.BlobServiceClient>>();
+        if (factory == null)
+            throw new InvalidOperationException("Azure client factory not configured");
+
+        var blobServiceClient = factory.CreateClient(clientName);
+        return new AzureBlobStreamProvider(blobServiceClient, containerName);
     }
 }

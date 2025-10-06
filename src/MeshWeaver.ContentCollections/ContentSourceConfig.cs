@@ -20,4 +20,9 @@ public class ContentSourceConfig
     /// If null, uses AddressMappings array.
     /// </summary>
     public Func<Messaging.Address, bool>? AddressFilter { get; set; }
+
+    /// <summary>
+    /// Additional provider-specific settings
+    /// </summary>
+    public Dictionary<string, string>? Settings { get; set; }
 }
