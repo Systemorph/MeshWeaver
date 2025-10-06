@@ -23,5 +23,5 @@ public static class NorthwindApplicationExtensions
                 .AddNorthwindProducts()
                 .AddNorthwindCustomers()
                 .AddNorthwindReferenceData()
-                .AddContentCollections();
+                .AddArticles();
 }

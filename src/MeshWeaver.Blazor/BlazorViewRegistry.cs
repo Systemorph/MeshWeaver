@@ -80,6 +80,7 @@ public static class BlazorViewRegistry
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
             SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
             ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
+            ArticleCatalogControl articleCatalog => StandardView<ArticleCatalogControl, ArticleCatalogView>(articleCatalog, stream, area),
             ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
             LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),

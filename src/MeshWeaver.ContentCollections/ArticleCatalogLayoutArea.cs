@@ -1,6 +1,6 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 
 namespace MeshWeaver.ContentCollections;
@@ -17,7 +17,7 @@ public static class ArticleCatalogLayoutArea
     public static async Task<UiControl?> Catalog(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var articleService = host.Hub.GetContentService();
-        var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Reference), ct);
+        var articles = await articleService.GetArticleCatalog(ParseToOptions(host.Hub.Address), ct);
         return articles.Aggregate(Controls.Stack.AddSkin(new ArticleCatalogSkin()), (s, a) =>
                         s.WithView(CreateControl(a))
                     )
@@ -31,14 +31,14 @@ public static class ArticleCatalogLayoutArea
     /// <summary>
     /// This is the deserialization of Id to catalog options. Need to see how we use.
     /// </summary>
-    /// <param name="reference">Layout area reference to be parsed.</param>
+    /// <param name="address">Address to be displayed.</param>
     /// <returns></returns>
-    private static ArticleCatalogOptions ParseToOptions(LayoutAreaReference reference)
+    private static ArticleCatalogOptions ParseToOptions(Address address)
     {
         // TODO V10: Need to create some link from layout area reference id to options ==> url parsing. (24.01.2025, Roland Bürgi)
         return new()
         {
-            Collection = reference.Id?.ToString() ?? string.Empty
+            Addresses = [address]
         };
     }
 

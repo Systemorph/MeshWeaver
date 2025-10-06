@@ -20,7 +20,7 @@ public static class DocumentationApplicationExtensions
     /// <returns></returns>
     public static MessageHubConfiguration AddDocumentation(MessageHubConfiguration config)
         => config
-            .AddContentCollections()
+            .AddArticles()
             .AddLayout(layout => layout
             .AddCounter()
             .AddCalculator()
