@@ -6,7 +6,6 @@ using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration;
@@ -16,29 +15,33 @@ namespace MeshWeaver.ContentCollections;
 
 public static class ContentCollectionsExtensions
 {
-    public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
-        config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin), typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
+    public static MessageHubConfiguration AddArticles(
+        this MessageHubConfiguration config,
+        Func<ArticlesConfiguration, ArticlesConfiguration>? configure = null)
+    {
+        return config
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin), typeof(GetContentRequest), typeof(GetContentResponse))
+            .WithServices(services =>
+            services.AddScoped<ArticlesConfiguration>(_ => configure is null ? new ArticlesConfiguration() { Addresses = [config.Address] } : configure.Invoke(new()))
+            )
             .AddLayout(layout => layout
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog)
                 .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles)
                 .WithView(nameof(ArticlesLayoutArea.Content), ArticlesLayoutArea.Content))
             .AddContentCollections();
+    }
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null) =>
         config
             .WithServices(services => services.AddContentCollections(configuration))
-            .WithTypes(typeof(GetStaticContentRequest), typeof(GetStaticContentResponse), typeof(GetContentCollectionRequest), typeof(GetContentCollectionResponse))
-            .AddLayout(layout => layout
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog))
-            .WithHandler<GetStaticContentRequest>(async (hub, request, ct) =>
+            .WithTypes(typeof(GetContentRequest), typeof(GetContentResponse), typeof(GetContentCollectionRequest), typeof(GetContentCollectionResponse))
+            .WithHandler<GetContentRequest>(async (hub, request, ct) =>
             {
-                var response = await GetStaticContentHandler(hub, request, ct);
+                var response = await GetContentCollectionsResponse(hub, request, ct);
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             })
             .WithHandler<GetContentCollectionRequest>(async (hub, request, ct) =>
             {
-                var response = await GetContentCollectionHandler(hub, request, ct);
+                var response = await GetContentCollectionResponse(hub, request, ct);
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             });
@@ -46,84 +49,94 @@ public static class ContentCollectionsExtensions
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    private static async Task<GetStaticContentResponse> GetStaticContentHandler(
+    private static async Task<GetContentResponse> GetContentCollectionsResponse(
         IMessageHub hub,
-        IMessageDelivery<GetStaticContentRequest> delivery,
+        IMessageDelivery<GetContentRequest> delivery,
         CancellationToken cancellationToken)
     {
         var request = delivery.Message;
         var contentService = hub.GetContentService();
 
         // Get the collection mapped to this address
-        var contentCollection = await contentService.GetCollectionForAddressAsync(hub.Address, cancellationToken);
+        var contentCollection = contentService.GetCollection(request.Collection);
 
         if (contentCollection is null)
         {
-            return new GetStaticContentResponse(null, null);
+            return new GetContentResponse(null, null);
         }
 
         // Delegate to the content collection to prepare the response
-        return await contentCollection.GetStaticContentResponseAsync(request.Path, cancellationToken);
+        return await contentCollection.GetContentResponseAsync(request.Path, cancellationToken);
     }
 
-    private static async Task<GetContentCollectionResponse> GetContentCollectionHandler(
+    private static async Task<GetContentCollectionResponse> GetContentCollectionResponse(
         IMessageHub hub,
-        IMessageDelivery<GetContentCollectionRequest> delivery,
+        IMessageDelivery<GetContentCollectionRequest> _,
         CancellationToken cancellationToken)
     {
         var contentService = hub.GetContentService();
 
-        // Get the collection mapped to this address
-        var contentCollection = await contentService.GetCollectionForAddressAsync(hub.Address, cancellationToken);
+        // Get all collections for this hub
+        var contentCollections = await contentService.GetCollectionsAsync(cancellationToken);
 
-        if (contentCollection is null)
+        if (contentCollections.Count == 0)
         {
             return new();
         }
 
-        // Build configuration based on provider type
-        var config = new Dictionary<string, string>();
-        var providerType = contentCollection.Config.SourceType;
-
-        // Copy settings from config if available
-        if (contentCollection.Config.Settings != null)
+        // Build configuration for each collection
+        var configs = contentCollections
+            .Where(c => c.Address is not null && c.Address.Type == hub.Address.Type && c.Address.Id == hub.Address.Id)
+            .Select(contentCollection =>
         {
-            foreach (var setting in contentCollection.Config.Settings)
+            var config = new Dictionary<string, string>();
+            var providerType = contentCollection.Config.SourceType;
+
+            // Copy settings from config if available
+            if (contentCollection.Config.Settings != null)
             {
-                config[setting.Key] = setting.Value;
+                foreach (var setting in contentCollection.Config.Settings)
+                {
+                    config[setting.Key] = setting.Value;
+                }
             }
-        }
 
-        // Add provider-specific configuration
-        switch (providerType)
-        {
-            case "FileSystem":
-                if (contentCollection.Config.BasePath != null)
-                {
-                    config["BasePath"] = contentCollection.Config.BasePath;
-                }
-                break;
+            // Add provider-specific configuration
+            switch (providerType)
+            {
+                case "FileSystem":
+                    if (contentCollection.Config.BasePath != null)
+                    {
+                        config["BasePath"] = contentCollection.Config.BasePath;
+                    }
+                    break;
 
-            case "EmbeddedResource":
-                // For embedded resources, extract assembly name and resource prefix from provider
-                var embeddedProvider = hub.ServiceProvider.GetKeyedService<IStreamProvider>(contentCollection.Collection);
-                if (embeddedProvider is EmbeddedResourceStreamProvider embeddedResourceProvider)
-                {
-                    // We need to expose these properties on the provider or store them in Settings
-                    // For now, they should be in Settings
-                }
-                break;
+                case "EmbeddedResource":
+                    // For embedded resources, extract assembly name and resource prefix from provider
+                    var embeddedProvider = hub.ServiceProvider.GetKeyedService<IStreamProvider>(contentCollection.Collection);
+                    if (embeddedProvider is EmbeddedResourceStreamProvider)
+                    {
+                        // We need to expose these properties on the provider or store them in Settings
+                        // For now, they should be in Settings
+                    }
+                    break;
 
-            case "AzureBlob":
-                // Azure Blob settings should already be in Settings
-                break;
-        }
+                case "AzureBlob":
+                    // Azure Blob settings should already be in Settings
+                    break;
+            }
+
+            return new ContentCollectionConfig
+            {
+                ProviderType = providerType,
+                CollectionName = contentCollection.Collection,
+                Configuration = config
+            };
+        }).ToArray();
 
         return new GetContentCollectionResponse
         {
-            ProviderType = providerType,
-            CollectionName = contentCollection.Collection,
-            Configuration = config
+            Collections = configs
         };
     }
 
@@ -132,7 +145,9 @@ public static class ContentCollectionsExtensions
     {
         services
             .AddSingleton<IContentService, ContentService>()
-            .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType);
+            .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
+            .AddKeyedSingleton<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
+            .AddKeyedSingleton<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
 
         // Register stream providers if configuration is provided
         if (configuration != null)
@@ -323,13 +338,12 @@ public static class ContentCollectionsExtensions
         => $"content/{collection}/{path}";
 
 
-    public static MeshNode WithEmbeddedResourceContentCollection(
-        this MeshNode node,
+    public static MessageHubConfiguration WithEmbeddedResourceContentCollection(
+        this MessageHubConfiguration configuration,
         string collectionName,
         Assembly assembly,
-        string relativePath,
-        string[]? addressMappings = null)
-        => node.WithGlobalServiceRegistry(services =>
+        string relativePath)
+        => configuration.WithServices(services =>
         {
             var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
 
@@ -346,12 +360,12 @@ public static class ContentCollectionsExtensions
                 {
                     Name = collectionName,
                     SourceType = "EmbeddedResource",
-                    AddressMappings = addressMappings ?? [collectionName], // Default to collection name
                     Settings = new Dictionary<string, string>
                     {
                         ["AssemblyName"] = assembly.GetName().Name ?? "",
                         ["ResourcePrefix"] = resourcePrefix
-                    }
+                    },
+                    Address = configuration.Address
                 };
                 return new ContentCollectionProvider(
                     new ContentCollection(config, provider, hub)
@@ -366,8 +380,7 @@ public static class ContentCollectionsExtensions
 
 public record ArticleCatalogOptions
 {
-    public IReadOnlyCollection<string> Collections { get; init; } = [];
-    public IReadOnlyCollection<Address> Addresses { get; init; } = [];
+    public IReadOnlyCollection<string>? Collections { get; init; } = [];
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
 

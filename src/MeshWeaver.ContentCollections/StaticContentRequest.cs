@@ -1,18 +1,19 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
 
 /// <summary>
 /// Request for static content from a hub using addressType/addressId pattern
 /// </summary>
-public record GetStaticContentRequest(
+public record GetContentRequest(
+    string Collection,
     string Path
-) : IRequest<GetStaticContentResponse>;
+) : IRequest<GetContentResponse>;
 
 /// <summary>
 /// Response containing static content with source type indication
 /// </summary>
-public record GetStaticContentResponse(
+public record GetContentResponse(
     string? ContentType,
     string? FileName
 )

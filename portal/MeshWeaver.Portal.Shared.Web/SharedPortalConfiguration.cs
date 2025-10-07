@@ -122,10 +122,17 @@ public static class SharedPortalConfiguration
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
-                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddGoogleMaps().AddContentCollections(configuration))
+                .ConfigureHub(mesh => mesh
+                    .AddAgGrid()
+                    .AddChartJs()
+                    .AddGoogleMaps()
+                    .AddContentCollections(configuration)
+                )
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                            c.AddArticles()
+                        c.AddArticles(articles => articles
+                            .WithAddress(new ApplicationAddress("Documentation"), new ApplicationAddress("Todo"))
+                        )
                         )
                 )
                 .AddSignalRHubs();

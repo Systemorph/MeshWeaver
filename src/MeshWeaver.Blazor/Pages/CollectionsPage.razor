@@ -32,7 +32,7 @@
         else
         {
             // Redirect to first available collection if no collection specified
-            var collections = ContentService.GetCollections(false);
+            var collections = ContentService.GetCollections();
             var firstCollection = collections.FirstOrDefault();
             if (firstCollection != null)
             {

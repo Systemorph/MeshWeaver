@@ -12,7 +12,6 @@ public partial class CollectionPicker : ComponentBase
     [Parameter] public string? NullLabel { get; set; }
     [Parameter] public string? Collection { get; set; }
     [Parameter] public EventCallback<string?> CollectionChanged { get; set; }
-    [Parameter] public bool ShowHidden { get; set; } = false;
     [Parameter] public string? Context { get; set; }
     [Parameter] public bool UseNavigation { get; set; } = false;
     private string? SelectedCollection { get; set; }
@@ -23,7 +22,7 @@ public partial class CollectionPicker : ComponentBase
 
         var definedCollections = !string.IsNullOrEmpty(Context)
             ? ContentService.GetCollections(Context)
-            : ContentService.GetCollections(ShowHidden);
+            : await ContentService.GetCollectionsAsync();
 
         var options = definedCollections
             .Select(a => new Option<string>() { Text = a.DisplayName, Value = a.Collection });
@@ -45,7 +44,7 @@ public partial class CollectionPicker : ComponentBase
         if (collection == NullLabel)
             collection = null;
         SelectedCollection = collection;
-        
+
         if (UseNavigation && !string.IsNullOrEmpty(collection))
         {
             NavigationManager.NavigateTo($"/collections/{collection}");

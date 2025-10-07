@@ -137,11 +137,13 @@ public static class BlazorHostingExtensions
                 }
 
                 // Get the collection for this address (with lazy loading)
-                var collection = await contentService.GetCollectionForAddressAsync(address, context.RequestAborted);
+                var collections = await contentService.GetCollectionForAddressAsync(address, context.RequestAborted);
+
+                //Order must be set when configuring.
+                var collection = collections.OrderBy(c => c.Config.Order).FirstOrDefault();
+
                 if (collection == null)
-                {
                     return Results.NotFound("Content collection not found");
-                }
 
                 // Get stream directly from the collection
                 var stream = await collection.GetContentAsync(path, context.RequestAborted);

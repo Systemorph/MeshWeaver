@@ -1,5 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.Application;
 
 [assembly: NorthwindApplication]
@@ -25,7 +24,7 @@ public class NorthwindApplicationAttribute : MeshNodeAttribute
         new ApplicationAddress(nameof(Northwind)),
         nameof(Northwind),
         NorthwindApplicationExtensions.ConfigureNorthwindApplication
-    ).WithEmbeddedResourceContentCollection("Northwind", typeof(NorthwindApplicationAttribute).Assembly, "Markdown");
+    );
 
 
 }

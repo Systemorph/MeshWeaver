@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
@@ -10,11 +11,15 @@ public partial class ArticleCatalogView
     private string? selectedCollection;
     private IReadOnlyCollection<Article> articles = [];
     private IReadOnlyCollection<Option<string>>? collectionOptions;
-    private readonly IReadOnlyCollection<string> collections;
-    private readonly IReadOnlyCollection<Address> addresses;
+    private readonly IReadOnlyCollection<Address>? addresses;
+    private readonly IReadOnlyCollection<string>? collections;
+    private Dictionary<string, ContentCollection> collectionsByName = new();
+
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
+
     protected override void BindData()
     {
-        // Bind to Collection property
+        // Bind to collections property
         DataBind(
             ViewModel.Collections,
             x => x.collections
@@ -26,7 +31,11 @@ public partial class ArticleCatalogView
             x => x.addresses
         );
 
-
+        // Bind to selected collection property
+        DataBind(
+            ViewModel.SelectedCollection,
+            x => x.selectedCollection
+        );
     }
 
     protected override async Task OnParametersSetAsync()
@@ -41,59 +50,52 @@ public partial class ArticleCatalogView
                 Value = c.Collection
             })
             .ToList();
-
+        collectionsByName = allCollections.ToDictionary(x => x.Collection);
         // Add "all" option if showing picker
         if (options.Count > 1)
         {
-            options.Insert(0, new Option<string> { Text = "(all)", Value = null });
+            options.Insert(0, new Option<string> { Text = All, Value = null });
         }
 
+        collectionsByName = allCollections.ToDictionary(c => c.Collection);
         collectionOptions = options;
         articles = await LoadArticlesAsync();
     }
 
+    private const string All = "(all)";
     private async IAsyncEnumerable<ContentCollection> LoadCollectionsAsync()
     {
         var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
 
+        if (collections is not null)
+            foreach (var collection in collections)
+            {
+                var col = contentService.GetCollection(collection);
+                if (col != null)
+                    yield return col;
+            }
         // Get collectionOptions from the specified addresses
-        if (addresses != null && addresses.Any())
-        {
+        if (addresses is not null)
             foreach (var address in addresses)
             {
-                var collection = await contentService.GetCollectionForAddressAsync(address);
-                if (collection != null)
-                {
+                var coll = await contentService.GetCollectionForAddressAsync(address);
+                foreach (var collection in coll)
                     yield return collection;
-                }
             }
-        }
+
+
 
     }
 
     private Task<IReadOnlyCollection<Article>> LoadArticlesAsync()
     {
         var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
-        var catalogOptions = !string.IsNullOrEmpty(selectedCollection)
-        ? GetCatalogOptionsFromSelection(selectedCollection)
-        : new ArticleCatalogOptions
-        {
-            Collections = collections,
-            Addresses = addresses,
-        };
-
-        return contentService.GetArticleCatalog(catalogOptions);
-    }
-
-    private ArticleCatalogOptions GetCatalogOptionsFromSelection(string s)
-    {
-        var fromAddress = addresses.FirstOrDefault(a => a.ToString() == s);
-        if (fromAddress != null)
-            return new ArticleCatalogOptions() { Addresses = [fromAddress] };
-        return new ArticleCatalogOptions
-        {
-            Collections = [s],
-        };
+        if (string.IsNullOrWhiteSpace(selectedCollection) || selectedCollection == All)
+            return contentService.GetArticleCatalogAsync(new ArticleCatalogOptions
+            {
+                Collections = collectionsByName.Keys
+            });
+        return contentService.GetArticleCatalogAsync(new ArticleCatalogOptions() { Collections = [selectedCollection] });
     }
 
     private string? SelectedCollection
@@ -101,11 +103,12 @@ public partial class ArticleCatalogView
         get => selectedCollection;
         set
         {
-            if (selectedCollection != value)
+            selectedCollection = value;
+            InvokeAsync(async () =>
             {
-                selectedCollection = value;
-                InvokeAsync(StateHasChanged);
-            }
+                articles = await LoadArticlesAsync();
+                StateHasChanged();
+            });
         }
     }
 
