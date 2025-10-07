@@ -72,6 +72,37 @@ public abstract class ArticleHeaderBase : ComponentBase
     }
     protected string EditLink => $"/article/edit/{CollectionName}/{Name}";
     protected string ThumbnailPath => $"/static/{CollectionName}/{Thumbnail}";
+
+    protected string? GetAuthorImageUrl(string? imageUrl)
+    {
+        if (string.IsNullOrEmpty(imageUrl))
+            return null;
+
+        // If it's already an absolute URL (http/https), use it as-is for centrally deployed images
+        if (imageUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            imageUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return imageUrl;
+        }
+
+        // If it starts with /, it's already a full path
+        if (imageUrl.StartsWith("/"))
+        {
+            return imageUrl;
+        }
+
+        // Otherwise, prepend with /{address}/static/
+        var address = CollectionName;
+        return $"/{address}/static/{imageUrl}";
+    }
+
+    protected string GetInitials(Author author)
+    {
+        var first = author.FirstName?.FirstOrDefault() ?? ' ';
+        var last = author.LastName?.FirstOrDefault() ?? ' ';
+        return $"{first}{last}".Trim();
+    }
+
     protected string GetEmbedUrl(string? videoUrl)
     {
         if (videoUrl?.Contains("youtube.com/watch") == true)

@@ -21,7 +21,8 @@ public static class ContentCollectionsExtensions
             .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin), typeof(GetStaticContentRequest), typeof(GetStaticContentResponse))
             .AddLayout(layout => layout
                 .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog)
-                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
+                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles)
+                .WithView(nameof(ArticlesLayoutArea.Content), ArticlesLayoutArea.Content))
             .AddContentCollections();
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null) =>
         config

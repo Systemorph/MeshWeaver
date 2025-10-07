@@ -13,7 +13,9 @@
                         <div class="author">
                             <FluentPersona Name="@author.FormatName()"
                                            ImageSize="24px"
-                                           Image="@author.ImageUrl" />
+                                           Image="@GetAuthorImageUrl(author.ImageUrl)"
+                                           InitialsTextColor="var(--neutral-foreground-rest)"
+                                           ImageInitials="@GetInitials(author)" />
                         </div>
                     }
                 </div>

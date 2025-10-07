@@ -18,7 +18,11 @@
     <FluentStack Orientation="Orientation.Vertical" Class="articles-catalog">
         @foreach (var article in Articles)
         {
-            var catalogItem = new ArticleCatalogItemControl(article with { Content = string.Empty, PrerenderedHtml = string.Empty });
+            var url = GenerateArticleUrl(article);
+            var catalogItem = new ArticleCatalogItemControl(
+                article with { Content = string.Empty, PrerenderedHtml = string.Empty },
+                url
+            );
             <ArticleCatalogItemView ViewModel="@catalogItem" />
         }
     </FluentStack>

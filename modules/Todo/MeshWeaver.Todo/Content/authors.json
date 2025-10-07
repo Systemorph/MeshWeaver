@@ -2,7 +2,7 @@
   "Roland Bürgi": {
     "FirstName": "Roland",
     "LastName": "Bürgi",
-    "ImageUrl": "images/rolandburgi.png"
+    "ImageUrl": "/app/Todo/static/images/rolandburgi.png"
   }
- 
+
 }

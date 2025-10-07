@@ -110,5 +110,15 @@ public partial class ArticleCatalogView
     }
 
     private IReadOnlyCollection<Article> Articles => articles;
-    private bool ShowPicker => collectionOptions?.Count > 0;
+    private bool ShowPicker => collectionOptions?.Count > 1;
+
+    private string GenerateArticleUrl(Article article)
+    {
+        // Format: {address}/Content/{collection}/{path}
+        var address = addresses?.FirstOrDefault()?.ToString() ?? "Portal";
+        var collection = article.Collection;
+        var path = article.Path;
+
+        return $"{address}/Content/{collection}/{path}";
+    }
 }

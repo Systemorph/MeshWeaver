@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
@@ -11,27 +11,25 @@ namespace MeshWeaver.Blazor.Articles;
 
 public partial class ArticleView
 {
-    private ModelParameter<Article> data = null!;
+    private readonly ModelParameter<Article> data = null!;
     private ActivityLog Log { get; set; } = null!;
     [Inject] private IToastService ToastService { get; set; } = null!;
-    private JsonPointerReference ArticlePointer { get; set; } = null!;
     protected override void BindData()
     {
-        ArticlePointer = new JsonPointerReference(ViewModel.DataContext ?? "/");
         DataBind(
-            ArticlePointer,
+            ViewModel.Article,
             x => x.data,
-            (jsonObject,_) => Convert(jsonObject as Article)
+            (jsonObject, _) => Convert(jsonObject as Article)
         );
     }
 
-    
+
     private ModelParameter<Article> ArticleModel { get; set; } = null!;
     private ModelParameter<Article>? Convert(Article? article)
     {
         if (article == null)
             return null;
-        var ret = ArticleModel = new ModelParameter<Article>(article, (_,_) => throw new NotImplementedException());
+        var ret = ArticleModel = new ModelParameter<Article>(article, (_, _) => throw new NotImplementedException());
         ret.ElementChanged += OnModelChanged!;
         return ret;
     }
@@ -65,12 +63,12 @@ public partial class ArticleView
     {
         InvokeAsync(StateHasChanged);
     }
-    
+
     private readonly KernelAddress KernelAddress = new();
 
     private MarkdownControl MarkdownControl
     {
-        get => new MarkdownControl(ArticleModel?.Element.Content ?? ""){Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml)};
+        get => new(ArticleModel?.Element.Content ?? "") { Html = ConvertHtml(ArticleModel?.Element.PrerenderedHtml) };
     }
 
 
