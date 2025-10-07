@@ -16,6 +16,7 @@ public static class NorthwindApplicationExtensions
 
         =>
             application
+                .WithEmbeddedResourceContentCollection("Northwind", typeof(NorthwindApplicationAttribute).Assembly, "Markdown")
                 .AddNorthwindViewModels()
                 .AddNorthwindEmployees()
                 .AddNorthwindOrders()

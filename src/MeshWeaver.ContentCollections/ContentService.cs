@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Concurrent;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,7 +11,6 @@ public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
-    private readonly Dictionary<string, ContentCollection> dynamicCollections = new();
     private readonly object lockObject = new();
 
     public ContentService(IServiceProvider serviceProvider, IMessageHub hub, AccessService accessService)
@@ -18,7 +18,6 @@ public class ContentService : IContentService
         this.hub = hub;
         this.accessService = accessService;
 
-        var collectionsDict = new Dictionary<string, ContentCollection>();
 
         // Add collections from configuration
         var configs = serviceProvider.GetService<IOptions<List<ContentSourceConfig>>>();
@@ -26,7 +25,7 @@ public class ContentService : IContentService
         {
             foreach (var collection in configs.Value.Select(CreateCollection))
             {
-                collectionsDict[collection.Collection] = collection;
+                collections[collection.Collection] = collection;
             }
         }
 
@@ -36,11 +35,10 @@ public class ContentService : IContentService
         {
             foreach (var collection in provider.GetCollections())
             {
-                collectionsDict[collection.Collection] = collection;
+                collections[collection.Collection] = collection;
             }
         }
 
-        collections = collectionsDict;
     }
 
 
@@ -52,7 +50,7 @@ public class ContentService : IContentService
         return factory.Create(config, hub);
     }
 
-    private readonly IReadOnlyDictionary<string, ContentCollection> collections;
+    private readonly ConcurrentDictionary<string, ContentCollection> collections = new();
 
     public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
@@ -66,7 +64,7 @@ public class ContentService : IContentService
         return coll.GetContentAsync(path, ct);
     }
 
-    public async Task<IReadOnlyCollection<Article>> GetArticleCatalog(ArticleCatalogOptions catalogOptions,
+    public async Task<IReadOnlyCollection<Article>> GetArticleCatalogAsync(ArticleCatalogOptions catalogOptions,
         CancellationToken ct)
     {
 
@@ -74,16 +72,7 @@ public class ContentService : IContentService
             .Select(x => collections.GetValueOrDefault(x))
             .Where(x => x is not null)
             .ToArray();
-        if (catalogOptions.Addresses.Any())
-        {
-            var collectionsFromAddresses = await catalogOptions.Addresses
-                .ToAsyncEnumerable()
-                .SelectAwait(async c => await GetCollectionForAddressAsync(c, ct))
-                .ToArrayAsync(ct);
-
-            allCollections = allCollections.Concat(collectionsFromAddresses).ToArray();
-        }
-        return (await allCollections.Select(c => c.GetMarkdown(catalogOptions))
+        return (await allCollections.Select(c => c!.GetMarkdown(catalogOptions))
                 .CombineLatest()
                 .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
                 .Select(articles => ApplyOptions(articles, catalogOptions))
@@ -121,152 +110,103 @@ public class ContentService : IContentService
         return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
     }
 
-    public IReadOnlyCollection<ContentCollection> GetCollections(CancellationToken ct = default)
-    {
-        return collections.Values.ToArray();
-    }
 
-    public IReadOnlyCollection<ContentCollection> GetCollections(bool includeHidden = false)
+    public IReadOnlyCollection<ContentCollection> GetCollections()
     {
         var result = collections.Values;
-        if (!includeHidden)
-        {
-            result = result.Where(c => !c.IsHidden);
-        }
         return result.ToArray();
     }
 
-    public IReadOnlyCollection<ContentCollection> GetCollections(string context)
+    public IEnumerable<ContentCollection> GetCollections(string context)
     {
-        return collections.Values
-            .Where(c => !c.IsHiddenFrom(context))
-            .ToArray();
+        return collections.Values;
     }
 
-    public ContentCollection? GetCollectionForAddress(Address address)
-    {
-        // First, try to find a collection with a custom AddressFilter
-        var collectionWithFilter = collections.Values
-            .FirstOrDefault(c => c.Config.AddressFilter?.Invoke(address) == true);
 
-        if (collectionWithFilter != null)
-            return collectionWithFilter;
-
-        // Then, try to find a collection with AddressMappings that match the address ID or Type
-        var collectionWithMapping = collections.Values
-            .FirstOrDefault(c => c.Config.AddressMappings != null &&
-                (c.Config.AddressMappings.Contains(address.Id) ||
-                 c.Config.AddressMappings.Contains(address.Type)));
-
-        if (collectionWithMapping != null)
-            return collectionWithMapping;
-
-        // Check dynamic collections
-        lock (lockObject)
-        {
-            if (dynamicCollections.TryGetValue(address.Id, out var dynamicCollection))
-                return dynamicCollection;
-        }
-
-        // Default: try to find a collection by address ID
-        return GetCollection(address.Id);
-    }
-
-    public async Task<ContentCollection?> GetCollectionForAddressAsync(Address address, CancellationToken cancellationToken = default)
+    private readonly ConcurrentDictionary<Address, IReadOnlyCollection<ContentCollection>> collectionsByAddress = new();
+    private readonly SemaphoreSlim getCollectionsLock = new(1, 1);
+    public async Task<IReadOnlyCollection<ContentCollection>> GetCollectionForAddressAsync(Address address, CancellationToken cancellationToken = default)
     {
         // First check if it's already configured
-        var existing = GetCollectionForAddress(address);
-        if (existing != null)
+        if (collectionsByAddress.TryGetValue(address, out var existing))
             return existing;
 
         // Try to load it dynamically from the remote hub
         try
         {
-            var request = new GetContentCollectionRequest();
-            var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-            );
+            await getCollectionsLock.WaitAsync(cancellationToken);
+            var ret = await CreateCollections(address, cancellationToken);
+            collectionsByAddress[address] = ret;
+            return ret;
 
-            var response = await hub.AwaitResponse(request, o => o.WithTarget(address), timeout.Token);
-
-            if (!response.Message.IsFound)
-                return null;
-
-            // Create and register the collection
-            var collection = await CreateCollectionFromResponseAsync(response.Message, address);
-
-            lock (lockObject)
-            {
-                dynamicCollections[address.Id] = collection;
-            }
-
-            return collection;
         }
         catch (TaskCanceledException)
         {
-            return null;
+            return [];
+        }
+        finally
+        {
+            getCollectionsLock.Release();
         }
     }
 
-    private Task<ContentCollection> CreateCollectionFromResponseAsync(
+    private async Task<IReadOnlyCollection<ContentCollection>> CreateCollections(Address address, CancellationToken cancellationToken)
+    {
+        var request = new GetContentCollectionRequest();
+        var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+        );
+
+        var response = await hub.AwaitResponse(request, o => o.WithTarget(address), timeout.Token);
+
+        if (!response.Message.IsFound)
+            return [];
+
+        // Create and register all collections from the response
+        var createdCollections = await CreateCollectionsFromResponseAsync(response.Message, address);
+
+        lock (lockObject)
+        {
+            foreach (var collection in createdCollections)
+            {
+                collections[collection.Collection] = collection;
+            }
+        }
+
+        return createdCollections;
+
+    }
+    private Task<IReadOnlyCollection<ContentCollection>> CreateCollectionsFromResponseAsync(
         GetContentCollectionResponse response,
         Address address)
     {
-        // Create provider based on type
-        IStreamProvider provider = response.ProviderType switch
+        if (response.Collections == null || response.Collections.Count == 0)
+            return Task.FromResult<IReadOnlyCollection<ContentCollection>>(Array.Empty<ContentCollection>());
+
+        var collections = response.Collections.Select(collectionConfig =>
         {
-            "FileSystem" => CreateFileSystemProvider(response.Configuration),
-            "EmbeddedResource" => CreateEmbeddedResourceProvider(response.Configuration),
-            "AzureBlob" => CreateAzureBlobProvider(response.Configuration),
-            _ => throw new NotSupportedException($"Unknown provider type: {response.ProviderType}")
-        };
+            // Get the factory for this provider type
+            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(collectionConfig.ProviderType);
+            if (factory == null)
+                throw new NotSupportedException($"Unknown provider type: {collectionConfig.ProviderType}");
 
-        // Create config
-        var config = new ContentSourceConfig
-        {
-            Name = response.CollectionName ?? address.Id,
-            SourceType = response.ProviderType ?? "Unknown",
-            AddressMappings = [address.Id],
-            Settings = response.Configuration
-        };
+            // Create provider using the factory
+            var provider = factory.Create(collectionConfig.Configuration);
 
-        // Create collection
-        var collection = new ContentCollection(config, provider, hub);
-        return Task.FromResult(collection);
-    }
+            // Create config
+            var config = new ContentSourceConfig
+            {
+                Name = collectionConfig.CollectionName ?? address.ToString(),
+                SourceType = collectionConfig.ProviderType ?? "Unknown",
+                Settings = collectionConfig.Configuration,
+                Address = address
+            };
 
-    private static IStreamProvider CreateFileSystemProvider(Dictionary<string, string>? config)
-    {
-        var basePath = config?.GetValueOrDefault("BasePath") ?? "";
-        return new FileSystemStreamProvider(basePath);
-    }
+            // Create collection
+            return new ContentCollection(config, provider, hub);
+        }).ToArray();
 
-    private static IStreamProvider CreateEmbeddedResourceProvider(Dictionary<string, string>? config)
-    {
-        var assemblyName = config?.GetValueOrDefault("AssemblyName")
-            ?? throw new ArgumentException("AssemblyName required for EmbeddedResource");
-        var resourcePrefix = config?.GetValueOrDefault("ResourcePrefix")
-            ?? throw new ArgumentException("ResourcePrefix required for EmbeddedResource");
-
-        var assembly = AppDomain.CurrentDomain.GetAssemblies()
-            .FirstOrDefault(a => a.GetName().Name == assemblyName)
-            ?? throw new InvalidOperationException($"Assembly not found: {assemblyName}");
-
-        return new EmbeddedResourceStreamProvider(assembly, resourcePrefix);
-    }
-
-    private IStreamProvider CreateAzureBlobProvider(Dictionary<string, string>? config)
-    {
-        var containerName = config?.GetValueOrDefault("ContainerName")
-            ?? throw new ArgumentException("ContainerName required for AzureBlob");
-        var clientName = config?.GetValueOrDefault("ClientName", "default");
-
-        var factory = hub.ServiceProvider.GetService<Microsoft.Extensions.Azure.IAzureClientFactory<Azure.Storage.Blobs.BlobServiceClient>>();
-        if (factory == null)
-            throw new InvalidOperationException("Azure client factory not configured");
-
-        var blobServiceClient = factory.CreateClient(clientName);
-        return new AzureBlobStreamProvider(blobServiceClient, containerName);
+        return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections);
     }
 }

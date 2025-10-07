@@ -7,6 +7,7 @@
   </PropertyGroup>
 
     <ItemGroup>
+        <EmbeddedResource Include="Markdown\**\*.*" />
         <None Include="Markdown\**\*.*" Pack="true" PackagePath="Markdown\" />
     </ItemGroup>
 

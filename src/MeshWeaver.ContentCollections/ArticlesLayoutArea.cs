@@ -1,6 +1,7 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -11,20 +12,27 @@ public static class ArticlesLayoutArea
 {
     /// <summary>
     /// Articles layout area that displays the article catalog for a specific collection.
-    /// By default, shows articles from the current hub address only.
+    /// Uses configured addresses if specified, otherwise shows articles from the current hub address only.
     /// </summary>
     /// <param name="host">The layout area host</param>
-    /// <param name="context">The rendering context</param>
+    /// <param name="_">The rendering context</param>
     /// <returns>An Article Catalog control</returns>
-    public static UiControl? Articles(LayoutAreaHost host, RenderingContext context)
+    public static UiControl? Articles(LayoutAreaHost host, RenderingContext _)
     {
-        return new ArticleCatalogControl() { Addresses = new[] { host.Hub.Address } };
+        var configuration = host.Hub.ServiceProvider.GetRequiredService<ArticlesConfiguration>();
+        var selectedCollection = host.Reference.Id?.ToString();
+
+        return new ArticleCatalogControl
+        {
+            Collections = selectedCollection,
+            Addresses = configuration.Addresses
+        };
     }
 
     /// <summary>
     /// Content layout area for displaying a single article
     /// </summary>
-    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext context)
+    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
         var split = host.Reference.Id?.ToString()?.Split("/");
         if (split is null || split.Length < 2)

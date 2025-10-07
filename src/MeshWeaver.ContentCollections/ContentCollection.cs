@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -14,6 +14,7 @@ public class ContentCollection : IDisposable
     private readonly ISynchronizationStream<InstanceCollection> markdownStream;
     private readonly IStreamProvider provider;
     public readonly ContentSourceConfig Config;
+    public Address? Address => Config.Address;
     private IDisposable? monitorDisposable;
 
     public ContentCollection(ContentSourceConfig config, IStreamProvider provider, IMessageHub hub)
@@ -39,8 +40,6 @@ public class ContentCollection : IDisposable
     public IMessageHub Hub { get; }
     public string Collection => Config.Name!;
     public string DisplayName => Config.DisplayName ?? Config.Name!.Wordify();
-    public bool IsHidden => Config.HiddenFrom.Length > 0;
-    public bool IsHiddenFrom(string context) => Config.HiddenFrom.Contains(context);
 
     public IObservable<object?> GetMarkdown(string path)
         => markdownStream
@@ -59,7 +58,7 @@ public class ContentCollection : IDisposable
     public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
         => provider.GetStreamAsync(path, ct);
 
-    public async Task<GetStaticContentResponse> GetStaticContentResponseAsync(string path, CancellationToken ct = default)
+    public async Task<GetContentResponse> GetContentResponseAsync(string path, CancellationToken ct = default)
     {
         var contentType = GetContentType(path);
         var fileName = Path.GetFileName(path);
@@ -68,7 +67,7 @@ public class ContentCollection : IDisposable
         var stream = await provider.GetStreamAsync(path, ct);
         if (stream == null)
         {
-            return new GetStaticContentResponse(null, null);
+            return new GetContentResponse(null, null);
         }
 
         // For embedded resources, always inline content
@@ -80,9 +79,9 @@ public class ContentCollection : IDisposable
                 {
                     using var reader = new StreamReader(stream);
                     var content = await reader.ReadToEndAsync(ct);
-                    return new GetStaticContentResponse(contentType, fileName)
+                    return new GetContentResponse(contentType, fileName)
                     {
-                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        SourceType = GetContentResponse.InlineSourceType,
                         InlineContent = content
                     };
                 }
@@ -91,9 +90,9 @@ public class ContentCollection : IDisposable
                     using var memoryStream = new MemoryStream();
                     await stream.CopyToAsync(memoryStream, ct);
                     var base64Content = Convert.ToBase64String(memoryStream.ToArray());
-                    return new GetStaticContentResponse(contentType, fileName)
+                    return new GetContentResponse(contentType, fileName)
                     {
-                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        SourceType = GetContentResponse.InlineSourceType,
                         InlineContent = base64Content
                     };
                 }
@@ -110,9 +109,9 @@ public class ContentCollection : IDisposable
                 using (var reader = new StreamReader(stream))
                 {
                     var content = await reader.ReadToEndAsync(ct);
-                    return new GetStaticContentResponse(contentType, fileName)
+                    return new GetContentResponse(contentType, fileName)
                     {
-                        SourceType = GetStaticContentResponse.InlineSourceType,
+                        SourceType = GetContentResponse.InlineSourceType,
                         InlineContent = content
                     };
                 }
@@ -122,7 +121,7 @@ public class ContentCollection : IDisposable
         // For all other cases, return provider reference
         stream.Dispose();
         var providerReference = GetProviderReference(path);
-        return new GetStaticContentResponse(contentType, fileName)
+        return new GetContentResponse(contentType, fileName)
         {
             SourceType = provider.ProviderType,
             ProviderName = Collection,

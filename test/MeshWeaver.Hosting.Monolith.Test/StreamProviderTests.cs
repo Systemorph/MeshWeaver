@@ -116,10 +116,10 @@ public class AzureBlobStreamProviderTests
         // Arrange
         var blobServiceClient = new BlobServiceClient("UseDevelopmentStorage=true");
         var provider = new AzureBlobStreamProvider(blobServiceClient, "test-container");
-        var blobPath = "test-blob.txt";
-        var contentStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("test"));
 
         // Act - Note: This will fail if Azure Storage Emulator is not running
+        // var blobPath = "test-blob.txt";
+        // var contentStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("test"));
         // await provider.WriteStreamAsync(blobPath, contentStream);
 
         // For now, just verify the provider was created

@@ -1,5 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Documentation;
+﻿using MeshWeaver.Documentation;
 using MeshWeaver.Mesh;
 [assembly: DocumentationApplication]
 
@@ -24,5 +23,5 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
         new ApplicationAddress(nameof(Documentation)),
         nameof(Documentation),
         DocumentationApplicationExtensions.AddDocumentation
-    ).WithEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly, "Markdown");
+    );
 }

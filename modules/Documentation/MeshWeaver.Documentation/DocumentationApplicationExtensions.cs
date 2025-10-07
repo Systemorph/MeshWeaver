@@ -21,14 +21,16 @@ public static class DocumentationApplicationExtensions
     public static MessageHubConfiguration AddDocumentation(MessageHubConfiguration config)
         => config
             .AddArticles()
+            .WithEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly,
+                "Markdown")
             .AddLayout(layout => layout
-            .AddCounter()
-            .AddCalculator()
-            .AddDistributionStatistics()
-            .AddProgress()
-            .AddFileBrowser()
-            .WithThumbnailBasePath("/app/Documentation/static/thumbnails")
-        );
+                .AddCounter()
+                .AddCalculator()
+                .AddDistributionStatistics()
+                .AddProgress()
+                .AddFileBrowser()
+                .WithThumbnailBasePath("/app/Documentation/static/thumbnails")
+            );
 
 }
 
