@@ -1,7 +1,10 @@
 using System.Reactive.Linq;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using Microsoft.Extensions.DependencyInjection;
+using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;
 
 namespace MeshWeaver.Insurance.Domain.LayoutAreas;
 
@@ -18,50 +21,34 @@ public static class SubmissionLayoutArea
         _ = ctx;
         var pricingId = host.Hub.Address.Id;
 
+        // Get the collection configuration from the registry
+        // The collection name is localized with the hub's address ID
+        var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
+        var registry = host.Hub.ServiceProvider.GetService<IContentCollectionRegistry>();
+        var collectionRegistration = registry?.GetCollection("Submissions");
+        var collectionConfig = collectionRegistration?.Config;
+
         return host.Workspace.GetStream<Pricing>()!
             .Select(pricings =>
             {
                 var pricing = pricings?.FirstOrDefault();
-                return pricing != null
-                    ? Controls.Stack
+                if (pricing != null)
+                {
+                    var fileBrowser = new FileBrowserControl(localizedCollectionName);
+                    if (collectionConfig != null)
+                        fileBrowser = fileBrowser.WithCollectionConfiguration(collectionConfig);
+
+                    return Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
-                        .WithView(Controls.Markdown(RenderSubmissionDetails(pricing)))
-                    : Controls.Stack
-                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
-                        .WithView(Controls.Markdown($"# Submission\n\n*Pricing '{pricingId}' not found.*"));
+                        .WithView(Controls.Title($"Submission - {pricing.InsuredName}", 1))
+                        .WithView(fileBrowser);
+                }
+                return Controls.Stack
+                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
+                    .WithView(Controls.Markdown($"# Submission\n\n*Pricing '{pricingId}' not found.*"));
             })
             .StartWith(Controls.Stack
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
                 .WithView(Controls.Markdown("# Submission\n\n*Loading...*")));
-    }
-
-    private static string RenderSubmissionDetails(Pricing pricing)
-    {
-        var lines = new List<string>
-        {
-            $"# Submission - {pricing.InsuredName}",
-            "",
-            "## Submission Information",
-            "",
-            $"**Pricing ID:** {pricing.Id}",
-            $"**Status:** {pricing.Status ?? "N/A"}",
-            $"**Broker:** {pricing.BrokerName ?? "N/A"}",
-            "",
-            "### Coverage Period",
-            $"- **Inception Date:** {pricing.InceptionDate?.ToString("yyyy-MM-dd") ?? "N/A"}",
-            $"- **Expiration Date:** {pricing.ExpirationDate?.ToString("yyyy-MM-dd") ?? "N/A"}",
-            $"- **Underwriting Year:** {pricing.UnderwritingYear?.ToString() ?? "N/A"}",
-            "",
-            "### Classification",
-            $"- **Line of Business:** {pricing.LineOfBusiness ?? "N/A"}",
-            $"- **Country:** {pricing.Country ?? "N/A"}",
-            $"- **Legal Entity:** {pricing.LegalEntity ?? "N/A"}",
-            "",
-            "---",
-            "",
-            "*Additional submission details coming soon...*"
-        };
-
-        return string.Join("\n", lines);
     }
 }

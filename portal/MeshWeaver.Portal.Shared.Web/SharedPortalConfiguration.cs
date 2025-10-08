@@ -1,4 +1,5 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+﻿using System.Configuration;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
@@ -54,7 +55,6 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             });
         services.AddPortalAI();
-        services.AddInsuranceAI();
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
@@ -117,7 +117,7 @@ public static class SharedPortalConfiguration
 
 
         builder.Services.AddSignalR();
-        builder.Services.Configure<List<ContentSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
+        builder.Services.Configure<List<ContentCollectionConfig>>(builder.Configuration.GetSection("ArticleCollections"));
 
         builder.Services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
@@ -129,10 +129,10 @@ public static class SharedPortalConfiguration
             (TBuilder)builder
                 .ConfigureHub(mesh => mesh
                     .WithType(typeof(PricingAddress), PricingAddress.TypeName)
+                    .AddContentCollections(configuration, "ContentCollections")
                     .AddAgGrid()
                     .AddChartJs()
                     .AddGoogleMaps()
-                    .AddContentCollections(configuration)
                 )
                 .AddInsurancePricing()
                 .AddBlazor(layoutClient => layoutClient

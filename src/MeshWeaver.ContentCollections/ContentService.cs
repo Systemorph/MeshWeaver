@@ -20,7 +20,7 @@ public class ContentService : IContentService
 
 
         // Add collections from configuration
-        var configs = serviceProvider.GetService<IOptions<List<ContentSourceConfig>>>();
+        var configs = serviceProvider.GetService<IOptions<List<ContentCollectionConfig>>>();
         if (configs?.Value != null)
         {
             foreach (var collection in configs.Value.Select(CreateCollection))
@@ -42,7 +42,7 @@ public class ContentService : IContentService
     }
 
 
-    private ContentCollection CreateCollection(ContentSourceConfig config)
+    private ContentCollection CreateCollection(ContentCollectionConfig config)
     {
         var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
         if (factory is null)
@@ -51,9 +51,53 @@ public class ContentService : IContentService
     }
 
     private readonly ConcurrentDictionary<string, ContentCollection> collections = new();
+    private readonly SemaphoreSlim initializeLock = new(1, 1);
 
     public ContentCollection? GetCollection(string collection)
         => collections.GetValueOrDefault(collection);
+
+    public async Task<ContentCollection> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    {
+        // Check if already exists
+        if (collections.TryGetValue(config.Name!, out var existing))
+            return existing;
+
+        await initializeLock.WaitAsync(cancellationToken);
+        try
+        {
+            // Double-check after acquiring lock
+            if (collections.TryGetValue(config.Name!, out existing))
+                return existing;
+
+            // Get the factory for this provider type
+            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
+            if (factory is null)
+                throw new InvalidOperationException($"Unknown provider type {config.SourceType}");
+
+            // Build configuration dictionary
+            var configuration = config.Settings ?? new Dictionary<string, string>();
+            if (config.BasePath != null && !configuration.ContainsKey("BasePath"))
+            {
+                configuration["BasePath"] = config.BasePath;
+            }
+
+            // Create provider using the factory
+            var provider = factory.Create(configuration);
+
+            // Create and initialize new collection
+            var newCollection = new ContentCollection(config, provider, hub);
+            await newCollection.InitializeAsync(cancellationToken);
+
+            // Register it
+            collections[config.Name!] = newCollection;
+
+            return newCollection;
+        }
+        finally
+        {
+            initializeLock.Release();
+        }
+    }
 
 
     public Task<Stream?> GetContentAsync(string collection, string path, CancellationToken ct = default)
@@ -187,24 +231,25 @@ public class ContentService : IContentService
         var collections = response.Collections.Select(collectionConfig =>
         {
             // Get the factory for this provider type
-            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(collectionConfig.ProviderType);
+            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(collectionConfig.SourceType);
             if (factory == null)
-                throw new NotSupportedException($"Unknown provider type: {collectionConfig.ProviderType}");
+                throw new NotSupportedException($"Unknown provider type: {collectionConfig.SourceType}");
+
+            // Build configuration dictionary
+            var configuration = collectionConfig.Settings ?? new Dictionary<string, string>();
+            if (collectionConfig.BasePath != null && !configuration.ContainsKey("BasePath"))
+            {
+                configuration["BasePath"] = collectionConfig.BasePath;
+            }
 
             // Create provider using the factory
-            var provider = factory.Create(collectionConfig.Configuration);
+            var provider = factory.Create(configuration);
 
-            // Create config
-            var config = new ContentSourceConfig
-            {
-                Name = collectionConfig.CollectionName ?? address.ToString(),
-                SourceType = collectionConfig.ProviderType ?? "Unknown",
-                Settings = collectionConfig.Configuration,
-                Address = address
-            };
+            // Use collectionConfig directly (already has proper Address set)
+            collectionConfig.Address = address;
 
             // Create collection
-            return new ContentCollection(config, provider, hub);
+            return new ContentCollection(collectionConfig, provider, hub);
         }).ToArray();
 
         return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections);

@@ -36,8 +36,8 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected virtual IServiceCollection ConfigureArticles(IServiceCollection services)
     {
         return services
-            .Configure<List<ContentSourceConfig>>(
-                options => options.Add(new ContentSourceConfig()
+            .Configure<List<ContentCollectionConfig>>(
+                options => options.Add(new ContentCollectionConfig()
                 {
                     Name = Test,
                     BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")

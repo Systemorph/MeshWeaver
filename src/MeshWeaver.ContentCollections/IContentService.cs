@@ -14,6 +14,15 @@ public interface IContentService
     ContentCollection? GetCollection(string collectionName);
 
     /// <summary>
+    /// Initializes a content collection from configuration if it doesn't already exist.
+    /// Creates the provider and initializes the collection.
+    /// </summary>
+    /// <param name="config">The configuration for the collection</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>The initialized collection (existing or newly created)</returns>
+    Task<ContentCollection> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the collection mapped to the specified address asynchronously.
     /// If the collection is not found locally, attempts to load it dynamically from the remote hub.
     /// Returns null if no collection is found.

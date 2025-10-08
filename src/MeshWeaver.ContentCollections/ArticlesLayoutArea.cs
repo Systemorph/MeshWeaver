@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.ComponentModel;
+using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,7 @@ public static class ArticlesLayoutArea
     /// <param name="host">The layout area host</param>
     /// <param name="_">The rendering context</param>
     /// <returns>An Article Catalog control</returns>
+    [Browsable(false)]
     public static UiControl? Articles(LayoutAreaHost host, RenderingContext _)
     {
         var configuration = host.Hub.ServiceProvider.GetRequiredService<ArticlesConfiguration>();
@@ -32,6 +34,7 @@ public static class ArticlesLayoutArea
     /// <summary>
     /// Content layout area for displaying a single article
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
     {
         var split = host.Reference.Id?.ToString()?.Split("/");

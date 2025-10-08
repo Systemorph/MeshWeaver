@@ -96,8 +96,8 @@ public class ArticlesBlobStorageTest : ArticlesTest
         });
         return services
             .AddAzureBlobArticles()
-            .Configure<List<ContentSourceConfig>>(
-                options => options.Add(new ContentSourceConfig()
+            .Configure<List<ContentCollectionConfig>>(
+                options => options.Add(new ContentCollectionConfig()
                 {
                     Name = "Test",
                     BasePath = StorageProviders.Articles,

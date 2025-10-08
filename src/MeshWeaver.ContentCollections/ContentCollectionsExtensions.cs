@@ -15,6 +15,15 @@ namespace MeshWeaver.ContentCollections;
 
 public static class ContentCollectionsExtensions
 {
+    /// <summary>
+    /// Gets the localized collection name for a hub by appending the hub's address ID.
+    /// </summary>
+    /// <param name="collectionName">The base collection name</param>
+    /// <param name="addressId">The hub's address ID</param>
+    /// <returns>The localized collection name in format: {collectionName}-{addressId}</returns>
+    public static string GetLocalizedCollectionName(string collectionName, string addressId)
+        => $"{collectionName}-{addressId}";
+
     public static MessageHubConfiguration AddArticles(
         this MessageHubConfiguration config,
         Func<ArticlesConfiguration, ArticlesConfiguration>? configure = null)
@@ -29,9 +38,66 @@ public static class ContentCollectionsExtensions
                 .WithView(nameof(ArticlesLayoutArea.Content), ArticlesLayoutArea.Content))
             .AddContentCollections();
     }
-    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null) =>
-        config
-            .WithServices(services => services.AddContentCollections(configuration))
+    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null, string? collectionsConfigKey = null)
+    {
+        return config
+            .WithServices(services =>
+            {
+                // Register the ContentCollectionRegistry with lazy parent resolution
+                // This follows the same pattern as TypeRegistry
+                services.AddScoped<IContentCollectionRegistry>(sp =>
+                {
+                    // Try to get parent registry from parent hub's service provider
+                    // We use reflection to access the private ParentMessageHub record
+                    IContentCollectionRegistry? parentRegistry = null;
+                    try
+                    {
+                        var hub = sp.GetRequiredService<IMessageHub>();
+                        parentRegistry = hub.Configuration.ParentHub != hub
+                            ? hub.Configuration.ParentHub?.ServiceProvider.GetService<IContentCollectionRegistry>()
+                            : null;
+                    }
+                    catch
+                    {
+                        // Parent may not have registry, that's ok
+                    }
+
+                    var registry = new ContentCollectionRegistry(parentRegistry);
+
+                    // Load collections from configuration if provided
+                    if (configuration != null && !string.IsNullOrEmpty(collectionsConfigKey))
+                    {
+                        var collectionSections = configuration.GetSection(collectionsConfigKey).GetChildren();
+                        foreach (var section in collectionSections)
+                        {
+                            var collectionName = section.Key;
+                            var collectionConfig = section.Get<ContentCollectionConfig>();
+                            if (collectionConfig != null)
+                            {
+                                // Set the name from the section key if not specified
+                                if (string.IsNullOrEmpty(collectionConfig.Name))
+                                    collectionConfig.Name = collectionName;
+
+                                // Set the address to this hub's address
+                                collectionConfig.Address = config.Address;
+
+                                // Register in the registry with lazy provider factory
+                                registry.WithCollection(collectionName, new ContentCollectionRegistration(
+                                    collectionConfig,
+                                    serviceProvider => CreateStreamProvider(collectionConfig, serviceProvider)
+                                ));
+                            }
+                        }
+                    }
+
+                    return registry;
+                });
+
+                // Register the content service and factories
+                services.AddContentCollections(configuration, collectionsConfigKey);
+
+                return services;
+            })
             .WithTypes(typeof(GetContentRequest), typeof(GetContentResponse), typeof(GetContentCollectionRequest), typeof(GetContentCollectionResponse))
             .WithHandler<GetContentRequest>(async (hub, request, ct) =>
             {
@@ -45,6 +111,18 @@ public static class ContentCollectionsExtensions
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             });
+    }
+
+    private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config, IServiceProvider sp)
+    {
+        var sourceType = config.SourceType ?? "FileSystem";
+        return sourceType switch
+        {
+            "FileSystem" => new FileSystemStreamProvider(config.BasePath ?? ""),
+            "EmbeddedResource" => throw new NotSupportedException("EmbeddedResource requires assembly and prefix - use WithEmbeddedResourceContentCollection"),
+            _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported")
+        };
+    }
 
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -128,9 +206,9 @@ public static class ContentCollectionsExtensions
 
             return new ContentCollectionConfig
             {
-                ProviderType = providerType,
-                CollectionName = contentCollection.Collection,
-                Configuration = config
+                SourceType = providerType,
+                Name = contentCollection.Collection,
+                Settings = config
             };
         }).ToArray();
 
@@ -141,13 +219,13 @@ public static class ContentCollectionsExtensions
     }
 
 
-    private static IServiceCollection AddContentCollections(this IServiceCollection services, IConfiguration? configuration = null)
+    public static IServiceCollection AddContentCollections(this IServiceCollection services, IConfiguration? configuration = null, string? collectionsConfigKey = null)
     {
         services
-            .AddSingleton<IContentService, ContentService>()
-            .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
-            .AddKeyedSingleton<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
-            .AddKeyedSingleton<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
+            .AddScoped<IContentService, ContentService>()
+            .AddKeyedScoped<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
+            .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
+            .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
 
         // Register stream providers if configuration is provided
         if (configuration != null)
@@ -158,6 +236,26 @@ public static class ContentCollectionsExtensions
                 foreach (var providerConfig in config.Providers)
                 {
                     services.AddStreamProvider(providerConfig);
+                }
+            }
+
+            // Register content collections from configuration if specified
+            if (!string.IsNullOrEmpty(collectionsConfigKey))
+            {
+                var collectionSections = configuration.GetSection(collectionsConfigKey).GetChildren();
+                foreach (var section in collectionSections)
+                {
+                    var collectionName = section.Key;
+                    var collectionConfig = section.Get<ContentCollectionConfig>();
+                    if (collectionConfig != null)
+                    {
+                        // Set the name from the section key if not specified
+                        if (string.IsNullOrEmpty(collectionConfig.Name))
+                            collectionConfig.Name = collectionName;
+
+                        // Register as a named option or similar pattern if needed
+                        // For now, this just validates the configuration exists
+                    }
                 }
             }
         }
@@ -352,11 +450,11 @@ public static class ContentCollectionsExtensions
                 new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
 
             // Register the content collection provider
-            services.AddSingleton<IContentCollectionProvider>(sp =>
+            services.AddScoped<IContentCollectionProvider>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
                 var provider = new EmbeddedResourceStreamProvider(assembly, resourcePrefix);
-                var config = new ContentSourceConfig
+                var config = new ContentCollectionConfig
                 {
                     Name = collectionName,
                     SourceType = "EmbeddedResource",
@@ -375,6 +473,128 @@ public static class ContentCollectionsExtensions
             return services;
         });
 
+    /// <summary>
+    /// Configures a FileSystem content collection for this hub with a dynamically calculated path.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection</param>
+    /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration WithFileSystemContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        Func<IServiceProvider, string> pathFactory)
+        => configuration
+            .AddContentCollections()
+            .WithServices(services =>
+            {
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionProvider>(sp =>
+                {
+                    var hub = sp.GetRequiredService<IMessageHub>();
+                    var basePath = pathFactory(sp);
+                    var provider = new FileSystemStreamProvider(basePath);
+
+                    var config = new ContentCollectionConfig
+                    {
+                        Name = collectionName,
+                        SourceType = "FileSystem",
+                        BasePath = basePath,
+                        Address = configuration.Address,
+                        Settings = new Dictionary<string, string>
+                        {
+                            ["BasePath"] = basePath
+                        }
+                    };
+
+                    return new ContentCollectionProvider(
+                        new ContentCollection(config, provider, hub)
+                    );
+                });
+
+                return services;
+            });
+
+    /// <summary>
+    /// Configures a content collection for this hub by reading configuration and computing a relative path.
+    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection from ContentCollections config section</param>
+    /// <param name="relativePathFactory">Factory function to compute the relative path to append to the base path</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration WithContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        Func<IServiceProvider, string> relativePathFactory)
+        => configuration
+            .AddContentCollections() // Ensure content service and registry are initialized
+            .WithServices(services =>
+            {
+                // Register the content collection provider - this will use the registry to get config
+                services.AddScoped<IContentCollectionProvider>(sp =>
+                {
+                    var hub = sp.GetRequiredService<IMessageHub>();
+                    var registry = sp.GetRequiredService<IContentCollectionRegistry>();
+                    var config = sp.GetRequiredService<IConfiguration>();
+
+                    // Try to get from registry first (may be from parent hub)
+                    var registration = registry.GetCollection(collectionName);
+                    ContentCollectionConfig? collectionConfig;
+
+                    if (registration != null)
+                    {
+                        collectionConfig = registration.Config;
+                    }
+                    else
+                    {
+                        // Fallback to reading from configuration directly
+                        collectionConfig = config.GetSection($"ContentCollections:{collectionName}").Get<ContentCollectionConfig>();
+                        if (collectionConfig?.BasePath == null)
+                            return new ContentCollectionProvider(); // Return empty provider if config not found
+
+                        // Set the name from the section key if not specified in config
+                        if (string.IsNullOrEmpty(collectionConfig.Name))
+                            collectionConfig.Name = collectionName;
+                    }
+
+                    // Compute the relative path and combine with base path
+                    var relativePath = relativePathFactory(sp);
+                    var basePath = collectionConfig.BasePath ?? "";
+                    var fullPath = string.IsNullOrEmpty(relativePath)
+                        ? basePath
+                        : System.IO.Path.Combine(basePath, relativePath);
+
+                    // Create the appropriate provider based on SourceType (default to FileSystem)
+                    var sourceType = collectionConfig.SourceType ?? "FileSystem";
+                    IStreamProvider provider = sourceType switch
+                    {
+                        "FileSystem" => new FileSystemStreamProvider(fullPath),
+                        _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported by WithContentCollection")
+                    };
+
+                    // Localize the collection name with the hub's address ID
+                    var localizedName = GetLocalizedCollectionName(collectionName, hub.Address.Id);
+
+                    var collectionSourceConfig = new ContentCollectionConfig
+                    {
+                        Name = localizedName,
+                        SourceType = sourceType,
+                        BasePath = fullPath,
+                        Address = configuration.Address,
+                        Settings = new Dictionary<string, string>
+                        {
+                            ["BasePath"] = fullPath
+                        }
+                    };
+
+                    return new ContentCollectionProvider(
+                        new ContentCollection(collectionSourceConfig, provider, hub)
+                    );
+                });
+
+                return services;
+            });
 
 }
 

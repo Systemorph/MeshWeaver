@@ -13,11 +13,11 @@ public class ContentCollection : IDisposable
 {
     private readonly ISynchronizationStream<InstanceCollection> markdownStream;
     private readonly IStreamProvider provider;
-    public readonly ContentSourceConfig Config;
+    public readonly ContentCollectionConfig Config;
     public Address? Address => Config.Address;
     private IDisposable? monitorDisposable;
 
-    public ContentCollection(ContentSourceConfig config, IStreamProvider provider, IMessageHub hub)
+    public ContentCollection(ContentCollectionConfig config, IStreamProvider provider, IMessageHub hub)
     {
         Hub = hub;
         Config = config;
@@ -133,10 +133,8 @@ public class ContentCollection : IDisposable
     {
         return provider.ProviderType switch
         {
-            "FileSystem" => Path.Combine(Config.BasePath!, path.TrimStart('/')),
             "EmbeddedResource" => GetEmbeddedResourceName(path),
-            "AzureBlob" => path.TrimStart('/'),
-            _ => path.TrimStart('/')
+            _ => Path.Combine(Config.BasePath!, path.TrimStart('/'))
         };
     }
 
