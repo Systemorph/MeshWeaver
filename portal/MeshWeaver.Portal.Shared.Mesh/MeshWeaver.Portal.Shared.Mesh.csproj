@@ -9,7 +9,7 @@
     <ProjectReference Include="..\..\modules\Todo\MeshWeaver.Todo\MeshWeaver.Todo.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\modules\Insurance\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
   </ItemGroup>
 
 </Project>
