@@ -22,24 +22,3 @@ public record GetContentCollectionResponse
     /// </summary>
     public bool IsFound => Collections?.Count > 0;
 }
-
-/// <summary>
-/// Configuration for a single content collection
-/// </summary>
-public record ContentCollectionConfig
-{
-    /// <summary>
-    /// The type of provider (e.g., "FileSystem", "AzureBlob", "EmbeddedResource")
-    /// </summary>
-    public string? ProviderType { get; init; }
-
-    /// <summary>
-    /// The collection name
-    /// </summary>
-    public string? CollectionName { get; init; }
-
-    /// <summary>
-    /// Provider-specific configuration
-    /// </summary>
-    public Dictionary<string, string>? Configuration { get; init; }
-}

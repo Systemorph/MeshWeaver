@@ -50,7 +50,7 @@ public class AzureBlobContentCollectionFactory(IServiceProvider serviceProvider)
 {
     public const string SourceType = "AzureBlob";
 
-    public ContentCollection Create(ContentSourceConfig config, IMessageHub hub)
+    public ContentCollection Create(ContentCollectionConfig config, IMessageHub hub)
     {
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
         var blobServiceClient = factory.CreateClient(config.BasePath);

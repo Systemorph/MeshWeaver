@@ -61,11 +61,7 @@ public static class PricingOverviewLayoutArea
             $"- **Currency:** {pricing.Currency ?? "N/A"}",
             "",
             "### Parties",
-            $"- **Broker:** {pricing.BrokerName ?? "N/A"}",
-            "",
-            "---",
-            "",
-            $"[View Property Risks](/insurance-pricing/{pricing.Id}/PropertyRisks)"
+            $"- **Broker:** {pricing.BrokerName ?? "N/A"}"
         };
 
         return string.Join("\n", lines);

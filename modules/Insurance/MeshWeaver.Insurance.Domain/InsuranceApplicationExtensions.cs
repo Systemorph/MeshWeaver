@@ -1,8 +1,10 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Insurance.Domain;
@@ -41,6 +43,21 @@ public static class InsuranceApplicationExtensions
     {
         return configuration
             .WithTypes(typeof(InsuranceApplicationExtensions))
+            .WithContentCollection("Submissions", sp =>
+            {
+                var hub = sp.GetRequiredService<IMessageHub>();
+                var addressId = hub.Address.Id;
+
+                // Parse addressId in format {company}-{uwy}
+                var parts = addressId.Split('-');
+                if (parts.Length != 2)
+                    return string.Empty;
+
+                var company = parts[0];
+                var uwy = parts[1];
+
+                return $"{company}/{uwy}";
+            })
             .AddData(data =>
             {
                 var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();

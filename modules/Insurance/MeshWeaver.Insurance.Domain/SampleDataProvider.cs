@@ -276,7 +276,7 @@ public static class SampleDataProvider
             },
             new Pricing
             {
-                Id = "Microsoft",
+                Id = "Microsoft-2026",
                 InsuredName = "Microsoft",
                 BrokerName = "Marsh McLennan",
                 InceptionDate = new DateTime(2026, 1, 1),

@@ -1,6 +1,8 @@
 ﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.FileExplorer;
@@ -8,13 +10,14 @@ namespace MeshWeaver.Blazor.FileExplorer;
 public partial class FileBrowser
 {
     [Inject] private IDialogService DialogService { get; set; } = null!;
-    [Inject] private IContentService ContentService { get; set; } = null!;
+    private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     [Inject] private IToastService ToastService { get; set; } = null!;
+    [Inject] private IMessageHub Hub { get; set; } = null!;
     [Parameter] public string? CollectionName { get; set; } = "";
     [Parameter] public string? CurrentPath { get; set; } = "/";
     [Parameter] public string TopLevelPath { get; set; } = "";
     [Parameter] public bool Embed { get; set; }
-    [Parameter]public bool CreatePath { get; set; }
+    [Parameter] public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
     [Parameter] public bool ShowCollectionSelection { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
@@ -22,11 +25,15 @@ public partial class FileBrowser
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
+
+        // Try to get the collection
         Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
+
         if (CreatePath && Collection is not null && CurrentPath is not null)
             await Collection.CreateFolderAsync(CurrentPath);
         await RefreshContentAsync();
     }
+
 
 
     private const string Root = "/";
@@ -76,7 +83,7 @@ public partial class FileBrowser
         var dialog = await DialogService.ShowDialogAsync<CreateFolderDialog, CreateFolderModel>(new CreateFolderModel(Collection!, CurrentPath!, CollectionItems), parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
-           await RefreshContentAsync();
+            await RefreshContentAsync();
     }
     private Task NewArticleAsync(MouseEventArgs arg)
     {
@@ -137,7 +144,7 @@ public partial class FileBrowser
                 ToastService.ShowSuccess($"File {file.Name} successfully uploaded.");
             }
         }
-        catch(Exception e)
+        catch (Exception e)
         {
             ToastService.ShowError($"Error uploading {file.Name}: {e.Message}");
         }

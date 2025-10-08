@@ -14,11 +14,19 @@
 
         public object? PathCreation { get; init; }
 
+        /// <summary>
+        /// Configuration to initialize the collection if it doesn't exist.
+        /// </summary>
+        public object? CollectionConfiguration { get; init; }
+
         public FileBrowserControl CreatePath()
             => this with { PathCreation = true };
 
         public FileBrowserControl WithTopLevel(string path)
             => this with { TopLevelPath = path };
+
+        public FileBrowserControl WithCollectionConfiguration(object config)
+            => this with { CollectionConfiguration = config };
 
         public string? TopLevelPath { get; init; }
     }
