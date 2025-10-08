@@ -12,6 +12,8 @@ using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
 using MeshWeaver.Insurance.AI;
+using MeshWeaver.Insurance.Domain;
+using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.AI;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
@@ -71,6 +73,7 @@ public static class SharedPortalConfiguration
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
         services.AddSingleton<DimensionManager>();
+        services.AddSingleton<IPricingService, InMemoryPricingService>();
 
         services.AddHttpContextAccessor();
 
@@ -125,11 +128,13 @@ public static class SharedPortalConfiguration
             =>
             (TBuilder)builder
                 .ConfigureHub(mesh => mesh
+                    .WithType(typeof(PricingAddress), PricingAddress.TypeName)
                     .AddAgGrid()
                     .AddChartJs()
                     .AddGoogleMaps()
                     .AddContentCollections(configuration)
                 )
+                .AddInsurancePricing()
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
                         c.AddArticles(articles => articles

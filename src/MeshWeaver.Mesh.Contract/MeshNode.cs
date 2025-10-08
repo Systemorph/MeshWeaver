@@ -55,8 +55,6 @@ public record MeshNode(
     public RoutingType RoutingType { get; init; }
     public InstantiationType InstantiationType { get; set; }
 
-    public virtual Address CreateAddress(string addressType, string addressId)
-        => MeshExtensions.MapAddress(addressType, addressId);
 
     [JsonIgnore, NotMapped]
     public ImmutableList<Func<IServiceCollection, IServiceCollection>> GlobalServiceConfigurations { get; set; } = [];

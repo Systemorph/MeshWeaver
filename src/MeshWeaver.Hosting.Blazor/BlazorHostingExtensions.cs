@@ -126,7 +126,7 @@ public static class BlazorHostingExtensions
         {
             try
             {
-                var address = MeshExtensions.MapAddress(addressType, addressId);
+                var address = mainHub.TypeRegistry.MapAddress(addressType, addressId);
                 var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
 
                 // Get content service directly from the target hub

@@ -2,18 +2,19 @@
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
-public partial class AreaPage
+public partial class AreaPage : ComponentBase
 {
     private LayoutAreaControl ViewModel { get; set; } = null!;
     private bool IsContentReady { get; set; } = false;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = null!;
-
+    [Inject] private IMessageHub Hub { get; set; } = null!;
     [Parameter]
     public string? AddressId { get; set; } = "";
     [Parameter]
@@ -35,12 +36,11 @@ public partial class AreaPage
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-    private object? Address => MeshExtensions.MapAddress(AddressType!, AddressId!);
+    private object? Address => Hub.TypeRegistry.MapAddress(AddressType!, AddressId!);
 
     private LayoutAreaReference Reference { get; set; } = null!;
-    protected override async Task OnParametersSetAsync()
+    protected override Task OnParametersSetAsync()
     {
-        await base.OnParametersSetAsync();
 
         var id = (string)WorkspaceReference.Decode(Id);
         var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
@@ -55,18 +55,20 @@ public partial class AreaPage
 
 
         ViewModel = Controls.LayoutArea(Address!, Reference)
-            with {
-                ShowProgress = false, // Disable progress indicator for cleaner screenshots
-            };
+            with
+        {
+            ShowProgress = false, // Disable progress indicator for cleaner screenshots
+        };
 
         // Reset content ready state when parameters change
         IsContentReady = false;
+
+        return Task.CompletedTask;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        await base.OnAfterRenderAsync(firstRender);
-        
+
         // Use a short delay to allow content to stabilize, then mark as ready
         if (!IsContentReady)
         {

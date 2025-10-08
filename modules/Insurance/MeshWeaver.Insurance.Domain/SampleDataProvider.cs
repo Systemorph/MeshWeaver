@@ -273,6 +273,21 @@ public static class SampleDataProvider
                 Premium = 95000m,
                 Currency = "EUR",
                 Status = "Draft"
+            },
+            new Pricing
+            {
+                Id = "Microsoft",
+                InsuredName = "Microsoft",
+                BrokerName = "Marsh McLennan",
+                InceptionDate = new DateTime(2026, 1, 1),
+                ExpirationDate = new DateTime(2026, 12, 31),
+                UnderwritingYear = 2026,
+                LineOfBusiness = "PROP",
+                Country = "US",
+                LegalEntity = "MW-US",
+                Premium = 2500000m,
+                Currency = "USD",
+                Status = "Bound"
             }
         };
     }

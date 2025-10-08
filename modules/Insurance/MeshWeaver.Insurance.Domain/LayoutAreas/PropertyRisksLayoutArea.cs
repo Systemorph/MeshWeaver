@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -28,24 +29,19 @@ public static class PropertyRisksLayoutArea
             if (!riskList.Any())
             {
                 return Controls.Stack
-                    .WithView(BuildToolbar(pricingId))
+                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
                     .WithView(Controls.Markdown("# Property Risks\n\n*No risks loaded. Import or add risks to begin.*"));
             }
 
             var dataGrid = RenderRisksDataGrid(host, riskList);
 
             return Controls.Stack
-                .WithView(BuildToolbar(pricingId))
+                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
                 .WithView(dataGrid);
         })
         .StartWith(Controls.Stack
-            .WithView(BuildToolbar(pricingId))
+            .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
             .WithView(Controls.Markdown("# Property Risks\n\n*Loading...*")));
-    }
-
-    private static UiControl BuildToolbar(string pricingId)
-    {
-        return Controls.Markdown($"[← Back to Overview](/insurance-pricing/{pricingId}/Overview)");
     }
 
     private static UiControl RenderRisksDataGrid(LayoutAreaHost host, IReadOnlyCollection<PropertyRisk> risks)

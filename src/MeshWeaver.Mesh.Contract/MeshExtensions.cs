@@ -1,6 +1,5 @@
-﻿using System.Reflection;
+﻿using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh;
 
@@ -30,16 +29,13 @@ public static class MeshExtensions
     }
 
 
-    public static Address MapAddress(string addressType, string id)
-        => addressType switch
-        {
-            ApplicationAddress.TypeName => new ApplicationAddress(id),
-            KernelAddress.TypeName => new KernelAddress(id),
-            NotebookAddress.TypeName => new NotebookAddress(id),
-            UiAddress.TypeName => new UiAddress(id),
-            MeshAddress.TypeName => new MeshAddress(id),
-            _ => throw new NotSupportedException($"Address type '{addressType}' is not supported.")
-        };
+    public static Address MapAddress(this ITypeRegistry typeRegistry, string addressType, string id)
+    {
+        var type = typeRegistry.GetType(addressType);
+        if (type != null)
+            return (Address)Activator.CreateInstance(type, id)!;
+        return new Address(addressType, id);
+    }
 
 
 }
