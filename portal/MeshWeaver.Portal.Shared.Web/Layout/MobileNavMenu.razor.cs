@@ -51,6 +51,12 @@ public partial class MobileNavMenu : ComponentBase
             DesktopNavMenu.NorthwindArticleIcon(),
             LinkMatchRegex: new Regex("^/app/Northwind/Articles")
         );
+        yield return new MobileNavMenuEntry(
+            "Pricing",
+            () => NavigateToAsync("/app/Insurance/Pricings"),
+            DesktopNavMenu.PricingIcon(),
+            LinkMatchRegex: new Regex("^/app/Insurance/Pricings")
+        );
         yield return new MobileNavMenuEntry("Documentation Areas",
             () => NavigateToAsync("/app/Documentation/LayoutAreas"),
             DesktopNavMenu.DocumentationIcon(),

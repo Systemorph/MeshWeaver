@@ -6,14 +6,14 @@ using MeshWeaver.Layout.Composition;
 namespace MeshWeaver.Insurance.Domain.LayoutAreas;
 
 /// <summary>
-/// Layout area for displaying individual pricing overview.
+/// Layout area for displaying submission details for a pricing.
 /// </summary>
-public static class PricingOverviewLayoutArea
+public static class SubmissionLayoutArea
 {
     /// <summary>
-    /// Renders the overview for a specific pricing.
+    /// Renders the submission details for a specific pricing.
     /// </summary>
-    public static IObservable<UiControl> Overview(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl> Submission(LayoutAreaHost host, RenderingContext ctx)
     {
         _ = ctx;
         var pricingId = host.Hub.Address.Id;
@@ -24,27 +24,28 @@ public static class PricingOverviewLayoutArea
                 var pricing = pricings?.FirstOrDefault();
                 return pricing != null
                     ? Controls.Stack
-                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Overview"))
-                        .WithView(Controls.Markdown(RenderPricingOverview(pricing)))
+                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
+                        .WithView(Controls.Markdown(RenderSubmissionDetails(pricing)))
                     : Controls.Stack
-                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Overview"))
-                        .WithView(Controls.Markdown($"# Pricing Overview\n\n*Pricing '{pricingId}' not found.*"));
+                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
+                        .WithView(Controls.Markdown($"# Submission\n\n*Pricing '{pricingId}' not found.*"));
             })
             .StartWith(Controls.Stack
-                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Overview"))
-                .WithView(Controls.Markdown("# Pricing Overview\n\n*Loading...*")));
+                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
+                .WithView(Controls.Markdown("# Submission\n\n*Loading...*")));
     }
 
-    private static string RenderPricingOverview(Pricing pricing)
+    private static string RenderSubmissionDetails(Pricing pricing)
     {
         var lines = new List<string>
         {
-            $"# {pricing.InsuredName}",
+            $"# Submission - {pricing.InsuredName}",
             "",
-            "## Pricing Details",
+            "## Submission Information",
             "",
             $"**Pricing ID:** {pricing.Id}",
             $"**Status:** {pricing.Status ?? "N/A"}",
+            $"**Broker:** {pricing.BrokerName ?? "N/A"}",
             "",
             "### Coverage Period",
             $"- **Inception Date:** {pricing.InceptionDate?.ToString("yyyy-MM-dd") ?? "N/A"}",
@@ -56,16 +57,9 @@ public static class PricingOverviewLayoutArea
             $"- **Country:** {pricing.Country ?? "N/A"}",
             $"- **Legal Entity:** {pricing.LegalEntity ?? "N/A"}",
             "",
-            "### Financial",
-            $"- **Premium:** {(pricing.Premium.HasValue && pricing.Currency != null ? $"{pricing.Currency} {pricing.Premium:N2}" : "N/A")}",
-            $"- **Currency:** {pricing.Currency ?? "N/A"}",
-            "",
-            "### Parties",
-            $"- **Broker:** {pricing.BrokerName ?? "N/A"}",
-            "",
             "---",
             "",
-            $"[View Property Risks](/insurance-pricing/{pricing.Id}/PropertyRisks)"
+            "*Additional submission details coming soon...*"
         };
 
         return string.Join("\n", lines);

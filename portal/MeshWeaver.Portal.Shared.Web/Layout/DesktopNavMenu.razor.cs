@@ -81,4 +81,9 @@ public partial class DesktopNavMenu : ComponentBase
         => active
             ? new Icons.Filled.Size24.News()
             : new Icons.Regular.Size24.News();
+
+    public static Icon PricingIcon(bool active = false)
+        => active
+            ? new Icons.Filled.Size24.Money()
+            : new Icons.Regular.Size24.Money();
 }

@@ -11,5 +11,5 @@ public record PricingAddress(string Id) : Address(TypeName, Id)
     /// <summary>
     /// Type name for pricing addresses.
     /// </summary>
-    public const string TypeName = "insurance-pricing";
+    public const string TypeName = "pricing";
 }

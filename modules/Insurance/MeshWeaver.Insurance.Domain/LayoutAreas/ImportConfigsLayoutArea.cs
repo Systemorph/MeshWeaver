@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Import.Configuration;
+using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
@@ -11,13 +12,13 @@ public static class ImportConfigsLayoutArea
     public static IObservable<UiControl> ImportConfigs(LayoutAreaHost host, RenderingContext ctx)
     {
         _ = ctx;
+        var pricingId = host.Hub.Address.Id;
         var pricingStream = host.Workspace.GetStream<Pricing>()!;
         var cfgStream = host.Workspace.GetStream<ExcelImportConfiguration>()!;
 
         return cfgStream.CombineLatest(pricingStream, (cfgs, pricings) =>
         {
             var pricing = pricings?.FirstOrDefault();
-            var pricingId = pricing?.Id ?? string.Empty;
 
             var list = cfgs?
                 .Where(c => string.Equals(c.EntityId, pricingId, StringComparison.OrdinalIgnoreCase))
@@ -26,6 +27,7 @@ public static class ImportConfigsLayoutArea
             if (list.Count == 0)
             {
                 return Controls.Stack
+                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ImportConfigs"))
                     .WithView(Controls.Markdown("# Import Configurations\n\n*No import configurations found for this pricing.*"));
             }
 
@@ -90,9 +92,11 @@ public static class ImportConfigsLayoutArea
             var md = string.Join("\n", parts);
 
             return Controls.Stack
+                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ImportConfigs"))
                 .WithView(Controls.Markdown(md));
         })
         .StartWith(Controls.Stack
+            .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ImportConfigs"))
             .WithView(Controls.Markdown("# Import Configurations\n\n*Loading...*")));
     }
 }

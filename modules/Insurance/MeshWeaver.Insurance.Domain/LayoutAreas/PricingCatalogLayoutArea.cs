@@ -11,8 +11,9 @@ public static class PricingCatalogLayoutArea
 {
     /// <summary>
     /// Renders the pricing catalog as a table with links to individual pricings.
+    /// This is displayed at /app/Insurance/Pricings
     /// </summary>
-    public static IObservable<UiControl> PricingCatalog(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl> Pricings(LayoutAreaHost host, RenderingContext ctx)
     {
         _ = ctx;
         return host.Workspace.GetStream<Pricing>()!
@@ -37,7 +38,7 @@ public static class PricingCatalogLayoutArea
             .OrderByDescending(p => p.InceptionDate)
             .Select(p =>
             {
-                var link = $"[{p.InsuredName}](/insurance-pricing/{p.Id}/Overview)";
+                var link = $"[{p.InsuredName}](/pricing/{p.Id}/Overview)";
                 var inception = p.InceptionDate?.ToString("yyyy-MM-dd") ?? "-";
                 var expiration = p.ExpirationDate?.ToString("yyyy-MM-dd") ?? "-";
                 var premium = p.Premium.HasValue && p.Currency != null
