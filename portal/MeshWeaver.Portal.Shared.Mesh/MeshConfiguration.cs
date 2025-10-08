@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.AI.Application;
 using MeshWeaver.Documentation;
+using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Northwind.Application;
@@ -17,6 +18,7 @@ public static  class SharedMeshConfiguration
             .InstallAssemblies(typeof(NorthwindApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(AgentsApplicationAttribute).Assembly.Location)
             .InstallAssemblies(typeof(TodoApplicationAttribute).Assembly.Location)
+            .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location)
             .AddKernel();
     }
 

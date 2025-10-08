@@ -11,6 +11,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Insurance.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.AI;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
@@ -51,6 +52,7 @@ public static class SharedPortalConfiguration
                 opt.DisableImplicitFromServicesParameters = true;
             });
         services.AddPortalAI();
+        services.AddInsuranceAI();
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat

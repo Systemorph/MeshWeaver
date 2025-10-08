@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Data;
-using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal.Shared.Web.Components;
 using MeshWeaver.Portal.Shared.Web.Resize;
@@ -22,7 +21,7 @@ public partial class MainLayout : IDisposable
     private const string ChatAreaName = "AgentChat";
 
     private bool isNavMenuOpen;
-    private AgentChatControl chatControl = new AgentChatControl();
+    private AgentChatControl chatControl = new();
 
     protected override void OnInitialized()
     {
@@ -119,7 +118,7 @@ public partial class MainLayout : IDisposable
     {
         IsAIChatVisible = !IsAIChatVisible;
         StateHasChanged();
-        
+
         // Small delay to ensure proper rendering, especially for bottom position
         if (IsAIChatVisible && currentChatPosition == ChatPosition.Bottom)
         {
