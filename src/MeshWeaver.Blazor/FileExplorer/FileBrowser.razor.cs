@@ -20,11 +20,22 @@ public partial class FileBrowser
     [Parameter] public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
     [Parameter] public bool ShowCollectionSelection { get; set; }
+    [Parameter] public ContentCollectionConfig? CollectionConfiguration { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
+
+        // Initialize collection if configuration is provided and collection doesn't exist
+        if (CollectionConfiguration != null && CollectionName != null)
+        {
+            var existing = ContentService.GetCollection(CollectionName);
+            if (existing == null)
+            {
+                await ContentService.InitializeCollectionAsync(CollectionConfiguration, CancellationToken.None);
+            }
+        }
 
         // Try to get the collection
         Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);

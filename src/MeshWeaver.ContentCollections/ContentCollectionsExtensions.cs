@@ -43,26 +43,11 @@ public static class ContentCollectionsExtensions
         return config
             .WithServices(services =>
             {
-                // Register the ContentCollectionRegistry with lazy parent resolution
-                // This follows the same pattern as TypeRegistry
-                services.AddScoped<IContentCollectionRegistry>(sp =>
+                // Register the ContentCollectionRegistry at hub level
+                // Does NOT delegate to parent - parent delegation is handled by ContentService
+                services.AddScoped<IContentCollectionRegistry>(_ =>
                 {
-                    // Try to get parent registry from parent hub's service provider
-                    // We use reflection to access the private ParentMessageHub record
-                    IContentCollectionRegistry? parentRegistry = null;
-                    try
-                    {
-                        var hub = sp.GetRequiredService<IMessageHub>();
-                        parentRegistry = hub.Configuration.ParentHub != hub
-                            ? hub.Configuration.ParentHub?.ServiceProvider.GetService<IContentCollectionRegistry>()
-                            : null;
-                    }
-                    catch
-                    {
-                        // Parent may not have registry, that's ok
-                    }
-
-                    var registry = new ContentCollectionRegistry(parentRegistry);
+                    var registry = new ContentCollectionRegistry();
 
                     // Load collections from configuration if provided
                     if (configuration != null && !string.IsNullOrEmpty(collectionsConfigKey))
@@ -84,7 +69,7 @@ public static class ContentCollectionsExtensions
                                 // Register in the registry with lazy provider factory
                                 registry.WithCollection(collectionName, new ContentCollectionRegistration(
                                     collectionConfig,
-                                    serviceProvider => CreateStreamProvider(collectionConfig, serviceProvider)
+                                    serviceProvider => CreateStreamProvider(collectionConfig)
                                 ));
                             }
                         }
@@ -113,7 +98,7 @@ public static class ContentCollectionsExtensions
             });
     }
 
-    private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config, IServiceProvider sp)
+    private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config)
     {
         var sourceType = config.SourceType ?? "FileSystem";
         return sourceType switch
@@ -516,80 +501,48 @@ public static class ContentCollectionsExtensions
             });
 
     /// <summary>
-    /// Configures a content collection for this hub by reading configuration and computing a relative path.
+    /// Configures a content collection for this hub using the provided configuration factory.
     /// Uses the ContentCollectionRegistry to register the collection hierarchically.
     /// </summary>
     /// <param name="configuration">The message hub configuration</param>
-    /// <param name="collectionName">The name of the collection from ContentCollections config section</param>
-    /// <param name="relativePathFactory">Factory function to compute the relative path to append to the base path</param>
+    /// <param name="collectionConfigFactory">Factory function that creates the content collection configuration</param>
     /// <returns>The configured message hub configuration</returns>
     public static MessageHubConfiguration WithContentCollection(
         this MessageHubConfiguration configuration,
-        string collectionName,
-        Func<IServiceProvider, string> relativePathFactory)
+        Func<IServiceProvider, ContentCollectionConfig> collectionConfigFactory)
         => configuration
             .AddContentCollections() // Ensure content service and registry are initialized
             .WithServices(services =>
             {
-                // Register the content collection provider - this will use the registry to get config
+                // Register the content collection provider
                 services.AddScoped<IContentCollectionProvider>(sp =>
                 {
                     var hub = sp.GetRequiredService<IMessageHub>();
-                    var registry = sp.GetRequiredService<IContentCollectionRegistry>();
-                    var config = sp.GetRequiredService<IConfiguration>();
-
-                    // Try to get from registry first (may be from parent hub)
-                    var registration = registry.GetCollection(collectionName);
-                    ContentCollectionConfig? collectionConfig;
-
-                    if (registration != null)
-                    {
-                        collectionConfig = registration.Config;
-                    }
-                    else
-                    {
-                        // Fallback to reading from configuration directly
-                        collectionConfig = config.GetSection($"ContentCollections:{collectionName}").Get<ContentCollectionConfig>();
-                        if (collectionConfig?.BasePath == null)
-                            return new ContentCollectionProvider(); // Return empty provider if config not found
-
-                        // Set the name from the section key if not specified in config
-                        if (string.IsNullOrEmpty(collectionConfig.Name))
-                            collectionConfig.Name = collectionName;
-                    }
-
-                    // Compute the relative path and combine with base path
-                    var relativePath = relativePathFactory(sp);
-                    var basePath = collectionConfig.BasePath ?? "";
-                    var fullPath = string.IsNullOrEmpty(relativePath)
-                        ? basePath
-                        : System.IO.Path.Combine(basePath, relativePath);
+                    var collectionConfig = collectionConfigFactory(sp);
 
                     // Create the appropriate provider based on SourceType (default to FileSystem)
                     var sourceType = collectionConfig.SourceType ?? "FileSystem";
                     IStreamProvider provider = sourceType switch
                     {
-                        "FileSystem" => new FileSystemStreamProvider(fullPath),
+                        "FileSystem" => new FileSystemStreamProvider(collectionConfig.BasePath ?? ""),
                         _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported by WithContentCollection")
                     };
 
-                    // Localize the collection name with the hub's address ID
-                    var localizedName = GetLocalizedCollectionName(collectionName, hub.Address.Id);
-
-                    var collectionSourceConfig = new ContentCollectionConfig
+                    // Ensure Settings are set
+                    var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
+                    if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
                     {
-                        Name = localizedName,
-                        SourceType = sourceType,
-                        BasePath = fullPath,
+                        settings["BasePath"] = collectionConfig.BasePath;
+                    }
+
+                    var finalConfig = collectionConfig with
+                    {
                         Address = configuration.Address,
-                        Settings = new Dictionary<string, string>
-                        {
-                            ["BasePath"] = fullPath
-                        }
+                        Settings = settings
                     };
 
                     return new ContentCollectionProvider(
-                        new ContentCollection(collectionSourceConfig, provider, hub)
+                        new ContentCollection(finalConfig, provider, hub)
                     );
                 });
 

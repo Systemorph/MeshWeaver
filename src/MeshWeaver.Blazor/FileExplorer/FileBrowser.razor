@@ -13,7 +13,7 @@
                         var accumulatedPath = Embed ? "/" : "/collections/" + @Collection.Collection;
                             if (Embed)
                             {
-                                var topPath = Path.Combine(accumulatedPath, TopLevelPath);
+                                var topPath = string.IsNullOrEmpty(TopLevelPath) ? accumulatedPath : Path.Combine(accumulatedPath, TopLevelPath);
                                 <FluentBreadcrumbItem @onclick="@(() => ChangePath(topPath))" class="breadcrumb-clickable">@Root</FluentBreadcrumbItem>
                             }
                             else

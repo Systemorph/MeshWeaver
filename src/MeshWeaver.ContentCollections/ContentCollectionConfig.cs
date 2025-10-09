@@ -3,7 +3,7 @@
 namespace MeshWeaver.ContentCollections;
 
 
-public class ContentCollectionConfig
+public record ContentCollectionConfig
 {
     public string SourceType { get; set; } = FileSystemContentCollectionFactory.SourceType;
     public string? Name { get; set; }

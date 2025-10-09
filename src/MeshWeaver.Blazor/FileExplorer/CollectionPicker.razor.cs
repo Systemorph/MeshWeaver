@@ -1,5 +1,7 @@
 ﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.FileExplorer;
@@ -7,7 +9,9 @@ namespace MeshWeaver.Blazor.FileExplorer;
 public partial class CollectionPicker : ComponentBase
 {
     private IReadOnlyCollection<Option<string>>? collections;
-    [Inject] private IContentService ContentService { get; set; } = null!;
+    [Inject] private IMessageHub Hub { get; set; } = null!;
+
+    private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Parameter] public string? NullLabel { get; set; }
     [Parameter] public string? Collection { get; set; }

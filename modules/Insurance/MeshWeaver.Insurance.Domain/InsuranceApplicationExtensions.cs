@@ -6,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;
 
 namespace MeshWeaver.Insurance.Domain;
 
@@ -43,20 +44,39 @@ public static class InsuranceApplicationExtensions
     {
         return configuration
             .WithTypes(typeof(InsuranceApplicationExtensions))
-            .WithContentCollection("Submissions", sp =>
+            .WithContentCollection(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
                 var addressId = hub.Address.Id;
 
+                // Get the global Submissions configuration from the parent hub's registry (appsettings)
+                var parentRegistry = hub.Configuration.ParentHub?.ServiceProvider.GetService<IContentCollectionRegistry>();
+                var globalRegistration = parentRegistry?.GetCollection("Submissions");
+                if (globalRegistration == null)
+                    throw new InvalidOperationException("Submissions collection not found in parent hub's registry");
+
+                var globalConfig = globalRegistration.Config;
+
                 // Parse addressId in format {company}-{uwy}
                 var parts = addressId.Split('-');
                 if (parts.Length != 2)
-                    return string.Empty;
+                    throw new InvalidOperationException($"Invalid address format: {addressId}. Expected format: {{company}}-{{uwy}}");
 
                 var company = parts[0];
                 var uwy = parts[1];
+                var subPath = $"{company}/{uwy}";
 
-                return $"{company}/{uwy}";
+                // Create localized config with modified name and basepath
+                var localizedName = GetLocalizedCollectionName("Submissions", addressId);
+                var fullPath = string.IsNullOrEmpty(subPath)
+                    ? globalConfig.BasePath ?? ""
+                    : System.IO.Path.Combine(globalConfig.BasePath ?? "", subPath);
+
+                return globalConfig with
+                {
+                    Name = localizedName,
+                    BasePath = fullPath
+                };
             })
             .AddData(data =>
             {

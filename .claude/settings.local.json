@@ -42,7 +42,8 @@
       "Bash(git log:*)",
       "Read(//c/**)",
       "Bash(python:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(test:*)"
     ],
     "deny": []
   }

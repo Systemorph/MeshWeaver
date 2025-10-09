@@ -2,6 +2,8 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using MeshWeaver.Blazor.FileExplorer
 @using MeshWeaver.ContentCollections
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
@@ -16,7 +18,8 @@
 @code {
     [Parameter] public string? FullPath { get; set; } = "";
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
-    [Inject] private IContentService ContentService { get; set; } = null!;
+    [Inject] private IMessageHub Hub { get; set; } = null!;
+    private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     private string? Collection { get; set; } = "";
     private string? Path { get; set; } = "";
 
