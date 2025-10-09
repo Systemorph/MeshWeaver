@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
@@ -21,12 +21,16 @@ public static class SubmissionLayoutArea
         _ = ctx;
         var pricingId = host.Hub.Address.Id;
 
-        // Get the collection configuration from the registry
-        // The collection name is localized with the hub's address ID
+        // Get the collection configuration, creating a localized version if needed
         var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
-        var registry = host.Hub.ServiceProvider.GetService<IContentCollectionRegistry>();
-        var collectionRegistration = registry?.GetCollection("Submissions");
-        var collectionConfig = collectionRegistration?.Config;
+        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+
+        // Parse the pricing ID to get the subpath
+        var parts = pricingId.Split('-');
+        var subPath = parts.Length == 2 ? $"{parts[0]}/{parts[1]}" : null;
+
+        // Get or create the collection configuration
+        var collectionConfig = contentService?.GetOrCreateCollectionConfig("Submissions", localizedCollectionName, subPath);
 
         return host.Workspace.GetStream<Pricing>()!
             .Select(pricings =>
@@ -36,7 +40,9 @@ public static class SubmissionLayoutArea
                 {
                     var fileBrowser = new FileBrowserControl(localizedCollectionName);
                     if (collectionConfig != null)
-                        fileBrowser = fileBrowser.WithCollectionConfiguration(collectionConfig);
+                        fileBrowser = fileBrowser.WithCollectionConfiguration(collectionConfig)
+                            .CreatePath()
+                            ;
 
                     return Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))

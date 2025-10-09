@@ -11,6 +11,7 @@ public class ContentService : IContentService
 {
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
+    private readonly IContentService? parentContentService;
     private readonly object lockObject = new();
 
     public ContentService(IServiceProvider serviceProvider, IMessageHub hub, AccessService accessService)
@@ -18,6 +19,32 @@ public class ContentService : IContentService
         this.hub = hub;
         this.accessService = accessService;
 
+        // Get parent content service if available - walk up the parent chain
+        try
+        {
+            var currentParent = hub.Configuration.ParentHub;
+            var visited = new HashSet<IMessageHub>();
+            while (currentParent != null && currentParent != hub)
+            {
+                // Prevent infinite loops
+                if (!visited.Add(currentParent))
+                    break;
+
+                var parentCs = currentParent.ServiceProvider.GetService<IContentService>();
+                if (parentCs != null)
+                {
+                    parentContentService = parentCs;
+                    break;
+                }
+                // Try next parent in chain
+                currentParent = currentParent.Configuration.ParentHub;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Parent may not have content service, that's ok
+            System.Diagnostics.Debug.WriteLine($"Error getting parent ContentService for {hub.Address}: {ex.Message}");
+        }
 
         // Add collections from configuration
         var configs = serviceProvider.GetService<IOptions<List<ContentCollectionConfig>>>();
@@ -54,7 +81,14 @@ public class ContentService : IContentService
     private readonly SemaphoreSlim initializeLock = new(1, 1);
 
     public ContentCollection? GetCollection(string collection)
-        => collections.GetValueOrDefault(collection);
+    {
+        // Try local collections first
+        if (collections.TryGetValue(collection, out var localCollection))
+            return localCollection;
+
+        // Delegate to parent if not found locally
+        return parentContentService?.GetCollection(collection);
+    }
 
     public async Task<ContentCollection> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
     {
@@ -97,6 +131,33 @@ public class ContentService : IContentService
         {
             initializeLock.Release();
         }
+    }
+
+    public ContentCollectionConfig? GetOrCreateCollectionConfig(string baseCollectionName, string localizedCollectionName, string? subPath = null)
+    {
+        // First check if the localized collection already exists
+        var existingCollection = GetCollection(localizedCollectionName);
+        if (existingCollection != null)
+            return existingCollection.Config;
+
+        // Try to get the base configuration from parent hub's registry
+        var parentRegistry = hub.Configuration.ParentHub?.ServiceProvider.GetService<IContentCollectionRegistry>();
+        var globalRegistration = parentRegistry?.GetCollection(baseCollectionName);
+
+        if (globalRegistration == null)
+            return null;
+
+        // Create localized config with subpath
+        var basePath = globalRegistration.Config.BasePath ?? "";
+        var fullPath = string.IsNullOrEmpty(subPath)
+            ? basePath
+            : System.IO.Path.Combine(basePath, subPath);
+
+        return globalRegistration.Config with
+        {
+            Name = localizedCollectionName,
+            BasePath = fullPath
+        };
     }
 
 
