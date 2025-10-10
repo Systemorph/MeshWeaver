@@ -14,17 +14,27 @@ public class DeleteModel(ContentCollection collection, IEnumerable<CollectionIte
         ? $"Are you sure you want to delete '{ItemsToDelete.First().Name}'?"
         : $"Are you sure you want to delete {Count} items?";
 
+    public List<string> Errors { get; } = new();
+
     public async Task DeleteAsync()
     {
+        Errors.Clear();
         foreach (var item in ItemsToDelete)
         {
-            if (item is FolderItem folder)
+            try
             {
-                await collection.DeleteFolderAsync(folder.Path);
+                if (item is FolderItem folder)
+                {
+                    await collection.DeleteFolderAsync(folder.Path);
+                }
+                else if (item is FileItem file)
+                {
+                    await collection.DeleteFileAsync(file.Path);
+                }
             }
-            else if (item is FileItem file)
+            catch (Exception ex)
             {
-                await collection.DeleteFileAsync(file.Path);
+                Errors.Add($"Failed to delete '{item.Name}': {ex.Message}");
             }
         }
     }

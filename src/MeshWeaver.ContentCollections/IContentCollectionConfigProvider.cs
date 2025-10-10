@@ -6,15 +6,15 @@
 /// <remarks>Implementations of this interface provide a mechanism to retrieve one or more  <see
 /// cref="ContentCollection"/> instances. The specific source and nature of the content  collections depend on the
 /// implementation.</remarks>
-public interface IContentCollectionProvider
+public interface IContentCollectionConfigProvider
 {
     /// <summary>
     /// Implementations should return one or more content collections.
     /// </summary>
-    IEnumerable<ContentCollection> GetCollections();
+    IEnumerable<ContentCollectionConfig> GetCollections();
 }
 
-public class ContentCollectionProvider(params IEnumerable<ContentCollection> collections) : IContentCollectionProvider
+public class ContentCollectionConfigProvider(params IEnumerable<ContentCollectionConfig> collections) : IContentCollectionConfigProvider
 {
-    public IEnumerable<ContentCollection> GetCollections() => collections;
+    public IEnumerable<ContentCollectionConfig> GetCollections() => collections;
 }

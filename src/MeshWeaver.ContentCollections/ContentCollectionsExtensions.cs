@@ -26,18 +26,39 @@ public static class ContentCollectionsExtensions
 
     public static MessageHubConfiguration AddArticles(
         this MessageHubConfiguration config,
-        Func<ArticlesConfiguration, ArticlesConfiguration>? configure = null)
+        params IReadOnlyCollection<ContentCollectionConfig> configurations)
     {
         return config
             .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin))
             .WithServices(services =>
-            services.AddScoped<ArticlesConfiguration>(_ => configure is null ? new ArticlesConfiguration() : configure.Invoke(new()))
+            services.AddScoped(sp => sp.GetConfiguration(config, configurations))
             )
             .AddLayout(layout => layout
                 .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles)
                 .WithView(nameof(ArticlesLayoutArea.Content), ArticlesLayoutArea.Content))
             .AddContentCollections();
     }
+
+    private static ArticlesConfiguration GetConfiguration(this IServiceProvider serviceProvider, MessageHubConfiguration config, IReadOnlyCollection<ContentCollectionConfig> configurations)
+    {
+        var hub = serviceProvider.GetRequiredService<IMessageHub>();
+        if (configurations.Count == 0)
+        {
+            var contentService = hub.GetContentService();
+            var collection = contentService.GetCollectionConfig(config.Address.Id);
+            if (collection is null)
+                throw new InvalidOperationException($"No content collection configured for hub at address '{config.Address.Id}'. Ensure a content collection is registered for this hub.");
+            return new ArticlesConfiguration() { CollectionConfigurations = [collection] };
+
+        }
+
+        return new ArticlesConfiguration()
+        {
+            CollectionConfigurations = configurations,
+            Collections = configurations.Select(c => c.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray()
+        };
+    }
+
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null, string? collectionsConfigKey = null)
     {
         return config
@@ -83,9 +104,9 @@ public static class ContentCollectionsExtensions
 
                 return services;
             })
-            .WithHandler<GetContentCollectionRequest>(async (hub, request, ct) =>
+            .WithHandler<GetContentCollectionRequest>((hub, request) =>
             {
-                var response = await GetContentCollectionResponse(hub, request, ct);
+                var response = GetContentCollectionResponse(hub, request);
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             });
@@ -106,33 +127,17 @@ public static class ContentCollectionsExtensions
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
 
-    private static async Task<GetContentCollectionResponse> GetContentCollectionResponse(
+    private static GetContentCollectionResponse GetContentCollectionResponse(
         IMessageHub hub,
-        IMessageDelivery<GetContentCollectionRequest> delivery,
-        CancellationToken cancellationToken)
+        IMessageDelivery<GetContentCollectionRequest> delivery)
     {
-        var request = delivery.Message;
         var contentService = hub.GetContentService();
 
-        // Get all collections for this hub
-        var contentCollections = await contentService.GetCollectionsAsync(cancellationToken);
-
-        if (contentCollections.Count == 0)
-        {
+        if (delivery.Message.CollectionNames is null || delivery.Message.CollectionNames.Count == 0)
             return new();
-        }
 
-        // Filter by requested collection names if specified
-        if (request.CollectionNames != null && request.CollectionNames.Count > 0)
-        {
-            contentCollections = contentCollections
-                .Where(c => request.CollectionNames.Contains(c.Collection))
-                .ToArray();
-        }
-
-        // Build configuration for each collection
-        var configs = contentCollections
-            .Select(contentCollection => contentCollection.Config)
+        var configs = delivery.Message.CollectionNames
+            .Select(c => contentService.GetCollectionConfig(c))
             .ToArray();
 
         return new GetContentCollectionResponse
@@ -147,6 +152,8 @@ public static class ContentCollectionsExtensions
         services
             .AddScoped<IContentService, ContentService>()
             .AddKeyedScoped<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
+            .AddKeyedScoped<IContentCollectionFactory, HubContentCollectionFactory>(HubContentCollectionFactory.SourceType)
+            .AddKeyedScoped<IContentCollectionFactory, EmbeddedResourceContentCollectionFactory>(EmbeddedResourceContentCollectionFactory.SourceType)
             .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
             .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
 
@@ -186,12 +193,12 @@ public static class ContentCollectionsExtensions
         return services;
     }
 
-    private static IServiceCollection AddStreamProvider(this IServiceCollection services, StreamProviderConfiguration config)
+    private static void AddStreamProvider(this IServiceCollection services, StreamProviderConfiguration config)
     {
         switch (config.ProviderType)
         {
             case "FileSystem":
-                services.AddKeyedSingleton<IStreamProvider>(config.Name, (_, key) =>
+                services.AddKeyedSingleton<IStreamProvider>(config.Name, (_, _) =>
                 {
                     var basePath = config.Settings.GetValueOrDefault("BasePath", "");
                     return new FileSystemStreamProvider(basePath);
@@ -212,8 +219,6 @@ public static class ContentCollectionsExtensions
             default:
                 throw new InvalidOperationException($"Unknown stream provider type: {config.ProviderType}");
         }
-
-        return services;
     }
 
     public static string ConvertToMarkdown(this Article article)
@@ -369,14 +374,12 @@ public static class ContentCollectionsExtensions
             var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
 
             // Register the stream provider for this embedded resource collection
-            services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, key) =>
+            services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, _) =>
                 new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
 
             // Register the content collection provider
-            services.AddScoped<IContentCollectionProvider>(sp =>
+            services.AddScoped<IContentCollectionConfigProvider>(_ =>
             {
-                var hub = sp.GetRequiredService<IMessageHub>();
-                var provider = new EmbeddedResourceStreamProvider(assembly, resourcePrefix);
                 var config = new ContentCollectionConfig
                 {
                     Name = collectionName,
@@ -388,9 +391,7 @@ public static class ContentCollectionsExtensions
                     },
                     Address = configuration.Address
                 };
-                return new ContentCollectionProvider(
-                    new ContentCollection(config, provider, hub)
-                );
+                return new ContentCollectionConfigProvider(config);
             });
 
             return services;
@@ -412,11 +413,9 @@ public static class ContentCollectionsExtensions
             .WithServices(services =>
             {
                 // Register the content collection provider
-                services.AddScoped<IContentCollectionProvider>(sp =>
+                services.AddScoped<IContentCollectionConfigProvider>(sp =>
                 {
-                    var hub = sp.GetRequiredService<IMessageHub>();
                     var basePath = pathFactory(sp);
-                    var provider = new FileSystemStreamProvider(basePath);
 
                     var config = new ContentCollectionConfig
                     {
@@ -430,9 +429,7 @@ public static class ContentCollectionsExtensions
                         }
                     };
 
-                    return new ContentCollectionProvider(
-                        new ContentCollection(config, provider, hub)
-                    );
+                    return new ContentCollectionConfigProvider(config);
                 });
 
                 return services;
@@ -453,18 +450,9 @@ public static class ContentCollectionsExtensions
             .WithServices(services =>
             {
                 // Register the content collection provider
-                services.AddScoped<IContentCollectionProvider>(sp =>
+                services.AddScoped<IContentCollectionConfigProvider>(sp =>
                 {
-                    var hub = sp.GetRequiredService<IMessageHub>();
                     var collectionConfig = collectionConfigFactory(sp);
-
-                    // Create the appropriate provider based on SourceType (default to FileSystem)
-                    var sourceType = collectionConfig.SourceType;
-                    IStreamProvider provider = sourceType switch
-                    {
-                        "FileSystem" => new FileSystemStreamProvider(collectionConfig.BasePath ?? ""),
-                        _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported by WithContentCollection")
-                    };
 
                     // Ensure Settings are set
                     var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
@@ -479,9 +467,7 @@ public static class ContentCollectionsExtensions
                         Settings = settings
                     };
 
-                    return new ContentCollectionProvider(
-                        new ContentCollection(finalConfig, provider, hub)
-                    );
+                    return new ContentCollectionConfigProvider(finalConfig);
                 });
 
                 return services;

@@ -16,9 +16,8 @@ public static class SubmissionLayoutArea
     /// <summary>
     /// Renders the submission details for a specific pricing.
     /// </summary>
-    public static IObservable<UiControl> Submission(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl> Submission(LayoutAreaHost host, RenderingContext _)
     {
-        _ = ctx;
         var pricingId = host.Hub.Address.Id;
 
         // Get the collection configuration, creating a localized version if needed
@@ -29,8 +28,18 @@ public static class SubmissionLayoutArea
         var parts = pricingId.Split('-');
         var subPath = parts.Length == 2 ? $"{parts[0]}/{parts[1]}" : null;
 
-        // Get or create the collection configuration
-        var collectionConfig = contentService?.GetOrCreateCollectionConfig("Submissions", localizedCollectionName, subPath);
+        // Create the collection configuration
+        ContentCollectionConfig? collectionConfig = null;
+        if (subPath != null)
+        {
+            collectionConfig = new ContentCollectionConfig
+            {
+                Name = localizedCollectionName,
+                SourceType = "FileSystem",
+                BasePath = subPath,
+                Address = host.Hub.Address
+            };
+        }
 
         return host.Workspace.GetStream<Pricing>()!
             .Select(pricings =>

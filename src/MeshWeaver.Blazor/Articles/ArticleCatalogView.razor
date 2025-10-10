@@ -17,15 +17,13 @@
 
     @if (collectionOptions == null || !collectionOptions.Any())
     {
-        <FluentMessageBar Title="No collections found" Intent="MessageIntent.Info">
-            No article collections are available.
-        </FluentMessageBar>
+        <b>No article collections are available.</b>
     }
     else if (!Articles.Any())
     {
-        <FluentMessageBar Title="No articles found" Intent="MessageIntent.Info">
+        <b>
             No articles found in the selected collection(s).
-        </FluentMessageBar>
+        </b>
     }
     else
     {

@@ -135,13 +135,15 @@ public static class BlazorHostingExtensions
                     return Results.NotFound("Content service not configured");
                 }
 
-                // Get or initialize the collection from the address
-                var address = portal.TypeRegistry.MapAddress(addressType, addressId);
-                var contentCollection = await contentService.GetOrInitializeCollectionAsync(
-                    collection,
-                    address,
-                    context.RequestAborted
-                );
+                contentService.AddConfiguration(new ContentCollectionConfig()
+                {
+                    Name = collection,
+                    SourceType = HubContentCollectionFactory.SourceType,
+                    Address = portal.TypeRegistry.MapAddress(addressType, addressId)
+                });
+
+                // Get or initialize the collection by name
+                var contentCollection = await contentService.GetCollectionAsync(collection, context.RequestAborted);
 
                 if (contentCollection == null)
                 {

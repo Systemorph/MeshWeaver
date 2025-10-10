@@ -4,5 +4,5 @@ namespace MeshWeaver.ContentCollections;
 
 public interface IContentCollectionFactory
 {
-    ContentCollection Create(ContentCollectionConfig config, IMessageHub hub);
+    Task<ContentCollection> CreateAsync(ContentCollectionConfig config, IMessageHub hub, CancellationToken cancellationToken = default);
 }

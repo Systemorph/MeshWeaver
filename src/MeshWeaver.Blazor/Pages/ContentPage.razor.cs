@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Layout;
-using Microsoft.AspNetCore.Components;
 using MeshWeaver.ContentCollections;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Pages;
 
@@ -13,16 +13,15 @@ public partial class ContentPage : ComponentBase, IDisposable
     public Stream? Content { get; set; }
     public string? ContentType { get; set; }
     public string? ErrorMessage { get; set; }
-    IDisposable? ArticleStreamSubscription { get; set; }
 
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
-    [Inject] public IContentService ArticleService { get; set; } = null!;
+    private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
 
-        var collection = ArticleService.GetCollection(Collection!);
+        var collection = await ContentService.GetCollectionAsync(Collection!);
         if (collection is null)
         {
             ErrorMessage = $"Collection '{Collection}' does not exist.";
@@ -56,6 +55,5 @@ public partial class ContentPage : ComponentBase, IDisposable
     public void Dispose()
     {
         Content?.Dispose();
-        ArticleStreamSubscription?.Dispose();
     }
 }

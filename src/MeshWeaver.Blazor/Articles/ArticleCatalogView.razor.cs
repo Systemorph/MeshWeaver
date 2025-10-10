@@ -40,7 +40,7 @@ public partial class ArticleCatalogView
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
-        var allCollections = await LoadCollectionsAsync()
+        var allCollections = await LoadCollectionsAsync(default)
             .ToArrayAsync();
         var options = allCollections
             .Select(c => new Option<string>
@@ -62,30 +62,28 @@ public partial class ArticleCatalogView
     }
 
     private const string All = "(all)";
-    private async IAsyncEnumerable<ContentCollection> LoadCollectionsAsync()
+    private async IAsyncEnumerable<ContentCollection> LoadCollectionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        if (collections is not null)
-            foreach (var collection in collections)
-            {
-                var col = contentService.GetCollection(collection);
-                if (col != null)
-                    yield return col;
-            }
-
-        // Initialize collections from configurations
+        // Initialize collections from configurations (from control)
+        HashSet<string> processed = new();
         if (collectionConfigurations is not null)
             foreach (var config in collectionConfigurations)
             {
-                var existing = contentService.GetCollection(config.Name!);
-                if (existing == null)
-                {
-                    await contentService.InitializeCollectionAsync(config);
-                    existing = contentService.GetCollection(config.Name!);
-                }
+                var existing = await contentService.InitializeCollectionAsync(config, ct);
                 if (existing != null)
+                {
+                    processed.Add(existing.Collection);
                     yield return existing;
+                }
+            }
+        if (collections is not null)
+            foreach (var collection in collections.Where(c => !processed.Contains(c)))
+            {
+                var col = await contentService.GetCollectionAsync(collection, ct);
+                if (col != null)
+                    yield return col;
             }
     }
 

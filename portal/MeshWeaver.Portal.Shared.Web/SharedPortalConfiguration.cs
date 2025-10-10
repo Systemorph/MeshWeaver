@@ -115,7 +115,7 @@ public static class SharedPortalConfiguration
 
 
         builder.Services.AddSignalR();
-        builder.Services.Configure<List<ContentCollectionConfig>>(builder.Configuration.GetSection("ArticleCollections"));
+
 
         builder.Services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
@@ -135,7 +135,19 @@ public static class SharedPortalConfiguration
                 .AddInsurancePricing()
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                        c.AddArticles()
+                            c.AddArticles(new ContentCollectionConfig()
+                            {
+                                SourceType = HubContentCollectionFactory.SourceType,
+                                Name = "Documentation",
+                                Address = new ApplicationAddress("Documentation")
+                            },
+                                new ContentCollectionConfig()
+                                {
+                                    SourceType = HubContentCollectionFactory.SourceType,
+                                    Name = "Todo",
+                                    Address = new ApplicationAddress("Todo")
+                                }
+                            )
                         )
                 )
                 .AddSignalRHubs();

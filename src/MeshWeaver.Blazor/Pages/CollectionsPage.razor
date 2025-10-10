@@ -8,7 +8,7 @@
 <PageTitle>Browse @Collection</PageTitle>
 <AuthorizeView Roles="@Roles.PortalAdmin">
     <Authorized>
-        <FileBrowser CollectionName="@Collection" ShowCollectionSelection="@true" CurrentPath="@Path"></FileBrowser>
+        <FileBrowser CollectionName="@Collection" CurrentPath="@Path"></FileBrowser>
     </Authorized>
     <NotAuthorized>
         <h3>Access Denied</h3>
@@ -23,9 +23,9 @@
     private string? Collection { get; set; } = "";
     private string? Path { get; set; } = "";
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
-        base.OnParametersSet();
+        await base.OnParametersSetAsync();
         if (!string.IsNullOrEmpty(FullPath))
         {
             var split = FullPath!.Split('/');
@@ -35,7 +35,7 @@
         else
         {
             // Redirect to first available collection if no collection specified
-            var collections = ContentService.GetCollections();
+            var collections = await ContentService.GetCollectionsAsync();
             var firstCollection = collections.FirstOrDefault();
             if (firstCollection != null)
             {

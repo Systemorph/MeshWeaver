@@ -50,7 +50,7 @@ public class AzureBlobContentCollectionFactory(IServiceProvider serviceProvider)
 {
     public const string SourceType = "AzureBlob";
 
-    public ContentCollection Create(ContentCollectionConfig config, IMessageHub hub)
+    public async Task<ContentCollection> CreateAsync(ContentCollectionConfig config, IMessageHub hub, CancellationToken cancellationToken = default)
     {
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
         var blobServiceClient = factory.CreateClient(config.BasePath);
@@ -59,6 +59,9 @@ public class AzureBlobContentCollectionFactory(IServiceProvider serviceProvider)
         var containerName = config.Name!;
         var provider = new AzureBlobStreamProvider(blobServiceClient, containerName);
 
-        return new ContentCollection(config, provider, hub);
+        var collection = new ContentCollection(config, provider, hub);
+        await collection.InitializeAsync(cancellationToken);
+
+        return collection;
     }
 }

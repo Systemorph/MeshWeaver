@@ -19,7 +19,6 @@ public partial class FileBrowser
     [Parameter] public bool Embed { get; set; }
     [Parameter] public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
-    [Parameter] public bool ShowCollectionSelection { get; set; }
     [Parameter] public ContentCollectionConfig? CollectionConfiguration { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
@@ -30,7 +29,7 @@ public partial class FileBrowser
         // Initialize collection if configuration is provided and collection doesn't exist
         if (CollectionConfiguration != null && CollectionName != null)
         {
-            var existing = ContentService.GetCollection(CollectionName);
+            var existing = await ContentService.GetCollectionAsync(CollectionName);
             if (existing == null)
             {
                 await ContentService.InitializeCollectionAsync(CollectionConfiguration, CancellationToken.None);
@@ -38,7 +37,7 @@ public partial class FileBrowser
         }
 
         // Try to get the collection
-        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : await ContentService.GetCollectionAsync(CollectionName);
 
         if (CreatePath && Collection is not null && CurrentPath is not null)
             await Collection.CreateFolderAsync(CurrentPath);
@@ -68,7 +67,7 @@ public partial class FileBrowser
             return;
         CollectionName = collection;
 
-        Collection = CollectionName is null ? null : ContentService.GetCollection(CollectionName);
+        Collection = CollectionName is null ? null : await ContentService.GetCollectionAsync(CollectionName);
         await RefreshContentAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -114,10 +113,27 @@ public partial class FileBrowser
             Modal = true,
             PreventScroll = true,
         };
-        var dialog = await DialogService.ShowDialogAsync<DeleteDialog, DeleteModel>(new DeleteModel(Collection!, SelectedItems), parameters);
+        var deleteModel = new DeleteModel(Collection!, SelectedItems);
+        var dialog = await DialogService.ShowDialogAsync<DeleteDialog, DeleteModel>(deleteModel, parameters);
         var result = await dialog.Result;
         if (!result.Cancelled)
+        {
             await RefreshContentAsync();
+
+            // Show errors if any occurred
+            if (deleteModel.Errors.Any())
+            {
+                foreach (var error in deleteModel.Errors)
+                {
+                    ToastService.ShowError(error);
+                }
+            }
+            else
+            {
+                var itemCount = deleteModel.ItemsToDelete.Count();
+                ToastService.ShowSuccess($"Successfully deleted {itemCount} item{(itemCount > 1 ? "s" : "")}.");
+            }
+        }
     }
     private string GetLink(CollectionItem item)
     {
