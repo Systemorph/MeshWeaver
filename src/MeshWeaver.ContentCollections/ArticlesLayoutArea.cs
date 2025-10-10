@@ -2,6 +2,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -19,9 +20,22 @@ public static class ArticlesLayoutArea
     [Browsable(false)]
     public static UiControl? Articles(LayoutAreaHost host, RenderingContext _)
     {
-        var selectedCollection = host.Reference.Id?.ToString() ?? host.Hub.Address.Id;
+        var selectedCollection = host.Reference.Id?.ToString();
+        if (selectedCollection is not null)
+            return GetCollectionFromId(host, selectedCollection);
+
+        var config = host.Hub.ServiceProvider.GetRequiredService<ArticlesConfiguration>();
+        return new ArticleCatalogControl
+        {
+            Collections = config.Collections,
+            CollectionConfigurations = config.CollectionConfigurations
+        };
+    }
+
+    private static UiControl? GetCollectionFromId(LayoutAreaHost host, string selectedCollection)
+    {
         var contentService = host.Hub.GetContentService();
-        var collectionConfig = contentService.GetCollection(selectedCollection)?.Config;
+        var collectionConfig = contentService.GetCollectionConfig(selectedCollection);
         if (collectionConfig == null)
             return new MarkdownControl($"Collection not found: {selectedCollection}");
         return new ArticleCatalogControl
@@ -35,7 +49,7 @@ public static class ArticlesLayoutArea
     /// Content layout area for displaying a single article
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingContext _)
+    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
     {
         var split = host.Reference.Id?.ToString()?.Split("/");
         if (split is null || split.Length < 2)
@@ -45,10 +59,8 @@ public static class ArticlesLayoutArea
         var path = string.Join('/', split.Skip(1));
 
         var articleService = host.Hub.GetContentService();
-        var contentStream = articleService.GetArticle(collection, path);
+        var contentStream = await articleService.GetArticleAsync(collection, path, ct);
 
-        if (contentStream is null)
-            return Observable.Return(new MarkdownControl($"Article not found: {path}"));
 
         return contentStream.Select(article =>
             article is Article a ? (UiControl?)new ArticleControl(a) : new MarkdownControl($"Article not found: {path}")

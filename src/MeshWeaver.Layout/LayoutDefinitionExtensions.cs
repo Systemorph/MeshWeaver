@@ -91,15 +91,20 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
-    ) where T:UiControl? => WithView(
+    ) where T : UiControl? => WithView(
         layout,
-        context, 
+        context,
         Observable.Return<ViewDefinition>((async (x, y, z) => await generator(x, y, z))));
 
     public static LayoutDefinition WithView<T>(
         this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
+    ) where T : UiControl? => layout.WithView(c => c.Area == area, generator);
+    public static LayoutDefinition WithView<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T>>> generator
     ) where T : UiControl? => layout.WithView(c => c.Area == area, generator);
     public static LayoutDefinition WithView(this LayoutDefinition layout, Func<RenderingContext, bool> context, ViewDefinition generator) =>
         WithView(
@@ -121,15 +126,15 @@ public static class LayoutDefinitionExtensions
         Func<RenderingContext, bool> context,
         IObservable<ViewDefinition> generator) =>
         layout.WithRenderer(context,
-            (a, c, s) 
+            (a, c, s)
                 => a.RenderArea(c, generator, s))
         ;
- 
+
     public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
         IObservable<ViewDefinition<T>> generator,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
-    ) where T:UiControl? =>
+    ) where T : UiControl? =>
         layout.WithView(c => c.Area == area, generator)
             .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, null))
         ;
@@ -142,7 +147,7 @@ public static class LayoutDefinitionExtensions
             var method = delgate.Method;
             var doc = method.GetXmlDocsSummary();
             ret = ret.WithDescription(doc);
-            
+
             // Check class-level DisplayAttribute for GroupName and fallback Order
             var declaringType = method.DeclaringType;
             if (declaringType?.GetCustomAttribute<DisplayAttribute>() is { } classDisplayAttribute)
@@ -152,21 +157,21 @@ public static class LayoutDefinitionExtensions
                 if (ret.Order is null or 0 && classDisplayAttribute.GetOrder() is not null and not 0)
                     ret = ret with { Order = classDisplayAttribute.Order };
             }
-            
+
             // Check method-level DisplayAttribute (takes precedence)
-            if(method.GetCustomAttribute<DisplayAttribute>() is { } methodDisplayAttribute)
+            if (method.GetCustomAttribute<DisplayAttribute>() is { } methodDisplayAttribute)
             {
-                ret = ret with{Order = methodDisplayAttribute.GetOrder() ?? int.MaxValue};
-                if(methodDisplayAttribute.Description is not null)
+                ret = ret with { Order = methodDisplayAttribute.GetOrder() ?? int.MaxValue };
+                if (methodDisplayAttribute.Description is not null)
                     ret = ret.WithDescription(methodDisplayAttribute.Description);
-                if(methodDisplayAttribute.Name is not null)
+                if (methodDisplayAttribute.Name is not null)
                     ret = ret.WithTitle(methodDisplayAttribute.Name);
-                if(methodDisplayAttribute.GroupName is not null)
+                if (methodDisplayAttribute.GroupName is not null)
                     ret = ret.WithGroup(methodDisplayAttribute.GroupName);
             }
-            
+
             if (method.GetCustomAttribute<BrowsableAttribute>() is { } browsableAtt)
-                ret = ret with{IsInvisible = !browsableAtt.Browsable};
+                ret = ret with { IsInvisible = !browsableAtt.Browsable };
         }
         if (options is not null)
             ret = options.Invoke(ret);
@@ -174,16 +179,16 @@ public static class LayoutDefinitionExtensions
     }
 
     public static LayoutDefinition WithView(
-        this LayoutDefinition layout, 
-        Func<RenderingContext, bool> context, 
+        this LayoutDefinition layout,
+        Func<RenderingContext, bool> context,
         object view,
         LayoutAreaDefinition? layoutAreaDefinition = null) =>
         layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, view, s))
             .WithAreaDefinition(layoutAreaDefinition!);
 
     public static LayoutDefinition WithView(
-        this LayoutDefinition layout, 
-        string area, 
+        this LayoutDefinition layout,
+        string area,
         UiControl? view,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
         ) =>
@@ -216,10 +221,10 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         Func<RenderingContext, bool> context,
         Func<LayoutAreaHost, RenderingContext, T> view,
-        LayoutAreaDefinition? areaDefinition = null) where T:UiControl?
+        LayoutAreaDefinition? areaDefinition = null) where T : UiControl?
         => layout
-            .WithView(context, 
-                (a, ctx) 
+            .WithView(context,
+                (a, ctx)
                     => Observable.Return<UiControl?>(view(a, ctx)))
             .WithAreaDefinition(areaDefinition);
 
@@ -232,7 +237,7 @@ public static class LayoutDefinitionExtensions
         .WithAreaDefinition(layout.CreateLayoutAreaDefinition(area, areaDefinition, view));
 
     public static EntityStoreAndUpdates UpdateControl(this EntityStore store, string id, UiControl? control)
-        => new (store.Update(LayoutAreaReference.Areas, i => i.Update(id, control!)), [new EntityUpdate(LayoutAreaReference.Areas, id, control!)], null);
+        => new(store.Update(LayoutAreaReference.Areas, i => i.Update(id, control!)), [new EntityUpdate(LayoutAreaReference.Areas, id, control!)], null);
     public static EntityStoreAndUpdates UpdateData(this EntityStore store, string id, object control)
         => new(store.Update(LayoutAreaReference.Data, i => i.Update(id, control)), [new EntityUpdate(LayoutAreaReference.Data, id, control)], null);
 

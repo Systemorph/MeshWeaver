@@ -50,6 +50,7 @@ namespace MeshWeaver.Documentation.Test
                 .Configure<List<ContentCollectionConfig>>(
                     options => options.Add(new ContentCollectionConfig()
                     {
+                        SourceType = FileSystemContentCollectionFactory.SourceType,
                         Name = "Documentation",
                         BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
                     })

@@ -39,6 +39,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .Configure<List<ContentCollectionConfig>>(
                 options => options.Add(new ContentCollectionConfig()
                 {
+                    SourceType = FileSystemContentCollectionFactory.SourceType,
                     Name = Test,
                     BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
                 })
@@ -77,7 +78,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     public virtual async Task NotFound()
     {
         var client = GetClient();
-        var articleStream = client.RenderArticle("Test", "NotFound");
+        var articleStream = await client.RenderArticle("Test", "NotFound", TestContext.Current.CancellationToken);
 
         var control = await articleStream
             .Timeout(20.Seconds())
