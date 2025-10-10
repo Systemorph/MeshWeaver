@@ -50,7 +50,7 @@ namespace MeshWeaver.Northwind.Application
                             .AddOrdersAnalysis()
                             .AddSalesAnalysis()
                             .AddTopClients()
-                            .WithThumbnailBasePath("/app/Northwind/static/thumbnails")
+                            .WithThumbnailBasePath("/app/Northwind/static/Northwind/thumbnails")
                     )
                 ;
         }

@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -11,7 +10,7 @@ public partial class ArticleCatalogView
     private string? selectedCollection;
     private IReadOnlyCollection<Article> articles = [];
     private IReadOnlyCollection<Option<string>>? collectionOptions;
-    private readonly IReadOnlyCollection<Address>? addresses;
+    private readonly IReadOnlyCollection<ContentCollectionConfig>? collectionConfigurations;
     private readonly IReadOnlyCollection<string>? collections;
     private Dictionary<string, ContentCollection> collectionsByName = new();
 
@@ -25,10 +24,10 @@ public partial class ArticleCatalogView
             x => x.collections
         );
 
-        // Bind to Addresses property
+        // Bind to CollectionConfigurations property
         DataBind(
-            ViewModel.Addresses,
-            x => x.addresses
+            ViewModel.CollectionConfigurations,
+            x => x.collectionConfigurations
         );
 
         // Bind to selected collection property
@@ -74,17 +73,20 @@ public partial class ArticleCatalogView
                 if (col != null)
                     yield return col;
             }
-        // Get collectionOptions from the specified addresses
-        if (addresses is not null)
-            foreach (var address in addresses)
+
+        // Initialize collections from configurations
+        if (collectionConfigurations is not null)
+            foreach (var config in collectionConfigurations)
             {
-                var coll = await contentService.GetCollectionForAddressAsync(address);
-                foreach (var collection in coll)
-                    yield return collection;
+                var existing = contentService.GetCollection(config.Name!);
+                if (existing == null)
+                {
+                    await contentService.InitializeCollectionAsync(config);
+                    existing = contentService.GetCollection(config.Name!);
+                }
+                if (existing != null)
+                    yield return existing;
             }
-
-
-
     }
 
     private Task<IReadOnlyCollection<Article>> LoadArticlesAsync()
@@ -117,11 +119,10 @@ public partial class ArticleCatalogView
 
     private string GenerateArticleUrl(Article article)
     {
-        // Format: {address}/Content/{collection}/{path}
-        var address = addresses?.FirstOrDefault()?.ToString() ?? "Portal";
+        // Format: Content/{collection}/{path}
         var collection = article.Collection;
         var path = article.Path;
 
-        return $"{address}/Content/{collection}/{path}";
+        return $"Content/{collection}/{path}";
     }
 }

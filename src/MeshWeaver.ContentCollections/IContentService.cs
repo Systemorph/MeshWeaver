@@ -34,10 +34,12 @@ public interface IContentService
     ContentCollectionConfig? GetOrCreateCollectionConfig(string baseCollectionName, string localizedCollectionName, string? subPath = null);
 
     /// <summary>
-    /// Gets the collection mapped to the specified address asynchronously.
-    /// If the collection is not found locally, attempts to load it dynamically from the remote hub.
-    /// Returns null if no collection is found.
+    /// Gets a collection by name, initializing it from the specified address if it doesn't exist locally.
+    /// This method is thread-safe and prevents duplicate initializations of the same collection.
     /// </summary>
-    Task<IReadOnlyCollection<ContentCollection>> GetCollectionForAddressAsync(Address address,
-        CancellationToken cancellationToken = default);
+    /// <param name="collectionName">The collection name to retrieve</param>
+    /// <param name="address">The address to query if the collection doesn't exist locally</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>The collection, or null if not found</returns>
+    Task<ContentCollection?> GetOrInitializeCollectionAsync(string collectionName, Address address, CancellationToken cancellationToken = default);
 }

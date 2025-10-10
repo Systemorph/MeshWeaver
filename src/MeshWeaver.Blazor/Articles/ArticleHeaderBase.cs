@@ -91,9 +91,8 @@ public abstract class ArticleHeaderBase : ComponentBase
             return imageUrl;
         }
 
-        // Otherwise, prepend with /{address}/static/
-        var address = CollectionName;
-        return $"/{address}/static/{imageUrl}";
+        // Otherwise, prepend with /static/{collection}/
+        return $"/static/{CollectionName}/{imageUrl}";
     }
 
     protected string GetInitials(Author author)

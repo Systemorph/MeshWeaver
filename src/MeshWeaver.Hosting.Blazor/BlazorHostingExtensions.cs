@@ -121,32 +121,35 @@ public static class BlazorHostingExtensions
     }
 
     private static void MapHubStaticContent(this IEndpointRouteBuilder app, IMessageHub mainHub)
-        => app.MapGet("/{addressType:addresstype}/{addressId}/static/{**path}",
-            async (HttpContext context, string addressType, string addressId, string path) =>
+        => app.MapGet("/{addressType:addresstype}/{addressId}/static/{collection}/{**path}",
+            async (HttpContext context, string addressType, string addressId, string collection, string path) =>
         {
             try
             {
-                var address = mainHub.TypeRegistry.MapAddress(addressType, addressId);
                 var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
 
                 // Get content service directly from the target hub
                 var contentService = portal.ServiceProvider.GetService<IContentService>();
-                if (contentService == null)
+                if (contentService is null)
                 {
                     return Results.NotFound("Content service not configured");
                 }
 
-                // Get the collection for this address (with lazy loading)
-                var collections = await contentService.GetCollectionForAddressAsync(address, context.RequestAborted);
+                // Get or initialize the collection from the address
+                var address = portal.TypeRegistry.MapAddress(addressType, addressId);
+                var contentCollection = await contentService.GetOrInitializeCollectionAsync(
+                    collection,
+                    address,
+                    context.RequestAborted
+                );
 
-                //Order must be set when configuring.
-                var collection = collections.OrderBy(c => c.Config.Order).FirstOrDefault();
-
-                if (collection == null)
-                    return Results.NotFound("Content collection not found");
+                if (contentCollection == null)
+                {
+                    return Results.NotFound($"Content collection '{collection}' not found");
+                }
 
                 // Get stream directly from the collection
-                var stream = await collection.GetContentAsync(path, context.RequestAborted);
+                var stream = await contentCollection.GetContentAsync(path, context.RequestAborted);
                 if (stream == null)
                 {
                     return Results.NotFound("File not found");

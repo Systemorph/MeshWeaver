@@ -1,13 +1,16 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 
 namespace MeshWeaver.ContentCollections;
 
 /// <summary>
-/// Request to get static content from a content collection
+/// Request to get content collection configurations by name
 /// </summary>
-public record GetContentCollectionsRequest(string Path) : IRequest<GetContentCollectionsResponse>;
+public record GetContentCollectionRequest(params IReadOnlyCollection<string>? CollectionNames) : IRequest<GetContentCollectionResponse>;
 
 /// <summary>
-/// Response containing static content
+/// Response containing content collection configurations
 /// </summary>
-public record GetContentCollectionsResponse(byte[]? Content, string? ContentType);
+public record GetContentCollectionResponse
+{
+    public IReadOnlyCollection<ContentCollectionConfig> Collections { get; init; } = [];
+}

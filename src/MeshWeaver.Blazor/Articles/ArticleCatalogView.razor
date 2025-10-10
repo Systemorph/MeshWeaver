@@ -15,17 +15,32 @@
         <div class="toolbar-spacer"></div>
     }
 
-    <FluentStack Orientation="Orientation.Vertical" Class="articles-catalog">
-        @foreach (var article in Articles)
-        {
-            var url = GenerateArticleUrl(article);
-            var catalogItem = new ArticleCatalogItemControl(
-                article with { Content = string.Empty, PrerenderedHtml = string.Empty },
-                url
-            );
-            <ArticleCatalogItemView ViewModel="@catalogItem" />
-        }
-    </FluentStack>
+    @if (collectionOptions == null || !collectionOptions.Any())
+    {
+        <FluentMessageBar Title="No collections found" Intent="MessageIntent.Info">
+            No article collections are available.
+        </FluentMessageBar>
+    }
+    else if (!Articles.Any())
+    {
+        <FluentMessageBar Title="No articles found" Intent="MessageIntent.Info">
+            No articles found in the selected collection(s).
+        </FluentMessageBar>
+    }
+    else
+    {
+        <FluentStack Orientation="Orientation.Vertical" Class="articles-catalog">
+            @foreach (var article in Articles)
+            {
+                var url = GenerateArticleUrl(article);
+                var catalogItem = new ArticleCatalogItemControl(
+                    article with { Content = string.Empty, PrerenderedHtml = string.Empty },
+                    url
+                );
+                <ArticleCatalogItemView ViewModel="@catalogItem" />
+            }
+        </FluentStack>
+    }
 </div>
 
 

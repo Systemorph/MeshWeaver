@@ -2,7 +2,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -13,7 +12,6 @@ public static class ArticlesLayoutArea
 {
     /// <summary>
     /// Articles layout area that displays the article catalog for a specific collection.
-    /// Uses configured addresses if specified, otherwise shows articles from the current hub address only.
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="_">The rendering context</param>
@@ -21,13 +19,15 @@ public static class ArticlesLayoutArea
     [Browsable(false)]
     public static UiControl? Articles(LayoutAreaHost host, RenderingContext _)
     {
-        var configuration = host.Hub.ServiceProvider.GetRequiredService<ArticlesConfiguration>();
-        var selectedCollection = host.Reference.Id?.ToString();
-
+        var selectedCollection = host.Reference.Id?.ToString() ?? host.Hub.Address.Id;
+        var contentService = host.Hub.GetContentService();
+        var collectionConfig = contentService.GetCollection(selectedCollection)?.Config;
+        if (collectionConfig == null)
+            return new MarkdownControl($"Collection not found: {selectedCollection}");
         return new ArticleCatalogControl
         {
-            Collections = selectedCollection,
-            Addresses = configuration.Addresses
+            Collections = new[] { selectedCollection },
+            CollectionConfigurations = new[] { collectionConfig }
         };
     }
 
