@@ -29,9 +29,9 @@ public static class ContentCollectionsExtensions
         Func<ArticlesConfiguration, ArticlesConfiguration>? configure = null)
     {
         return config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin), typeof(GetContentRequest), typeof(GetContentResponse))
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin))
             .WithServices(services =>
-            services.AddScoped<ArticlesConfiguration>(_ => configure is null ? new ArticlesConfiguration() { Addresses = [config.Address] } : configure.Invoke(new()))
+            services.AddScoped<ArticlesConfiguration>(_ => configure is null ? new ArticlesConfiguration() : configure.Invoke(new()))
             )
             .AddLayout(layout => layout
                 .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles)
@@ -69,7 +69,7 @@ public static class ContentCollectionsExtensions
                                 // Register in the registry with lazy provider factory
                                 registry.WithCollection(collectionName, new ContentCollectionRegistration(
                                     collectionConfig,
-                                    serviceProvider => CreateStreamProvider(collectionConfig)
+                                    _ => CreateStreamProvider(collectionConfig)
                                 ));
                             }
                         }
@@ -83,13 +83,6 @@ public static class ContentCollectionsExtensions
 
                 return services;
             })
-            .WithTypes(typeof(GetContentRequest), typeof(GetContentResponse), typeof(GetContentCollectionRequest), typeof(GetContentCollectionResponse))
-            .WithHandler<GetContentRequest>(async (hub, request, ct) =>
-            {
-                var response = await GetContentCollectionsResponse(hub, request, ct);
-                hub.Post(response, o => o.ResponseFor(request));
-                return request.Processed();
-            })
             .WithHandler<GetContentCollectionRequest>(async (hub, request, ct) =>
             {
                 var response = await GetContentCollectionResponse(hub, request, ct);
@@ -100,7 +93,7 @@ public static class ContentCollectionsExtensions
 
     private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config)
     {
-        var sourceType = config.SourceType ?? "FileSystem";
+        var sourceType = config.SourceType;
         return sourceType switch
         {
             "FileSystem" => new FileSystemStreamProvider(config.BasePath ?? ""),
@@ -112,31 +105,13 @@ public static class ContentCollectionsExtensions
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    private static async Task<GetContentResponse> GetContentCollectionsResponse(
-        IMessageHub hub,
-        IMessageDelivery<GetContentRequest> delivery,
-        CancellationToken cancellationToken)
-    {
-        var request = delivery.Message;
-        var contentService = hub.GetContentService();
-
-        // Get the collection mapped to this address
-        var contentCollection = contentService.GetCollection(request.Collection);
-
-        if (contentCollection is null)
-        {
-            return new GetContentResponse(null, null);
-        }
-
-        // Delegate to the content collection to prepare the response
-        return await contentCollection.GetContentResponseAsync(request.Path, cancellationToken);
-    }
 
     private static async Task<GetContentCollectionResponse> GetContentCollectionResponse(
         IMessageHub hub,
-        IMessageDelivery<GetContentCollectionRequest> _,
+        IMessageDelivery<GetContentCollectionRequest> delivery,
         CancellationToken cancellationToken)
     {
+        var request = delivery.Message;
         var contentService = hub.GetContentService();
 
         // Get all collections for this hub
@@ -147,55 +122,18 @@ public static class ContentCollectionsExtensions
             return new();
         }
 
+        // Filter by requested collection names if specified
+        if (request.CollectionNames != null && request.CollectionNames.Count > 0)
+        {
+            contentCollections = contentCollections
+                .Where(c => request.CollectionNames.Contains(c.Collection))
+                .ToArray();
+        }
+
         // Build configuration for each collection
         var configs = contentCollections
-            .Where(c => c.Address is not null && c.Address.Type == hub.Address.Type && c.Address.Id == hub.Address.Id)
-            .Select(contentCollection =>
-        {
-            var config = new Dictionary<string, string>();
-            var providerType = contentCollection.Config.SourceType;
-
-            // Copy settings from config if available
-            if (contentCollection.Config.Settings != null)
-            {
-                foreach (var setting in contentCollection.Config.Settings)
-                {
-                    config[setting.Key] = setting.Value;
-                }
-            }
-
-            // Add provider-specific configuration
-            switch (providerType)
-            {
-                case "FileSystem":
-                    if (contentCollection.Config.BasePath != null)
-                    {
-                        config["BasePath"] = contentCollection.Config.BasePath;
-                    }
-                    break;
-
-                case "EmbeddedResource":
-                    // For embedded resources, extract assembly name and resource prefix from provider
-                    var embeddedProvider = hub.ServiceProvider.GetKeyedService<IStreamProvider>(contentCollection.Collection);
-                    if (embeddedProvider is EmbeddedResourceStreamProvider)
-                    {
-                        // We need to expose these properties on the provider or store them in Settings
-                        // For now, they should be in Settings
-                    }
-                    break;
-
-                case "AzureBlob":
-                    // Azure Blob settings should already be in Settings
-                    break;
-            }
-
-            return new ContentCollectionConfig
-            {
-                SourceType = providerType,
-                Name = contentCollection.Collection,
-                Settings = config
-            };
-        }).ToArray();
+            .Select(contentCollection => contentCollection.Config)
+            .ToArray();
 
         return new GetContentCollectionResponse
         {
@@ -253,7 +191,7 @@ public static class ContentCollectionsExtensions
         switch (config.ProviderType)
         {
             case "FileSystem":
-                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, key) =>
+                services.AddKeyedSingleton<IStreamProvider>(config.Name, (_, key) =>
                 {
                     var basePath = config.Settings.GetValueOrDefault("BasePath", "");
                     return new FileSystemStreamProvider(basePath);
@@ -261,7 +199,7 @@ public static class ContentCollectionsExtensions
                 break;
 
             case "AzureBlob":
-                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, key) =>
+                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, _) =>
                 {
                     var factory = sp.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
                     var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
@@ -431,7 +369,7 @@ public static class ContentCollectionsExtensions
             var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
 
             // Register the stream provider for this embedded resource collection
-            services.AddKeyedSingleton<IStreamProvider>(collectionName, (sp, key) =>
+            services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, key) =>
                 new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
 
             // Register the content collection provider
@@ -521,7 +459,7 @@ public static class ContentCollectionsExtensions
                     var collectionConfig = collectionConfigFactory(sp);
 
                     // Create the appropriate provider based on SourceType (default to FileSystem)
-                    var sourceType = collectionConfig.SourceType ?? "FileSystem";
+                    var sourceType = collectionConfig.SourceType;
                     IStreamProvider provider = sourceType switch
                     {
                         "FileSystem" => new FileSystemStreamProvider(collectionConfig.BasePath ?? ""),

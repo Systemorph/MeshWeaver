@@ -78,7 +78,8 @@ public class ContentService : IContentService
     }
 
     private readonly ConcurrentDictionary<string, ContentCollection> collections = new();
-    private readonly SemaphoreSlim initializeLock = new(1, 1);
+    private readonly Dictionary<string, Task<ContentCollection?>> initializationTasks = new();
+    private readonly object initializeLock = new();
 
     public ContentCollection? GetCollection(string collection)
     {
@@ -90,47 +91,89 @@ public class ContentService : IContentService
         return parentContentService?.GetCollection(collection);
     }
 
-    public async Task<ContentCollection> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    public Task<ContentCollection> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    {
+        return InitializeCollectionInternalAsync(config.Name!, () => Task.FromResult(config)!, cancellationToken)!;
+    }
+
+    private async Task<ContentCollection?> InitializeCollectionInternalAsync(
+        string collectionName,
+        Func<Task<ContentCollectionConfig?>> configProvider,
+        CancellationToken cancellationToken = default)
     {
         // Check if already exists
-        if (collections.TryGetValue(config.Name!, out var existing))
+        if (collections.TryGetValue(collectionName, out var existing))
             return existing;
 
-        await initializeLock.WaitAsync(cancellationToken);
-        try
+        Task<ContentCollection?>? initTask;
+        lock (initializeLock)
         {
-            // Double-check after acquiring lock
-            if (collections.TryGetValue(config.Name!, out existing))
+            // Check again inside lock
+            if (collections.TryGetValue(collectionName, out existing))
                 return existing;
 
-            // Get the factory for this provider type
-            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
-            if (factory is null)
-                throw new InvalidOperationException($"Unknown provider type {config.SourceType}");
-
-            // Build configuration dictionary
-            var configuration = config.Settings ?? new Dictionary<string, string>();
-            if (config.BasePath != null && !configuration.ContainsKey("BasePath"))
+            // Check if initialization is already in progress
+            if (initializationTasks.TryGetValue(collectionName, out initTask))
             {
-                configuration["BasePath"] = config.BasePath;
+                // Return the existing task - will be awaited outside the lock
             }
+            else
+            {
+                // Create a new initialization task
+                initTask = Task.Run(InstantiateCollectionAsync(collectionName, configProvider, cancellationToken), cancellationToken);
 
-            // Create provider using the factory
-            var provider = factory.Create(configuration);
-
-            // Create and initialize new collection
-            var newCollection = new ContentCollection(config, provider, hub);
-            await newCollection.InitializeAsync(cancellationToken);
-
-            // Register it
-            collections[config.Name!] = newCollection;
-
-            return newCollection;
+                initializationTasks[collectionName] = initTask;
+            }
         }
-        finally
+
+        // Await the task outside the lock
+        return await initTask;
+    }
+
+    private Func<Task<ContentCollection?>?> InstantiateCollectionAsync(string collectionName, Func<Task<ContentCollectionConfig?>> configProvider, CancellationToken cancellationToken)
+    {
+        return async () =>
         {
-            initializeLock.Release();
-        }
+            try
+            {
+                // Get the configuration
+                var config = await configProvider();
+                if (config == null)
+                    return null;
+
+                // Get the factory for this provider type
+                var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
+                if (factory is null)
+                    throw new InvalidOperationException($"Unknown provider type {config.SourceType}");
+
+                // Build configuration dictionary
+                var configuration = config.Settings ?? new Dictionary<string, string>();
+                if (config.BasePath != null && !configuration.ContainsKey("BasePath"))
+                {
+                    configuration["BasePath"] = config.BasePath;
+                }
+
+                // Create provider using the factory
+                var provider = factory.Create(configuration);
+
+                // Create and initialize new collection
+                var newCollection = new ContentCollection(config, provider, hub);
+                await newCollection.InitializeAsync(cancellationToken);
+
+                // Register it
+                collections[collectionName] = newCollection;
+
+                return newCollection;
+            }
+            finally
+            {
+                // Remove from initialization tasks when complete
+                lock (initializeLock)
+                {
+                    initializationTasks.Remove(collectionName);
+                }
+            }
+        };
     }
 
     public ContentCollectionConfig? GetOrCreateCollectionConfig(string baseCollectionName, string localizedCollectionName, string? subPath = null)
@@ -227,92 +270,22 @@ public class ContentService : IContentService
         return collections.Values;
     }
 
-
-    private readonly ConcurrentDictionary<Address, IReadOnlyCollection<ContentCollection>> collectionsByAddress = new();
-    private readonly SemaphoreSlim getCollectionsLock = new(1, 1);
-    public async Task<IReadOnlyCollection<ContentCollection>> GetCollectionForAddressAsync(Address address, CancellationToken cancellationToken = default)
+    public Task<ContentCollection?> GetOrInitializeCollectionAsync(string collectionName, Address address, CancellationToken cancellationToken = default)
     {
-        // First check if it's already configured
-        if (collectionsByAddress.TryGetValue(address, out var existing))
-            return existing;
+        return InitializeCollectionInternalAsync(
+            collectionName,
+            async () =>
+            {
+                // Query the address for the collection configuration
+                var response = await hub.AwaitResponse(
+                    new GetContentCollectionRequest(collectionName),
+                    o => o.WithTarget(address),
+                    cancellationToken
+                );
 
-        // Try to load it dynamically from the remote hub
-        try
-        {
-            await getCollectionsLock.WaitAsync(cancellationToken);
-            var ret = await CreateCollections(address, cancellationToken);
-            collectionsByAddress[address] = ret;
-            return ret;
-
-        }
-        catch (TaskCanceledException)
-        {
-            return [];
-        }
-        finally
-        {
-            getCollectionsLock.Release();
-        }
-    }
-
-    private async Task<IReadOnlyCollection<ContentCollection>> CreateCollections(Address address, CancellationToken cancellationToken)
-    {
-        var request = new GetContentCollectionRequest();
-        var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
+                return response.Message.Collections.FirstOrDefault();
+            },
+            cancellationToken
         );
-
-        var response = await hub.AwaitResponse(request, o => o.WithTarget(address), timeout.Token);
-
-        if (!response.Message.IsFound)
-            return [];
-
-        // Create and register all collections from the response
-        var createdCollections = await CreateCollectionsFromResponseAsync(response.Message, address);
-
-        lock (lockObject)
-        {
-            foreach (var collection in createdCollections)
-            {
-                collections[collection.Collection] = collection;
-            }
-        }
-
-        return createdCollections;
-
-    }
-    private Task<IReadOnlyCollection<ContentCollection>> CreateCollectionsFromResponseAsync(
-        GetContentCollectionResponse response,
-        Address address)
-    {
-        if (response.Collections == null || response.Collections.Count == 0)
-            return Task.FromResult<IReadOnlyCollection<ContentCollection>>(Array.Empty<ContentCollection>());
-
-        var collections = response.Collections.Select(collectionConfig =>
-        {
-            // Get the factory for this provider type
-            var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(collectionConfig.SourceType);
-            if (factory == null)
-                throw new NotSupportedException($"Unknown provider type: {collectionConfig.SourceType}");
-
-            // Build configuration dictionary
-            var configuration = collectionConfig.Settings ?? new Dictionary<string, string>();
-            if (collectionConfig.BasePath != null && !configuration.ContainsKey("BasePath"))
-            {
-                configuration["BasePath"] = collectionConfig.BasePath;
-            }
-
-            // Create provider using the factory
-            var provider = factory.Create(configuration);
-
-            // Use collectionConfig directly (already has proper Address set)
-            collectionConfig.Address = address;
-
-            // Create collection
-            return new ContentCollection(collectionConfig, provider, hub);
-        }).ToArray();
-
-        return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections);
     }
 }

@@ -1,5 +1,4 @@
-﻿using System.Configuration;
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.Persistence;
@@ -12,7 +11,6 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
-using MeshWeaver.Insurance.AI;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
@@ -137,9 +135,7 @@ public static class SharedPortalConfiguration
                 .AddInsurancePricing()
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                        c.AddArticles(articles => articles
-                            .WithAddress(new ApplicationAddress("Documentation"), new ApplicationAddress("Todo"))
-                        )
+                        c.AddArticles()
                         )
                 )
                 .AddSignalRHubs();

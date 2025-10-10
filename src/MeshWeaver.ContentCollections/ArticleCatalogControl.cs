@@ -13,11 +13,10 @@ public record ArticleCatalogControl()
     /// </summary>
     public object? Collections { get; init; }
 
-
     /// <summary>
-    /// List of addresses to be displayed.
+    /// List of collection configurations to be initialized
     /// </summary>
-    public object? Addresses { get; init; }
+    public object? CollectionConfigurations { get; init; }
 
     /// <summary>
     /// Selected collection
@@ -31,10 +30,10 @@ public record ArticleCatalogControl()
         => this with { Collections = collections };
 
     /// <summary>
-    /// Returns a copy of this control with the provided addresses value.
+    /// Returns a copy of this control with the provided collection configurations value.
     /// </summary>
-    public ArticleCatalogControl WithAddresses(object? addresses)
-        => this with { Addresses = addresses };
+    public ArticleCatalogControl WithCollectionConfigurations(object? collectionConfigurations)
+        => this with { CollectionConfigurations = collectionConfigurations };
 
     /// <summary>
     /// Returns a copy of this control with the provided selected collection value.
