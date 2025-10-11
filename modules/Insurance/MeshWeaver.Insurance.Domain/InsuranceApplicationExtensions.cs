@@ -48,14 +48,12 @@ public static class InsuranceApplicationExtensions
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
                 var addressId = hub.Address.Id;
+                var configuration = sp.GetRequiredService<IConfiguration>();
 
-                // Get the global Submissions configuration from the parent hub's registry (appsettings)
-                var parentRegistry = hub.Configuration.ParentHub?.ServiceProvider.GetService<IContentCollectionRegistry>();
-                var globalRegistration = parentRegistry?.GetCollection("Submissions");
-                if (globalRegistration == null)
-                    throw new InvalidOperationException("Submissions collection not found in parent hub's registry");
-
-                var globalConfig = globalRegistration.Config;
+                // Get the global Submissions configuration from appsettings
+                var globalConfig = configuration.GetSection("Submissions").Get<ContentCollectionConfig>();
+                if (globalConfig == null)
+                    throw new InvalidOperationException("Submissions collection not found in configuration");
 
                 // Parse addressId in format {company}-{uwy}
                 var parts = addressId.Split('-');

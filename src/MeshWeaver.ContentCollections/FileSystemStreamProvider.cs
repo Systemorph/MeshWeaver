@@ -8,7 +8,6 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class FileSystemStreamProvider(string basePath) : IStreamProvider
 {
-    private readonly string basePath = basePath;
     private FileSystemWatcher? watcher;
 
     public string ProviderType => "FileSystem";

@@ -65,26 +65,19 @@ public partial class ArticleCatalogView
     private async IAsyncEnumerable<ContentCollection> LoadCollectionsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
         var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
+        var allCollections = new HashSet<string>(collections ?? []);
+        foreach (var config in collectionConfigurations ?? [])
+        {
+            contentService.AddConfiguration(config);
+            allCollections.Add(config.Name);
+        }
 
-        // Initialize collections from configurations (from control)
-        HashSet<string> processed = new();
-        if (collectionConfigurations is not null)
-            foreach (var config in collectionConfigurations)
-            {
-                var existing = await contentService.InitializeCollectionAsync(config, ct);
-                if (existing != null)
-                {
-                    processed.Add(existing.Collection);
-                    yield return existing;
-                }
-            }
-        if (collections is not null)
-            foreach (var collection in collections.Where(c => !processed.Contains(c)))
-            {
-                var col = await contentService.GetCollectionAsync(collection, ct);
-                if (col != null)
-                    yield return col;
-            }
+        foreach (var allCollection in allCollections)
+        {
+            var col = await contentService.GetCollectionAsync(allCollection, ct);
+            if (col != null)
+                yield return col;
+        }
     }
 
     private Task<IReadOnlyCollection<Article>> LoadArticlesAsync()

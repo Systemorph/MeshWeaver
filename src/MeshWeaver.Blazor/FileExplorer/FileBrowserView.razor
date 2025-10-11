@@ -35,12 +35,12 @@
 
     private async Task InitializeCollectionIfNeededAsync()
     {
-        if (Collection is null || CollectionConfiguration is null)
+        if (Collection is null && CollectionConfiguration is null)
             return;
 
         var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
 
         // Initialize the collection - the service handles everything
-        await contentService.InitializeCollectionAsync(CollectionConfiguration, CancellationToken.None);
+        await contentService.GetCollectionAsync(Collection ?? CollectionConfiguration!.Name, CancellationToken.None);
     }
 }

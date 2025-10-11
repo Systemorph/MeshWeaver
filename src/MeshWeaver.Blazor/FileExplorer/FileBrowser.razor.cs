@@ -27,14 +27,8 @@ public partial class FileBrowser
         await base.OnParametersSetAsync();
 
         // Initialize collection if configuration is provided and collection doesn't exist
-        if (CollectionConfiguration != null && CollectionName != null)
-        {
-            var existing = await ContentService.GetCollectionAsync(CollectionName);
-            if (existing == null)
-            {
-                await ContentService.InitializeCollectionAsync(CollectionConfiguration, CancellationToken.None);
-            }
-        }
+        if (CollectionConfiguration is not null)
+            ContentService.AddConfiguration(CollectionConfiguration);
 
         // Try to get the collection
         Collection = CollectionName is null ? null : await ContentService.GetCollectionAsync(CollectionName);

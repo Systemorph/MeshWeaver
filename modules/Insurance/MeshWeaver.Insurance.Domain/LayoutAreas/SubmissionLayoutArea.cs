@@ -22,24 +22,12 @@ public static class SubmissionLayoutArea
 
         // Get the collection configuration, creating a localized version if needed
         var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
-        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var contentService = host.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
         // Parse the pricing ID to get the subpath
-        var parts = pricingId.Split('-');
-        var subPath = parts.Length == 2 ? $"{parts[0]}/{parts[1]}" : null;
 
         // Create the collection configuration
-        ContentCollectionConfig? collectionConfig = null;
-        if (subPath != null)
-        {
-            collectionConfig = new ContentCollectionConfig
-            {
-                Name = localizedCollectionName,
-                SourceType = "FileSystem",
-                BasePath = subPath,
-                Address = host.Hub.Address
-            };
-        }
+        var collectionConfig = contentService.GetCollectionConfig(localizedCollectionName);
 
         return host.Workspace.GetStream<Pricing>()!
             .Select(pricings =>
