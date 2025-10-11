@@ -70,7 +70,7 @@ public partial class ApplicationPage : ComponentBase
         {
             ShowProgress = true
         };
-        PageTitle = $"{ViewModel.ProgressMessage} - {Application!}";
+        PageTitle = $"{Application!}";
 
         return Task.CompletedTask;
     }

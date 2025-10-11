@@ -11,7 +11,7 @@ namespace MeshWeaver.Data
     /// <param name="DisplayName">The display name of the type</param>
     /// <param name="Description">Optional description of the type</param>
     /// <param name="Address">Address on which the data type lives.</param>
-    public record TypeDescription(string Name, string DisplayName, string Description, Address Address);
+    public record TypeDescription(string Name, string DisplayName, string Description, Address? Address);
 }
 
 
