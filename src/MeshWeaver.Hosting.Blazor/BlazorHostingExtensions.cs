@@ -100,6 +100,17 @@ public static class BlazorHostingExtensions
             ".eot" => "application/vnd.ms-fontobject",
             ".otf" => "font/otf",
             ".ico" => "image/x-icon",
+            ".pdf" => "application/pdf",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xls" => "application/vnd.ms-excel",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".doc" => "application/msword",
+            ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".ppt" => "application/vnd.ms-powerpoint",
+            ".zip" => "application/zip",
+            ".csv" => "text/csv",
+            ".txt" => "text/plain",
+            ".md" => "text/markdown",
             _ => "application/octet-stream"
         };
     }
@@ -159,6 +170,13 @@ public static class BlazorHostingExtensions
 
                 var contentType = GetContentType(path);
                 var fileName = Path.GetFileName(path);
+
+                // Check if download is requested via query parameter
+                var isDownload = context.Request.Query.ContainsKey("download");
+                if (isDownload)
+                {
+                    context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
+                }
 
                 // Configure caching headers for small files
                 if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB

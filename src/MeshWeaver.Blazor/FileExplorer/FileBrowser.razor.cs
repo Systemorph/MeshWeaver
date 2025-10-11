@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.FileExplorer;
 
@@ -13,6 +14,8 @@ public partial class FileBrowser
     private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     [Inject] private IToastService ToastService { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
     [Parameter] public string? CollectionName { get; set; } = "";
     [Parameter] public string? CurrentPath { get; set; } = "/";
     [Parameter] public string TopLevelPath { get; set; } = "";
@@ -145,7 +148,27 @@ public partial class FileBrowser
     }
     private string GetLink(FileItem item)
     {
-        return $"/content/{CollectionName}{item.Path}";
+        var address = Hub.Address;
+        var addressType = address.Type;
+        var addressId = address.Id;
+
+        // For files that can't be displayed in browser, add download query parameter
+        var baseUrl = $"/{addressType}/{addressId}/static/{CollectionName}{item.Path}";
+        if (ShouldDownload(item.Name))
+        {
+            return $"{baseUrl}?download";
+        }
+        return baseUrl;
+    }
+
+    private static bool ShouldDownload(string fileName)
+    {
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        return extension switch
+        {
+            ".xlsx" or ".xls" or ".docx" or ".doc" or ".pptx" or ".ppt" or ".zip" => true,
+            _ => false
+        };
     }
 
     int progressPercent;
@@ -183,5 +206,55 @@ public partial class FileBrowser
     {
         CurrentPath = path;
         await RefreshContentAsync();
+    }
+
+    private async Task HandleFileClick(FileItem file)
+    {
+        // For files that should be downloaded, trigger download via JavaScript
+        if (ShouldDownload(file.Name))
+        {
+            var downloadUrl = GetLink(file);
+            await JSRuntime.InvokeVoidAsync("open", downloadUrl, "_blank");
+        }
+        // For displayable files, let the href handle navigation naturally
+        // (preventDefault is false, so navigation happens)
+    }
+
+    private async Task DownloadSelectedAsync()
+    {
+        var filesToDownload = SelectedItems.OfType<FileItem>().ToList();
+
+        if (!filesToDownload.Any())
+        {
+            ToastService.ShowWarning("Please select at least one file to download.");
+            return;
+        }
+
+        try
+        {
+            // Get the address information to construct the proper URL
+            var address = Hub.Address;
+            var addressType = address.Type;
+            var addressId = address.Id;
+
+            // Download each file by opening it in a new window/tab
+            // The browser will handle the download based on the content-disposition header
+            foreach (var file in filesToDownload)
+            {
+                var downloadUrl = $"/{addressType}/{addressId}/static/{CollectionName}{file.Path}?download";
+                await JSRuntime.InvokeVoidAsync("open", downloadUrl, "_blank");
+                // Add a small delay between downloads to avoid browser blocking multiple downloads
+                await Task.Delay(100);
+            }
+
+            ToastService.ShowSuccess($"Downloading {filesToDownload.Count} file{(filesToDownload.Count > 1 ? "s" : "")}...");
+
+            // Clear selection after download
+            SelectedItems = [];
+        }
+        catch (Exception ex)
+        {
+            ToastService.ShowError($"Error downloading files: {ex.Message}");
+        }
     }
 }

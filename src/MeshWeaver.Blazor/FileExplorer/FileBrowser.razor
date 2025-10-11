@@ -47,6 +47,7 @@
             @if (Collection is not null)
             {
                 <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
+                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="Download" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">Download</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
                 if (ShowNewArticle)
@@ -99,9 +100,9 @@
                         </a>
                     }
                 }
-                else
+                else if (context is FileItem fileItem)
                 {
-                    <a href="@GetLink(context)" class="file-browser-link">
+                    <a href="@GetLink(fileItem)" class="file-browser-link" @onclick="@(() => HandleFileClick(fileItem))" @onclick:preventDefault="@ShouldDownload(fileItem.Name)">
                         <FluentIcon Value="@(new Icons.Regular.Size20.Document())"/>
                         <span>@context.Name</span>
                     </a>
