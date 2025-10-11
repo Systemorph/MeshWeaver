@@ -138,6 +138,7 @@ public static class ContentCollectionsExtensions
 
         var configs = delivery.Message.CollectionNames
             .Select(c => contentService.GetCollectionConfig(c))
+            .OfType<ContentCollectionConfig>()
             .ToArray();
 
         return new GetContentCollectionResponse

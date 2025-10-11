@@ -80,7 +80,7 @@ public class ContentService : IContentService
     }
 
 
-    public Task<ContentCollection?> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
+    private Task<ContentCollection?> InitializeCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
     {
 
         Task<ContentCollection?>? initTask;
@@ -98,18 +98,19 @@ public class ContentService : IContentService
             }
             else
             {
-                // Create a new initialization task
-                initTask = Task.Run(InstantiateCollectionAsync(config, cancellationToken), cancellationToken);
-
-                initializationTasks[config.Name] = initTask;
+                lock (initializeLock)
+                {
+                    // Create a new initialization task
+                    initTask = InstantiateCollectionAsync(config, cancellationToken);
+                    initializationTasks[config.Name] = initTask;
+                    return initTask;
+                }
             }
         }
 
-        // Await the task outside the lock
-        return initTask;
     }
 
-    public ContentCollectionConfig GetCollectionConfig(string collection)
+    public ContentCollectionConfig? GetCollectionConfig(string collection)
     {
         // Try local configs first
         if (collectionConfigs.TryGetValue(collection, out var config))
@@ -119,7 +120,7 @@ public class ContentService : IContentService
         if (parentContentService is not null)
             return parentContentService.GetCollectionConfig(collection);
 
-        throw new ArgumentException($"Collection '{collection}' not found");
+        return null;
     }
 
     public void AddConfiguration(ContentCollectionConfig contentCollectionConfig)
@@ -127,33 +128,30 @@ public class ContentService : IContentService
         this.collectionConfigs[contentCollectionConfig.Name] = contentCollectionConfig;
     }
 
-    private Func<Task<ContentCollection?>?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
+    private async Task<ContentCollection?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
     {
-        return async () =>
+        try
         {
-            try
-            {
-                // Use the async factory to create the collection
-                var newCollection = await CreateCollectionAsync(config, cancellationToken);
+            // Use the async factory to create the collection
+            var newCollection = await CreateCollectionAsync(config, cancellationToken);
 
-                // Register it
-                collections[config.Name] = newCollection;
+            // Register it
+            collections[config.Name] = newCollection;
 
-                return newCollection;
-            }
-            catch
+            return newCollection;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            // Remove from initialization tasks when complete
+            lock (initializeLock)
             {
-                return null;
+                initializationTasks.Remove(config.Name);
             }
-            finally
-            {
-                // Remove from initialization tasks when complete
-                lock (initializeLock)
-                {
-                    initializationTasks.Remove(config.Name);
-                }
-            }
-        };
+        }
     }
 
 
