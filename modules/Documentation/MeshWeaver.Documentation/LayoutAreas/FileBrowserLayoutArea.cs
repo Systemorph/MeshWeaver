@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Utils;
 using static MeshWeaver.Layout.Controls;
 
 namespace MeshWeaver.Documentation.LayoutAreas
@@ -25,10 +26,14 @@ namespace MeshWeaver.Documentation.LayoutAreas
         /// <returns>A UI control containing the file browser demo with a header and file browser component.</returns>
         private static UiControl FileBrowser(LayoutAreaHost host, RenderingContext ctx)
         {
+            var collection = host.Reference.Id?.ToString()!.Split('/').FirstOrDefault();
+            if (string.IsNullOrEmpty(collection))
+                return Controls.Markdown("No collection specified.");
+
             return Stack
-                .WithView(H2("File Browser").WithStyle(style => style.WithMarginBottom("1em")))
+                .WithView(H2(collection.Wordify()).WithStyle(style => style.WithMarginBottom("1em")))
                 .WithView(Controls
-                        .FileBrowser("Documentation", "DemoFolder").CreatePath().WithTopLevel("DemoFolder"));
+                        .FileBrowser(collection, "/").CreatePath());
         }
     }
 }

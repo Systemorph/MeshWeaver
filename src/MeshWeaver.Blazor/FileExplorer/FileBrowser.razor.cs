@@ -14,7 +14,6 @@ public partial class FileBrowser
     private IContentService ContentService => Hub.ServiceProvider.GetRequiredService<IContentService>();
     [Inject] private IToastService ToastService { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
-    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
     [Parameter] public string? CollectionName { get; set; } = "";
     [Parameter] public string? CurrentPath { get; set; } = "/";
@@ -23,6 +22,7 @@ public partial class FileBrowser
     [Parameter] public bool CreatePath { get; set; }
     [Parameter] public bool ShowNewArticle { get; set; }
     [Parameter] public ContentCollectionConfig? CollectionConfiguration { get; set; }
+    [Parameter] public Address? Address { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
     protected override async Task OnParametersSetAsync()
@@ -148,12 +148,16 @@ public partial class FileBrowser
     }
     private string GetLink(FileItem item)
     {
-        var address = Hub.Address;
-        var addressType = address.Type;
-        var addressId = address.Id;
+        var address = Address;
+        var addressType = address?.Type;
+        var addressId = address?.Id;
 
-        // For files that can't be displayed in browser, add download query parameter
-        var baseUrl = $"/{addressType}/{addressId}/static/{CollectionName}{item.Path}";
+        // Use /Content/ for files that can be rendered (markdown, text, images)
+        // Use /static/ for files that should be downloaded (documents, spreadsheets, archives)
+        var pathSegment = ShouldDownload(item.Name) ? "static" : "Content";
+        var baseUrl = $"/{addressType}/{addressId}/{pathSegment}/{CollectionName}{item.Path}";
+
+        // For download files, add download query parameter
         if (ShouldDownload(item.Name))
         {
             return $"{baseUrl}?download";
@@ -232,7 +236,6 @@ public partial class FileBrowser
 
         try
         {
-            // Get the address information to construct the proper URL
             var address = Hub.Address;
             var addressType = address.Type;
             var addressId = address.Id;

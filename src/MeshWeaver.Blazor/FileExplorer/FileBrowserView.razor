@@ -3,7 +3,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
-<FileBrowser CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" Embed="@true"></FileBrowser>
+<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" Embed="@true"></FileBrowser>
 
 @code
 {
