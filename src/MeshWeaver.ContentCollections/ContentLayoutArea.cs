@@ -67,7 +67,7 @@ public static class ContentLayoutArea
             : RenderContent(id, a));
     }
 
-    public static Task<IObservable<object?>> GetArticleAsync(this IMessageHub hub, string collection, string id, CancellationToken _)
-        => hub.GetContentService().GetArticleAsync(collection, id);
+    public static Task<IObservable<object?>> GetArticleAsync(this IMessageHub hub, string collection, string id, CancellationToken ct)
+        => hub.GetContentService().GetArticleAsync(collection, id, ct);
 
 }

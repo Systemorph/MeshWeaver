@@ -26,6 +26,37 @@ public static class LayoutDefinitionExtensions
     ) =>
         layout.WithRenderer(context, (a, ctx, s) => a.RenderArea(ctx, generator.Invoke(a, ctx), s));
 
+
+    /// <summary>
+    /// Adds a view to the layout definition for the specified area and generator.
+    /// </summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <param name="area">The area name to render the view.</param>
+    /// <param name="generator">The generator function to produce the view content.</param>
+    /// <param name="areaDefinition">Area definition exposed in layout area catalog</param>
+    /// <returns>The updated layout definition.</returns>
+    public static LayoutDefinition WithView<T>(
+        this LayoutDefinition layout,
+        string area,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> generator,
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
+    ) where T : UiControl => layout.WithRenderer(x => x.Area == area, (host, ctx, s) => host.RenderArea(ctx, generator, s));
+
+    /// <summary>
+    /// Adds a view to the layout definition for the specified area and generator.
+    /// </summary>
+    /// <param name="layout">The layout definition.</param>
+    /// <param name="context">The context to render the view.</param>
+    /// <param name="generator">The generator function to produce the view content.</param>
+    /// <param name="areaDefinition">Area definition exposed in layout area catalog</param>
+    /// <returns>The updated layout definition.</returns>
+    public static LayoutDefinition WithView<T>(
+        this LayoutDefinition layout,
+        Func<RenderingContext, bool> context,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> generator,
+        Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
+    ) where T : UiControl => layout.WithRenderer(context, (host, ctx, s) => host.RenderArea(ctx, generator, s));
+
     /// <summary>
     /// Adds a view to the layout definition for the specified area and generator.
     /// </summary>
@@ -34,11 +65,11 @@ public static class LayoutDefinitionExtensions
     /// <param name="generator">The generator function to produce the view content.</param>
     /// <param name="areaDefinition">Area definition exposed in layout area catalog</param>
     /// <returns>The updated layout definition.</returns>
-    public static LayoutDefinition WithView(this LayoutDefinition layout,
+    public static LayoutDefinition WithView<T>(this LayoutDefinition layout,
         string area,
-        Func<LayoutAreaHost, RenderingContext, IObservable<UiControl?>> generator,
+        Func<LayoutAreaHost, RenderingContext, IObservable<T?>> generator,
         Func<LayoutAreaDefinition, LayoutAreaDefinition>? areaDefinition = null
-    ) =>
+    ) where T : UiControl =>
         layout
             .WithView(c => c.Area == area, generator)
             .WithAreaDefinition(
@@ -100,11 +131,6 @@ public static class LayoutDefinitionExtensions
         this LayoutDefinition layout,
         string area,
         Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<T>> generator
-    ) where T : UiControl? => layout.WithView(c => c.Area == area, generator);
-    public static LayoutDefinition WithView<T>(
-        this LayoutDefinition layout,
-        string area,
-        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T>>> generator
     ) where T : UiControl? => layout.WithView(c => c.Area == area, generator);
     public static LayoutDefinition WithView(this LayoutDefinition layout, Func<RenderingContext, bool> context, ViewDefinition generator) =>
         WithView(
@@ -184,6 +210,13 @@ public static class LayoutDefinitionExtensions
         object view,
         LayoutAreaDefinition? layoutAreaDefinition = null) =>
         layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, view, s))
+            .WithAreaDefinition(layoutAreaDefinition!);
+    public static LayoutDefinition WithView<T>(
+        this LayoutDefinition layout,
+        Func<RenderingContext, bool> context,
+        Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> generator,
+        LayoutAreaDefinition? layoutAreaDefinition = null) =>
+        layout.WithRenderer(context, (a, c, s) => a.RenderArea(c, generator, s))
             .WithAreaDefinition(layoutAreaDefinition!);
 
     public static LayoutDefinition WithView(

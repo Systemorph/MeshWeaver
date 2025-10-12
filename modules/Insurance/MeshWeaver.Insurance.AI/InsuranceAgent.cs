@@ -85,14 +85,14 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
             {
                 // Only handle pricing contexts
                 if (context?.Address?.Type != PricingAddress.TypeName)
-                    return null;
+                    return null!;
 
                 var pricingId = context.Address.Id;
 
                 // Parse pricingId in format {company}-{uwy}
                 var parts = pricingId.Split('-');
                 if (parts.Length != 2)
-                    return null;
+                    return null!;
 
                 var company = parts[0];
                 var uwy = parts[1];

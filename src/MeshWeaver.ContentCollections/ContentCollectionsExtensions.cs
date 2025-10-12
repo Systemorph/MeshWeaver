@@ -34,8 +34,7 @@ public static class ContentCollectionsExtensions
             services.AddScoped(sp => sp.GetConfiguration(config, configurations))
             )
             .AddLayout(layout => layout
-                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles)
-                .WithView(nameof(ArticlesLayoutArea.Content), ArticlesLayoutArea.Content))
+                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
             .AddContentCollections();
     }
 
@@ -104,6 +103,9 @@ public static class ContentCollectionsExtensions
 
                 return services;
             })
+            .AddLayout(layout => layout
+                .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
+                .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser))
             .WithHandler<GetContentCollectionRequest>((hub, request) =>
             {
                 var response = GetContentCollectionResponse(hub, request);
