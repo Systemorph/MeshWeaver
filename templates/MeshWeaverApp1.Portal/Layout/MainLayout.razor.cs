@@ -16,11 +16,13 @@ public partial class MainLayout : IDisposable
 {
     [Inject] private IJSRuntime JSRuntime { get; set; } = null!;
     [Inject] private NavigationManager NavigationManager { get; set; } = null!;
+    [Inject] private IMessageHub Hub { get; set; } = null!;
 
     private const string MessageBarSection = "MessagesTop";
+    private const string ChatAreaName = "AgentChat";
 
     private bool isNavMenuOpen;
-    private AgentChatControl chatControl = new AgentChatControl();
+    private AgentChatControl chatControl = new();
     private IJSObjectReference? jsModule;
 
     protected override void OnInitialized()
@@ -78,6 +80,7 @@ public partial class MainLayout : IDisposable
             LayoutArea = layoutArea
         };
     }
+
     protected override void OnParametersSet()
     {
         if (ViewportInformation.IsDesktop && isNavMenuOpen)
@@ -119,11 +122,6 @@ public partial class MainLayout : IDisposable
         StateHasChanged();
     }
 
-    private void HandleChatPositionChanged(ChatPosition newPosition)
-    {
-        chatPosition = newPosition;
-        StateHasChanged();
-    }
     private async Task StartResize()
     {
         // Lazily load the JavaScript module
@@ -140,6 +138,12 @@ public partial class MainLayout : IDisposable
         {
             await chatComponent.ResetConversationAsync();
         }
+    }
+
+    private void HandleChatPositionChanged(ChatPosition newPosition)
+    {
+        chatPosition = newPosition;
+        StateHasChanged();
     }
 
     public void Dispose()
