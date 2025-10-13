@@ -22,6 +22,7 @@ public partial class MainLayout : IDisposable
 
     private bool isNavMenuOpen;
     private AgentChatControl chatControl = new();
+    private IJSObjectReference? jsModule;
 
     protected override void OnInitialized()
     {
@@ -112,24 +113,22 @@ public partial class MainLayout : IDisposable
     }
     public bool IsAIChatVisible { get; private set; }
     private AgentChatView? chatComponent;
-    private ChatPosition currentChatPosition = ChatPosition.Right;
+    private ChatPosition chatPosition = ChatPosition.Right;
 
-    public async Task ToggleAIChatVisibility()
+    public void ToggleAIChatVisibility()
     {
         IsAIChatVisible = !IsAIChatVisible;
         StateHasChanged();
-
-        // Small delay to ensure proper rendering, especially for bottom position
-        if (IsAIChatVisible && currentChatPosition == ChatPosition.Bottom)
-        {
-            await Task.Delay(50);
-            StateHasChanged();
-        }
     }
+
     private async Task StartResize()
     {
+        // Lazily load the JavaScript module
+        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
+
         // Call the JavaScript function to handle the resize operation
-        await JSRuntime.InvokeVoidAsync("chatResizer.startResize");
+        await jsModule.InvokeVoidAsync("startResize");
     }
 
     private async Task HandleNewChatAsync()
@@ -140,27 +139,15 @@ public partial class MainLayout : IDisposable
         }
     }
 
-    private async Task OnChatPositionChanged(ChatPosition newPosition)
+    private void HandleChatPositionChanged(ChatPosition newPosition)
     {
-        var previousPosition = currentChatPosition;
-        currentChatPosition = newPosition;
-
-        // Reset CSS variables when switching position types
-        if (previousPosition != newPosition)
-        {
-            await JSRuntime.InvokeVoidAsync("eval",
-                $"document.querySelector('.layout')?.style.removeProperty('--chat-width'); document.querySelector('.layout')?.style.removeProperty('--chat-height');");
-        }
-
-        StateHasChanged();
-
-        // Small delay to allow DOM to update before applying new styles
-        await Task.Delay(10);
+        chatPosition = newPosition;
         StateHasChanged();
     }
 
     public void Dispose()
     {
         NavigationManager.LocationChanged -= OnLocationChanged;
+        jsModule?.DisposeAsync();
     }
 }

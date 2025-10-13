@@ -1,12 +1,5 @@
-﻿window.isDarkMode = function () {
-    let matched = window.matchMedia("(prefers-color-scheme: dark)").matches;
-
-    if (matched)
-        return true;
-    else
-        return false;
-}
-
+﻿// Chat resizer functionality for MeshWeaver.Blazor.Chat
+// This script handles resizing of the chat panel in different positions (left, right, bottom)
 window.chatResizer = {
     startResize: function () {
         // Only allow resizing on desktop (screen width >= 768px)
@@ -14,15 +7,22 @@ window.chatResizer = {
 
         // Get the layout element
         const layout = document.querySelector('.layout.chat-visible');
-        if (!layout) return;
+        if (!layout) {
+            console.log('chatResizer: No layout element found');
+            return;
+        }
 
-        // Determine if we're resizing a bottom panel or side panel
-        const isBottomPanel = layout.classList.contains('chat-bottom');
-        
+        // Determine chat position - support both naming conventions
+        const isBottom = layout.classList.contains('chat-position-bottom') || layout.classList.contains('chat-bottom');
+        const isLeft = layout.classList.contains('chat-position-left') || layout.classList.contains('chat-left');
+        const isRight = layout.classList.contains('chat-position-right') || layout.classList.contains('chat-right');
+
+        console.log('chatResizer: Starting resize - Position: bottom=' + isBottom + ', left=' + isLeft + ', right=' + isRight);
+
         // Simple throttling for horizontal resize only
         let lastUpdate = 0;
-        const throttleMs = isBottomPanel ? 0 : 8; // Only throttle horizontal resize
-        
+        const throttleMs = isBottom ? 0 : 8; // Only throttle horizontal resize
+
         // Set up the mouse events for resizing
         const mouseMoveHandler = (e) => {
             // Prevent default to avoid text selection
@@ -30,10 +30,10 @@ window.chatResizer = {
 
             // Simple time-based throttling for horizontal resize only
             const now = Date.now();
-            if (!isBottomPanel && now - lastUpdate < throttleMs) return;
+            if (!isBottom && now - lastUpdate < throttleMs) return;
             lastUpdate = now;
 
-            if (isBottomPanel) {
+            if (isBottom) {
                 // Calculate the new height based on mouse position (from bottom edge)
                 const height = window.innerHeight - e.clientY;
 
@@ -42,12 +42,24 @@ window.chatResizer = {
                 const maxHeight = window.innerHeight * 0.7;
                 const newHeight = Math.min(Math.max(height, minHeight), maxHeight);
 
+                console.log('chatResizer: Bottom resize - clientY=' + e.clientY + ', height=' + height + ', newHeight=' + newHeight);
+
                 // Update the CSS custom property to adjust the chat area height
                 layout.style.setProperty('--chat-height', `${newHeight}px`);
-            } else {
-                // Calculate the new width based on mouse position (from right edge for right panel, from left for left panel)
-                const isLeftPanel = layout.classList.contains('chat-left');
-                const width = isLeftPanel ? e.clientX : window.innerWidth - e.clientX;
+            } else if (isLeft) {
+                // Calculate the new width based on mouse position (from left edge)
+                const width = e.clientX - 60; // Subtract nav menu width
+
+                // Apply minimum and maximum constraints for width
+                const minWidth = 300;
+                const maxWidth = window.innerWidth * 0.8;
+                const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
+
+                // Update the CSS custom property to adjust the chat area width
+                layout.style.setProperty('--chat-width', `${newWidth}px`);
+            } else if (isRight) {
+                // Calculate the new width based on mouse position (from right edge)
+                const width = window.innerWidth - e.clientX;
 
                 // Apply minimum and maximum constraints for width
                 const minWidth = 300;
@@ -68,7 +80,7 @@ window.chatResizer = {
         };
 
         // Set cursor style for the entire page during resize
-        document.body.style.cursor = isBottomPanel ? 'row-resize' : 'col-resize';
+        document.body.style.cursor = isBottom ? 'row-resize' : 'col-resize';
         document.body.style.userSelect = 'none';
 
         // Add the event listeners

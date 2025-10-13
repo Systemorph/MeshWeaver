@@ -24,6 +24,7 @@ var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables);
 
 // Add the EntraId parameters
+var entraIdInstance = builder.AddParameter("EntraIdInstance", secret: false);
 var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
 var entraIdClientId = builder.AddParameter("EntraIdClientId");
 var entraIdAdminGroupId = builder.AddParameter("PortalAdminGroup");
@@ -53,6 +54,7 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithReference(meshweaverdb)
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
+        .WithEnvironment("EntraId__Instance", entraIdInstance)
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
         .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
@@ -85,6 +87,7 @@ else
         .WithReference(azureMeshweaverdb)
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
+        .WithEnvironment("EntraId__Instance", entraIdInstance)
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
         .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
