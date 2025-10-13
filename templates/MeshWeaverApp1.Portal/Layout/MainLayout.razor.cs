@@ -21,6 +21,7 @@ public partial class MainLayout : IDisposable
 
     private bool isNavMenuOpen;
     private AgentChatControl chatControl = new AgentChatControl();
+    private IJSObjectReference? jsModule;
 
     protected override void OnInitialized()
     {
@@ -110,16 +111,27 @@ public partial class MainLayout : IDisposable
     }
     public bool IsAIChatVisible { get; private set; }
     private AgentChatView? chatComponent;
+    private ChatPosition chatPosition = ChatPosition.Right;
 
     public void ToggleAIChatVisibility()
     {
         IsAIChatVisible = !IsAIChatVisible;
         StateHasChanged();
     }
+
+    private void HandleChatPositionChanged(ChatPosition newPosition)
+    {
+        chatPosition = newPosition;
+        StateHasChanged();
+    }
     private async Task StartResize()
     {
+        // Lazily load the JavaScript module
+        jsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", "./_content/MeshWeaver.Blazor.Chat/AgentChatView.razor.js");
+
         // Call the JavaScript function to handle the resize operation
-        await JSRuntime.InvokeVoidAsync("chatResizer.startResize");
+        await jsModule.InvokeVoidAsync("startResize");
     }
 
     private async Task HandleNewChatAsync()
@@ -133,5 +145,6 @@ public partial class MainLayout : IDisposable
     public void Dispose()
     {
         NavigationManager.LocationChanged -= OnLocationChanged;
+        jsModule?.DisposeAsync();
     }
 }

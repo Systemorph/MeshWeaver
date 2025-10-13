@@ -25,33 +25,43 @@ public partial class MobileNavMenu : ComponentBase
     private IEnumerable<MobileNavMenuEntry> GetMobileNavMenuEntries()
     {
         yield return new MobileNavMenuEntry(
-            "Todos",
-            () => NavigateToAsync("/app/Todo/TodoList"),
-            DesktopNavMenu.TodoIcon(),
-            LinkMatchRegex: new Regex("^/app/Todo")
-        );
-
-        yield return new MobileNavMenuEntry(
-            "Articles",
+            "Blog",
             () => NavigateToAsync("/articles"),
             DesktopNavMenu.BlogIcon(),
             LinkMatchRegex: new Regex("^/articles")
         );
 
-        yield return new MobileNavMenuEntry("Areas",
-            () => NavigateToAsync("/content/Documentation/Readme"),
-            DesktopNavMenu.DocumentationIcon(),
-            LinkMatchRegex: new Regex("^/content/Documentation/Readme"));
+        yield return new MobileNavMenuEntry(
+            "Todo",
+            () => NavigateToAsync("/app/Todo/LayoutAreas"),
+            DesktopNavMenu.TodoIcon(),
+            LinkMatchRegex: new Regex("^/app/Todo")
+        );
 
         yield return new MobileNavMenuEntry(
-        "Settings",
-        LaunchSettingsAsync,
-        new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
-    );
+            "Agents",
+            () => NavigateToAsync("/app/Agents/Overview"),
+            DesktopNavMenu.AgentsIcon(),
+            LinkMatchRegex: new Regex("^/app/Agents")
+        );
+
+        yield return new MobileNavMenuEntry(
+            "Chat",
+            () => NavigateToAsync("/chat"),
+            DesktopNavMenu.ChatIcon(),
+            LinkMatchRegex: new Regex("^/chat")
+        );
+
+        yield return new MobileNavMenuEntry(
+            "Settings",
+            LaunchSettingsAsync,
+            new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Settings()
+        );
+
         yield return new MobileNavMenuEntry(
             "Sign in",
             () => NavigateToAsync(LoginUrl(), true),
-                new Size24.PersonAccounts()
+            new Size24.PersonAccounts()
         );
     }
 

@@ -28,14 +28,6 @@
                 <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
             </FluentButton>
             <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">
-                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Right))">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
-                    Right
-                    @if (currentPosition == ChatPosition.Right)
-                    {
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
-                    }
-                </FluentMenuItem>
                 <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Left))">
                     <FluentIcon Value="@(new Icons.Regular.Size16.PanelLeft())" />
                     Left
