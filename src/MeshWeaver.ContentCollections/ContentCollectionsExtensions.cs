@@ -120,7 +120,7 @@ public static class ContentCollectionsExtensions
         return sourceType switch
         {
             "FileSystem" => new FileSystemStreamProvider(config.BasePath ?? ""),
-            "EmbeddedResource" => throw new NotSupportedException("EmbeddedResource requires assembly and prefix - use WithEmbeddedResourceContentCollection"),
+            "EmbeddedResource" => throw new NotSupportedException("EmbeddedResource requires assembly and prefix - use AddEmbeddedResourceContentCollection"),
             _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported")
         };
     }
@@ -152,13 +152,17 @@ public static class ContentCollectionsExtensions
 
     public static IServiceCollection AddContentCollections(this IServiceCollection services, IConfiguration? configuration = null, string? collectionsConfigKey = null)
     {
-        services
-            .AddScoped<IContentService, ContentService>()
-            .AddKeyedScoped<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
-            .AddKeyedScoped<IContentCollectionFactory, HubContentCollectionFactory>(HubContentCollectionFactory.SourceType)
-            .AddKeyedScoped<IContentCollectionFactory, EmbeddedResourceContentCollectionFactory>(EmbeddedResourceContentCollectionFactory.SourceType)
-            .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
-            .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
+        // Only register core services if they haven't been registered yet
+        if (services.All(d => d.ServiceType != typeof(IContentService)))
+        {
+            services
+                .AddScoped<IContentService, ContentService>()
+                .AddKeyedScoped<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
+                .AddKeyedScoped<IContentCollectionFactory, HubContentCollectionFactory>(HubContentCollectionFactory.SourceType)
+                .AddKeyedScoped<IContentCollectionFactory, EmbeddedResourceContentCollectionFactory>(EmbeddedResourceContentCollectionFactory.SourceType)
+                .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
+                .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
+        }
 
         // Register stream providers if configuration is provided
         if (configuration != null)
@@ -367,7 +371,7 @@ public static class ContentCollectionsExtensions
         => $"content/{collection}/{path}";
 
 
-    public static MessageHubConfiguration WithEmbeddedResourceContentCollection(
+    public static MessageHubConfiguration AddEmbeddedResourceContentCollection(
         this MessageHubConfiguration configuration,
         string collectionName,
         Assembly assembly,
@@ -407,7 +411,7 @@ public static class ContentCollectionsExtensions
     /// <param name="collectionName">The name of the collection</param>
     /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
     /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration WithFileSystemContentCollection(
+    public static MessageHubConfiguration AddFileSystemContentCollection(
         this MessageHubConfiguration configuration,
         string collectionName,
         Func<IServiceProvider, string> pathFactory)
@@ -445,7 +449,7 @@ public static class ContentCollectionsExtensions
     /// <param name="configuration">The message hub configuration</param>
     /// <param name="collectionConfigFactory">Factory function that creates the content collection configuration</param>
     /// <returns>The configured message hub configuration</returns>
-    public static MessageHubConfiguration WithContentCollection(
+    public static MessageHubConfiguration AddContentCollection(
         this MessageHubConfiguration configuration,
         Func<IServiceProvider, ContentCollectionConfig> collectionConfigFactory)
         => configuration
@@ -472,6 +476,25 @@ public static class ContentCollectionsExtensions
 
                     return new ContentCollectionConfigProvider(finalConfig);
                 });
+
+                return services;
+            });
+    /// <summary>
+    /// Configures a content collection for this hub using the provided configuration factory.
+    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionConfigs">Factory function that creates the content collection configuration</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddContentCollections(
+        this MessageHubConfiguration configuration,
+        params IReadOnlyCollection<ContentCollectionConfig> collectionConfigs)
+        => configuration
+            .AddContentCollections() // Ensure content service and registry are initialized
+            .WithServices(services =>
+            {
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(_ => new ContentCollectionConfigProvider(collectionConfigs));
 
                 return services;
             });

@@ -86,6 +86,8 @@ public class ContentService : IContentService
         Task<ContentCollection?>? initTask;
         lock (initializeLock)
         {
+            if (collections.TryGetValue(config.Name, out var localCollection))
+                return Task.FromResult<ContentCollection?>(localCollection);
             collectionConfigs[config.Name] = config;
             // Check again inside lock
             if (collections.TryGetValue(config.Name, out var existing))

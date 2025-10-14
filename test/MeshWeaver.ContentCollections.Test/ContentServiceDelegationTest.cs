@@ -22,14 +22,14 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         // Register ParentCollection at router level so both host and client can access it
         return configuration
             .AddContentCollections()
-            .WithFileSystemContentCollection("ParentCollection", _ => _parentPath);
+            .AddFileSystemContentCollection("ParentCollection", _ => _parentPath);
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return configuration
             .AddContentCollections()
-            .WithFileSystemContentCollection("ChildCollection", _ => _childPath);
+            .AddFileSystemContentCollection("ChildCollection", _ => _childPath);
     }
 
     [Fact]

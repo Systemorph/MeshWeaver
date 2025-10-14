@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -34,8 +33,13 @@ namespace MeshWeaver.Documentation.Test
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
             base.ConfigureMesh(builder)
                 .AddKernel()
-                .ConfigureServices(ConfigureArticles)
                 .InstallAssemblies(DocumentationAssemblyLocation)
+                .ConfigureHub(hub => hub.AddContentCollections(new ContentCollectionConfig()
+                {
+                    SourceType = FileSystemContentCollectionFactory.SourceType,
+                    Name = "Documentation",
+                    BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
+                }))
                 ;
 
         /// <summary>
@@ -44,18 +48,6 @@ namespace MeshWeaver.Documentation.Test
         protected static readonly string DocumentationAssemblyLocation =
             typeof(DocumentationApplicationAttribute).Assembly.Location;
 
-        private IServiceCollection ConfigureArticles(IServiceCollection services)
-        {
-            return services
-                .Configure<List<ContentCollectionConfig>>(
-                    options => options.Add(new ContentCollectionConfig()
-                    {
-                        SourceType = FileSystemContentCollectionFactory.SourceType,
-                        Name = "Documentation",
-                        BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
-                    })
-                );
-        }
 
         /// <summary>
         /// Default configuration of the client
