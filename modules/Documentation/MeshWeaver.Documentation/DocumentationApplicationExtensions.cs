@@ -21,7 +21,7 @@ public static class DocumentationApplicationExtensions
     public static MessageHubConfiguration AddDocumentation(MessageHubConfiguration config)
         => config
             .AddArticles()
-            .WithEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly,
+            .AddEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly,
                 "Markdown")
             .AddLayout(layout => layout
                 .AddCounter()

@@ -21,7 +21,7 @@ public static class TodoApplicationExtensions
     public static MessageHubConfiguration ConfigureTodoApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-                .WithEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
+                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
                 .WithTypes(
                     typeof(TodoStatus)
                 )

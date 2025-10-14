@@ -44,7 +44,7 @@ public static class InsuranceApplicationExtensions
     {
         return configuration
             .WithTypes(typeof(InsuranceApplicationExtensions))
-            .WithContentCollection(sp =>
+            .AddContentCollection(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
                 var addressId = hub.Address.Id;

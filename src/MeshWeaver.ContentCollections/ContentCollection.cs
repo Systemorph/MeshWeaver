@@ -32,7 +32,7 @@ public class ContentCollection : IDisposable
         Hub,
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x.WithInitialization((_, ct) => InitializeAsync(ct)));
+            x => x);
         return ret;
     }
 
@@ -122,6 +122,7 @@ public class ContentCollection : IDisposable
                 .Where(x => x is not null)
                 .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
         );
+        markdownStream.OnNext(new(ret, markdownStream.StreamId, Hub.Version));
         AttachMonitor();
         return ret;
     }
