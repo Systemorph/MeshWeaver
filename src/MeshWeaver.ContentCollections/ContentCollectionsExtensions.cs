@@ -292,7 +292,7 @@ public static class ContentCollectionsExtensions
         return markdownBuilder.ToString();
     }
     public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content,
-        IReadOnlyDictionary<string, Author> authors)
+        IReadOnlyDictionary<string, Author> authors, Address? address)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -309,7 +309,7 @@ public static class ContentCollectionsExtensions
                 Name = name,
                 Path = path,
                 Collection = collection,
-                Url = GetContentUrl(collection, pathWithoutExtension),
+                Url = GetContentUrl(collection, pathWithoutExtension, address),
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
@@ -342,17 +342,21 @@ public static class ContentCollectionsExtensions
         // Remove the YAML block from the content
         var contentWithoutYaml = content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n');
 
+        // Adapt thumbnail URL to include address and collection path
+        var adaptedThumbnail = AdaptResourceUrl(ret.Thumbnail, collection, address);
+
         return ret with
         {
             Name = name,
             Path = path,
             Collection = collection,
-            Url = GetContentUrl(collection, pathWithoutExtension),
+            Url = GetContentUrl(collection, pathWithoutExtension, address),
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
-            AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? []
+            AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? [],
+            Thumbnail = adaptedThumbnail
         };
     }
 
@@ -366,9 +370,35 @@ public static class ContentCollectionsExtensions
         return new Author(names[0], names[^1]) { MiddleName = string.Join(' ', names.Skip(1).Take(names.Length - 2)), };
     }
 
+    public static string? AdaptResourceUrl(string? resourceUrl, string collection, Address? address)
+    {
+        if (string.IsNullOrEmpty(resourceUrl))
+            return resourceUrl;
 
-    public static string GetContentUrl(string collection, string path)
-        => $"content/{collection}/{path}";
+        // If it's already an absolute URL (http/https), use it as-is
+        if (resourceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            resourceUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return resourceUrl;
+        }
+
+        // If it starts with /, it's already a full path
+        if (resourceUrl.StartsWith("/"))
+        {
+            return resourceUrl;
+        }
+
+        // Otherwise, prepend with address/static/collection or static/collection
+        return address != null
+            ? $"{address}/static/{collection}/{resourceUrl}"
+            : $"static/{collection}/{resourceUrl}";
+    }
+
+
+    public static string GetContentUrl(string collection, string path, Address? address = null)
+        => address != null
+            ? $"{address}/Content/{collection}/{path}"
+            : $"Content/{collection}/{path}";
 
 
     public static MessageHubConfiguration AddEmbeddedResourceContentCollection(
