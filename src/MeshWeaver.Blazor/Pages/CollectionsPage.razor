@@ -35,7 +35,7 @@
         else
         {
             // Redirect to first available collection if no collection specified
-            var collections = await ContentService.GetCollectionsAsync();
+            var collections = await ContentService.GetCollectionsAsync().ToArrayAsync();
             var firstCollection = collections.FirstOrDefault();
             if (firstCollection != null)
             {

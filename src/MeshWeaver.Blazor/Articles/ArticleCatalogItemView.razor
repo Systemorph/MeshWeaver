@@ -57,8 +57,8 @@
     private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
     private string? VideoDuration => Data.VideoDuration?.ToString(@"hh\:mm\:ss");
 
-    private string ImageBasePath => $"static/{Data.Collection}";
-    private string Thumbnail => $"{ImageBasePath}/{Data.Thumbnail}";
+    private string? ImageBasePath => Stream is null ? null : $"{Stream.Owner}/static/{Data.Collection}";
+    private string? Thumbnail => Stream is null ? null : $"{ImageBasePath}/{Data.Thumbnail}";
 
     private string? GetAuthorImageUrl(string? imageUrl)
     {
@@ -78,9 +78,10 @@
             return imageUrl;
         }
 
+        if (Stream is null)
+            return null;
         // Otherwise, prepend with /{address}/static/
-        var address = Data.Collection;
-        return $"/{address}/static/{imageUrl}";
+        return $"{ImageBasePath}/{imageUrl}";
     }
 
     private string GetInitials(Author author)

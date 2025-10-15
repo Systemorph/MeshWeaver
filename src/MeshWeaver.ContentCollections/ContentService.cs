@@ -11,8 +11,9 @@ public class ContentService : IContentService
     private readonly IMessageHub hub;
     private readonly AccessService accessService;
     private readonly IContentService? parentContentService;
-    private readonly ConcurrentDictionary<string, ContentCollection> collections = new();
     private readonly ConcurrentDictionary<string, ContentCollectionConfig> collectionConfigs;
+    private readonly Dictionary<string, Task<ContentCollection?>> collections = new();
+    private readonly Lock initializeLock = new();
     public ContentService(IMessageHub hub, AccessService accessService)
     {
         this.hub = hub;
@@ -52,7 +53,7 @@ public class ContentService : IContentService
     }
 
 
-    private async Task<ContentCollection> CreateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
+    private async Task<ContentCollection?> CreateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
     {
         var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
         if (factory is null)
@@ -60,22 +61,24 @@ public class ContentService : IContentService
         return await factory.CreateAsync(config, hub, cancellationToken);
     }
 
-    private readonly Dictionary<string, Task<ContentCollection?>> initializationTasks = new();
-    private readonly Lock initializeLock = new();
 
     public async Task<ContentCollection?> GetCollectionAsync(string collection, CancellationToken ct)
     {
+        if (parentContentService is not null)
+        {
+            var fromParent = await parentContentService.GetCollectionAsync(collection, ct);
+            if (fromParent is not null)
+                return fromParent;
+        }
         // Try local collections first
         if (collections.TryGetValue(collection, out var localCollection))
-            return localCollection;
+            return await localCollection;
 
         var config = collectionConfigs.GetValueOrDefault(collection);
         if (config is not null)
             return await InitializeCollectionAsync(config, ct);
 
         // Delegate to parent if not found locally
-        if (parentContentService is not null)
-            return await parentContentService.GetCollectionAsync(collection, ct);
         return null;
     }
 
@@ -87,24 +90,22 @@ public class ContentService : IContentService
         lock (initializeLock)
         {
             if (collections.TryGetValue(config.Name, out var localCollection))
-                return Task.FromResult<ContentCollection?>(localCollection);
+                return localCollection;
             collectionConfigs[config.Name] = config;
             // Check again inside lock
             if (collections.TryGetValue(config.Name, out var existing))
-                return Task.FromResult<ContentCollection?>(existing);
+                return existing;
 
-            // Check if initialization is already in progress
-            if (initializationTasks.TryGetValue(config.Name, out initTask))
-            {
-                return initTask;
-            }
             else
             {
                 lock (initializeLock)
                 {
+                    if (collections.TryGetValue(config.Name, out existing))
+                        return existing;
+
                     // Create a new initialization task
                     initTask = InstantiateCollectionAsync(config, cancellationToken);
-                    initializationTasks[config.Name] = initTask;
+                    collections[config.Name] = initTask;
                     return initTask;
                 }
             }
@@ -130,12 +131,12 @@ public class ContentService : IContentService
         this.collectionConfigs[contentCollectionConfig.Name] = contentCollectionConfig;
     }
 
-    private async Task<ContentCollection?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
+    private Task<ContentCollection?> InstantiateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
     {
         try
         {
             // Use the async factory to create the collection
-            var newCollection = await CreateCollectionAsync(config, cancellationToken);
+            var newCollection = CreateCollectionAsync(config, cancellationToken);
 
             // Register it
             collections[config.Name] = newCollection;
@@ -144,14 +145,14 @@ public class ContentService : IContentService
         }
         catch
         {
-            return null;
+            return Task.FromResult<ContentCollection?>(null);
         }
         finally
         {
             // Remove from initialization tasks when complete
             lock (initializeLock)
             {
-                initializationTasks.Remove(config.Name);
+                collections.Remove(config.Name);
             }
         }
     }
@@ -170,11 +171,17 @@ public class ContentService : IContentService
         CancellationToken ct)
     {
 
-        var allCollections = (catalogOptions.Collections ?? [])
-            .Select(x => collections.GetValueOrDefault(x))
-            .Where(x => x is not null)
-            .ToArray();
-        return (await allCollections.Select(c => c!.GetMarkdown(catalogOptions))
+        var allCollections = await (catalogOptions.Collections ?? [])
+            .ToAsyncEnumerable()
+            .SelectAwait(async x =>
+            {
+                var valueOrDefault = collections.GetValueOrDefault(x);
+                return valueOrDefault is null ? null : await valueOrDefault;
+            })
+            .ToArrayAsync(ct);
+        return (await allCollections
+                .Where(x => x is not null)
+                .Select(c => c!.GetMarkdown(catalogOptions))
                 .CombineLatest()
                 .Select(c => c.SelectMany(articles => articles.OfType<Article>()))
                 .Select(articles => ApplyOptions(articles, catalogOptions))
@@ -208,21 +215,9 @@ public class ContentService : IContentService
         return coll?.GetMarkdown(article) ?? Observable.Return(Controls.Markdown($"No article {article} found in collection {collection}"));
     }
 
-    public Task<IReadOnlyCollection<ContentCollection>> GetCollectionsAsync(CancellationToken ct = default)
+    public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
     {
-        return Task.FromResult<IReadOnlyCollection<ContentCollection>>(collections.Values.ToArray());
-    }
-
-
-    public IReadOnlyCollection<ContentCollection> GetCollections()
-    {
-        var result = collections.Values;
-        return result.ToArray();
-    }
-
-    public IEnumerable<ContentCollection> GetCollections(string _)
-    {
-        return collections.Values;
+        return collections.Values.ToAsyncEnumerable().SelectAwait(async x => await x).OfType<ContentCollection>();
     }
 
 }
