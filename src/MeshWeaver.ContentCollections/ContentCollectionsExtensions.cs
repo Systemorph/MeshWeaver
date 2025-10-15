@@ -345,6 +345,11 @@ public static class ContentCollectionsExtensions
         // Adapt thumbnail URL to include address and collection path
         var adaptedThumbnail = AdaptResourceUrl(ret.Thumbnail, collection, address);
 
+        // Render abstract as HTML if it exists
+        var abstractHtml = string.IsNullOrEmpty(ret.Abstract)
+            ? string.Empty
+            : Markdig.Markdown.ToHtml(ret.Abstract, pipeline);
+
         return ret with
         {
             Name = name,
@@ -356,7 +361,8 @@ public static class ContentCollectionsExtensions
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
             AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? [],
-            Thumbnail = adaptedThumbnail
+            Thumbnail = adaptedThumbnail,
+            AbstractHtml = abstractHtml
         };
     }
 

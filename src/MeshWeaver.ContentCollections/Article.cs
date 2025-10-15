@@ -27,6 +27,7 @@ public record Article : MarkdownElement
     public string? Title { get; set; }
     public bool Pinned { get; init; }
     public string? Abstract { get; init; } = string.Empty;
+    public string? AbstractHtml { get; init; } = string.Empty;
     public string? Thumbnail { get; init; } = string.Empty;
     public int Views { get; init; }
     public int Likes { get; init; }
