@@ -1,12 +1,10 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -54,7 +52,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
             Output.WriteLine($"    Has ContentService: {cs != null}");
             if (cs != null)
             {
-                var colls = await cs.GetCollectionsAsync(TestContext.Current.CancellationToken);
+                var colls = await cs.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
                 Output.WriteLine($"    Collections: {string.Join(", ", colls.Select(c => c.Collection))}");
             }
             Output.WriteLine($"    ParentHub: {current.Configuration.ParentHub?.Address}");
@@ -74,10 +72,10 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine($"ContentServices are same: {ReferenceEquals(parentContentService, childContentService)}");
 
         // Debug: Check what collections each service has
-        var parentCollections = await parentContentService.GetCollectionsAsync(TestContext.Current.CancellationToken);
-        var childCollections = await childContentService.GetCollectionsAsync(TestContext.Current.CancellationToken);
-        Output.WriteLine($"Parent content service has {parentCollections.Count} collections: {string.Join(", ", parentCollections.Select(c => c.Collection))}");
-        Output.WriteLine($"Child content service has {childCollections.Count} collections: {string.Join(", ", childCollections.Select(c => c.Collection))}");
+        var parentCollections = await parentContentService.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
+        var childCollections = await childContentService.GetCollectionsAsync().ToArrayAsync(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Parent content service has {parentCollections.Length} collections: {string.Join(", ", parentCollections.Select(c => c.Collection))}");
+        Output.WriteLine($"Child content service has {childCollections.Length} collections: {string.Join(", ", childCollections.Select(c => c.Collection))}");
 
         // Act & Assert - Parent hub can only reach ParentCollection
         var parentCollectionFromParent = await parentContentService.GetCollectionAsync("ParentCollection", TestContext.Current.CancellationToken);
@@ -105,8 +103,8 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         childCollectionFromChild.Should().NotBeNull("child hub should have its own ChildCollection");
 
         // Debug: Check instance details
-        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent!.GetHashCode()}");
-        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild!.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromParent instance: {parentCollectionFromParent.GetHashCode()}");
+        Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild.GetHashCode()}");
         Output.WriteLine($"Are they reference equal: {ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild)}");
 
         // Act & Assert - The ParentCollection from child should be reference equal to the one from parent
