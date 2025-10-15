@@ -63,6 +63,39 @@
     display: flex;
     align-items: center;
 }
+
+.title {
+    font-size: 16pt;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.summary {
+    font-size: 14pt !important;
+    line-height: 1.5;
+    color: var(--color-fg-muted);
+}
+
+    .summary ::deep p {
+        font-size: 14pt !important; /* Ensure paragraphs inside summary inherit the font size */
+        margin: 0; /* Remove default paragraph margins */
+        line-height: 1.5 !important;
+    }
+
+    .summary ::deep a {
+        font-size: 14pt !important; /* Ensure links inside summary inherit the font size */
+    }
+
+    .summary :global(p) {
+        font-size: 14pt !important;
+        margin: 0;
+        line-height: 1.5 !important;
+    }
+
+    .summary :global(a) {
+        font-size: 14pt !important;
+    }
+
 /* For small screens, reduce the article card width slightly to provide horizontal spacing */
 @media (min-width: 800px) {
     .articles-catalog-page {

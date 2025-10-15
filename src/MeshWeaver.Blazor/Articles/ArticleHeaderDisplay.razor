@@ -1,4 +1,5 @@
 ﻿@using MeshWeaver.ContentCollections
+@using Microsoft.AspNetCore.Components
 @inherits ArticleHeaderBase
 
 <PageTitle>@Title</PageTitle>
@@ -45,7 +46,7 @@
                     </Authorized>
                 </AuthorizeView>            </div>
             <h1 class="title">@Title</h1>
-            <p class="abstract">@Abstract</p>
+            <div class="abstract">@((MarkupString)(AbstractHtml ?? string.Empty))</div>
         </div>
         <div class="media">
             @if (!string.IsNullOrEmpty(VideoUrl))

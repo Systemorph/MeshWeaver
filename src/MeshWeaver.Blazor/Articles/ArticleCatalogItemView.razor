@@ -1,4 +1,5 @@
 ﻿@using MeshWeaver.ContentCollections
+@using Microsoft.AspNetCore.Components
 @inherits BlazorView<MeshWeaver.ContentCollections.ArticleCatalogItemControl, ArticleCatalogItemView>
 
 <a href="@Url" class="article-card-link">
@@ -25,7 +26,7 @@
                 <div class="content">
                     <div class="text">
                         <h3 class="title">@Data.Title</h3>
-                        <p class="summary">@Data.Abstract</p>
+                        <div class="summary">@((MarkupString)(Data.AbstractHtml ?? string.Empty))</div>
                         @if (HasVideo)
                         {
                             <div class="video-info">

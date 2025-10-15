@@ -44,6 +44,11 @@ public abstract class ArticleHeaderBase : ComponentBase
         set => Model?.Update(a => a with { Abstract = value! });
     }
 
+    protected string? AbstractHtml
+    {
+        get => Model?.Element.AbstractHtml;
+    }
+
     protected IReadOnlyCollection<Author>? Authors
     {
         get => Model?.Element.AuthorDetails;
