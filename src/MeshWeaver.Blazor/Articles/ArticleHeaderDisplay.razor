@@ -13,7 +13,7 @@
                         <div class="author">
                             <FluentPersona Name="@author.FormatName()"
                                            ImageSize="24px"
-                                           Image="@GetAuthorImageUrl(author.ImageUrl)"
+                                           Image="@author.ImageUrl"
                                            InitialsTextColor="var(--neutral-foreground-rest)"
                                            ImageInitials="@GetInitials(author)" />
                         </div>
@@ -62,7 +62,7 @@
             }
             else
             {
-                <img class="thumbnail" src="@ThumbnailPath" alt="Article Thumbnail" />
+                <img class="thumbnail" src="@Thumbnail" alt="Article Thumbnail" />
             }
         </div>
 </div>

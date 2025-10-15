@@ -9,7 +9,7 @@
                     @foreach (var author in Data.AuthorDetails ?? [])
                     {
                         <div class="author">
-                            <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@GetAuthorImageUrl(author.ImageUrl)" InitialsTextColor="var(--neutral-foreground-rest)" ImageInitials="@GetInitials(author)"/>
+                            <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl" InitialsTextColor="var(--neutral-foreground-rest)" ImageInitials="@GetInitials(author)"/>
                         </div>
                     }
                 </div>
@@ -35,7 +35,7 @@
                         }
                     </div>
                     <div class="thumbnail">
-                        <img alt="@Data.Title" src="@Thumbnail" width="160" height="160"/>
+                        <img alt="@Data.Title" src="@Data.Thumbnail" width="160" height="160"/>
                     </div>
                 </div>
             </FluentStack>
@@ -56,33 +56,6 @@
     private bool IsNewArticle => Data.Published is not null && (DateTime.Now - Data.Published.Value).TotalDays <= 7;
     private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
     private string? VideoDuration => Data.VideoDuration?.ToString(@"hh\:mm\:ss");
-
-    private string? ImageBasePath => Stream is null ? null : $"{Stream.Owner}/static/{Data.Collection}";
-    private string? Thumbnail => Stream is null ? null : $"{ImageBasePath}/{Data.Thumbnail}";
-
-    private string? GetAuthorImageUrl(string? imageUrl)
-    {
-        if (string.IsNullOrEmpty(imageUrl))
-            return null;
-
-        // If it's already an absolute URL (http/https), use it as-is
-        if (imageUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            imageUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            return imageUrl;
-        }
-
-        // If it starts with /, it's already a full path
-        if (imageUrl.StartsWith("/"))
-        {
-            return imageUrl;
-        }
-
-        if (Stream is null)
-            return null;
-        // Otherwise, prepend with /{address}/static/
-        return $"{ImageBasePath}/{imageUrl}";
-    }
 
     private string GetInitials(Author author)
     {

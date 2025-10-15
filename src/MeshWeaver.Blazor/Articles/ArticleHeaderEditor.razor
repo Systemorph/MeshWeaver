@@ -28,7 +28,7 @@
                 @if (!string.IsNullOrEmpty(Thumbnail))
                 {
                     <div class="thumbnail-preview">
-                        <img src="@ThumbnailPath" alt="Thumbnail preview" />
+                        <img src="@Thumbnail" alt="Thumbnail preview" />
                     </div>
                 }
                 <FluentTextField Label="Video URL" @bind-Value="@VideoUrl" />

@@ -71,29 +71,6 @@ public abstract class ArticleHeaderBase : ComponentBase
         set => Model?.Update(a => a with { VideoUrl = value! });
     }
     protected string EditLink => $"/article/edit/{CollectionName}/{Name}";
-    protected string ThumbnailPath => $"/static/{CollectionName}/{Thumbnail}";
-
-    protected string? GetAuthorImageUrl(string? imageUrl)
-    {
-        if (string.IsNullOrEmpty(imageUrl))
-            return null;
-
-        // If it's already an absolute URL (http/https), use it as-is for centrally deployed images
-        if (imageUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            imageUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            return imageUrl;
-        }
-
-        // If it starts with /, it's already a full path
-        if (imageUrl.StartsWith("/"))
-        {
-            return imageUrl;
-        }
-
-        // Otherwise, prepend with /static/{collection}/
-        return $"/static/{CollectionName}/{imageUrl}";
-    }
 
     protected string GetInitials(Author author)
     {

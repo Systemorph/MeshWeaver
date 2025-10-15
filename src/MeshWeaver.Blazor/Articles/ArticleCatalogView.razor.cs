@@ -14,8 +14,6 @@ public partial class ArticleCatalogView
     private readonly IReadOnlyCollection<string>? collections;
     private Dictionary<string, ContentCollection> collectionsByName = new();
 
-    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
-
     protected override void BindData()
     {
         // Bind to collections property
@@ -107,13 +105,4 @@ public partial class ArticleCatalogView
 
     private IReadOnlyCollection<Article> Articles => articles;
     private bool ShowPicker => collectionOptions?.Count > 1;
-
-    private string GenerateArticleUrl(Article article)
-    {
-        // Format: Content/{collection}/{path}
-        var collection = article.Collection;
-        var path = article.Path;
-
-        return $"Content/{collection}/{path}";
-    }
 }

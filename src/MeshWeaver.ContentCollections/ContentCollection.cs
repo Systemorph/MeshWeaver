@@ -68,19 +68,15 @@ public class ContentCollection : IDisposable
 
     protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
 
-    protected ImmutableDictionary<string, Author> ParseAuthors(string content)
+    protected ImmutableDictionary<string, Author> AdaptAuthorUrls(ImmutableDictionary<string, Author> authors)
     {
-        var ret = JsonSerializer
-            .Deserialize<ImmutableDictionary<string, Author>>(
-                content
-            );
-        return ret?.Select(x =>
+        return authors.Select(x =>
             new KeyValuePair<string, Author>(
                 x.Key,
                 x.Value with
                 {
-                    ImageUrl = x.Value.ImageUrl is null ? null : $"static/{Collection}/{x.Value.ImageUrl}"
-                })).ToImmutableDictionary() ?? ImmutableDictionary<string, Author>.Empty;
+                    ImageUrl = ContentCollectionsExtensions.AdaptResourceUrl(x.Value.ImageUrl, Collection, Address)
+                })).ToImmutableDictionary();
     }
 
     public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
@@ -115,7 +111,8 @@ public class ContentCollection : IDisposable
 
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        Authors = await provider.LoadAuthorsAsync(ct);
+        var loadedAuthors = await provider.LoadAuthorsAsync(ct);
+        Authors = AdaptAuthorUrls(loadedAuthors);
         var ret = new InstanceCollection(
             await provider.GetStreamsAsync(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
@@ -156,7 +153,8 @@ public class ContentCollection : IDisposable
             path,
             lastModified,
             content,
-            Authors
+            Authors,
+            Address
         );
     }
 
