@@ -17,6 +17,7 @@ public static class BlazorHostingExtensions
     public static MeshBuilder AddBlazor(this MeshBuilder builder, Func<LayoutClientConfiguration, LayoutClientConfiguration>? clientConfig = null) =>
         builder
             .ConfigureServices(services => services
+                .AddContentService()
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
                 .Configure<RouteOptions>(options =>

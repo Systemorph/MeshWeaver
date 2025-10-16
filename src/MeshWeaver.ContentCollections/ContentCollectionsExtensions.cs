@@ -58,18 +58,7 @@ public static class ContentCollectionsExtensions
     public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
     {
         return config
-            .WithServices(services =>
-            {
-                if (services.All(d => d.ServiceType != typeof(IContentService)))
-                {
-                    services
-                        .AddScoped<IContentService, ContentService>()
-                        .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
-                        .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
-                        .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
-                }
-                return services;
-            })
+            .WithServices(AddContentService)
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
                 .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser))
@@ -79,6 +68,20 @@ public static class ContentCollectionsExtensions
                 hub.Post(response, o => o.ResponseFor(request));
                 return request.Processed();
             });
+    }
+
+    public static IServiceCollection AddContentService(this IServiceCollection services)
+    {
+        if (services.All(d => d.ServiceType != typeof(IContentService)))
+        {
+            services
+                .AddScoped<IContentService, ContentService>()
+                .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
+                .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
+                .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
+        }
+
+        return services;
     }
 
     private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config)
