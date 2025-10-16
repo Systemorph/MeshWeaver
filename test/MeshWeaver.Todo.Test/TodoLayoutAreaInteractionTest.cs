@@ -4,8 +4,8 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using Xunit;
 using MeshWeaver.Todo.LayoutAreas;
+using Xunit;
 
 namespace MeshWeaver.Todo.Test;
 
@@ -70,7 +70,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         var buttonResult = await FindButtonByText(stream, layoutGrid, "Auto-Assign");
         var startButton = buttonResult.button;
         var buttonAreaName = buttonResult.areaName;
-        
+
         // If no Auto-Assign button found, look for Start button
         if (startButton == null)
         {
@@ -78,7 +78,7 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
             startButton = buttonResult.button;
             buttonAreaName = buttonResult.areaName;
         }
-        
+
         startButton.Should().NotBeNull("Should find at least one clickable button");
         buttonAreaName.Should().NotBeNull("Button area name should not be null");
         Output.WriteLine($"✅ Step 3: Found clickable button '{startButton.Title}' in area {buttonAreaName}");
@@ -147,13 +147,11 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         // Step 4: Click the individual button and wait for the pending count to change
         ClickButtonAndVerifyResponse(stream, buttonAreaName, startButton);
 
-        // Step 5: Wait for the pending count to decrease by monitoring the area updates
+        // Step 5: Wait for the pending count to decrease by polling with timeout
         var expectedFinalCount = initialPendingCount - 1;
         Output.WriteLine($"⏳ Step 5: Waiting for pending count to change from {initialPendingCount} to {expectedFinalCount}...");
 
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        var count = await GetPendingCount(stream, layoutGrid);
-
+        var count = await WaitForPendingCountChange(stream, reference, initialPendingCount, expectedFinalCount, timeout: 5.Seconds());
 
         // Validate the final state
         count.Should().Be(expectedFinalCount, $"Should have {expectedFinalCount} pending todos after clicking individual start button");
@@ -204,6 +202,43 @@ public class TodoLayoutAreaInteractionTest(ITestOutputHelper output) : TodoDataT
         return initialControl;
     }
 
+
+    /// <summary>
+    /// Waits for the pending count to change to the expected value by polling with timeout
+    /// </summary>
+    private async Task<int> WaitForPendingCountChange(
+        ISynchronizationStream<JsonElement> stream,
+        LayoutAreaReference reference,
+        int initialCount,
+        int expectedCount,
+        TimeSpan timeout)
+    {
+        var startTime = DateTime.UtcNow;
+        var pollInterval = 100; // Poll every 100ms
+
+        while (DateTime.UtcNow - startTime < timeout)
+        {
+            // Get a fresh layout grid to see the latest state
+            var currentLayoutGrid = await GetLayoutGrid(stream, reference);
+            var currentCount = await GetPendingCount(stream, currentLayoutGrid);
+
+            Output.WriteLine($"   Polling... current count: {currentCount}, expected: {expectedCount}");
+
+            if (currentCount == expectedCount)
+            {
+                Output.WriteLine($"✅ Pending count changed to {currentCount} as expected!");
+                return currentCount;
+            }
+
+            await Task.Delay(pollInterval, TestContext.Current.CancellationToken);
+        }
+
+        // Timeout reached, return the last count we got
+        var finalLayoutGrid = await GetLayoutGrid(stream, reference);
+        var finalCount = await GetPendingCount(stream, finalLayoutGrid);
+        Output.WriteLine($"⚠️ Timeout reached after {timeout.TotalSeconds}s. Final count: {finalCount}");
+        return finalCount;
+    }
 
     /// <summary>
     /// Gets the current pending todo count from the layout using Observable pattern
