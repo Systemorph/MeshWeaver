@@ -132,7 +132,6 @@ public static class SharedPortalConfiguration
                     .AddChartJs()
                     .AddGoogleMaps()
                 )
-                .AddInsurancePricing()
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
                             c.AddArticles(new ContentCollectionConfig()

@@ -24,6 +24,13 @@ public record MeshBuilder
             .SelectMany(a => a.GetCustomAttributes<MeshNodeAttribute>())
             .ToArray();
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
+
+        // Install node factories from attributes
+        foreach (var factory in attributes.SelectMany(a => a.NodeFactories))
+        {
+            AddMeshNodeFactory(factory);
+        }
+
         return this;
     }
 
