@@ -147,14 +147,6 @@ public class ContentService : IContentService
         {
             return Task.FromResult<ContentCollection?>(null);
         }
-        finally
-        {
-            // Remove from initialization tasks when complete
-            lock (initializeLock)
-            {
-                collections.Remove(config.Name);
-            }
-        }
     }
 
 

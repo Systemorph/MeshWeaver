@@ -3,7 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -15,7 +14,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.DotNet.Interactive.Utility;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -28,23 +26,16 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)
             .AddKernel()
-            .ConfigureServices(ConfigureArticles)
-            .ConfigureHub(hub => hub.AddContentCollections())
             .AddMeshNodes(TestHubExtensions.Node)
             ;
 
-    protected virtual IServiceCollection ConfigureArticles(IServiceCollection services)
-    {
-        return services
-            .Configure<List<ContentCollectionConfig>>(
-                options => options.Add(new ContentCollectionConfig()
-                {
-                    SourceType = FileSystemContentCollectionFactory.SourceType,
-                    Name = Test,
-                    BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
-                })
-            );
-    }
+    protected virtual MessageHubConfiguration ConfigureContentCollections(MessageHubConfiguration hub) =>
+        hub.AddContentCollections(new ContentCollectionConfig()
+        {
+            SourceType = FileSystemContentCollectionFactory.SourceType,
+            Name = Test,
+            BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
+        });
 
 
     protected string GetAssemblyLocation()
@@ -66,7 +57,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Subject;
-        articleControl.Article.Should().BeOfType<JsonPointerReference>();
+        articleControl.Article.Should().BeOfType<Article>();
         var article = await articleStream
             .GetDataAsync<Article>(GetIdFromDataContext(articleControl))
             .Timeout(40.Seconds());
@@ -91,36 +82,28 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     {
         var client = GetClient();
         var articleStream = client.GetWorkspace().GetStream(
-            new LayoutAreaReference("Catalog")
+            new LayoutAreaReference("Articles") { Id = Test }
             );
 
         var control = await articleStream
-            .GetControlStream("Catalog")
+            .GetControlStream("Articles")
             .Timeout(40.Seconds())
             .FirstAsync(x => x is not null);
 
-        var stack = control.Should().BeOfType<StackControl>().Which;
-        stack.Areas.Should().HaveCount(2);
+        var stack = control.Should().BeOfType<ArticleCatalogControl>().Which;
+        var configs = stack.CollectionConfigurations.Should().BeAssignableTo<IReadOnlyCollection<ContentCollectionConfig>>().Subject;
+        var config = configs.Single();
+        config.Name.Should().Be(Test);
+        config.SourceType.Should().Be(FileSystemContentCollectionFactory.SourceType);
+        config.BasePath.Should().Be(Path.Combine(GetAssemblyLocation(), "Markdown"));
 
-        var articles = await stack.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a => await articleStream.GetControlStream(a.Area.ToString()!).FirstAsync())
-            .ToArrayAsync(CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(5.Seconds()).Token
-                ).Token
-            );
-
-        articles.Should().HaveCount(2);
-        articles.First().Should().BeOfType<ArticleCatalogItemControl>()
-            .Which.Article.Should().BeOfType<Article>()
-            .Which.Name.Should().Be("ReadMe");
     }
 
 
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
-        return base.ConfigureClient(configuration)
+        return ConfigureContentCollections(base.ConfigureClient(configuration))
             .AddArticles();
     }
 
