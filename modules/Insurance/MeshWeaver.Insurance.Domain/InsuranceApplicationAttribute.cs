@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 [assembly: MeshWeaver.Insurance.Domain.InsuranceApplication]
 
@@ -24,5 +25,19 @@ public class InsuranceApplicationAttribute : MeshNodeAttribute
             Address,
             nameof(InsuranceApplicationAttribute),
             InsuranceApplicationExtensions.ConfigureInsuranceApplication)
+    ];
+
+    /// <summary>
+    /// Gets the node factories for dynamic pricing nodes (one per PricingAddress).
+    /// </summary>
+    public override IEnumerable<Func<Address, MeshNode?>> NodeFactories =>
+    [
+        address =>
+            address.Type == PricingAddress.TypeName
+                ? new MeshNode(address.Type, address.Id, address.ToString())
+                {
+                    HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
+                }
+                : null
     ];
 }
