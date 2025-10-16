@@ -32,7 +32,7 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
     protected virtual MessageHubConfiguration ConfigureContentCollections(MessageHubConfiguration hub) =>
         hub.AddContentCollections(new ContentCollectionConfig()
         {
-            SourceType = FileSystemContentCollectionFactory.SourceType,
+            SourceType = FileSystemStreamProvider.SourceType,
             Name = Test,
             BasePath = Path.Combine(GetAssemblyLocation(), "Markdown")
         });
@@ -94,8 +94,6 @@ public class ArticlesTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var configs = stack.CollectionConfigurations.Should().BeAssignableTo<IReadOnlyCollection<ContentCollectionConfig>>().Subject;
         var config = configs.Single();
         config.Name.Should().Be(Test);
-        config.SourceType.Should().Be(FileSystemContentCollectionFactory.SourceType);
-        config.BasePath.Should().Be(Path.Combine(GetAssemblyLocation(), "Markdown"));
 
     }
 

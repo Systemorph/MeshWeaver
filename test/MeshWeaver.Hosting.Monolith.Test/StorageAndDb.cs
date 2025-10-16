@@ -57,7 +57,7 @@ public static class ContainerExtensions
             .WithPortBinding(blobPort, 10000) // Blob storage
             .WithPortBinding(queuePort, 10001) // Queue storage
             .WithPortBinding(tablePort, 10002) // Table storage
-            .WithWaitStrategy(Wait.ForUnixContainer().UntilExternalTcpPortIsAvailable(10000))
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilPortIsAvailable(10000))
             .WithCleanUp(true)
             .Build();
 

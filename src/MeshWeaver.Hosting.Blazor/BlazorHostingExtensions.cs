@@ -149,7 +149,7 @@ public static class BlazorHostingExtensions
                 contentService.AddConfiguration(new ContentCollectionConfig()
                 {
                     Name = collection,
-                    SourceType = HubContentCollectionFactory.SourceType,
+                    SourceType = HubStreamProviderFactory.SourceType,
                     Address = portal.TypeRegistry.MapAddress(addressType, addressId)
                 });
 

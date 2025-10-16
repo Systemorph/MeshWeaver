@@ -4,64 +4,83 @@ using Azure.Storage.Blobs;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
 public static class ArticleConfigurationExtensions
 {
-    public static IServiceCollection AddAzureBlobArticles(
+    public static IServiceCollection AddAzureBlob(
         this IServiceCollection services)
     {
         return services
-            .AddKeyedSingleton<IContentCollectionFactory, AzureBlobContentCollectionFactory>(
-                AzureBlobContentCollectionFactory.SourceType);
+            .AddKeyedSingleton<IStreamProviderFactory, AzureBlobStreamProviderFactory>(
+                AzureBlobStreamProviderFactory.SourceType);
     }
+    public static MessageHubConfiguration AddAzureBlob(
+        this MessageHubConfiguration config) =>
+        config.WithServices(AddAzureBlob);
 
-    public static IServiceCollection AddAzureBlobStreamProviders(this IServiceCollection services, IConfiguration configuration)
-    {
-        var config = configuration.GetSection("StreamProviders").Get<StreamProvidersConfiguration>();
-        if (config?.Providers == null)
-        {
-            return services;
-        }
-
-        foreach (var providerConfig in config.Providers.Where(p => p.ProviderType == "AzureBlob"))
-        {
-            services.AddKeyedSingleton<IStreamProvider>(providerConfig.Name, (sp, key) =>
+    /// <summary>
+    /// Adds an Azure Blob content collection to the message hub configuration
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection</param>
+    /// <param name="containerName">The Azure Blob container name</param>
+    /// <param name="clientName">The name of the Azure client (default: "default")</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddAzureBlobContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        string containerName,
+        string clientName = "default")
+        => configuration
+            .AddContentCollections()
+            .WithServices(services =>
             {
-                var factory = sp.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
+                // Ensure the factory is registered
+                services.AddKeyedScoped<IStreamProviderFactory, AzureBlobStreamProviderFactory>(
+                    AzureBlobStreamProviderFactory.SourceType);
 
-                // Try to get client name from settings, default to "default"
-                var clientName = providerConfig.Settings.GetValueOrDefault("ClientName", "default");
-                var containerName = providerConfig.Settings.GetValueOrDefault("ContainerName", providerConfig.Name);
-                var blobServiceClient = factory.CreateClient(clientName);
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(_ =>
+                {
+                    var config = new ContentCollectionConfig
+                    {
+                        Name = collectionName,
+                        SourceType = AzureBlobStreamProviderFactory.SourceType,
+                        Settings = new Dictionary<string, string>
+                        {
+                            ["ContainerName"] = containerName,
+                            ["ClientName"] = clientName
+                        },
+                        Address = configuration.Address
+                    };
+                    return new ContentCollectionConfigProvider(config);
+                });
 
-                return new AzureBlobStreamProvider(blobServiceClient, containerName);
+                return services;
             });
-        }
-
-        return services;
-    }
 }
 
-public class AzureBlobContentCollectionFactory(IServiceProvider serviceProvider) : IContentCollectionFactory
+public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : IStreamProviderFactory
 {
     public const string SourceType = "AzureBlob";
 
-    public async Task<ContentCollection> CreateAsync(ContentCollectionConfig config, IMessageHub hub, CancellationToken cancellationToken = default)
+    public IStreamProvider Create(Dictionary<string, string>? configuration)
     {
+        if (configuration == null)
+            throw new ArgumentException("Configuration is required for AzureBlob source type");
+
+        if (!configuration.TryGetValue("ContainerName", out var containerName))
+            throw new ArgumentException("ContainerName is required in configuration for AzureBlob source type");
+
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
-        var blobServiceClient = factory.CreateClient(config.BasePath);
 
-        // Container name should be in config or use collection name
-        var containerName = config.Name!;
-        var provider = new AzureBlobStreamProvider(blobServiceClient, containerName);
+        // Try to get client name from settings, default to "default"
+        var clientName = configuration.GetValueOrDefault("ClientName", "default");
+        var blobServiceClient = factory.CreateClient(clientName);
 
-        var collection = new ContentCollection(config, provider, hub);
-        await collection.InitializeAsync(cancellationToken);
-
-        return collection;
+        return new AzureBlobStreamProvider(blobServiceClient, containerName);
     }
 }

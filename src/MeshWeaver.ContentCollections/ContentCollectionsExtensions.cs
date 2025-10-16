@@ -1,14 +1,11 @@
 ﻿using System.Reflection;
 using System.Text;
-using Azure.Storage.Blobs;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Azure;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ContentCollections;
@@ -35,7 +32,7 @@ public static class ContentCollectionsExtensions
             )
             .AddLayout(layout => layout
                 .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
-            .AddContentCollections();
+            .AddContentCollections(configurations);
     }
 
     private static ArticlesConfiguration GetConfiguration(this IServiceProvider serviceProvider, MessageHubConfiguration config, IReadOnlyCollection<ContentCollectionConfig> configurations)
@@ -58,49 +55,19 @@ public static class ContentCollectionsExtensions
         };
     }
 
-    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config, IConfiguration? configuration = null, string? collectionsConfigKey = null)
+    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
     {
         return config
             .WithServices(services =>
             {
-                // Register the ContentCollectionRegistry at hub level
-                // Does NOT delegate to parent - parent delegation is handled by ContentService
-                services.AddScoped<IContentCollectionRegistry>(_ =>
+                if (services.All(d => d.ServiceType != typeof(IContentService)))
                 {
-                    var registry = new ContentCollectionRegistry();
-
-                    // Load collections from configuration if provided
-                    if (configuration != null && !string.IsNullOrEmpty(collectionsConfigKey))
-                    {
-                        var collectionSections = configuration.GetSection(collectionsConfigKey).GetChildren();
-                        foreach (var section in collectionSections)
-                        {
-                            var collectionName = section.Key;
-                            var collectionConfig = section.Get<ContentCollectionConfig>();
-                            if (collectionConfig != null)
-                            {
-                                // Set the name from the section key if not specified
-                                if (string.IsNullOrEmpty(collectionConfig.Name))
-                                    collectionConfig.Name = collectionName;
-
-                                // Set the address to this hub's address
-                                collectionConfig.Address = config.Address;
-
-                                // Register in the registry with lazy provider factory
-                                registry.WithCollection(collectionName, new ContentCollectionRegistration(
-                                    collectionConfig,
-                                    _ => CreateStreamProvider(collectionConfig)
-                                ));
-                            }
-                        }
-                    }
-
-                    return registry;
-                });
-
-                // Register the content service and factories
-                services.AddContentCollections(configuration, collectionsConfigKey);
-
+                    services
+                        .AddScoped<IContentService, ContentService>()
+                        .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
+                        .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
+                        .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
+                }
                 return services;
             })
             .AddLayout(layout => layout
@@ -150,83 +117,7 @@ public static class ContentCollectionsExtensions
     }
 
 
-    public static IServiceCollection AddContentCollections(this IServiceCollection services, IConfiguration? configuration = null, string? collectionsConfigKey = null)
-    {
-        // Only register core services if they haven't been registered yet
-        if (services.All(d => d.ServiceType != typeof(IContentService)))
-        {
-            services
-                .AddScoped<IContentService, ContentService>()
-                .AddKeyedScoped<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
-                .AddKeyedScoped<IContentCollectionFactory, HubContentCollectionFactory>(HubContentCollectionFactory.SourceType)
-                .AddKeyedScoped<IContentCollectionFactory, EmbeddedResourceContentCollectionFactory>(EmbeddedResourceContentCollectionFactory.SourceType)
-                .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>("FileSystem")
-                .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>("EmbeddedResource");
-        }
 
-        // Register stream providers if configuration is provided
-        if (configuration != null)
-        {
-            var config = configuration.GetSection("StreamProviders").Get<StreamProvidersConfiguration>();
-            if (config?.Providers != null)
-            {
-                foreach (var providerConfig in config.Providers)
-                {
-                    services.AddStreamProvider(providerConfig);
-                }
-            }
-
-            // Register content collections from configuration if specified
-            if (!string.IsNullOrEmpty(collectionsConfigKey))
-            {
-                var collectionSections = configuration.GetSection(collectionsConfigKey).GetChildren();
-                foreach (var section in collectionSections)
-                {
-                    var collectionName = section.Key;
-                    var collectionConfig = section.Get<ContentCollectionConfig>();
-                    if (collectionConfig != null)
-                    {
-                        // Set the name from the section key if not specified
-                        if (string.IsNullOrEmpty(collectionConfig.Name))
-                            collectionConfig.Name = collectionName;
-
-                        // Register as a named option or similar pattern if needed
-                        // For now, this just validates the configuration exists
-                    }
-                }
-            }
-        }
-
-        return services;
-    }
-
-    private static void AddStreamProvider(this IServiceCollection services, StreamProviderConfiguration config)
-    {
-        switch (config.ProviderType)
-        {
-            case "FileSystem":
-                services.AddKeyedSingleton<IStreamProvider>(config.Name, (_, _) =>
-                {
-                    var basePath = config.Settings.GetValueOrDefault("BasePath", "");
-                    return new FileSystemStreamProvider(basePath);
-                });
-                break;
-
-            case "AzureBlob":
-                services.AddKeyedSingleton<IStreamProvider>(config.Name, (sp, _) =>
-                {
-                    var factory = sp.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
-                    var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
-                    var containerName = config.Settings.GetValueOrDefault("ContainerName", config.Name);
-                    var blobServiceClient = factory.CreateClient(clientName);
-                    return new AzureBlobStreamProvider(blobServiceClient, containerName);
-                });
-                break;
-
-            default:
-                throw new InvalidOperationException($"Unknown stream provider type: {config.ProviderType}");
-        }
-    }
 
     public static string ConvertToMarkdown(this Article article)
     {

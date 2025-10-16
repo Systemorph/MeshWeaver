@@ -127,7 +127,7 @@ public static class SharedPortalConfiguration
             (TBuilder)builder
                 .ConfigureHub(mesh => mesh
                     .WithType(typeof(PricingAddress), PricingAddress.TypeName)
-                    .AddContentCollections(configuration, "ContentCollections")
+                    .AddContentCollections()
                     .AddAgGrid()
                     .AddChartJs()
                     .AddGoogleMaps()
@@ -137,13 +137,13 @@ public static class SharedPortalConfiguration
                         .WithPortalConfiguration(c =>
                             c.AddArticles(new ContentCollectionConfig()
                             {
-                                SourceType = HubContentCollectionFactory.SourceType,
+                                SourceType = HubStreamProviderFactory.SourceType,
                                 Name = "Documentation",
                                 Address = new ApplicationAddress("Documentation")
                             },
                                 new ContentCollectionConfig()
                                 {
-                                    SourceType = HubContentCollectionFactory.SourceType,
+                                    SourceType = HubStreamProviderFactory.SourceType,
                                     Name = "Todo",
                                     Address = new ApplicationAddress("Todo")
                                 }

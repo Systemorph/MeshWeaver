@@ -55,10 +55,25 @@ public class ContentService : IContentService
 
     private async Task<ContentCollection?> CreateCollectionAsync(ContentCollectionConfig config, CancellationToken cancellationToken)
     {
-        var factory = hub.ServiceProvider.GetKeyedService<IContentCollectionFactory>(config.SourceType);
+        var factory = hub.ServiceProvider.GetKeyedService<IStreamProviderFactory>(config.SourceType);
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
-        return await factory.CreateAsync(config, hub, cancellationToken);
+
+        // Build configuration dictionary
+        var configuration = config.Settings ?? new Dictionary<string, string>();
+        if (config.BasePath != null && !configuration.ContainsKey("BasePath"))
+        {
+            configuration["BasePath"] = config.BasePath;
+        }
+
+        // Create provider using the factory
+        var provider = factory.Create(configuration);
+
+        // Create and initialize the collection
+        var collection = new ContentCollection(config, provider, hub);
+        await collection.InitializeAsync(cancellationToken);
+
+        return collection;
     }
 
 
