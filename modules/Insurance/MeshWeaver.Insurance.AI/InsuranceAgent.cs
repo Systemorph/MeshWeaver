@@ -102,7 +102,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
                 // This matches the logic in InsuranceApplicationExtensions
                 return new ContentCollectionConfig
                 {
-                    SourceType = HubContentCollectionFactory.SourceType,
+                    SourceType = HubStreamProviderFactory.SourceType,
                     Name = $"Submissions-{pricingId}",
                     Address = context.Address,
                     BasePath = subPath

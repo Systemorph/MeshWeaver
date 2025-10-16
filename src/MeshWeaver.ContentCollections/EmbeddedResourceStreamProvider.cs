@@ -9,7 +9,8 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
     private ImmutableDictionary<string, string> resourcePaths = ImmutableDictionary<string, string>.Empty;
     private bool initialized;
 
-    public string ProviderType => "EmbeddedResource";
+    public string ProviderType => SourceType;
+    public const string SourceType = "EmbeddedResource";
 
     private void EnsureInitialized()
     {

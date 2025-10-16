@@ -36,7 +36,7 @@ namespace MeshWeaver.Documentation.Test
                 .InstallAssemblies(DocumentationAssemblyLocation)
                 .ConfigureHub(hub => hub.AddContentCollections(new ContentCollectionConfig()
                 {
-                    SourceType = FileSystemContentCollectionFactory.SourceType,
+                    SourceType = FileSystemStreamProvider.SourceType,
                     Name = "Documentation",
                     BasePath = Path.Combine(Path.GetDirectoryName(GetType().Assembly.Location)!, "Markdown")
                 }))

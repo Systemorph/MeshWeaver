@@ -8,9 +8,11 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class FileSystemStreamProvider(string basePath) : IStreamProvider
 {
+    public const string SourceType = "FileSystem";
+
     private FileSystemWatcher? watcher;
 
-    public string ProviderType => "FileSystem";
+    public string ProviderType => SourceType;
 
     public Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {

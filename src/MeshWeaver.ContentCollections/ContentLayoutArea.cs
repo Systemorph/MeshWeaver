@@ -50,6 +50,8 @@ public static class ContentLayoutArea
 
         var articleService = host.Hub.GetContentService();
         var collection = await articleService.GetCollectionAsync(split[0], ct);
+        if (collection is null)
+            return Observable.Return(new MarkdownControl($"Collection {split[0]} not found."));
         var path = string.Join('/', split.Skip(1));
 
         var contentStream = collection?.GetMarkdown(path);

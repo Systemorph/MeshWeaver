@@ -1,4 +1,4 @@
-namespace MeshWeaver.ContentCollections;
+﻿namespace MeshWeaver.ContentCollections;
 
 /// <summary>
 /// Factory for creating FileSystemStreamProvider instances
@@ -10,4 +10,5 @@ public class FileSystemStreamProviderFactory : IStreamProviderFactory
         var basePath = configuration?.GetValueOrDefault("BasePath") ?? "";
         return new FileSystemStreamProvider(basePath);
     }
+
 }

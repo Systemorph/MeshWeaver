@@ -43,7 +43,7 @@ builder.UseOrleansMeshClient(address, client =>
         // Configure Data Protection to persist keys to PostgreSQL using MeshWeaverDbContext
         services.AddDataProtection().PersistKeysToDbContext<MeshWeaverDbContext>();
         return services
-            .AddAzureBlobArticles();
+            .AddAzureBlob();
     });
 
 var app = builder.Build();
