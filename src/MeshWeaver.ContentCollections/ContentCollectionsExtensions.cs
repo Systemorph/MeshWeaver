@@ -61,7 +61,8 @@ public static class ContentCollectionsExtensions
             .WithServices(AddContentService)
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
-                .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser))
+                .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
+                .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
             .WithHandler<GetContentCollectionRequest>((hub, request) =>
             {
                 var response = GetContentCollectionResponse(hub, request);

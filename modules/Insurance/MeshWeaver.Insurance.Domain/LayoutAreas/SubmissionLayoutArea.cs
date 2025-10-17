@@ -10,11 +10,12 @@ namespace MeshWeaver.Insurance.Domain.LayoutAreas;
 
 /// <summary>
 /// Layout area for displaying submission details for a pricing.
+/// Uses the generic Collection layout area with area:'Collection', Id:'{collection}/{path}'
 /// </summary>
 public static class SubmissionLayoutArea
 {
     /// <summary>
-    /// Renders the submission details for a specific pricing.
+    /// Renders the submission details for a specific pricing using the generic Collection layout area.
     /// </summary>
     public static IObservable<UiControl> Submission(LayoutAreaHost host, RenderingContext _)
     {
@@ -24,9 +25,7 @@ public static class SubmissionLayoutArea
         var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
         var contentService = host.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        // Parse the pricing ID to get the subpath
-
-        // Create the collection configuration
+        // Get the collection configuration
         var collectionConfig = contentService.GetCollectionConfig(localizedCollectionName);
 
         return host.Workspace.GetStream<Pricing>()!
@@ -37,9 +36,9 @@ public static class SubmissionLayoutArea
                 {
                     var fileBrowser = new FileBrowserControl(localizedCollectionName);
                     if (collectionConfig != null)
-                        fileBrowser = fileBrowser.WithCollectionConfiguration(collectionConfig)
-                            .CreatePath()
-                            ;
+                        fileBrowser = fileBrowser
+                            .WithCollectionConfiguration(collectionConfig)
+                            .CreatePath();
 
                     return Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Submission"))
