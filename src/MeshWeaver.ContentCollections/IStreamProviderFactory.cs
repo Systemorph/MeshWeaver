@@ -8,7 +8,7 @@ public interface IStreamProviderFactory
     /// <summary>
     /// Creates a stream provider from the given configuration
     /// </summary>
-    /// <param name="configuration">Provider-specific configuration</param>
+    /// <param name="config">Content collection configuration</param>
     /// <returns>The created stream provider</returns>
-    IStreamProvider Create(Dictionary<string, string>? configuration);
+    IStreamProvider Create(ContentCollectionConfig config);
 }

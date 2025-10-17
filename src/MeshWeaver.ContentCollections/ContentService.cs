@@ -59,15 +59,8 @@ public class ContentService : IContentService
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
 
-        // Build configuration dictionary
-        var configuration = config.Settings ?? new Dictionary<string, string>();
-        if (config.BasePath != null && !configuration.ContainsKey("BasePath"))
-        {
-            configuration["BasePath"] = config.BasePath;
-        }
-
         // Create provider using the factory
-        var provider = factory.Create(configuration);
+        var provider = factory.Create(config);
 
         // Create and initialize the collection
         var collection = new ContentCollection(config, provider, hub);
