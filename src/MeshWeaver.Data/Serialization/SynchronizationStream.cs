@@ -144,18 +144,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Func<Exception, Task> exceptionCallback) =>
         Hub.Post(new UpdateStreamRequest(update, exceptionCallback));
 
-    public void Initialize()
-    {
-        if (Configuration.Initialization is not null)
-            Hub.InvokeAsync(async ct =>
-            {
-                var initialValue = await Configuration.Initialization.Invoke(this, ct);
-                SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
-            }, Configuration.ExceptionCallback);
-    }
-
-
-
     public void OnCompleted()
     {
         if(!Store.IsDisposed)
@@ -216,8 +204,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         if (Configuration.Initialization is not null)
         {
-            startupDeferrable = Hub.Defer(d => d.Message is not ExecutionRequest);
-            Hub.InvokeAsync(Initialize);
+            startupDeferrable = Hub.Defer(d => d.Message is not InitializeStreamRequest);
+            Hub.Post(new InitializeStreamRequest(StreamId));
         }
         else if (Configuration.Deferral is not null)
             startupDeferrable = Hub.Defer(Configuration.Deferral);
@@ -252,6 +240,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
+            }).WithHandler<InitializeStreamRequest>(async (_, request, ct) =>
+            {
+                if (Configuration.Initialization is not null)
+                {
+                    try
+                    {
+                        var initialValue = await Configuration.Initialization.Invoke(this, ct);
+                        SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
+                    }
+                    catch (Exception e)
+                    {
+                        await Configuration.ExceptionCallback.Invoke(e);
+                    }
+                }
+                return request.Processed();
             }).WithHandler<UpdateStreamRequest>(async (_, request, ct) =>
             {
                 var update = request.Message.UpdateAsync;
