@@ -87,6 +87,12 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : 
 public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 
 /// <summary>
+/// Request to initialize a synchronization stream during startup.
+/// Used to defer messages until initialization is complete.
+/// </summary>
+public record InitializeStreamRequest(string StreamId) : StreamMessage(StreamId);
+
+/// <summary>
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>

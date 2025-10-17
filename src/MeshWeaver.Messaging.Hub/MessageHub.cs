@@ -33,9 +33,7 @@ public sealed class MessageHub : IMessageHub
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
-    private readonly ThreadSafeLinkedList<AsyncDelivery> Rules = new();
-    private readonly HashSet<Type> registeredTypes = new();
-    private readonly Lock registeredTypesLock = new();
+    private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
 
@@ -71,6 +69,7 @@ public sealed class MessageHub : IMessageHub
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
+        Register<InitializeHubRequest>(HandleInitialize);
         lock (messageHandlerRegistrationLock)
         {
             foreach (var messageHandler in configuration.MessageHandlers)
@@ -78,7 +77,7 @@ public sealed class MessageHub : IMessageHub
                     messageHandler.MessageType,
                     (d, c) => messageHandler.AsyncDelivery.Invoke(this, d, c)
                 );
-        } 
+        }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
 
@@ -89,6 +88,21 @@ public sealed class MessageHub : IMessageHub
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
     {
         Post(new PingResponse(), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    private async Task<IMessageDelivery> HandleInitialize(IMessageDelivery<InitializeHubRequest> request, CancellationToken cancellationToken)
+    {
+        logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
+
+        var actions = Configuration.BuildupActions;
+        foreach (var buildup in actions)
+            await buildup(this, cancellationToken);
+
+        RunLevel = MessageHubRunLevel.Started;
+        hasStarted.SetResult();
+
+        logger.LogInformation("Message hub {address} fully initialized", Address);
         return request.Processed();
     }
 
@@ -106,10 +120,7 @@ public sealed class MessageHub : IMessageHub
             if (registry!.Action != null)
                 Register(registry.Action, d => registry.Type.IsInstanceOfType(d.Message));
 
-            lock (registeredTypesLock)
-            {
-                registeredTypes.Add(registry.Type);
-            }
+
             WithTypeAndRelatedTypesFor(registry.Type);
         }
     }
@@ -214,15 +225,6 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public bool IsDeferred(IMessageDelivery delivery)
-    {
-        lock (registeredTypesLock)
-        {
-            return (Address.Equals(delivery.Target) || delivery.Target == null)
-                   && registeredTypes.Any(type => type.IsInstanceOfType(delivery.Message));
-        }
-    }
-
     #endregion
 
 
@@ -233,22 +235,22 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        
+
         delivery = await node.Value.Invoke(delivery, cancellationToken);
-        
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+
+        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
 
         if (node.Next == null)
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
         }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return await HandleMessageAsync(delivery, node.Next, cancellationToken);
     }
@@ -258,8 +260,8 @@ public sealed class MessageHub : IMessageHub
     )
     {
         ++Version;
-        
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}", 
+
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Version: {Version}",
             delivery.Message.GetType().Name, Address, delivery.Id, Version);
 
         // Log only important messages during disposal
@@ -269,83 +271,85 @@ public sealed class MessageHub : IMessageHub
                 Address, shutdownReq.RunLevel, shutdownReq.Version, Version - 1);
         }
 
-        if (Rules.First != null)
+        if (rules.First != null)
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}", 
-                delivery.Message.GetType().Name, Address, delivery.Id, Rules.Count);
-            delivery = await HandleMessageAsync(delivery, Rules.First, cancellationToken);
+            logger.LogTrace("MESSAGE_FLOW: HUB_PROCESSING_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId} | RuleCount: {RuleCount}",
+                delivery.Message.GetType().Name, Address, delivery.Id, rules.Count);
+            delivery = await HandleMessageAsync(delivery, rules.First, cancellationToken);
         }
         else
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_NO_RULES | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
         }
 
         var result = FinishDelivery(delivery);
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }
 
     private IMessageDelivery FinishDelivery(IMessageDelivery delivery)
     {
-        logger.LogDebug("FinishDelivery called for {MessageType} (ID: {MessageId}) with state {State} in {Address}", 
+        logger.LogDebug("FinishDelivery called for {MessageType} (ID: {MessageId}) with state {State} in {Address}",
             delivery.Message.GetType().Name, delivery.Id, delivery.State, Address);
-            
+
         if (delivery.State == MessageDeliveryState.Submitted)
         {
             // Check if this is a request that expects a response
             var messageType = delivery.Message.GetType();
             var isRequest = messageType.GetInterfaces()
                 .Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
-                
-            logger.LogDebug("Message {MessageType} (ID: {MessageId}) is request: {IsRequest} in {Address}", 
+
+            logger.LogDebug("Message {MessageType} (ID: {MessageId}) is request: {IsRequest} in {Address}",
                 messageType.Name, delivery.Id, isRequest, Address);
-                
+
             if (isRequest)
             {
                 // Send DeliveryFailure response for unhandled requests
-                var failure = DeliveryFailure.FromException(delivery, 
+                var failure = DeliveryFailure.FromException(delivery,
                     new InvalidOperationException($"No handler found for message type {messageType.Name}"));
                 failure = failure with { ErrorType = ErrorType.NotFound };
-                
-                logger.LogWarning("No handler found for request {MessageType} (ID: {MessageId}) in {Address} - sending DeliveryFailure response", 
+
+                logger.LogWarning("No handler found for request {MessageType} (ID: {MessageId}) in {Address} - sending DeliveryFailure response",
                     messageType.Name, delivery.Id, Address);
-                
+
                 try
                 {
                     Post(failure, o => o.ResponseFor(delivery));
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError(ex, "Failed to post DeliveryFailure message for unhandled request {MessageType} (ID: {MessageId}) in {Address}", 
+                    logger.LogError(ex, "Failed to post DeliveryFailure message for unhandled request {MessageType} (ID: {MessageId}) in {Address}",
                         messageType.Name, delivery.Id, Address);
                 }
-                
+
                 return delivery.Failed($"No handler found for {messageType.Name}");
             }
-            
+
             return delivery.Ignored();
         }
         return delivery;
     }
 
     private readonly TaskCompletionSource hasStarted = new();
-    public Task Started => hasStarted.Task; 
-    
-    
+    public Task Started => hasStarted.Task;
+
+
     async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogDebug("Message hub {address} initializing", Address);
+        logger.LogDebug("Message hub {address} starting initialization", Address);
 
-        var actions = Configuration.BuildupActions;
-        foreach (var buildup in actions)
-            await buildup(this, cancellationToken);
+        // Defer all messages except InitializeHubRequest during initialization
+        using var deferral = Defer(d => d.Message is not InitializeHubRequest);
 
-        RunLevel = MessageHubRunLevel.Started;
-        hasStarted.SetResult();
+        // Post InitializeHubRequest which will execute the buildup actions
+        Post(new InitializeHubRequest());
 
-        logger.LogInformation("Message hub {address} fully initialized", Address);
+        // Wait for initialization to complete
+        await hasStarted.Task;
+
+        logger.LogDebug("Message hub {address} StartAsync completed", Address);
     }
 
 
@@ -464,30 +468,6 @@ public sealed class MessageHub : IMessageHub
         }
     }
 
-    public void RegisterCallback<TMessage, TResponse>(
-        string messageId,
-        SyncDelivery<TResponse> callback,
-        CancellationToken cancellationToken
-    )
-        where TMessage : IRequest<TResponse> =>
-        RegisterCallback<TResponse>(
-            messageId,
-            (d, _) => Task.FromResult(callback(d)),
-            cancellationToken
-        );
-
-    public void RegisterCallback<TResponse>(
-        string messageId,
-        AsyncDelivery<TResponse> callback,
-        CancellationToken cancellationToken
-    )
-    {
-        RegisterCallback(
-            messageId,
-            (d, c) => callback.Invoke((IMessageDelivery<TResponse>)d, c),
-            cancellationToken
-        );
-    }
 
     public Task<IMessageDelivery> RegisterCallback(
         string messageId,
@@ -495,11 +475,6 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     ) => RegisterCallback(messageId, (d, _) => Task.FromResult(callback(d)), cancellationToken);
 
-    // ReSharper disable once UnusedMethodReturnValue.Local
-    public Task<IMessageDelivery> RegisterCallback(
-        string messageId,
-        AsyncDelivery callback
-    ) => RegisterCallback(messageId, callback, CancellationToken.None);
 
     public Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback,
         CancellationToken cancellationToken)
@@ -515,9 +490,9 @@ public sealed class MessageHub : IMessageHub
         // or disposal begins
         var disposalCts = new CancellationTokenSource();
         var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, 
+            cancellationToken,
             disposalCts.Token);
-        
+
         var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
 
         // Register for disposal cancellation
@@ -531,7 +506,7 @@ public sealed class MessageHub : IMessageHub
                 combinedCts.Dispose();
                 return tcs.Task;
             }
-            
+
             // Store the disposal CTS so we can cancel it during disposal
             pendingCallbackCancellations.Add(disposalCts);
         }
@@ -590,15 +565,15 @@ public sealed class MessageHub : IMessageHub
         CancellationToken cancellationToken
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_HANDLE_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        
+
         if (
             !delivery.Properties.TryGetValue(PostOptions.RequestId, out var requestId)
             || requestId.ToString() is not { } requestIdString
         )
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_NO_CALLBACKS | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
         }
@@ -613,18 +588,18 @@ public sealed class MessageHub : IMessageHub
             }
         }
 
-        logger.LogDebug("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}", 
+        logger.LogDebug("Resolving callbacks for | {MessageType} | Hub: {Address} | MessageId: {MessageId} | CallbackCount: {CallbackCount}",
             delivery.Message.GetType().Name, Address, delivery.Id, myCallbacks.Count);
         foreach (var callback in myCallbacks)
         {
-            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 delivery.Message.GetType().Name, Address, delivery.Id);
             delivery = await callback(delivery, cancellationToken);
-            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+            logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACK_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
                 delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
         }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery;
     }
@@ -640,7 +615,7 @@ public sealed class MessageHub : IMessageHub
         if (configure != null)
             options = configure(options);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_POST | {MessageType} | Hub: {Address} | Target: {Target} | Sender: {Sender}",
             typeof(TMessage).Name, Address, options.Target, options.Sender);
 
         // Log only important messages during disposal
@@ -651,20 +626,20 @@ public sealed class MessageHub : IMessageHub
         }
 
         var result = (IMessageDelivery<TMessage>?)messageService.Post(message, options);
-        logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_POST_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             typeof(TMessage).Name, Address, result?.Id, options.Target);
         return result;
     }
 
     public IMessageDelivery DeliverMessage(IMessageDelivery delivery)
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        
+
         var ret = delivery.ChangeState(MessageDeliveryState.Submitted);
         var result = messageService.RouteMessageAsync(ret, default);
-        
-        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}", 
+
+        logger.LogTrace("MESSAGE_FLOW: HUB_DELIVER_MESSAGE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
             delivery.Message.GetType().Name, Address, delivery.Id, result.State);
         return result;
     }
@@ -700,8 +675,8 @@ public sealed class MessageHub : IMessageHub
     private readonly TaskCompletionSource disposingTaskCompletionSource = new();
     private readonly Stopwatch disposalStopwatch = new();
 
-    private readonly Lock locker = new(); 
-    
+    private readonly Lock locker = new();
+
     public void Dispose()
     {
         var totalStopwatch = Stopwatch.StartNew();
@@ -712,9 +687,9 @@ public sealed class MessageHub : IMessageHub
                 logger.LogWarning("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
                 return;
             }
-            logger.LogDebug("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}", 
-                Address,  Version, hostedHubs.Hubs.Count());
-            
+            logger.LogDebug("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}",
+                Address, Version, hostedHubs.Hubs.Count());
+
             disposalStopwatch.Start();
             Disposal = disposingTaskCompletionSource.Task;
 
@@ -724,7 +699,7 @@ public sealed class MessageHub : IMessageHub
         var hostedHubAddresses = hostedHubs.Hubs.Select(h => h.Address.ToString()).ToArray();
         if (hostedHubAddresses.Length > 0)
         {
-            logger.LogDebug("Hub {address} has {count} hosted hubs to dispose: [{hubAddresses}]", 
+            logger.LogDebug("Hub {address} has {count} hosted hubs to dispose: [{hubAddresses}]",
                 Address, hostedHubAddresses.Length, string.Join(", ", hostedHubAddresses));
         }
         else
@@ -732,7 +707,7 @@ public sealed class MessageHub : IMessageHub
             logger.LogInformation("Hub {address} has no hosted hubs to dispose", Address);
         }
 
-        logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)", 
+        logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
     }
@@ -764,19 +739,19 @@ public sealed class MessageHub : IMessageHub
             {
                 logger.LogDebug("Executing dispose action {actionNumber} for hub {address}", disposeActionCount, Address);
                 await configurationDisposeAction.Invoke(this, ct);
-                logger.LogDebug("Completed dispose action {actionNumber} for hub {address} in {elapsed}ms", 
+                logger.LogDebug("Completed dispose action {actionNumber} for hub {address} in {elapsed}ms",
                     disposeActionCount, Address, actionStopwatch.ElapsedMilliseconds);
             }
             catch (Exception e)
             {
-                logger.LogError("Error in dispose action {actionNumber} for hub {address} after {elapsed}ms: {exception}", 
+                logger.LogError("Error in dispose action {actionNumber} for hub {address} after {elapsed}ms: {exception}",
                     disposeActionCount, Address, actionStopwatch.ElapsedMilliseconds, e);
                 // Continue with other dispose actions
             }
         }
         if (disposeActionCount > 0)
         {
-            logger.LogDebug("Completed {actionCount} dispose actions for hub {address} in {elapsed}ms", 
+            logger.LogDebug("Completed {actionCount} dispose actions for hub {address} in {elapsed}ms",
                 disposeActionCount, Address, disposeActionsStopwatch.ElapsedMilliseconds);
         }
         if (request.Message.Version != Version - 1)
@@ -832,8 +807,8 @@ public sealed class MessageHub : IMessageHub
                         Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     }
                 });
-                    
-                    
+
+
                 break;
             case MessageHubRunLevel.ShutDown:
                 var shutdownStopwatch = Stopwatch.StartNew();
@@ -843,12 +818,12 @@ public sealed class MessageHub : IMessageHub
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
                         {
-                            logger.LogWarning("ShutDown already processed for hub {Address}, ignoring (phase time: {elapsed}ms)", 
+                            logger.LogWarning("ShutDown already processed for hub {Address}, ignoring (phase time: {elapsed}ms)",
                                 Address, phaseStopwatch.ElapsedMilliseconds);
                             return request.Ignored();
                         }
 
-                        logger.LogDebug("STARTING ShutDown for hub {address} with parent {parent} (total disposal time so far: {totalElapsed}ms)", 
+                        logger.LogDebug("STARTING ShutDown for hub {address} with parent {parent} (total disposal time so far: {totalElapsed}ms)",
                             Address, Configuration.ParentHub?.Address, disposalStopwatch.ElapsedMilliseconds);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
@@ -859,25 +834,25 @@ public sealed class MessageHub : IMessageHub
                     var messageServiceStopwatch = Stopwatch.StartNew();
                     logger.LogDebug("Disposing message service for hub {address}", Address);
                     await messageService.DisposeAsync();
-                    logger.LogDebug("Message service disposed successfully for hub {address} in {elapsed}ms", 
+                    logger.LogDebug("Message service disposed successfully for hub {address} in {elapsed}ms",
                         Address, messageServiceStopwatch.ElapsedMilliseconds);
 
                     try
                     {
                         disposingTaskCompletionSource.TrySetResult();
-                        logger.LogInformation("Disposal completed successfully for hub {address} with parent {parent} in {elapsed}ms (total disposal time: {totalElapsed}ms)", 
+                        logger.LogInformation("Disposal completed successfully for hub {address} with parent {parent} in {elapsed}ms (total disposal time: {totalElapsed}ms)",
                             Address, Configuration.ParentHub?.Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                     }
                     catch (InvalidOperationException)
                     {
                         // Task completion source was already set, ignore
-                        logger.LogDebug("Disposal task completion source was already set for hub {address} (elapsed: {elapsed}ms)", 
+                        logger.LogDebug("Disposal task completion source was already set for hub {address} (elapsed: {elapsed}ms)",
                             Address, shutdownStopwatch.ElapsedMilliseconds);
                     }
                 }
                 catch (Exception e)
                 {
-                    logger.LogError("Error during shutdown of hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}", 
+                    logger.LogError("Error during shutdown of hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
                         Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds, e);
                     try
                     {
@@ -894,7 +869,7 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.Dead;
                     disposalStopwatch.Stop();
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
-                    logger.LogInformation("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms", 
+                    logger.LogInformation("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms",
                         Address, Configuration.ParentHub?.Address, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                 }
 
@@ -980,8 +955,8 @@ public sealed class MessageHub : IMessageHub
                     ? action(md, c)
                     : Task.FromResult(d)
         );
-        Rules.AddLast(node);
-        return new AnonymousDisposable(() => Rules.Remove(node));
+        rules.AddLast(node);
+        return new AnonymousDisposable(() => rules.Remove(node));
     }
 
     public IDisposable Register(SyncDelivery delivery) =>
@@ -990,8 +965,8 @@ public sealed class MessageHub : IMessageHub
     public IDisposable Register(AsyncDelivery delivery)
     {
         var node = new LinkedListNode<AsyncDelivery>(delivery);
-        Rules.AddFirst(node);
-        return new AnonymousDisposable(() => Rules.Remove(node));
+        rules.AddFirst(node);
+        return new AnonymousDisposable(() => rules.Remove(node));
     }
 
     public IDisposable RegisterInherited<TMessage>(
@@ -1013,10 +988,6 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(Type tMessage, AsyncDelivery action)
     {
-        lock (registeredTypesLock)
-        {
-            registeredTypes.Add(tMessage);
-        }
         WithTypeAndRelatedTypesFor(tMessage);
         return Register(action, d => tMessage.IsInstanceOfType(d.Message));
     }
@@ -1027,10 +998,10 @@ public sealed class MessageHub : IMessageHub
             (IMessageDelivery delivery, CancellationToken cancellationToken)
             => WrapFilter(delivery, action, filter, cancellationToken);
         var node = new LinkedListNode<AsyncDelivery>(Rule);
-        Rules.AddFirst(node);
+        rules.AddFirst(node);
         return new AnonymousDisposable(() =>
         {
-            Rules.Remove(node);
+            rules.Remove(node);
         });
     }
 
@@ -1063,10 +1034,6 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Register(Type tMessage, AsyncDelivery action, DeliveryFilter filter)
     {
-        lock (registeredTypesLock)
-        {
-            registeredTypes.Add(tMessage);
-        }
         WithTypeAndRelatedTypesFor(tMessage);
         return Register(
             (d, c) => action(d, c),
