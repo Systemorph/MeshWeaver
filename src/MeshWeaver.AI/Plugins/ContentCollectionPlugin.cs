@@ -12,6 +12,11 @@ namespace MeshWeaver.AI.Plugins;
 /// <summary>
 /// Plugin for managing documents and files in content collections.
 /// Provides functions for listing, loading, saving, and deleting documents.
+///
+/// When working with agent context, the typical URL format is:
+/// area: 'Content', Id: '{collection}/{path}'
+///
+/// The plugin automatically parses collection and path from this format.
 /// </summary>
 public class ContentCollectionPlugin
 {
@@ -34,6 +39,7 @@ public class ContentCollectionPlugin
 
     /// <summary>
     /// Gets the default collection name from config, or returns the provided name if not null.
+    /// Parses the context URL in format 'area: Content, Id: {collection}/{path}' to extract collection name.
     /// Uses ContextToConfigMap if available to dynamically create collection config from agent context.
     /// </summary>
     private string? GetCollectionName(string? collectionName)
@@ -41,20 +47,59 @@ public class ContentCollectionPlugin
         if (!string.IsNullOrEmpty(collectionName))
             return collectionName;
 
-        // Try to get collection from ContextToConfigMap if available
-        if (config.ContextToConfigMap != null && chat.Context != null)
+        // Try to parse collection from chat context URL format: Content/{collection}/{path}
+        if (chat.Context != null)
         {
-            var contextConfig = config.ContextToConfigMap(chat.Context);
-            if (contextConfig != null)
+            var contextId = chat.Context.ToString();
+            if (!string.IsNullOrEmpty(contextId))
             {
-                // Add the dynamically created config to IContentService
-                contentService.AddConfiguration(contextConfig);
-                return contextConfig.Name;
+                var parts = contextId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    var collectionFromContext = parts[0];
+
+                    // Try to get collection from ContextToConfigMap if available
+                    if (config.ContextToConfigMap != null)
+                    {
+                        var contextConfig = config.ContextToConfigMap(chat.Context);
+                        if (contextConfig != null)
+                        {
+                            // Add the dynamically created config to IContentService
+                            contentService.AddConfiguration(contextConfig);
+                            return contextConfig.Name;
+                        }
+                    }
+
+                    return collectionFromContext;
+                }
             }
         }
 
         // Fall back to the first collection from config as default
         return config.Collections.FirstOrDefault()?.Name;
+    }
+
+    /// <summary>
+    /// Parses the path from the chat context URL format: Content/{collection}/{path}
+    /// Returns null if no path is present in the context.
+    /// </summary>
+    private string? GetPathFromContext()
+    {
+        if (chat.Context == null)
+            return null;
+
+        var contextId = chat.Context.ToString();
+        if (string.IsNullOrEmpty(contextId))
+            return null;
+
+        var parts = contextId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 1)
+        {
+            // Skip the collection name (first part) and join the rest as path
+            return string.Join('/', parts.Skip(1));
+        }
+
+        return null;
     }
 
     [KernelFunction]
@@ -87,10 +132,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Lists all files in a specified collection at a given path.")]
+    [Description("Lists all files in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> ListFiles(
-        [Description("The name of the collection to list files from")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root.")] string path = "/",
+        [Description("The name of the collection to list files from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -103,24 +148,25 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            var files = await collection.GetFilesAsync(path);
+            var resolvedPath = path ?? GetPathFromContext() ?? "/";
+            var files = await collection.GetFilesAsync(resolvedPath);
             if (!files.Any())
-                return $"No files found at path '{path}' in collection '{resolvedCollectionName}'.";
+                return $"No files found at path '{resolvedPath}' in collection '{resolvedCollectionName}'.";
 
             return string.Join("\n", files.Select(f =>
                 $"- {f.Name} (Path: {f.Path}, Modified: {f.LastModified:yyyy-MM-dd HH:mm:ss})"));
         }
         catch (Exception ex)
         {
-            return $"Error listing files in collection at path '{path}': {ex.Message}";
+            return $"Error listing files in collection at path '{path ?? GetPathFromContext() ?? "/"}': {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Lists all folders in a specified collection at a given path.")]
+    [Description("Lists all folders in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> ListFolders(
-        [Description("The name of the collection to list folders from")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root.")] string path = "/",
+        [Description("The name of the collection to list folders from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -133,24 +179,25 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            var folders = await collection.GetFoldersAsync(path);
+            var resolvedPath = path ?? GetPathFromContext() ?? "/";
+            var folders = await collection.GetFoldersAsync(resolvedPath);
             if (!folders.Any())
-                return $"No folders found at path '{path}' in collection '{resolvedCollectionName}'.";
+                return $"No folders found at path '{resolvedPath}' in collection '{resolvedCollectionName}'.";
 
             return string.Join("\n", folders.Select(f =>
                 $"- {f.Name} (Path: {f.Path})"));
         }
         catch (Exception ex)
         {
-            return $"Error listing folders in collection at path '{path}': {ex.Message}";
+            return $"Error listing folders in collection at path '{path ?? GetPathFromContext() ?? "/"}': {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Lists all files and folders in a specified collection at a given path.")]
+    [Description("Lists all files and folders in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> ListCollectionItems(
-        [Description("The name of the collection to list items from")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root.")] string path = "/",
+        [Description("The name of the collection to list items from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -163,9 +210,10 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            var items = await collection.GetCollectionItemsAsync(path);
+            var resolvedPath = path ?? GetPathFromContext() ?? "/";
+            var items = await collection.GetCollectionItemsAsync(resolvedPath);
             if (!items.Any())
-                return $"No items found at path '{path}' in collection '{resolvedCollectionName}'.";
+                return $"No items found at path '{resolvedPath}' in collection '{resolvedCollectionName}'.";
 
             var folders = items.OfType<FolderItem>()
                 .Select(f => $"[DIR]  {f.Name} (Path: {f.Path})");
@@ -176,26 +224,30 @@ public class ContentCollectionPlugin
         }
         catch (Exception ex)
         {
-            return $"Error listing items in collection at path '{path}': {ex.Message}";
+            return $"Error listing items in collection at path '{path ?? GetPathFromContext() ?? "/"}': {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Gets the content of a specific document from a collection.")]
+    [Description("Gets the content of a specific document from a collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> GetDocument(
-        [Description("The path to the document within the collection")] string documentPath,
-        [Description("The name of the collection containing the document")] string? collectionName = null,
+        [Description("The path to the document within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? documentPath = null,
+        [Description("The name of the collection containing the document. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
+        var resolvedDocumentPath = documentPath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedDocumentPath))
+            return "No document path specified and no path found in context.";
+
         try
         {
-            var stream = await contentService.GetContentAsync(resolvedCollectionName, documentPath, cancellationToken);
+            var stream = await contentService.GetContentAsync(resolvedCollectionName, resolvedDocumentPath, cancellationToken);
             if (stream == null)
-                return $"Document '{documentPath}' not found in collection '{resolvedCollectionName}'.";
+                return $"Document '{resolvedDocumentPath}' not found in collection '{resolvedCollectionName}'.";
 
             await using (stream)
             {
@@ -206,20 +258,20 @@ public class ContentCollectionPlugin
         }
         catch (FileNotFoundException)
         {
-            return $"Document '{documentPath}' not found in collection '{resolvedCollectionName}'.";
+            return $"Document '{resolvedDocumentPath}' not found in collection '{resolvedCollectionName}'.";
         }
         catch (Exception ex)
         {
-            return $"Error reading document '{documentPath}' from collection: {ex.Message}";
+            return $"Error reading document '{resolvedDocumentPath}' from collection: {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Saves content as a document to a specified collection.")]
+    [Description("Saves content as a document to a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
     public async Task<string> SaveDocument(
         [Description("The path where the document should be saved within the collection")] string documentPath,
         [Description("The content to save to the document")] string content,
-        [Description("The name of the collection to save the document to")] string? collectionName = null,
+        [Description("The name of the collection to save the document to. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -250,15 +302,19 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Deletes a file from a specified collection.")]
+    [Description("Deletes a file from a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> DeleteFile(
-        [Description("The path to the file to delete within the collection")] string filePath,
-        [Description("The name of the collection containing the file")] string? collectionName = null,
+        [Description("The path to the file to delete within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? filePath = null,
+        [Description("The name of the collection containing the file. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
+
+        var resolvedFilePath = filePath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedFilePath))
+            return "No file path specified and no path found in context.";
 
         try
         {
@@ -266,24 +322,24 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            await collection.DeleteFileAsync(filePath);
-            return $"File '{filePath}' successfully deleted from collection '{resolvedCollectionName}'.";
+            await collection.DeleteFileAsync(resolvedFilePath);
+            return $"File '{resolvedFilePath}' successfully deleted from collection '{resolvedCollectionName}'.";
         }
         catch (FileNotFoundException)
         {
-            return $"File '{filePath}' not found in collection '{resolvedCollectionName}'.";
+            return $"File '{resolvedFilePath}' not found in collection '{resolvedCollectionName}'.";
         }
         catch (Exception ex)
         {
-            return $"Error deleting file '{filePath}' from collection: {ex.Message}";
+            return $"Error deleting file '{resolvedFilePath}' from collection: {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Creates a new folder in a specified collection.")]
+    [Description("Creates a new folder in a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
     public async Task<string> CreateFolder(
         [Description("The path of the folder to create within the collection")] string folderPath,
-        [Description("The name of the collection to create the folder in")] string? collectionName = null,
+        [Description("The name of the collection to create the folder in. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -306,15 +362,19 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Deletes a folder from a specified collection.")]
+    [Description("Deletes a folder from a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> DeleteFolder(
-        [Description("The path to the folder to delete within the collection")] string folderPath,
-        [Description("The name of the collection containing the folder")] string? collectionName = null,
+        [Description("The path to the folder to delete within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? folderPath = null,
+        [Description("The name of the collection containing the folder. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
+
+        var resolvedFolderPath = folderPath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedFolderPath))
+            return "No folder path specified and no path found in context.";
 
         try
         {
@@ -322,24 +382,24 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            await collection.DeleteFolderAsync(folderPath);
-            return $"Folder '{folderPath}' successfully deleted from collection '{resolvedCollectionName}'.";
+            await collection.DeleteFolderAsync(resolvedFolderPath);
+            return $"Folder '{resolvedFolderPath}' successfully deleted from collection '{resolvedCollectionName}'.";
         }
         catch (DirectoryNotFoundException)
         {
-            return $"Folder '{folderPath}' not found in collection '{resolvedCollectionName}'.";
+            return $"Folder '{resolvedFolderPath}' not found in collection '{resolvedCollectionName}'.";
         }
         catch (Exception ex)
         {
-            return $"Error deleting folder '{folderPath}' from collection: {ex.Message}";
+            return $"Error deleting folder '{resolvedFolderPath}' from collection: {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Gets the article catalog for a collection with filtering options.")]
+    [Description("Gets the article catalog for a collection with filtering options. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
     public async Task<string> GetArticleCatalog(
         [Description("Optional: Maximum number of articles to return")] int? maxResults = null,
-        [Description("The name of the collection to get articles from")] string? collectionName = null,
+        [Description("The name of the collection to get articles from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -372,28 +432,32 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets a specific article with its metadata and content from a collection.")]
+    [Description("Gets a specific article with its metadata and content from a collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and article ID are automatically parsed from the context.")]
     public async Task<string> GetArticle(
-        [Description("The article identifier (path without .md extension)")] string articleId,
-        [Description("The name of the collection containing the article")] string? collectionName = null,
+        [Description("The article identifier (path without .md extension). Can be inferred from context URL 'Content/{collection}/{path}'.")] string? articleId = null,
+        [Description("The name of the collection containing the article. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
 
+        var resolvedArticleId = articleId ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedArticleId))
+            return "No article ID specified and no path found in context.";
+
         try
         {
-            var articleObservable = await contentService.GetArticleAsync(resolvedCollectionName, articleId, cancellationToken);
+            var articleObservable = await contentService.GetArticleAsync(resolvedCollectionName, resolvedArticleId, cancellationToken);
 
             // Get the current value from the observable
             var article = await articleObservable.FirstOrDefaultAsync();
 
             if (article == null)
-                return $"Article '{articleId}' not found in collection '{resolvedCollectionName}'.";
+                return $"Article '{resolvedArticleId}' not found in collection '{resolvedCollectionName}'.";
 
             // Try to get the markdown content as well
-            var documentPath = articleId.EndsWith(".md") ? articleId : $"{articleId}.md";
+            var documentPath = resolvedArticleId.EndsWith(".md") ? resolvedArticleId : $"{resolvedArticleId}.md";
             var contentStream = await contentService.GetContentAsync(resolvedCollectionName, documentPath, cancellationToken);
 
             string content = "Content not available";
@@ -410,20 +474,24 @@ public class ContentCollectionPlugin
         }
         catch (Exception ex)
         {
-            return $"Error getting article '{articleId}' from collection: {ex.Message}";
+            return $"Error getting article '{resolvedArticleId}' from collection: {ex.Message}";
         }
     }
 
     [KernelFunction]
-    [Description("Gets the MIME content type for a file based on its extension.")]
+    [Description("Gets the MIME content type for a file based on its extension. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
     public async Task<string> GetContentType(
-        [Description("The path to the file")] string filePath,
-        [Description("The name of the collection")] string? collectionName = null,
+        [Description("The path to the file. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? filePath = null,
+        [Description("The name of the collection. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
+
+        var resolvedFilePath = filePath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedFilePath))
+            return "No file path specified and no path found in context.";
 
         try
         {
@@ -431,12 +499,12 @@ public class ContentCollectionPlugin
             if (collection == null)
                 return $"Collection '{resolvedCollectionName}' not found.";
 
-            var contentType = collection.GetContentType(filePath);
-            return $"Content type for '{filePath}': {contentType}";
+            var contentType = collection.GetContentType(resolvedFilePath);
+            return $"Content type for '{resolvedFilePath}': {contentType}";
         }
         catch (Exception ex)
         {
-            return $"Error getting content type for '{filePath}': {ex.Message}";
+            return $"Error getting content type for '{resolvedFilePath}': {ex.Message}";
         }
     }
 
