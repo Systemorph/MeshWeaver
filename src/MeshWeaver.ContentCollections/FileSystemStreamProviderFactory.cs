@@ -5,9 +5,9 @@
 /// </summary>
 public class FileSystemStreamProviderFactory : IStreamProviderFactory
 {
-    public IStreamProvider Create(Dictionary<string, string>? configuration)
+    public IStreamProvider Create(ContentCollectionConfig config)
     {
-        var basePath = configuration?.GetValueOrDefault("BasePath") ?? "";
+        var basePath = config.BasePath ?? config.Settings?.GetValueOrDefault("BasePath") ?? "";
         return new FileSystemStreamProvider(basePath);
     }
 

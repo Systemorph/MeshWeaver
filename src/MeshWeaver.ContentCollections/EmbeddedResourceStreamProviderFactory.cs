@@ -5,11 +5,11 @@ namespace MeshWeaver.ContentCollections;
 /// </summary>
 public class EmbeddedResourceStreamProviderFactory : IStreamProviderFactory
 {
-    public IStreamProvider Create(Dictionary<string, string>? configuration)
+    public IStreamProvider Create(ContentCollectionConfig config)
     {
-        var assemblyName = configuration?.GetValueOrDefault("AssemblyName")
+        var assemblyName = config.Settings?.GetValueOrDefault("AssemblyName")
             ?? throw new ArgumentException("AssemblyName required for EmbeddedResource");
-        var resourcePrefix = configuration?.GetValueOrDefault("ResourcePrefix")
+        var resourcePrefix = config.Settings?.GetValueOrDefault("ResourcePrefix")
             ?? throw new ArgumentException("ResourcePrefix required for EmbeddedResource");
 
         var assembly = AppDomain.CurrentDomain.GetAssemblies()

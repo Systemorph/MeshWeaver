@@ -67,18 +67,18 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
 {
     public const string SourceType = "AzureBlob";
 
-    public IStreamProvider Create(Dictionary<string, string>? configuration)
+    public IStreamProvider Create(ContentCollectionConfig config)
     {
-        if (configuration == null)
-            throw new ArgumentException("Configuration is required for AzureBlob source type");
+        if (config.Settings == null)
+            throw new ArgumentException("Settings are required for AzureBlob source type");
 
-        if (!configuration.TryGetValue("ContainerName", out var containerName))
-            throw new ArgumentException("ContainerName is required in configuration for AzureBlob source type");
+        if (!config.Settings.TryGetValue("ContainerName", out var containerName))
+            throw new ArgumentException("ContainerName is required in settings for AzureBlob source type");
 
         var factory = serviceProvider.GetRequiredService<IAzureClientFactory<BlobServiceClient>>();
 
         // Try to get client name from settings, default to "default"
-        var clientName = configuration.GetValueOrDefault("ClientName", "default");
+        var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
         var blobServiceClient = factory.CreateClient(clientName);
 
         return new AzureBlobStreamProvider(blobServiceClient, containerName);
