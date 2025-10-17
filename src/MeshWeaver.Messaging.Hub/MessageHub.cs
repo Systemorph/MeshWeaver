@@ -103,6 +103,7 @@ public sealed class MessageHub : IMessageHub
         hasStarted.SetResult();
 
         logger.LogInformation("Message hub {address} fully initialized", Address);
+        request.Message.Deferral.Dispose();
         return request.Processed();
     }
 
@@ -336,21 +337,6 @@ public sealed class MessageHub : IMessageHub
     public Task Started => hasStarted.Task;
 
 
-    async Task IMessageHub.StartAsync(CancellationToken cancellationToken)
-    {
-        logger.LogDebug("Message hub {address} starting initialization", Address);
-
-        // Defer all messages except InitializeHubRequest during initialization
-        using var deferral = Defer(d => d.Message is not InitializeHubRequest);
-
-        // Post InitializeHubRequest which will execute the buildup actions
-        Post(new InitializeHubRequest());
-
-        // Wait for initialization to complete
-        await hasStarted.Task;
-
-        logger.LogDebug("Message hub {address} StartAsync completed", Address);
-    }
 
 
     public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(

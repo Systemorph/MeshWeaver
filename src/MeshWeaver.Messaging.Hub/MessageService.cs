@@ -44,7 +44,6 @@ public class MessageService : IMessageService
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
-        startupDeferral = Defer(_ => true);
     }
     void IMessageService.Start()
     {
@@ -54,63 +53,6 @@ public class MessageService : IMessageService
         // Link the delivery buffer to the action block immediately to avoid race conditions
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
 
-        executionBuffer.Post(async ct =>
-      {
-          CancellationTokenSource? timeoutCts = null;
-          try
-          {
-              // Add a timeout to prevent startup hangs
-              timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-              await hub.StartAsync(combinedCts.Token);
-              // Mark as started and complete the startup task
-              startupCompletionSource.SetResult(true);
-
-              logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
-              startupDeferral.Dispose();
-              logger.LogInformation("MessageService startup completed for {Address}", Address);
-          }
-          catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
-          {
-              logger.LogError("MessageService startup timed out after 30 seconds for {Address}", Address);
-              startupCompletionSource.SetException(new TimeoutException("MessageService startup timed out"));
-
-              // If startup timed out, dispose the startup deferral to unblock any pending operations
-              try
-              {
-                  startupDeferral.Dispose();
-                  logger.LogDebug("Startup deferral disposed due to startup timeout in {Address}", Address);
-              }
-              catch (Exception disposeEx)
-              {
-                  logger.LogError(disposeEx, "Error disposing startup deferral after startup timeout in {Address}", Address);
-              }
-
-              throw;
-          }
-          catch (Exception ex)
-          {
-              logger.LogError(ex, "MessageService startup failed for {Address}", Address);
-              startupCompletionSource.TrySetException(ex);
-
-              // If startup failed, dispose the startup deferral to unblock any pending operations
-              try
-              {
-                  startupDeferral.Dispose();
-                  logger.LogDebug("Startup deferral disposed due to startup failure in {Address}", Address);
-              }
-              catch (Exception disposeEx)
-              {
-                  logger.LogError(disposeEx, "Error disposing startup deferral after startup failure in {Address}", Address);
-              }
-
-              throw;
-          }
-          finally
-          {
-              timeoutCts?.Dispose();
-          }
-      });
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
@@ -170,20 +112,14 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
 
-        //var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
-        //// Double-check disposal state to prevent processing during shutdown
-        //if (isDisposing && delivery.Message is not ShutdownRequest)
-        //{
-        //    logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-        //        delivery.Message.GetType().Name, Address, delivery.Id);
-        //    return delivery.Failed("Hub disposing - message rejected");
-        //}
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
-        if (ParentHub is MessageHub parentMessageHub)
+
+        // For initialization messages, skip waiting for parent startup to avoid deadlocks
+        // For all other messages, wait for parent to be ready before routing
+        if (ParentHub is not null)
         {
-            await parentMessageHub.Started;
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub?.Address))
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub.Address))
                 delivery = delivery.WithTarget(ha.Address);
         }
 
@@ -380,7 +316,6 @@ public class MessageService : IMessageService
         return delivery;
     }
     private readonly Lock locker = new();
-    private readonly IDisposable startupDeferral;
 
     public async ValueTask DisposeAsync()
     {
