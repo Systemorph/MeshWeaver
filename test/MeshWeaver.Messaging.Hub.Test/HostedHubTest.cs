@@ -38,7 +38,7 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
                 );
         var response = await subHub
             .AwaitResponse(new Ping(), o => o.WithTarget(new HostAddress())
-                , new CancellationTokenSource(500.Seconds()).Token
+                , new CancellationTokenSource(5.Seconds()).Token
                 );
         response.Message.Should().BeOfType<Pong>();
     }
