@@ -176,6 +176,8 @@ public class EmbeddedResourceStreamProvider(Assembly assembly, string basePath) 
 
     public Task CreateFolderAsync(string folderPath)
     {
+        if (string.IsNullOrEmpty(folderPath) || folderPath == "/")
+            return Task.CompletedTask;
         throw new NotSupportedException("Embedded resource collections are read-only");
     }
 
