@@ -13,10 +13,23 @@ namespace MeshWeaver.AI.Plugins;
 /// Plugin for managing documents and files in content collections.
 /// Provides functions for listing, loading, saving, and deleting documents.
 ///
-/// When working with agent context, the typical URL format is:
-/// area: 'Content', Id: '{collection}/{path}'
+/// Context Resolution:
+/// - When LayoutAreaReference.Area is "Content" or "Collection"
+/// - LayoutAreaReference.Id format: "{collection}/{path}"
+/// - The plugin automatically parses collection and path from the Id
 ///
-/// The plugin automatically parses collection and path from this format.
+/// Examples:
+/// 1. Viewing "Slip.md" in "Submissions-Microsoft-2026" collection:
+///    - Area: "Content" or "Collection"
+///    - Id: "Submissions-Microsoft-2026/Slip.md"
+///    - Parsed collection: "Submissions-Microsoft-2026"
+///    - Parsed path: "Slip.md"
+///
+/// 2. Viewing root folder of "Documents" collection:
+///    - Area: "Collection"
+///    - Id: "Documents/"
+///    - Parsed collection: "Documents"
+///    - Parsed path: "/" (root)
 /// </summary>
 public class ContentCollectionPlugin
 {
@@ -38,40 +51,44 @@ public class ContentCollectionPlugin
     }
 
     /// <summary>
-    /// Gets the default collection name from config, or returns the provided name if not null.
-    /// Parses the context URL in format 'area: Content, Id: {collection}/{path}' to extract collection name.
-    /// Uses ContextToConfigMap if available to dynamically create collection config from agent context.
+    /// Gets the collection name from the provided parameter or parses from LayoutAreaReference.
+    /// The collection is resolved in this order:
+    /// 1. Explicit collectionName parameter if provided
+    /// 2. Parsed from LayoutAreaReference.Id (format: "{collection}/{path}") ONLY when Area is "Content" or "Collection"
+    /// 3. If area is NOT "Content" or "Collection", returns null to allow resolution via ContextToConfigMap or config
     /// </summary>
     private string? GetCollectionName(string? collectionName)
     {
         if (!string.IsNullOrEmpty(collectionName))
             return collectionName;
 
-        // Try to parse collection from chat context URL format: Content/{collection}/{path}
-        if (chat.Context != null)
+        // Only parse from LayoutAreaReference.Id when area is "Content" or "Collection"
+        if (chat.Context?.LayoutArea != null)
         {
-            var contextId = chat.Context.ToString();
-            if (!string.IsNullOrEmpty(contextId))
+            var area = chat.Context.LayoutArea.Area?.ToString();
+            if (area == "Content" || area == "Collection")
             {
-                var parts = contextId.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length > 0)
+                var id = chat.Context.LayoutArea.Id?.ToString();
+                if (!string.IsNullOrEmpty(id))
                 {
-                    var collectionFromContext = parts[0];
-
-                    // Try to get collection from ContextToConfigMap if available
-                    if (config.ContextToConfigMap != null)
+                    var parts = id.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length > 0)
                     {
-                        var contextConfig = config.ContextToConfigMap(chat.Context);
-                        if (contextConfig != null)
-                        {
-                            // Add the dynamically created config to IContentService
-                            contentService.AddConfiguration(contextConfig);
-                            return contextConfig.Name;
-                        }
+                        return parts[0]; // First part is the collection name
                     }
-
-                    return collectionFromContext;
                 }
+            }
+        }
+
+        // If not from Content/Collection area, try ContextToConfigMap
+        if (config.ContextToConfigMap != null && chat.Context != null)
+        {
+            var contextConfig = config.ContextToConfigMap(chat.Context);
+            if (contextConfig != null)
+            {
+                // Add the dynamically created config to IContentService
+                contentService.AddConfiguration(contextConfig);
+                return contextConfig.Name;
             }
         }
 
@@ -80,19 +97,26 @@ public class ContentCollectionPlugin
     }
 
     /// <summary>
-    /// Parses the path from the chat context URL format: Content/{collection}/{path}
-    /// Returns null if no path is present in the context.
+    /// Gets the path from the agent's LayoutAreaReference.Id.
+    /// When LayoutAreaReference.Area is "Content" or "Collection", the Id format is "{collection}/{path}".
+    /// This method extracts and returns the path portion.
+    /// For example, "Submissions-Microsoft-2026/Slip.md" returns "Slip.md".
+    /// Returns null if no context is available.
     /// </summary>
     private string? GetPathFromContext()
     {
-        if (chat.Context == null)
+        if (chat.Context?.LayoutArea == null)
             return null;
 
-        var contextId = chat.Context.ToString();
-        if (string.IsNullOrEmpty(contextId))
+        var area = chat.Context.LayoutArea.Area?.ToString();
+        if (area != "Content" && area != "Collection")
             return null;
 
-        var parts = contextId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var id = chat.Context.LayoutArea.Id?.ToString();
+        if (string.IsNullOrEmpty(id))
+            return null;
+
+        var parts = id.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length > 1)
         {
             // Skip the collection name (first part) and join the rest as path
@@ -132,10 +156,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Lists all files in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Lists all files in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListFiles(
-        [Description("The name of the collection to list files from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -163,10 +187,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Lists all folders in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Lists all folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListFolders(
-        [Description("The name of the collection to list folders from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -194,10 +218,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Lists all files and folders in a specified collection at a given path. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Lists all files and folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListCollectionItems(
-        [Description("The name of the collection to list items from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
-        [Description("The directory path within the collection. Use '/' for root. Can be inferred from context.")] string? path = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -229,10 +253,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets the content of a specific document from a collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Gets the content of a specific document from a collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetDocument(
-        [Description("The path to the document within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? documentPath = null,
-        [Description("The name of the collection containing the document. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Document path in collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/', e.g., 'Slip.md' from 'Submissions-Microsoft-2026/Slip.md'); else null.")] string? documentPath = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -267,11 +291,11 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Saves content as a document to a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
+    [Description("Saves content as a document to a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> SaveDocument(
         [Description("The path where the document should be saved within the collection")] string documentPath,
         [Description("The content to save to the document")] string content,
-        [Description("The name of the collection to save the document to. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -302,10 +326,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Deletes a file from a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Deletes a file from a specified collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> DeleteFile(
-        [Description("The path to the file to delete within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? filePath = null,
-        [Description("The name of the collection containing the file. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("File path to delete. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -336,10 +360,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Creates a new folder in a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
+    [Description("Creates a new folder in a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> CreateFolder(
         [Description("The path of the folder to create within the collection")] string folderPath,
-        [Description("The name of the collection to create the folder in. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -362,10 +386,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Deletes a folder from a specified collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Deletes a folder from a specified collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> DeleteFolder(
-        [Description("The path to the folder to delete within the collection. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? folderPath = null,
-        [Description("The name of the collection containing the folder. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Folder path to delete. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? folderPath = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -396,10 +420,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets the article catalog for a collection with filtering options. When used with context area 'Content' and Id '{collection}/{path}', the collection can be automatically parsed from the context.")]
+    [Description("Gets the article catalog for a collection with filtering options. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetArticleCatalog(
         [Description("Optional: Maximum number of articles to return")] int? maxResults = null,
-        [Description("The name of the collection to get articles from. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -432,10 +456,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets a specific article with its metadata and content from a collection. When used with context area 'Content' and Id '{collection}/{path}', the collection and article ID are automatically parsed from the context.")]
+    [Description("Gets a specific article with its metadata and content from a collection. If collection/articleId not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetArticle(
-        [Description("The article identifier (path without .md extension). Can be inferred from context URL 'Content/{collection}/{path}'.")] string? articleId = null,
-        [Description("The name of the collection containing the article. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("Article identifier (path without .md). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? articleId = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
@@ -479,10 +503,10 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets the MIME content type for a file based on its extension. When used with context area 'Content' and Id '{collection}/{path}', the collection and path are automatically parsed from the context.")]
+    [Description("Gets the MIME content type for a file based on its extension. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetContentType(
-        [Description("The path to the file. Can be inferred from context URL 'Content/{collection}/{path}'.")] string? filePath = null,
-        [Description("The name of the collection. If not provided, parsed from context URL 'Content/{collection}/{path}'.")] string? collectionName = null,
+        [Description("File path. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
+        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);
