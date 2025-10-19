@@ -4,17 +4,18 @@ namespace MeshWeaver.Messaging;
 
 public record DeferralItem : IAsyncDisposable, IDisposable
 {
-    private readonly SyncDelivery syncDelivery;
+    private readonly AsyncDelivery asyncDelivery;
     private readonly SyncDelivery failure;
-    private readonly ActionBlock<IMessageDelivery> executionBuffer;
-    private readonly BufferBlock<IMessageDelivery> deferral = new();
+    private readonly ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> executionBuffer;
+    private readonly BufferBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)> deferral = new();
+    private readonly CancellationTokenSource cancellationTokenSource = new();
     private bool isReleased;
 
-    public DeferralItem(Predicate<IMessageDelivery> Filter, SyncDelivery syncDelivery, SyncDelivery failure)
+    public DeferralItem(Predicate<IMessageDelivery> Filter, AsyncDelivery asyncDelivery, SyncDelivery failure)
     {
-        this.syncDelivery = syncDelivery;
+        this.asyncDelivery = asyncDelivery;
         this.failure = failure;
-        executionBuffer = new ActionBlock<IMessageDelivery>(d => syncDelivery(d));
+        executionBuffer = new ActionBlock<(IMessageDelivery Delivery, CancellationToken CancellationToken)>(async tup => await asyncDelivery(tup.Delivery, tup.CancellationToken));
         this.Filter = Filter;
     }
 
@@ -23,21 +24,22 @@ public record DeferralItem : IAsyncDisposable, IDisposable
     )
         => failure.Invoke(delivery);
 
-    public IMessageDelivery DeliverMessage(
-        IMessageDelivery delivery
+    public async Task<IMessageDelivery> DeliverMessage(
+        IMessageDelivery delivery,
+        CancellationToken cancellationToken
     )
     {
         if (Filter(delivery))
         {
-            deferral.Post(delivery);
+            deferral.Post((delivery, cancellationToken));
             return null!;
         }
 
         try
         {
             // TODO V10: Add logging here. (30.07.2024, Roland Bürgi)
-            var ret = syncDelivery.Invoke(delivery);
-            if(ret is null)
+            var ret = await asyncDelivery.Invoke(delivery, cancellationToken);
+            if (ret is null)
                 return null!;
             if (ret.State == MessageDeliveryState.Failed)
                 return failure(ret);
@@ -53,7 +55,7 @@ public record DeferralItem : IAsyncDisposable, IDisposable
     }
 
     private bool isLinked;
-    private readonly object locker = new object();
+    private readonly object locker = new();
 
     public void Dispose()
     {

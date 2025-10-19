@@ -16,9 +16,11 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public IMessageHub? GetHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
         where TAddress : Address
     {
+        if (messageHubs.TryGetValue(address, out var hub))
+            return hub;
         lock (locker)
         {
-            if (messageHubs.TryGetValue(address, out var hub))
+            if (messageHubs.TryGetValue(address, out hub))
                 return hub;
 
             if (IsDisposing)

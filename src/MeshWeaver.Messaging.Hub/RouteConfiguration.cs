@@ -12,7 +12,7 @@ public record RouteConfiguration(IMessageHub Hub)
     public RouteConfiguration WithHandler(AsyncDelivery handler) => this with { Handlers = Handlers.Add(handler) };
 
     public RouteConfiguration RouteAddressToHub<TAddress>(Func<TAddress, IMessageHub?> hubFactory)
-        where TAddress:Address=>
+        where TAddress : Address =>
         RouteAddress<TAddress>((routedAddress, d) =>
         {
             // Check if the parent hub is disposing before attempting to create/route to hosted hubs
@@ -28,7 +28,7 @@ public record RouteConfiguration(IMessageHub Hub)
                 );
                 return d.Failed("Parent hub disposing");
             }
-            
+
             var hub = hubFactory.Invoke(routedAddress);
             if (hub == null)
                 return d.NotFound();
@@ -36,12 +36,12 @@ public record RouteConfiguration(IMessageHub Hub)
             return d.Forwarded();
         });
 
-    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler) 
-        where TAddress:Address=>
+    public RouteConfiguration RouteAddress<TAddress>(SyncRouteDelivery<TAddress> handler)
+        where TAddress : Address =>
         RouteAddress<TAddress>((routedAddress, d, _) => Task.FromResult(handler(routedAddress, d)));
 
     public RouteConfiguration RouteAddress<TAddress>(AsyncRouteDelivery<TAddress> handler)
-    where TAddress:Address
+    where TAddress : Address
         => this with
         {
             Handlers = Handlers.Add(async (delivery, cancellationToken) =>
@@ -65,7 +65,7 @@ public record RouteConfiguration(IMessageHub Hub)
 
     public RouteConfiguration RouteAddressToHostedHub<TAddress>(Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         where TAddress : Address
-        => RouteAddressToHub<TAddress>(a => 
+        => RouteAddressToHub<TAddress>(a =>
         {
             // During disposal, only try to get existing hubs, don't create new ones
             var creation = Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs ? HostedHubCreation.Never : HostedHubCreation.Always;
