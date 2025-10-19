@@ -82,7 +82,7 @@ public sealed class MessageHub : IMessageHub
         Register(HandleCallbacks);
 
         messageService.Start();
-
+        Post(new InitializeHubRequest(Defer(x => x.Message is not InitializeHubRequest)));
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)

@@ -9,6 +9,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MeshWeaver.Messaging.Hub", 
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{CE943C7E-66DA-4F21-A97D-7897AA426F34}"
 	ProjectSection(SolutionItems) = preProject
+		test\appsettings.json = test\appsettings.json
 		test\Directory.Build.props = test\Directory.Build.props
 		test\Directory.Packages.props = test\Directory.Packages.props
 	EndProjectSection
