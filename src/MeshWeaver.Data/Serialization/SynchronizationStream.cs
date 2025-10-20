@@ -146,7 +146,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnCompleted()
     {
-        if(!Store.IsDisposed)
+        if (!Store.IsDisposed)
             Store.OnCompleted();
     }
 
@@ -184,7 +184,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (Host.RunLevel > MessageHubRunLevel.Started)
             throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream for {Reference}.");
 
-        
+
         this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
@@ -268,7 +268,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            });
+            }).WithStartupDeferral(x => x.Message is not InitializeStreamRequest && x.Message is not ExecutionRequest);
 
     }
 
@@ -276,7 +276,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
-        if(Hub.Disposal is not null)
+        if (Hub.Disposal is not null)
             return;
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
@@ -340,7 +340,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         Store.OnCompleted();
         Store.Dispose();
-        if(Hub.RunLevel <= MessageHubRunLevel.Started)
+        if (Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
@@ -381,7 +381,7 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
-    
+
     internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)

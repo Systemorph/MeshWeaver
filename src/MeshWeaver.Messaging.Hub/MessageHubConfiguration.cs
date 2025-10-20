@@ -1,9 +1,9 @@
 ﻿using System.Collections.Immutable;
 using MeshWeaver.Domain;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Messaging;
 
@@ -11,7 +11,7 @@ public record MessageHubConfiguration
 {
     public Address Address { get; }
     protected readonly IServiceProvider? ParentServiceProvider;
-    public MessageHubConfiguration(IServiceProvider? parentServiceProvider,  Address address)
+    public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
     {
         Address = address;
         ParentServiceProvider = parentServiceProvider;
@@ -19,6 +19,11 @@ public record MessageHubConfiguration
         PostPipeline = [UserServicePostPipeline];
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
+
+    internal Predicate<IMessageDelivery> StartupDeferral { get; init; } = x => x.Message is InitializeHubRequest;
+
+    public MessageHubConfiguration WithStartupDeferral(Predicate<IMessageDelivery> startupDeferral)
+        => this with { StartupDeferral = startupDeferral };
 
     public IMessageHub? ParentHub
     {
@@ -138,7 +143,7 @@ public record MessageHubConfiguration
         {
             if (ServiceProvider != null!)
                 return; // Already created
-                
+
             ServiceProvider = ConfigureServices(parent)
                 .SetupModules(ParentServiceProvider);
         }
