@@ -43,7 +43,7 @@ public class MessageService : IMessageService
             new(x => x.Invoke());
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, ct) => deferralContainer.DeliverMessage(d, ct)), (p, c) => c.Invoke(p)).AsyncDelivery;
+        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
     }
     void IMessageService.Start()
     {
@@ -106,12 +106,10 @@ public class MessageService : IMessageService
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
-
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
-        logger.LogTrace(
-            "MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+        logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
 
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -121,8 +119,7 @@ public class MessageService : IMessageService
         // For all other messages, wait for parent to be ready before routing
         if (ParentHub is not null)
         {
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) &&
-                ha.Host.Equals(ParentHub.Address))
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub.Address))
                 delivery = delivery.WithTarget(ha.Address);
         }
 
@@ -130,13 +127,34 @@ public class MessageService : IMessageService
         // Add current address to routing path
         delivery = delivery.AddToRoutingPath(hub.Address);
 
-        logger.LogTrace(
-            "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            name, Address, delivery.Id);
-        return await deliveryPipeline.Invoke(delivery, cancellationToken);
+        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        if (isOnTarget)
+        {
+            delivery = UnpackIfNecessary(delivery);
+            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                name, Address, delivery.Id);
 
+            if (delivery.State == MessageDeliveryState.Failed)
+                return ReportFailure(delivery);
+        }
+
+
+
+        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+            name, Address, delivery.Id, delivery.Target);
+        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+            name, Address, delivery.Id, delivery.State);
+
+        if (isOnTarget)
+        {
+            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                name, Address, delivery.Id);
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+        }
+
+        return delivery;
     }
-
 
     private static string GetMessageType(IMessageDelivery delivery)
     {
@@ -155,7 +173,7 @@ public class MessageService : IMessageService
     }
 
     private readonly CancellationTokenSource cancellationTokenSource = new();
-    private Task<IMessageDelivery> ScheduleExecution(IMessageDelivery delivery, CancellationToken cancellationToken)
+    private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
     {
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
@@ -177,33 +195,7 @@ public class MessageService : IMessageService
                 if (!isDisposing || delivery.Message is ShutdownRequest)
                 {
 
-                    var name = GetMessageType(delivery);
-                    var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
-                    if (isOnTarget)
-                    {
-                        delivery = UnpackIfNecessary(delivery);
-                        logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                            name, Address, delivery.Id);
-
-                        if (delivery.State == MessageDeliveryState.Failed)
-                        {
-                            ReportFailure(delivery);
-                            return;
-                        }
-                    }
-
-                    logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-                        name, Address, delivery.Id, delivery.Target);
-                    delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-                    logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-                        name, Address, delivery.Id, delivery.State);
-
-                    if (delivery.State != MessageDeliveryState.Submitted)
-                        return;
-                    if (isOnTarget)
-                        delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
-                    if (delivery.State == MessageDeliveryState.Failed)
-                        ReportFailure(delivery);
+                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                 }
                 else
                 {
@@ -248,7 +240,7 @@ public class MessageService : IMessageService
         });
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        return Task.FromResult(delivery.Forwarded(hub.Address));
+        return delivery.Forwarded(hub.Address);
     }
 
 
