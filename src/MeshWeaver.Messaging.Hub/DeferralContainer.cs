@@ -6,7 +6,7 @@ public class DeferralContainer : IAsyncDisposable
 {
     private readonly LinkedList<DeferralItem> deferralChain = new();
 
-    public DeferralContainer(AsyncDelivery asyncDelivery, SyncDelivery failure)
+    public DeferralContainer(SyncDelivery asyncDelivery, SyncDelivery failure)
     {
         deferralChain.AddFirst(new DeferralItem(_ => false, asyncDelivery, failure));
     }
@@ -20,8 +20,8 @@ public class DeferralContainer : IAsyncDisposable
         return new AnonymousDisposable(deliveryLink.Release);
     }
 
-    public Task<IMessageDelivery> DeliverMessage(IMessageDelivery delivery, CancellationToken cancellationToken) =>
-        deferralChain.First!.Value.DeliverMessage(delivery, cancellationToken);
+    public IMessageDelivery DeliverMessage(IMessageDelivery delivery) =>
+        deferralChain.First!.Value.DeliverMessage(delivery);
 
     public async ValueTask DisposeAsync()
     {
