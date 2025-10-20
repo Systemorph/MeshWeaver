@@ -113,7 +113,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (startupDeferrable is not null)
         {
-            logger.LogDebug("Disposing startup deferrable");
+            logger.LogDebug("Disposing startup deferrable for Stream {StreamId}", StreamId);
             startupDeferrable.Dispose();
             startupDeferrable = null;
         }
@@ -165,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        Hub.InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
+        Hub.Post(new SetCurrentRequest(value));
     }
 
     public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
@@ -198,7 +198,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
 
-
+        startupDeferrable = Hub.Defer(StartupDeferrable);
 
 
 
@@ -246,13 +246,26 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            }).WithStartupDeferral(x =>
-                x.Message is not InitializeHubRequest
-                && x.Message is not ExecutionRequest &&
-                x.Message is not DataChangedEvent { ChangeType: ChangeType.Full })
+            }).WithHandler<SetCurrentRequest>((_, request) =>
+            {
+                try
+                {
+                    SetCurrent(request.Message.Value);
+                }
+                catch (Exception ex)
+                {
+                    throw new SynchronizationException("An error occurred during synchronization", ex);
+                }
+                return request.Processed();
+            }).WithStartupDeferral(StartupDeferrable)
             .WithInitialization((_, ct) => InitializeAsync(ct));
 
     }
+
+    private static readonly Predicate<IMessageDelivery> StartupDeferrable = x =>
+        x.Message is not InitializeHubRequest
+        && x.Message is not SetCurrentRequest &&
+        x.Message is not DataChangedEvent { ChangeType: ChangeType.Full };
 
     private async Task InitializeAsync(CancellationToken ct)
     {
@@ -353,6 +366,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     }
 
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
+
+    public record SetCurrentRequest(ChangeItem<TStream> Value);
 
 }
 
