@@ -1,14 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -315,7 +311,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     }    /// <summary>
          /// Tests that multiple clients can synchronize data changes across the workspace
          /// </summary>
-    [Fact(Timeout = 30000)] // 30 second timeout to prevent hanging
+    [Fact]
     public async Task Workspace_MultipleClients_ShouldSynchronizeData()
     {
         // arrange
