@@ -189,26 +189,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
 
-        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
-
-
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
-
-        logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
-
+        logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
+        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
 
-        if (Configuration.Initialization is not null)
-        {
-            startupDeferrable = Hub.Defer(d => d.Message is not InitializeStreamRequest);
-            Hub.Post(new InitializeStreamRequest(StreamId));
-        }
-        else if (Configuration.Deferral is not null)
-            startupDeferrable = Hub.Defer(Configuration.Deferral);
+
+
+
+
     }
 
     private IDisposable? startupDeferrable;
@@ -240,21 +233,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
-            }).WithHandler<InitializeStreamRequest>(async (_, request, ct) =>
-            {
-                if (Configuration.Initialization is not null)
-                {
-                    try
-                    {
-                        var initialValue = await Configuration.Initialization.Invoke(this, ct);
-                        SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
-                    }
-                    catch (Exception e)
-                    {
-                        await Configuration.ExceptionCallback.Invoke(e);
-                    }
-                }
-                return request.Processed();
             }).WithHandler<UpdateStreamRequest>(async (_, request, ct) =>
             {
                 var update = request.Message.UpdateAsync;
@@ -268,8 +246,21 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            }).WithStartupDeferral(x => x.Message is not InitializeStreamRequest && x.Message is not ExecutionRequest);
+            }).WithStartupDeferral(x =>
+                x.Message is not InitializeHubRequest
+                && x.Message is not ExecutionRequest &&
+                x.Message is not DataChangedEvent { ChangeType: ChangeType.Full })
+            .WithInitialization((_, ct) => InitializeAsync(ct));
 
+    }
+
+    private async Task InitializeAsync(CancellationToken ct)
+    {
+        if (Configuration.Initialization is null)
+            return;
+
+        var init = await Configuration.Initialization(this, ct);
+        SetCurrent(new ChangeItem<TStream>(init, StreamId, Host.Version));
     }
 
 
@@ -374,8 +365,6 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal bool NullReturn { get; init; }
 
-    internal Predicate<IMessageDelivery>? Deferral { get; init; }
-
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
 
@@ -392,7 +381,4 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
-
-    public StreamConfiguration<TStream> WithDeferral(Predicate<IMessageDelivery> deferral)
-        => this with { Deferral = deferral };
 }
