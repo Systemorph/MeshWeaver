@@ -28,7 +28,7 @@ public static class WorkspaceOperations
                     activity?.LogError($"{validationResult.ErrorMessage}", scopes);
                     var message =
                         $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
-                    
+
                     // Log validation errors (activityId: {activityId})
                     workspace.Hub.ServiceProvider.GetService<ILogger>()?.LogWarning("Validation error in activityId {ActivityId}: {Message}", activity?.Id, message);
                 }
@@ -50,7 +50,7 @@ public static class WorkspaceOperations
                     };
                     var message =
                         $"{string.Join(", ", validationResult.MemberNames)} invalid: {validationResult.ErrorMessage!}";
-                    
+
                     // Log validation errors (activityId: {activityId})
                     activity?.LogError($"Validation error in {message}", scopes);
                 }
@@ -71,7 +71,7 @@ public static class WorkspaceOperations
                         new("members", validationResult.MemberNames.ToArray())
                     };
                     var message = string.Format("{0} invalid: {1}", string.Join(", ", validationResult.MemberNames), validationResult.ErrorMessage!);
-                    
+
                     // Log validation errors (activityId: {activityId})
                     activity?.LogError($"Validation error in activityId {message}", scopes);
                 }
@@ -126,7 +126,7 @@ public static class WorkspaceOperations
             // Start sub-activity for data update
             var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
 
-            
+
             stream!.Update(store =>
             {
                 // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
@@ -136,7 +136,7 @@ public static class WorkspaceOperations
 
                     var updates = group.GroupBy(x =>
                             (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
-                        .Aggregate(new EntityStoreAndUpdates(store!, [], change.ChangedBy),
+                        .Aggregate(new EntityStoreAndUpdates(store ?? new(), [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
                                 if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
@@ -149,8 +149,8 @@ public static class WorkspaceOperations
                                         };
                                     var updated = change.Options?.Snapshot == true
                                         ? instances
-                                        : storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName)
-                                            !.Merge(instances);
+                                        : (storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName) ?? new())
+                                            .Merge(instances);
                                     var updates =
                                         storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
                                             .ToArray();
