@@ -1,5 +1,4 @@
-﻿using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
+﻿using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Kernel;
 
@@ -20,4 +19,3 @@ public record SubmitCodeRequest(string Code)
 public record SubscribeKernelEventsRequest;
 public record UnsubscribeKernelEventsRequest;
 
-public record RoutingRequest(IMessageDelivery OriginalRequest);

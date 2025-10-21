@@ -82,7 +82,7 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
                 )
             )
             .AddMeshTypes()
-            .WithRoutes(routes => routes.WithHandler((d, ct) => RaiseRouteRequest(routes.Hub, d, ct)))
+            .WithRoutes(routes => routes.WithHandler((d, ct) => Task.FromResult(RaiseRouteRequest(routes.Hub, d))))
             .WithInitialization((hub, _) =>
             {
                 Initialize(hub);
@@ -98,13 +98,12 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
 
     }
 
-    private Task<IMessageDelivery> RaiseRouteRequest(IMessageHub kernelHub, IMessageDelivery request,
-        CancellationToken cancellationToken)
+    private IMessageDelivery RaiseRouteRequest(IMessageHub kernelHub, IMessageDelivery request)
     {
         if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
-            return Task.FromResult(request);
+            return request;
         kernelHub.Post(new RoutingRequest(request));
-        return Task.FromResult(request.Forwarded());
+        return request.Forwarded();
     }
 
 
