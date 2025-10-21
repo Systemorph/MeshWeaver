@@ -3,7 +3,6 @@ using MeshWeaver.Data;
 using MeshWeaver.DataStructures;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -11,24 +10,8 @@ namespace MeshWeaver.Import.Implementation;
 
 public class ImportManager
 {
-    private record ImportAddress() : Address("import", Guid.NewGuid().AsString());
     public ImportConfiguration Configuration { get; }
 
-    private IMessageHub? importHub;
-    private IMessageHub ImportHub
-    {
-        get
-        {
-            if (importHub == null)
-            {
-                var logger = Hub.ServiceProvider.GetService<ILogger<ImportManager>>();
-                logger?.LogDebug("ImportManager lazy-initializing import hub for address {ImportAddress}", new ImportAddress());
-                importHub = Hub.GetHostedHub(new ImportAddress());
-                logger?.LogDebug("ImportManager import hub initialized: {ImportHub}", importHub?.Address);
-            }
-            return importHub!;
-        }
-    }
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
 
@@ -45,25 +28,16 @@ public class ImportManager
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
-    public IMessageDelivery HandleImportRequest(IMessageDelivery<ImportRequest> request)
-   {
+    public Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+    {
         // Create cancellation token with timeout if specified in the import request
         var cancellationTokenSource = request.Message.Timeout.HasValue
             ? new CancellationTokenSource(request.Message.Timeout.Value)
             : new CancellationTokenSource();
 
-        ImportHub.InvokeAsync(ct =>
-        {
-            // Combine the provided cancellation token with our timeout token
-            using var combined = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationTokenSource.Token);
-            return DoImport(request, combined.Token);
-        }, ex =>
-        {
-            FailImport(ex, request);
-            return Task.CompletedTask;
-        });
-
-        return request.Processed();
+        // Combine the provided cancellation token with our timeout token
+        using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationTokenSource.Token);
+        return DoImport(request, combined.Token);
     }
 
     private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
@@ -77,7 +51,7 @@ public class ImportManager
 
         var activity = new Activity(ActivityCategory.Import, Hub);
         activity.LogError(message.ToString());
-        
+
         activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
@@ -106,7 +80,7 @@ public class ImportManager
     }
 
 
-    private async Task ImportImpl(IMessageDelivery<ImportRequest> request,  CancellationToken cancellationToken)
+    private async Task ImportImpl(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
         try
@@ -129,12 +103,10 @@ public class ImportManager
                     request
                 );
                 activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
 
             });
 
-            activity.Complete(l =>
-                Hub.Post(new ImportResponse(Hub.Version, l), o => o.ResponseFor(request))
-            );
         }
         catch (Exception e)
         {
