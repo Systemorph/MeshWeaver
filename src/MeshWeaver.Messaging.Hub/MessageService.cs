@@ -109,7 +109,7 @@ public class MessageService : IMessageService
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
-        logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+        logger.LogDebug("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
 
         if (delivery.State != MessageDeliveryState.Submitted)
