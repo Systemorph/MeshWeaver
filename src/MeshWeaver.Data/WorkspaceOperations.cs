@@ -135,82 +135,82 @@ public static class WorkspaceOperations
 
 
             // Use async update to allow proper retry logic if state changed during computation
-            stream!.Update(async (store, ct) =>
-            {
-                logger.LogDebug("Starting update of {Stream} with {StreamId}", stream.StreamIdentity, stream.StreamId);
-                // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
-                subActivity?.LogInformation("Updating Data Stream {Stream}", stream!.StreamIdentity);
-                try
-                {
-                    // Get the current store state (might be different from initial 'store' parameter if updates occurred)
-                    var currentStore = store ?? new EntityStore();
-
-                    var updates = group.GroupBy(x =>
-                            (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
-                        .Aggregate(new EntityStoreAndUpdates(currentStore, [], change.ChangedBy),
-                            (storeAndUpdates, g) =>
-                            {
-                                if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
-                                {
-                                    var instances =
-                                        new InstanceCollection(g.Select(x => x.Instance)
-                                            .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
-                                        {
-                                            GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
-                                        };
-                                    var updated = change.Options?.Snapshot == true
-                                        ? instances
-                                        : (storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName) ?? new())
-                                            .Merge(instances);
-                                    var updates =
-                                        storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
-                                            .ToArray();
-                                    return new EntityStoreAndUpdates(
-                                        storeAndUpdates.Store.WithCollection(g.Key.TypeSource.CollectionName, updated),
-                                        storeAndUpdates.Updates.Concat(updates), change.ChangedBy);
-
-                                }
-
-                                if (g.Key.Op == OperationType.Remove)
-                                {
-                                    var instances = g.Select(i => (i.Instance,
-                                        Key: g.Key.TypeSource!.TypeDefinition.GetKey(i.Instance))).ToArray();
-                                    var newStore = storeAndUpdates.Store.Update(g.Key.TypeSource!.CollectionName,
-                                        c => c.Remove(instances.Select(x => x.Key)));
-                                    return new EntityStoreAndUpdates(newStore,
-                                        storeAndUpdates.Updates.Concat(instances.Select(i =>
-                                            new EntityUpdate(g.Key.TypeSource!.CollectionName, i.Key, null)
-                                            {
-                                                OldValue = i.Instance
-                                            })), change.ChangedBy ?? stream.StreamId);
-                                }
-
-                                throw new NotSupportedException($"Operation {g.Key.Op} not supported");
-                            });
-                    subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
-                    var logger = stream.Host.ServiceProvider.GetRequiredService<ILoggerFactory>()
-                        .CreateLogger(typeof(WorkspaceOperations));
-                    logger?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
-                    // Complete sub-activity - this would need proper sub-activity tracking to work correctly
-                    return stream.ApplyChanges(updates);
-                }
-                catch (Exception ex)
-                {
-                    subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
-                        ex.Message);
-                    return null;
-                }
-                finally
-                {
-                    subActivity?.Complete();
-                }
-            },
+            stream!.Update((store, _) => Task.FromResult(UpdateDataChangeRequest(store, change, logger, stream, subActivity, group)),
             ex => UpdateFailed(request, ex)
                 );
         }
     }
 
+    private static ChangeItem<EntityStore>? UpdateDataChangeRequest(EntityStore? store, DataChangeRequest change, ILogger logger, ISynchronizationStream<EntityStore> stream, Activity? subActivity,
+        IGrouping<(IDataSource? DataSource, object? Partition), (object Instance, OperationType Op, ITypeSource?
+            TypeSource, IDataSource? DataSource)> group)
+    {
+        logger.LogDebug("Starting update of {Stream} with {StreamId}", stream.StreamIdentity, stream.StreamId);
+        // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
+        subActivity?.LogInformation("Updating Data Stream {Stream}", stream!.StreamIdentity);
+        try
+        {
+            // Get the current store state (might be different from initial 'store' parameter if updates occurred)
+            var currentStore = store ?? new EntityStore();
 
+            var updates = group.GroupBy(x =>
+                    (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
+                .Aggregate(new EntityStoreAndUpdates(currentStore, [], change.ChangedBy),
+                    (storeAndUpdates, g) =>
+                    {
+                        if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
+                        {
+                            var instances =
+                                new InstanceCollection(g.Select(x => x.Instance)
+                                    .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
+                                {
+                                    GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
+                                };
+                            var updated = change.Options?.Snapshot == true
+                                ? instances
+                                : (storeAndUpdates.Store.GetCollection(g.Key.TypeSource.CollectionName) ?? new())
+                                .Merge(instances);
+                            var updates =
+                                storeAndUpdates.Store.ComputeChanges(g.Key.TypeSource.CollectionName, updated)
+                                    .ToArray();
+                            return new EntityStoreAndUpdates(
+                                storeAndUpdates.Store.WithCollection(g.Key.TypeSource.CollectionName, updated),
+                                storeAndUpdates.Updates.Concat(updates), change.ChangedBy);
+
+                        }
+
+                        if (g.Key.Op == OperationType.Remove)
+                        {
+                            var instances = g.Select(i => (i.Instance,
+                                Key: g.Key.TypeSource!.TypeDefinition.GetKey(i.Instance))).ToArray();
+                            var newStore = storeAndUpdates.Store.Update(g.Key.TypeSource!.CollectionName,
+                                c => c.Remove(instances.Select(x => x.Key)));
+                            return new EntityStoreAndUpdates(newStore,
+                                storeAndUpdates.Updates.Concat(instances.Select(i =>
+                                    new EntityUpdate(g.Key.TypeSource!.CollectionName, i.Key, null)
+                                    {
+                                        OldValue = i.Instance
+                                    })), change.ChangedBy ?? stream.StreamId);
+                        }
+
+                        throw new NotSupportedException($"Operation {g.Key.Op} not supported");
+                    });
+            subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
+            logger?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
+            // Complete sub-activity - this would need proper sub-activity tracking to work correctly
+            return stream.ApplyChanges(updates);
+        }
+        catch (Exception ex)
+        {
+            subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
+                ex.Message);
+            return null;
+        }
+        finally
+        {
+            subActivity?.Complete();
+        }
+    }
 
     public static EntityStore Merge(this EntityStore store, EntityStore updated) =>
         store.Merge(updated, UpdateOptions.Default);

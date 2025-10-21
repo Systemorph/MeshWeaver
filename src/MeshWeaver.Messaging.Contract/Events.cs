@@ -56,3 +56,4 @@ public record DisposeRequest;
 public record PingRequest : IRequest<PingResponse>;
 
 public record PingResponse;
+public record RoutingRequest(IMessageDelivery OriginalRequest);
