@@ -12,6 +12,10 @@ public static class WorkspaceOperations
     public static void Change(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
         var allValid = true;
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(WorkspaceOperations));
+        logger.LogDebug("Updating workstream for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
+
         if (change.Creations.Any())
         {
             var (isValid, results) = workspace.ValidateCreation(change.Creations);
@@ -103,6 +107,9 @@ public static class WorkspaceOperations
 
     private static void UpdateStreams(this IWorkspace workspace, DataChangeRequest change, Activity? activity, IMessageDelivery? request)
     {
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(WorkspaceOperations));
+        logger.LogDebug("Updating streams for workspace {Address} with {Creations} creations, {Updates} updates, {Deletions} deletions", workspace.Hub.Address, change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
         foreach (var group in
                  change.Creations.Select(i => (Instance: i, Op: OperationType.Add,
                          TypeSource: workspace.DataContext.GetTypeSource(i.GetType()),
@@ -127,16 +134,20 @@ public static class WorkspaceOperations
             var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
 
 
-            stream!.Update(store =>
+            // Use async update to allow proper retry logic if state changed during computation
+            stream!.Update(async (store, ct) =>
             {
+                logger.LogDebug("Starting update of {Stream} with {StreamId}", stream.StreamIdentity, stream.StreamId);
                 // For sub-activity logging, we use the main activity as we don't have direct access to sub-activity
-                subActivity?.LogInformation("Updating Data Stream {Stream}", stream.StreamIdentity);
+                subActivity?.LogInformation("Updating Data Stream {Stream}", stream!.StreamIdentity);
                 try
                 {
+                    // Get the current store state (might be different from initial 'store' parameter if updates occurred)
+                    var currentStore = store ?? new EntityStore();
 
                     var updates = group.GroupBy(x =>
                             (Op: (x.Op == OperationType.Add ? OperationType.Replace : x.Op), x.TypeSource))
-                        .Aggregate(new EntityStoreAndUpdates(store ?? new(), [], change.ChangedBy),
+                        .Aggregate(new EntityStoreAndUpdates(currentStore, [], change.ChangedBy),
                             (storeAndUpdates, g) =>
                             {
                                 if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
@@ -177,6 +188,9 @@ public static class WorkspaceOperations
                                 throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                             });
                     subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
+                    var logger = stream.Host.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                        .CreateLogger(typeof(WorkspaceOperations));
+                    logger?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
                     // Complete sub-activity - this would need proper sub-activity tracking to work correctly
                     return stream.ApplyChanges(updates);
                 }

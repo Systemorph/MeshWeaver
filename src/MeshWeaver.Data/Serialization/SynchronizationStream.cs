@@ -196,9 +196,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
+        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
+        if (Configuration.Initialization is null)
+            startupDeferrable = Hub.Defer(StartupDeferrable);
 
-        startupDeferrable = Hub.Defer(StartupDeferrable);
 
 
 
@@ -239,7 +240,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 var exceptionCallback = request.Message.ExceptionCallback;
                 try
                 {
-                    SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct));
+                    // Read the current state right before invoking the update function
+                    // This ensures we have the latest state including any updates that occurred
+                    // while previous updates were being processed
+                    var currentValue = Current is null ? default : Current.Value;
+                    var newChangeItem = await update.Invoke(currentValue, ct);
+
+                    // SetCurrent will be called with the computed result
+                    // The Message Hub serializes these messages, so only one UpdateStreamRequest
+                    // is processed at a time per stream, preventing race conditions
+                    SetCurrent(newChangeItem);
                 }
                 catch (Exception e)
                 {

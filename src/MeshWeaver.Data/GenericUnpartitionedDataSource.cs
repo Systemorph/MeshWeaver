@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data.Serialization;
@@ -111,7 +110,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
 
 
-    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
+    protected readonly Dictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
@@ -136,7 +135,13 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
     {
         var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
-        return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
+        lock (Streams)
+        {
+            if (Streams.TryGetValue(partition ?? Id, out var ret))
+                return ret;
+            Streams[partition ?? Id] = ret = CreateStream(identity);
+            return ret;
+        }
     }
 
     protected abstract ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity);
