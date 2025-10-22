@@ -93,7 +93,11 @@ public class ImportManager
             importActivity.Complete(log =>
             {
                 if (log.HasErrors())
+                {
+
+                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                     return;
+                }
                 Configuration.Workspace.RequestChange(
                     DataChangeRequest.Update(
                         imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
