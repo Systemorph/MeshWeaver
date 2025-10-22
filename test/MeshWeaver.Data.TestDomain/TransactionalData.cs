@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Messaging;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Messaging;
 using Newtonsoft.Json;
 
 namespace MeshWeaver.Data.TestDomain;
@@ -23,4 +23,4 @@ public record BusinessUnit([property: Key] string SystemName, string DisplayName
 public record ImportAddress(int Year) : Address(nameof(ImportAddress), Year.ToString());
 public record ReferenceDataAddress() : Address(nameof(ReferenceDataAddress), "1");
 public record ComputedDataAddress(int Year, string BusinessUnit) : Address(nameof(ComputedDataAddress), $"{Year}/{BusinessUnit}");
-public record TransactionalDataAddress(int Year, string BusinessUnit) : Address(nameof(ComputedDataAddress), $"{Year}/{BusinessUnit}");
+public record TransactionalDataAddress(int Year, string BusinessUnit) : Address(nameof(TransactionalData), $"{Year}/{BusinessUnit}");
