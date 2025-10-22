@@ -71,7 +71,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             o => o.WithTarget(new ImportAddress(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
-                new CancellationTokenSource(300.Seconds()).Token
+                new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
