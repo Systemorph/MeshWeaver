@@ -17,11 +17,13 @@ namespace MeshWeaver.Hosting
             {
                 return await RouteInMesh(delivery, cancellationToken);
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 Mesh.Post(new DeliveryFailure(delivery)
                 {
-                    Message = e.Message, ExceptionType = e.GetType().Name, StackTrace = e.StackTrace!
+                    Message = e.Message,
+                    ExceptionType = e.GetType().Name,
+                    StackTrace = e.StackTrace!
                 },
                     o => o.ResponseFor(delivery));
                 return delivery.Failed(e.Message);
@@ -34,7 +36,7 @@ namespace MeshWeaver.Hosting
 
 
         private async Task<IMessageDelivery> RouteInMesh(
-            IMessageDelivery delivery, 
+            IMessageDelivery delivery,
             CancellationToken cancellationToken
             )
         {
@@ -69,7 +71,7 @@ namespace MeshWeaver.Hosting
         protected virtual Task<IMessageDelivery> RouteToKernel(IMessageDelivery delivery, MeshNode node, Address address, CancellationToken ct)
         {
             var kernelId = GetKernelId(delivery, node, address);
-            delivery = delivery.WithTarget(new HostedAddress(delivery.Target!, new KernelAddress(){Id = kernelId}));
+            delivery = delivery.WithTarget(new HostedAddress(delivery.Target!, new KernelAddress() { Id = kernelId }));
             return RouteInMesh(delivery, ct);
         }
 
@@ -77,9 +79,9 @@ namespace MeshWeaver.Hosting
         {
             return node.RoutingType switch
             {
-                RoutingType.Shared => $"{address}",
+                RoutingType.Shared => $"{address}".Replace('/', '-'),
                 RoutingType.Individual =>
-                    $"{address}/{TypeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}",
+                    $"{address}/{TypeRegistry.GetTypeName(delivery.Sender)}/{delivery.Sender}".Replace('/', '-'),
                 _ => throw new NotSupportedException($"The routing type {node.RoutingType} is currently not supported.")
             };
         }
@@ -93,7 +95,7 @@ namespace MeshWeaver.Hosting
             var node = await MeshCatalog.GetNodeAsync(address);
 
             if (!string.IsNullOrWhiteSpace(node?.StartupScript))
-                return await RouteToKernel(delivery, node, address,cancellationToken);
+                return await RouteToKernel(delivery, node, address, cancellationToken);
 
 
 

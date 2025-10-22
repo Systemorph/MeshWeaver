@@ -39,7 +39,12 @@
       "Bash(git restore:*)",
       "Bash(meshweaver-thumbnails:*)",
       "Bash(findstr:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Read(//c/**)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(test:*)",
+      "Bash(Select-Object -Last 20)"
     ],
     "deny": []
   }

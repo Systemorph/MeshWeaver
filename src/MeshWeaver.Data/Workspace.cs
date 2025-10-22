@@ -2,17 +2,17 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
-using Microsoft.Extensions.Logging;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
 public class Workspace : IWorkspace
 {
     private readonly ILogger<Workspace> _logger;
-    
+
     public Workspace(IMessageHub hub, ILogger<Workspace> logger)
     {
         Hub = hub;
@@ -104,15 +104,15 @@ public class Workspace : IWorkspace
         );
 
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
-        WorkspaceReference<TReduced> reference, 
+        WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
     {
-        return (ISynchronizationStream<TReduced>?) ReduceManager.ReduceStream(
+        return (ISynchronizationStream<TReduced>?)ReduceManager.ReduceStream(
             this,
-            reference, 
+            reference,
             configuration
-        ) ?? throw new InvalidOperationException("Failed to create stream"); 
+        ) ?? throw new InvalidOperationException("Failed to create stream");
     }
 
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
@@ -126,7 +126,7 @@ public class Workspace : IWorkspace
                 : throw new ArgumentException($"Type {t.FullName} is unknown.")
         ).ToArray()!),
     x => x) ?? throw new InvalidOperationException("Failed to create stream");
- 
+
     public ReduceManager<EntityStore> ReduceManager => DataContext.ReduceManager;
 
     public IMessageHub Hub { get; }
@@ -144,16 +144,16 @@ public class Workspace : IWorkspace
 
     public async ValueTask DisposeAsync()
     {
-        _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}", 
+        _logger.LogInformation("Workspace {WorkspaceId} starting DisposeAsync, Thread: {ThreadId}",
             Id, Thread.CurrentThread.ManagedThreadId);
-        
+
         if (isDisposing)
         {
             _logger.LogDebug("Workspace {WorkspaceId} already disposing, returning", Id);
             return;
         }
         isDisposing = true;
-        
+
         _logger.LogDebug("Workspace {WorkspaceId} disposing {AsyncCount} async disposables", Id, asyncDisposables.Count);
         while (asyncDisposables.TryTake(out var d))
         {
@@ -191,7 +191,7 @@ public class Workspace : IWorkspace
         {
             _logger.LogError(ex, "Workspace {WorkspaceId} error disposing DataContext", Id);
         }
-        
+
         _logger.LogInformation("Workspace {WorkspaceId} DisposeAsync completed", Id);
     }
     private readonly ConcurrentBag<IDisposable> disposables = new();
@@ -248,7 +248,7 @@ public class Workspace : IWorkspace
     private void SubscribeToClient<TReduced, TReference>(SubscribeRequest request)
         where TReference : WorkspaceReference<TReduced>
     {
-        this.CreateSynchronizationStream<TReduced, TReference>(request );
+        this.CreateSynchronizationStream<TReduced, TReference>(request);
     }
 
 

@@ -1,6 +1,9 @@
+@using MeshWeaver.ContentCollections
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
-<FileBrowser CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" Embed="@true"></FileBrowser>
+<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" Embed="@true"></FileBrowser>
 
 @code
 {
@@ -8,6 +11,8 @@
     private string? Path;
     private bool PathCreation;
     private string? TopLevelPath;
+    private ContentCollectionConfig? CollectionConfiguration;
+
     protected override void BindData()
     {
         base.BindData();
@@ -15,6 +20,27 @@
         DataBind(ViewModel.Path, x => x.Path, defaultValue: "/");
         DataBind(ViewModel.PathCreation, x => x.PathCreation);
         DataBind(ViewModel.TopLevelPath, x => x.TopLevelPath);
+        DataBind(ViewModel.CollectionConfiguration, x => x.CollectionConfiguration);
     }
 
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+
+        if (CollectionConfiguration is not null && Collection is not null)
+        {
+            await InitializeCollectionIfNeededAsync();
+        }
+    }
+
+    private async Task InitializeCollectionIfNeededAsync()
+    {
+        if (Collection is null && CollectionConfiguration is null)
+            return;
+
+        var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
+
+        // Initialize the collection - the service handles everything
+        await contentService.GetCollectionAsync(Collection ?? CollectionConfiguration!.Name, CancellationToken.None);
+    }
 }

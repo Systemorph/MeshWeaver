@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data.Serialization;
@@ -37,7 +36,7 @@ public interface IUnpartitionedDataSource : IDataSource
 }
 public interface IPartitionedDataSource<in TPartition> : IDataSource
 {
-    IPartitionedDataSource<TPartition> WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null) where T : class;
+    IPartitionedDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null) where T : class;
 }
 
 
@@ -49,13 +48,13 @@ public abstract record PartitionedDataSource<TDataSource, TTypeSource, TPartitio
 
     public abstract TDataSource WithType<T>(Func<T, TPartition> partitionFunction, Func<TTypeSource, TTypeSource> config)
         where T : class;
-    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T,TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config) =>
+    IPartitionedDataSource<TPartition> IPartitionedDataSource<TPartition>.WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config) =>
         WithType(partitionFunction, ts => (TTypeSource)(config ?? (x => x)).Invoke(ts));
 
 
 }
 
-public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace) 
+public abstract record UnpartitionedDataSource<TDataSource, TTypeSource>(object Id, IWorkspace Workspace)
     : DataSource<TDataSource, TTypeSource>(Id, Workspace), IUnpartitionedDataSource
     where TDataSource : UnpartitionedDataSource<TDataSource, TTypeSource>
     where TTypeSource : ITypeSource
@@ -107,11 +106,11 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public ITypeSource? GetTypeSource(Type type) => TypeSources.GetValueOrDefault(type);
 
 
-    private IReadOnlyCollection<IDisposable>? changesSubscriptions;
+    private readonly IReadOnlyCollection<IDisposable>? changesSubscriptions;
 
 
 
-    protected readonly ConcurrentDictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
+    protected readonly Dictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
 
     public CollectionsReference Reference => GetReference();
 
@@ -136,7 +135,13 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
     {
         var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
-        return Streams.GetOrAdd(partition ?? Id, _ => CreateStream(identity));
+        lock (Streams)
+        {
+            if (Streams.TryGetValue(partition ?? Id, out var ret))
+                return ret;
+            Streams[partition ?? Id] = ret = CreateStream(identity);
+            return ret;
+        }
     }
 
     protected abstract ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity);
@@ -285,7 +290,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
                 })
         );
         // Always use async initialization to call GetInitialValueAsync properly
-            
+
         return stream;
     }
 }
@@ -351,9 +356,9 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
     {
         var stream = base.SetupDataSourceStream(identity, config);
         if (stream == null) return null;
-        
+
         // Always use async initialization to call GetInitialValueAsync properly
-            
+
         var isFirst = true;
         stream.RegisterForDisposal(
             stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))

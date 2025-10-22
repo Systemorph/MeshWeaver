@@ -18,10 +18,6 @@ public abstract record MessageDelivery : IMessageDelivery
 
     public string Id { get; init; } = Guid.NewGuid().AsString();
 
-    private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
-        ImmutableDictionary<string, object>.Empty;
-    public IReadOnlyDictionary<string, object> Properties { get => PropertiesImpl; init => PropertiesImpl = value.ToImmutableDictionary(); }
-    public MessageDeliveryState State { get; init; } = MessageDeliveryState.Submitted;
 
     object IMessageDelivery.Message => GetMessage();
     protected abstract object GetMessage();
@@ -112,6 +108,10 @@ public abstract record MessageDelivery : IMessageDelivery
             return ((IMessageDelivery)this).Failed($"Error serializing: \n{e}");
         }
     }
+    private ImmutableDictionary<string, object> PropertiesImpl { get; init; } =
+        ImmutableDictionary<string, object>.Empty;
+    public IReadOnlyDictionary<string, object> Properties { get => PropertiesImpl; init => PropertiesImpl = value.ToImmutableDictionary(); }
+    public MessageDeliveryState State { get; init; } = MessageDeliveryState.Submitted;
 
 }
 

@@ -1,12 +1,34 @@
-﻿/* Ensure the container of the cards is properly aligned and has enough width */
+﻿/* Wrapper container for overall page layout */
+.articles-catalog-page {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 16px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* Basic toolbar layout */
+.toolbar {
+    display: flex;
+    align-items: center;
+}
+
+/* Spacer element to add space between toolbar and layout area */
+.toolbar-spacer {
+    height: 2rem;
+}
+
+/* Ensure the container of the cards is properly aligned and has enough width */
 .articles-catalog {
     display: flex;
     flex-direction: column;
-    align-items: center; /* Center the cards horizontally */
+    align-items: stretch;
     justify-content: flex-start;
-    width: 100%; /* Ensure the container takes full width */
-    padding: 16px; /* Add some padding around the container */
-    box-sizing: border-box; /* Include padding and border in the element's total width */
-    background-color: var(--color-canvas-default); /* Use Primer CSS variable */
-    color: var(--color-fg-default); /* Use Primer CSS variable */
+    width: 100%;
+    gap: 16px;
+    box-sizing: border-box;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
 }

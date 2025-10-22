@@ -5,7 +5,6 @@ using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,21 +12,116 @@ namespace MeshWeaver.ContentCollections;
 
 public static class ContentCollectionsExtensions
 {
-    public static MessageHubConfiguration AddArticles(this MessageHubConfiguration config) =>
-        config
-            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogSkin))
+    /// <summary>
+    /// Gets the localized collection name for a hub by appending the hub's address ID.
+    /// </summary>
+    /// <param name="collectionName">The base collection name</param>
+    /// <param name="addressId">The hub's address ID</param>
+    /// <returns>The localized collection name in format: {collectionName}-{addressId}</returns>
+    public static string GetLocalizedCollectionName(string collectionName, string addressId)
+        => $"{collectionName}-{addressId}";
+
+    public static MessageHubConfiguration AddArticles(
+        this MessageHubConfiguration config,
+        params IReadOnlyCollection<ContentCollectionConfig> configurations)
+    {
+        return config
+            .WithTypes(typeof(Article), typeof(ArticleControl), typeof(ArticleCatalogItemControl), typeof(ArticleCatalogControl), typeof(ArticleCatalogSkin))
+            .WithServices(services =>
+            services.AddScoped(sp => sp.GetConfiguration(config, configurations))
+            )
+            .AddLayout(layout => layout
+                .WithView(nameof(ArticlesLayoutArea.Articles), ArticlesLayoutArea.Articles))
+            .AddContentCollections(configurations);
+    }
+
+    private static ArticlesConfiguration GetConfiguration(this IServiceProvider serviceProvider, MessageHubConfiguration config, IReadOnlyCollection<ContentCollectionConfig> configurations)
+    {
+        var hub = serviceProvider.GetRequiredService<IMessageHub>();
+        if (configurations.Count == 0)
+        {
+            var contentService = hub.GetContentService();
+            var collection = contentService.GetCollectionConfig(config.Address.Id);
+            if (collection is null)
+                throw new InvalidOperationException($"No content collection configured for hub at address '{config.Address.Id}'. Ensure a content collection is registered for this hub.");
+            return new ArticlesConfiguration() { CollectionConfigurations = [collection] };
+
+        }
+
+        return new ArticlesConfiguration()
+        {
+            CollectionConfigurations = configurations,
+            Collections = configurations.Select(c => c.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray()
+        };
+    }
+
+    public static MessageHubConfiguration AddContentCollections(this MessageHubConfiguration config)
+    {
+        return config
+            .WithServices(AddContentService)
             .AddLayout(layout => layout
                 .WithView(nameof(ContentLayoutArea.Content), ContentLayoutArea.Content)
-                .WithView(nameof(ArticleCatalogLayoutArea.Catalog), ArticleCatalogLayoutArea.Catalog));
+                .WithView(nameof(FileBrowserLayoutAreas.FileBrowser), FileBrowserLayoutAreas.FileBrowser)
+                .WithView(nameof(CollectionLayoutArea.Collection), CollectionLayoutArea.Collection))
+            .WithHandler<GetContentCollectionRequest>((hub, request) =>
+            {
+                var response = GetContentCollectionResponse(hub, request);
+                hub.Post(response, o => o.ResponseFor(request));
+                return request.Processed();
+            });
+    }
+
+    public static IServiceCollection AddContentService(this IServiceCollection services)
+    {
+        if (services.All(d => d.ServiceType != typeof(IContentService)))
+        {
+            services
+                .AddScoped<IContentService, ContentService>()
+                .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
+                .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
+                .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
+        }
+
+        return services;
+    }
+
+    private static IStreamProvider CreateStreamProvider(ContentCollectionConfig config)
+    {
+        var sourceType = config.SourceType;
+        return sourceType switch
+        {
+            "FileSystem" => new FileSystemStreamProvider(config.BasePath ?? ""),
+            "EmbeddedResource" => throw new NotSupportedException("EmbeddedResource requires assembly and prefix - use AddEmbeddedResourceContentCollection"),
+            _ => throw new NotSupportedException($"SourceType '{sourceType}' is not supported")
+        };
+    }
 
     internal static IContentService GetContentService(this IMessageHub hub)
         => hub.ServiceProvider.GetRequiredService<IContentService>();
 
-    public static IServiceCollection AddContentCollections(this IServiceCollection services)
-        => services
-                .AddSingleton<IContentService, ContentService>()
-                .AddKeyedSingleton<IContentCollectionFactory, FileSystemContentCollectionFactory>(FileSystemContentCollectionFactory.SourceType)
-            ;
+
+    private static GetContentCollectionResponse GetContentCollectionResponse(
+        IMessageHub hub,
+        IMessageDelivery<GetContentCollectionRequest> delivery)
+    {
+        var contentService = hub.GetContentService();
+
+        if (delivery.Message.CollectionNames is null || delivery.Message.CollectionNames.Count == 0)
+            return new();
+
+        var configs = delivery.Message.CollectionNames
+            .Select(c => contentService.GetCollectionConfig(c))
+            .OfType<ContentCollectionConfig>()
+            .ToArray();
+
+        return new GetContentCollectionResponse
+        {
+            Collections = configs
+        };
+    }
+
+
+
 
     public static string ConvertToMarkdown(this Article article)
     {
@@ -65,7 +159,7 @@ public static class ContentCollectionsExtensions
         if (article.Published.HasValue)
             markdownBuilder.AppendLine($"Published: \"{article.Published.Value:yyyy-MM-dd}\"");
 
-        if (article.Authors.Count > 0)
+        if (article.Authors?.Count > 0)
         {
             markdownBuilder.AppendLine("Authors:");
             foreach (var author in article.Authors)
@@ -74,7 +168,7 @@ public static class ContentCollectionsExtensions
             }
         }
 
-        if (article.Tags.Count > 0)
+        if (article.Tags?.Count > 0)
         {
             markdownBuilder.AppendLine("Tags:");
             foreach (var tag in article.Tags)
@@ -93,7 +187,7 @@ public static class ContentCollectionsExtensions
         return markdownBuilder.ToString();
     }
     public static MarkdownElement ParseContent(string collection, string path, DateTime lastWriteTime, string content,
-        IReadOnlyDictionary<string, Author> authors)
+        IReadOnlyDictionary<string, Author> authors, Address? address)
     {
         if (OperatingSystem.IsWindows())
             path = path.Replace("\\", "/");
@@ -110,7 +204,7 @@ public static class ContentCollectionsExtensions
                 Name = name,
                 Path = path,
                 Collection = collection,
-                Url = GetContentUrl(collection, pathWithoutExtension),
+                Url = GetContentUrl(collection, pathWithoutExtension, address),
                 PrerenderedHtml = document.ToHtml(pipeline),
                 LastUpdated = lastWriteTime,
                 Content = content,
@@ -143,17 +237,27 @@ public static class ContentCollectionsExtensions
         // Remove the YAML block from the content
         var contentWithoutYaml = content.Substring(yamlBlock.Span.End + 1).Trim('\r', '\n');
 
+        // Adapt thumbnail URL to include address and collection path
+        var adaptedThumbnail = AdaptResourceUrl(ret.Thumbnail, collection, address);
+
+        // Render abstract as HTML if it exists
+        var abstractHtml = string.IsNullOrEmpty(ret.Abstract)
+            ? string.Empty
+            : Markdig.Markdown.ToHtml(ret.Abstract, pipeline);
+
         return ret with
         {
             Name = name,
             Path = path,
             Collection = collection,
-            Url = GetContentUrl(collection, pathWithoutExtension),
+            Url = GetContentUrl(collection, pathWithoutExtension, address),
             PrerenderedHtml = document.ToHtml(pipeline),
             LastUpdated = lastWriteTime,
             Content = contentWithoutYaml,
             CodeSubmissions = document.Descendants().OfType<ExecutableCodeBlock>().Select(x => x.SubmitCode).Where(x => x is not null).ToArray()!,
-            AuthorDetails = ret.Authors.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray()
+            AuthorDetails = ret.Authors?.Select(x => authors.GetValueOrDefault(x) ?? ConvertToAuthor(x)).ToArray() ?? [],
+            Thumbnail = adaptedThumbnail,
+            AbstractHtml = abstractHtml
         };
     }
 
@@ -167,28 +271,170 @@ public static class ContentCollectionsExtensions
         return new Author(names[0], names[^1]) { MiddleName = string.Join(' ', names.Skip(1).Take(names.Length - 2)), };
     }
 
+    public static string? AdaptResourceUrl(string? resourceUrl, string collection, Address? address)
+    {
+        if (string.IsNullOrEmpty(resourceUrl))
+            return resourceUrl;
 
-    public static string GetContentUrl(string collection, string path)
-        => $"content/{collection}/{path}";
+        // If it's already an absolute URL (http/https), use it as-is
+        if (resourceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            resourceUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return resourceUrl;
+        }
+
+        // If it starts with /, it's already a full path
+        if (resourceUrl.StartsWith("/"))
+        {
+            return resourceUrl;
+        }
+
+        // Otherwise, prepend with address/static/collection or static/collection
+        return address != null
+            ? $"{address}/static/{collection}/{resourceUrl}"
+            : $"static/{collection}/{resourceUrl}";
+    }
 
 
-    public static MeshNode WithEmbeddedResourceContentCollection(this MeshNode node, string collectionName, Assembly assembly, string relativePath)
-        => node.WithGlobalServiceRegistry(services =>
-        services.AddSingleton<IContentCollectionProvider>(sp =>
-        new ContentCollectionProvider(
-            new EmbeddedResourceContentCollection(
-               collectionName,
-                assembly,
-                 $"{assembly.GetName().Name}.{relativePath}",
-                sp.GetRequiredService<IMessageHub>()
-            )
-        )));
+    public static string GetContentUrl(string collection, string path, Address? address = null)
+        => address != null
+            ? $"{address}/Content/{collection}/{path}"
+            : $"Content/{collection}/{path}";
+
+
+    public static MessageHubConfiguration AddEmbeddedResourceContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        Assembly assembly,
+        string relativePath)
+        => configuration.WithServices(services =>
+        {
+            var resourcePrefix = $"{assembly.GetName().Name}.{relativePath}";
+
+            // Register the stream provider for this embedded resource collection
+            services.AddKeyedSingleton<IStreamProvider>(collectionName, (_, _) =>
+                new EmbeddedResourceStreamProvider(assembly, resourcePrefix));
+
+            // Register the content collection provider
+            services.AddScoped<IContentCollectionConfigProvider>(_ =>
+            {
+                var config = new ContentCollectionConfig
+                {
+                    Name = collectionName,
+                    SourceType = "EmbeddedResource",
+                    Settings = new Dictionary<string, string>
+                    {
+                        ["AssemblyName"] = assembly.GetName().Name ?? "",
+                        ["ResourcePrefix"] = resourcePrefix
+                    },
+                    Address = configuration.Address
+                };
+                return new ContentCollectionConfigProvider(config);
+            });
+
+            return services;
+        });
+
+    /// <summary>
+    /// Configures a FileSystem content collection for this hub with a dynamically calculated path.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionName">The name of the collection</param>
+    /// <param name="pathFactory">Factory function to compute the path based on service provider</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddFileSystemContentCollection(
+        this MessageHubConfiguration configuration,
+        string collectionName,
+        Func<IServiceProvider, string> pathFactory)
+        => configuration
+            .AddContentCollections()
+            .WithServices(services =>
+            {
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(sp =>
+                {
+                    var basePath = pathFactory(sp);
+
+                    var config = new ContentCollectionConfig
+                    {
+                        Name = collectionName,
+                        SourceType = "FileSystem",
+                        BasePath = basePath,
+                        Address = configuration.Address,
+                        Settings = new Dictionary<string, string>
+                        {
+                            ["BasePath"] = basePath
+                        }
+                    };
+
+                    return new ContentCollectionConfigProvider(config);
+                });
+
+                return services;
+            });
+
+    /// <summary>
+    /// Configures a content collection for this hub using the provided configuration factory.
+    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionConfigFactory">Factory function that creates the content collection configuration</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddContentCollection(
+        this MessageHubConfiguration configuration,
+        Func<IServiceProvider, ContentCollectionConfig> collectionConfigFactory)
+        => configuration
+            .AddContentCollections() // Ensure content service and registry are initialized
+            .WithServices(services =>
+            {
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(sp =>
+                {
+                    var collectionConfig = collectionConfigFactory(sp);
+
+                    // Ensure Settings are set
+                    var settings = collectionConfig.Settings ?? new Dictionary<string, string>();
+                    if (collectionConfig.BasePath != null && !settings.ContainsKey("BasePath"))
+                    {
+                        settings["BasePath"] = collectionConfig.BasePath;
+                    }
+
+                    var finalConfig = collectionConfig with
+                    {
+                        Address = configuration.Address,
+                        Settings = settings
+                    };
+
+                    return new ContentCollectionConfigProvider(finalConfig);
+                });
+
+                return services;
+            });
+    /// <summary>
+    /// Configures a content collection for this hub using the provided configuration factory.
+    /// Uses the ContentCollectionRegistry to register the collection hierarchically.
+    /// </summary>
+    /// <param name="configuration">The message hub configuration</param>
+    /// <param name="collectionConfigs">Factory function that creates the content collection configuration</param>
+    /// <returns>The configured message hub configuration</returns>
+    public static MessageHubConfiguration AddContentCollections(
+        this MessageHubConfiguration configuration,
+        params IReadOnlyCollection<ContentCollectionConfig> collectionConfigs)
+        => configuration
+            .AddContentCollections() // Ensure content service and registry are initialized
+            .WithServices(services =>
+            {
+                // Register the content collection provider
+                services.AddScoped<IContentCollectionConfigProvider>(_ => new ContentCollectionConfigProvider(collectionConfigs));
+
+                return services;
+            });
 
 }
 
 public record ArticleCatalogOptions
 {
-    public string Collection { get; init; } = string.Empty;
+    public IReadOnlyCollection<string>? Collections { get; init; } = [];
     public int Page { get; init; }
     public int PageSize { get; init; } = 10;
 

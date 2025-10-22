@@ -49,11 +49,31 @@
 }
 
 .abstract {
-    font-size: 18pt; /* Increase font size */
+    font-size: 18pt !important; /* Increase font size */
     color: var(--color-accent-fg); /* Change the color to an accent color */
     line-height: 1.8; /* Increase line height to make it less dense */
     margin-bottom: 24px; /* Keep the space between abstract and video */
 }
+
+    .abstract ::deep p {
+        font-size: 18pt !important; /* Ensure paragraphs inside abstract inherit the font size */
+        margin: 0; /* Remove default paragraph margins */
+        line-height: 1.8 !important;
+    }
+
+    .abstract ::deep a {
+        font-size: 18pt !important; /* Ensure links inside abstract inherit the font size */
+    }
+
+    .abstract :global(p) {
+        font-size: 18pt !important;
+        margin: 0;
+        line-height: 1.8 !important;
+    }
+
+    .abstract :global(a) {
+        font-size: 18pt !important;
+    }
 
 .media {
     position: relative;

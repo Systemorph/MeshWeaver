@@ -5,7 +5,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.SignalR;
 
@@ -49,7 +48,7 @@ public class KernelHub : Hub
 
     public bool Connect(string kernelId)
     {
-        var kernel = new KernelAddress{Id = kernelId};
+        var kernel = new KernelAddress { Id = kernelId };
         kernelByConnection[Context.ConnectionId] = kernel;
         connectionsByKernel.AddOrUpdate(
             kernel, _ => [Context.ConnectionId],
@@ -69,7 +68,7 @@ public class KernelHub : Hub
 
     public override Task OnDisconnectedAsync(Exception? exception)
     {
-        if(kernelByConnection.TryRemove(Context.ConnectionId, out var id))
+        if (kernelByConnection.TryRemove(Context.ConnectionId, out var id))
             connectionsByKernel.AddOrUpdate(
                 id, _ => ImmutableList<string>.Empty,
                 (_, l) => l.Remove(Context.ConnectionId)

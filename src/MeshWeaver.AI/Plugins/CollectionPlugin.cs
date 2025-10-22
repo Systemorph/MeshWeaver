@@ -17,15 +17,16 @@ public class CollectionPlugin(IMessageHub hub)
     [Description("Gets the content of a file from a specified collection.")]
     public async Task<string> GetFile(
         [Description("The name of the collection to read from")] string collectionName,
-        [Description("The path to the file within the collection")] string filePath)
+        [Description("The path to the file within the collection")] string filePath,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var collection = contentService.GetCollection(collectionName);
+            var collection = await contentService.GetCollectionAsync(collectionName, cancellationToken);
             if (collection == null)
                 return $"Collection '{collectionName}' not found.";
 
-            await using var stream = await collection.GetContentAsync(filePath);
+            await using var stream = await collection.GetContentAsync(filePath, cancellationToken);
             if (stream == null)
                 return $"File '{filePath}' not found in collection '{collectionName}'.";
 
@@ -48,11 +49,12 @@ public class CollectionPlugin(IMessageHub hub)
     public async Task<string> SaveFile(
         [Description("The name of the collection to save to")] string collectionName,
         [Description("The path where the file should be saved within the collection")] string filePath,
-        [Description("The content to save to the file")] string content)
+        [Description("The content to save to the file")] string content,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var collection = contentService.GetCollection(collectionName);
+            var collection = await contentService.GetCollectionAsync(collectionName, cancellationToken);
             if (collection == null)
                 return $"Collection '{collectionName}' not found.";            // Ensure directory structure exists if the collection has a base path
             EnsureDirectoryExists(collection, filePath);
@@ -76,11 +78,12 @@ public class CollectionPlugin(IMessageHub hub)
     [Description("Lists all files in a specified collection.")]
     public async Task<string> ListFiles(
         [Description("The name of the collection to list files from")] string collectionName,
-        [Description("The path for which to load files.")] string path = "/")
+        [Description("The path for which to load files.")] string path = "/",
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var collection = contentService.GetCollection(collectionName);
+            var collection = await contentService.GetCollectionAsync(collectionName, cancellationToken);
             if (collection == null)
                 return $"Collection '{collectionName}' not found.";
 
@@ -102,15 +105,16 @@ public class CollectionPlugin(IMessageHub hub)
     [Description("Checks if a specific file exists in a collection.")]
     public async Task<string> FileExists(
         [Description("The name of the collection to check")] string collectionName,
-        [Description("The path to the file within the collection")] string filePath)
+        [Description("The path to the file within the collection")] string filePath,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var collection = contentService.GetCollection(collectionName);
+            var collection = await contentService.GetCollectionAsync(collectionName, cancellationToken);
             if (collection == null)
                 return $"Collection '{collectionName}' not found.";
 
-            await using var stream = await collection.GetContentAsync(filePath);
+            await using var stream = await collection.GetContentAsync(filePath, cancellationToken);
             if (stream == null)
                 return $"File '{filePath}' does not exist in collection '{collectionName}'.";
 

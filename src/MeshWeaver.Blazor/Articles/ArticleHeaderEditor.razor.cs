@@ -14,11 +14,11 @@ public partial class ArticleHeaderEditor
     {
         try
         {
-            Collection.SaveArticleAsync(Model!.Submit());
+            Collection?.SaveArticleAsync(Model!.Submit());
             ShowSuccess();
             Model!.Confirm();
         }
-        catch(Exception ex)
+        catch (Exception ex)
         {
             ShowError(ex.Message);
             Model!.Reset();
@@ -26,12 +26,12 @@ public partial class ArticleHeaderEditor
 
     }
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        base.OnInitialized();
-        Collection = ContentService.GetCollection(CollectionName!)!;
+        await base.OnInitializedAsync();
+        Collection = await ContentService.GetCollectionAsync(CollectionName!);
     }
-    private ContentCollection Collection { get; set; } = null!;
+    private ContentCollection? Collection { get; set; } = null!;
 
     private void Reset()
     {

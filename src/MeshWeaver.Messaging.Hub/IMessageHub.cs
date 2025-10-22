@@ -43,7 +43,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     // ReSharper disable once UnusedMethodReturnValue.Local
     Task<IMessageDelivery> RegisterCallback(IMessageDelivery delivery, AsyncDelivery callback, CancellationToken cancellationToken);
     public void InvokeAsync(Func<CancellationToken, Task> action, Func<Exception, Task> exceptionCallback);
-    
+
     public void InvokeAsync(Action action)
         => InvokeAsync(action, _ => Task.CompletedTask);
     public void InvokeAsync(Action action, Func<Exception, Task> exceptionCallback) => InvokeAsync(_ =>
@@ -99,7 +99,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     MessageHubRunLevel RunLevel { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
-    internal Task StartAsync(CancellationToken cancellationToken);
 
     internal Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,

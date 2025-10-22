@@ -1,11 +1,12 @@
 @* Fallback route - matches any 4-segment path *@
 @page "/{AddressType}/{Application}/{Area}/{**Id}"
+@using MeshWeaver.Messaging
 
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    @if (!IsValidAddressType)
+    @if (!Hub.TypeRegistry.TryGetType(AddressType!, out var t) || !typeof(Address).IsAssignableFrom(t!.Type))
     {
         <div class="error-container">
             <h2>Invalid Address Type</h2>

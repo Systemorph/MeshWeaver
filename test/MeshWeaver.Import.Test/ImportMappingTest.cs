@@ -1,5 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -90,11 +92,11 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
         log.Status.Should().Be(ActivityStatus.Succeeded);
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret2 = await GetDataAsync<MyRecord2>(ImportAddress);
+        var ret2 = await GetDataAsync<MyRecord2>(ImportAddress, x => true);
 
         ret2.Should().BeEmpty();
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress);
+        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -119,7 +121,7 @@ SystemName,DisplayName,2,null,,"""",null,,"""",1,,"""",1,,""""";
     {
         _ = await DoImport(string.Empty);
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress);
+        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => true);
 
         ret.Should().BeEmpty();
     }
@@ -157,7 +159,7 @@ Record3SystemName,Record3DisplayName";
 
         Logger.LogInformation("*** Import Finished ***");
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress);
+        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count > 0);
 
         ret.Should().HaveCount(1);
 
@@ -191,13 +193,13 @@ Record3SystemName,Record3DisplayName";
 
         var log = await DoImport(ThreeTablesContent, "Test2");
         log.Status.Should().Be(ActivityStatus.Succeeded);
-        
+
         Logger.LogInformation("*** Import Finished ***");
         var address = new TestDomain.ImportAddress();
-        var ret2 = await GetDataAsync<MyRecord2>(address);
+        var ret2 = await GetDataAsync<MyRecord2>(address, x => x.Count > 0);
 
         ret2.Should().HaveCount(1);
-        var ret = await GetDataAsync<MyRecord>(address); 
+        var ret = await GetDataAsync<MyRecord>(address, x => x.Count > 1); 
 
         ret.Should().HaveCount(2);
 
@@ -213,14 +215,18 @@ Record3SystemName,Record3DisplayName";
         resRecord.Number.Should().Be(0);
     }
 
-    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(Address address)
+    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
+        Address address,
+        System.Func<IReadOnlyCollection<TData>, bool> predicate,
+        TimeSpan? timeout = null)
     {
-        var response = 
-            await GetClient()
-            .AwaitResponse(new GetDataRequest(new CollectionReference(typeof(TData).Name)),
-            opt => opt.WithTarget(address)
-            //, new CancellationTokenSource(10.Seconds()).Token
-            );
-        return ((InstanceCollection?)response.Message.Data)?.Instances.Values.Cast<TData>().ToArray();
+        timeout ??= 10.Seconds();
+        var hub = Router.GetHostedHub(address);
+        var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        return await workspace
+            .GetObservable<TData>()
+            .Where(predicate)
+            .Timeout(timeout.Value)
+            .FirstAsync();
     }
 }

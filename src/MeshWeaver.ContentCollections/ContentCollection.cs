@@ -9,15 +9,19 @@ using MeshWeaver.Utils;
 
 namespace MeshWeaver.ContentCollections;
 
-public abstract class ContentCollection : IDisposable
+public class ContentCollection : IDisposable
 {
     private readonly ISynchronizationStream<InstanceCollection> markdownStream;
-    private readonly ContentSourceConfig config;
+    private readonly IStreamProvider provider;
+    public readonly ContentCollectionConfig Config;
+    public Address? Address => Config.Address;
+    private IDisposable? monitorDisposable;
 
-    protected ContentCollection(ContentSourceConfig config, IMessageHub hub)
+    public ContentCollection(ContentCollectionConfig config, IStreamProvider provider, IMessageHub hub)
     {
         Hub = hub;
-        this.config = config;
+        Config = config;
+        this.provider = provider;
         markdownStream = CreateStream();
     }
 
@@ -28,16 +32,14 @@ public abstract class ContentCollection : IDisposable
         Hub,
             new EntityReference(Collection, "/"),
             Hub.CreateReduceManager().ReduceTo<InstanceCollection>(),
-            x => x.WithInitialization((_, ct) => InitializeAsync(ct)));
+            x => x);
         return ret;
     }
 
 
-    protected IMessageHub Hub { get; }
-    public string Collection => config.Name!;
-    public string DisplayName => config.DisplayName ?? config.Name!.Wordify();
-    public bool IsHidden => config.HiddenFrom.Length > 0;
-    public bool IsHiddenFrom(string context) => config.HiddenFrom.Contains(context);
+    public IMessageHub Hub { get; }
+    public string Collection => Config.Name!;
+    public string DisplayName => Config.DisplayName ?? Config.Name!.Wordify();
 
     public IObservable<object?> GetMarkdown(string path)
         => markdownStream
@@ -53,34 +55,38 @@ public abstract class ContentCollection : IDisposable
             .Select(x => x.Value!.Instances.Values);
 
 
-    public abstract Task<Stream?> GetContentAsync(string path, CancellationToken ct = default);
+    public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
+        => provider.GetStreamAsync(path, ct);
+
+
 
     public virtual void Dispose()
     {
+        monitorDisposable?.Dispose();
         markdownStream.Dispose();
     }
 
     protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
 
-    protected ImmutableDictionary<string, Author> ParseAuthors(string content)
+    protected ImmutableDictionary<string, Author> AdaptAuthorUrls(ImmutableDictionary<string, Author> authors)
     {
-        var ret = JsonSerializer
-            .Deserialize<ImmutableDictionary<string, Author>>(
-                content
-            );
-        return ret?.Select(x =>
+        return authors.Select(x =>
             new KeyValuePair<string, Author>(
                 x.Key,
                 x.Value with
                 {
-                    ImageUrl = x.Value.ImageUrl is null ? null : $"static/{Collection}/{x.Value.ImageUrl}"
-                })).ToImmutableDictionary() ?? ImmutableDictionary<string, Author>.Empty;
+                    ImageUrl = ContentCollectionsExtensions.AdaptResourceUrl(x.Value.ImageUrl, Collection, Address)
+                })).ToImmutableDictionary();
     }
 
-    public abstract Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path);
+    public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
+        => provider.GetFoldersAsync(path);
 
-    public abstract Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path);
-    public abstract Task SaveFileAsync(string path, string fileName, Stream openReadStream);
+    public Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
+        => provider.GetFilesAsync(path);
+
+    public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
+        => provider.SaveFileAsync(path, fileName, openReadStream);
 
     public async Task SaveArticleAsync(Article article)
     {
@@ -99,33 +105,30 @@ public abstract class ContentCollection : IDisposable
             .Concat(files)
             .ToArray();
     }
+
     protected static bool MarkdownFilter(string name)
         => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        await InitializeInfrastructureAsync();
-        Authors = await LoadAuthorsAsync(ct);
+        var loadedAuthors = await provider.LoadAuthorsAsync(ct);
+        Authors = AdaptAuthorUrls(loadedAuthors);
         var ret = new InstanceCollection(
-            await GetStreams(MarkdownFilter, ct)
+            await provider.GetStreamsAsync(MarkdownFilter, ct)
                 .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
                 .Where(x => x is not null)
                 .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
         );
+        markdownStream.OnNext(new(ret, markdownStream.StreamId, Hub.Version));
         AttachMonitor();
         return ret;
-    }
-
-    protected virtual Task InitializeInfrastructureAsync()
-    {
-        return Task.CompletedTask;
     }
 
     protected void UpdateArticle(string path)
     {
         markdownStream.Update(async (x, ct) =>
         {
-            var tuple = await GetStreamAsync(path, ct);
+            var tuple = await provider.GetStreamWithMetadataAsync(path, ct);
             if (tuple.Stream is null)
                 return null;
             var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
@@ -136,8 +139,6 @@ public abstract class ContentCollection : IDisposable
 
         }, _ => Task.CompletedTask);
     }
-
-    protected abstract Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamAsync(string path, CancellationToken ct);
 
     private async Task<MarkdownElement?> ParseArticleAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
     {
@@ -152,22 +153,24 @@ public abstract class ContentCollection : IDisposable
             path,
             lastModified,
             content,
-            Authors
+            Authors,
+            Address
         );
     }
 
-    protected abstract void AttachMonitor();
+    protected void AttachMonitor()
+    {
+        monitorDisposable = provider.AttachMonitor(UpdateArticle);
+    }
 
-    protected abstract Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken ct);
+    public Task CreateFolderAsync(string folderPath)
+        => provider.CreateFolderAsync(folderPath);
 
-    public abstract Task CreateFolderAsync(string folderPath);
+    public Task DeleteFolderAsync(string folderPath)
+        => provider.DeleteFolderAsync(folderPath);
 
-    public abstract Task DeleteFolderAsync(string folderPath);
-
-    public abstract Task DeleteFileAsync(string filePath);
-    protected abstract IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreams(Func<string, bool> filter, CancellationToken ct);
-
-
+    public Task DeleteFileAsync(string filePath)
+        => provider.DeleteFileAsync(filePath);
 
     public virtual string GetContentType(string path)
     {
@@ -176,20 +179,29 @@ public abstract class ContentCollection : IDisposable
             return "text/markdown";
         return MimeTypes.GetValueOrDefault(extension, "application/octet-stream");
     }
+
     private static readonly Dictionary<string, string> MimeTypes = new()
     {
         { ".txt", "text/plain" },
         { ".md", "text/markdown" },
         { ".html", "text/html" },
         { ".htm", "text/html" },
+        { ".css", "text/css" },
+        { ".js", "application/javascript" },
         { ".jpg", "image/jpeg" },
         { ".jpeg", "image/jpeg" },
         { ".png", "image/png" },
         { ".gif", "image/gif" },
         { ".bmp", "image/bmp" },
         { ".svg", "image/svg+xml" },
+        { ".webp", "image/webp" },
+        { ".ico", "image/x-icon" },
         { ".json", "application/json" },
         { ".pdf", "application/pdf" },
-        // Add more mappings as needed
+        { ".woff", "font/woff" },
+        { ".woff2", "font/woff2" },
+        { ".ttf", "font/ttf" },
+        { ".eot", "application/vnd.ms-fontobject" },
+        { ".otf", "font/otf" },
     };
 }

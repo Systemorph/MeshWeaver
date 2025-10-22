@@ -35,14 +35,13 @@ public static class JsonSynchronizationStream
                 workspace.ReduceManager.ReduceTo<TReduced>(),
                 config => config
                     .WithClientId(config.Stream.StreamId)
-                    .WithDeferral(d => d.Message is not DataChangedEvent { ChangeType: ChangeType.Full })
             );
 
 
-        if(typeof(TReduced) == typeof(JsonElement))
+        if (typeof(TReduced) == typeof(JsonElement))
             reduced.RegisterForDisposal(
                 reduced
-                    .ToDataChanged < TReduced, PatchDataChangeRequest > (c => reduced.ClientId.Equals(c.ChangedBy))
+                    .ToDataChanged<TReduced, PatchDataChangeRequest>(c => reduced.ClientId.Equals(c.ChangedBy))
                     .Where(x => x is not null)
                     .Synchronize()
                     .Subscribe(e =>
@@ -69,7 +68,7 @@ public static class JsonSynchronizationStream
             );
 
 
-        var request = 
+        var request =
             reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
         var task = hub.RegisterCallback(request!, c =>
         {
@@ -128,7 +127,7 @@ public static class JsonSynchronizationStream
         var isFirst = true;
         reduced.RegisterForDisposal(
             reduced
-                .ToDataChanged<TReduced,DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
+                .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Synchronize()
@@ -162,16 +161,16 @@ public static class JsonSynchronizationStream
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange: JsonChange=>
+        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange =>
         stream
             .Where(predicate)
             .Select(x =>
             {
                 var logger = stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(JsonSynchronizationStream));
-                logger.LogDebug("ToDataChanged processing change item: StreamId={StreamId}, ChangeType={ChangeType}, ChangedBy={ChangedBy}, UpdatesCount={UpdatesCount}", 
+                logger.LogDebug("ToDataChanged processing change item: StreamId={StreamId}, ChangeType={ChangeType}, ChangedBy={ChangedBy}, UpdatesCount={UpdatesCount}",
                     stream.ClientId, x.ChangeType, x.ChangedBy, x.Updates.Count);
-                
+
                 var currentJson = stream.Get<JsonElement?>();
                 if (currentJson is null || x.ChangeType == ChangeType.Full)
                 {
@@ -197,7 +196,7 @@ public static class JsonSynchronizationStream
                 {
                     if (x.Updates.Count == 0)
                     {
-                        logger.LogWarning("No updates in change item for stream {StreamId}, skipping DataChangedEvent generation. ChangeType: {ChangeType}, ChangedBy: {ChangedBy}", 
+                        logger.LogWarning("No updates in change item for stream {StreamId}, skipping DataChangedEvent generation. ChangeType: {ChangeType}, ChangedBy: {ChangedBy}",
                             stream.ClientId, x.ChangeType, x.ChangedBy);
                         return null;
                     }
@@ -257,12 +256,12 @@ public static class JsonSynchronizationStream
                         id == null ? null : JsonSerializer.Deserialize<object>(id, options)!,
                         pointer.Evaluate(updated)!
                     )
-                    { OldValue = pointer.Evaluate(current) };
+                { OldValue = pointer.Evaluate(current) };
             })
             .DistinctBy(x => new { x.Id, x.Collection })
             .ToArray();
 
-    internal static (JsonElement, JsonPatch) UpdateJsonElement<TChange>(this TChange request, JsonElement? currentJson, JsonSerializerOptions options) where TChange:JsonChange
+    internal static (JsonElement, JsonPatch) UpdateJsonElement<TChange>(this TChange request, JsonElement? currentJson, JsonSerializerOptions options) where TChange : JsonChange
     {
         if (request.ChangeType == ChangeType.Full)
         {
@@ -318,12 +317,12 @@ public static class JsonSynchronizationStream
 
 
 
-    internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates, 
+    internal static DataChangeRequest ToDataChangeRequest(this IEnumerable<EntityUpdate> updates,
         string clientId)
     {
         return updates
             .GroupBy(x => new { x.Collection, x.Id })
-            .Aggregate(new DataChangeRequest(){ChangedBy = clientId}, (e, g) =>
+            .Aggregate(new DataChangeRequest() { ChangedBy = clientId }, (e, g) =>
             {
                 var first = g.First().OldValue;
                 var last = g.Last().Value;
@@ -339,7 +338,7 @@ public static class JsonSynchronizationStream
             });
     }
 
-    internal static JsonPatch ToJsonPatch(this IEnumerable<EntityUpdate> updates, 
+    internal static JsonPatch ToJsonPatch(this IEnumerable<EntityUpdate> updates,
         JsonSerializerOptions options,
         WorkspaceReference? streamReference)
     {
@@ -353,7 +352,7 @@ public static class JsonSynchronizationStream
     }
 
     private static JsonPatch CreateCollectionPatch(
-        CollectionReference collection, 
+        CollectionReference collection,
         JsonSerializerOptions options,
         IEnumerable<EntityUpdate> updates)
     {

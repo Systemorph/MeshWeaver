@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -9,6 +10,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Import.Test;
@@ -68,7 +70,7 @@ B4,B,4
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = await GetDataAsync<MyRecord>(ImportAddress);
+        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -92,12 +94,12 @@ SystemName,DisplayName
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
 
-        ret = await GetDataAsync<MyRecord>(ImportAddress);
+        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
-        var ret2 = await GetDataAsync<MyRecord>(new HostAddress());
+        var ret2 = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 1);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
@@ -125,7 +127,7 @@ B4,B,4
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var ret = await GetDataAsync<MyRecord>(ImportAddress);
+        var ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -154,7 +156,7 @@ SystemName,DisplayName
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
 
-        ret = await GetDataAsync<MyRecord>(ImportAddress);
+        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count == 1);
 
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Equals(5);
@@ -183,7 +185,7 @@ SystemName2,DisplayName2
             TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
-        ret = await GetDataAsync<MyRecord>(ImportAddress);
+        ret = await GetDataAsync<MyRecord>(ImportAddress, x => x.Count >= 2);
 
         ret.Should().HaveCount(2);
     }
@@ -212,7 +214,7 @@ B4,B,4
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = await GetDataAsync<MyRecord>(new HostAddress());
+        var ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -237,16 +239,24 @@ SystemName,DisplayName,Number
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
 
-        ret = await GetDataAsync<MyRecord>(new HostAddress());
+        ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 0);
 
         ret.Should().BeEmpty();
     }
 
-    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(Address address)
+    private async Task<IReadOnlyCollection<TData>?> GetDataAsync<TData>(
+        Address address,
+        System.Func<IReadOnlyCollection<TData>, bool> predicate,
+        TimeSpan? timeout = null)
     {
-        var response = await GetClient().AwaitResponse(new GetDataRequest(new CollectionReference(typeof(TData).Name)),
-            opt => opt.WithTarget(address), new CancellationTokenSource(10.Seconds()).Token);
-        return ((InstanceCollection?)response.Message.Data)?.Instances.Values.Cast<TData>().ToArray();
+        timeout ??= 10.Seconds();
+        var hub = Router.GetHostedHub(address);
+        var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        return await workspace
+            .GetObservable<TData>()
+            .Where(predicate)
+            .Timeout(timeout.Value)
+            .FirstAsync();
     }
 
 }

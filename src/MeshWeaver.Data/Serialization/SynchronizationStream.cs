@@ -113,7 +113,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (startupDeferrable is not null)
         {
-            logger.LogDebug("Disposing startup deferrable");
+            logger.LogDebug("Disposing startup deferrable for Stream {StreamId}", StreamId);
             startupDeferrable.Dispose();
             startupDeferrable = null;
         }
@@ -144,21 +144,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Func<Exception, Task> exceptionCallback) =>
         Hub.Post(new UpdateStreamRequest(update, exceptionCallback));
 
-    public void Initialize()
-    {
-        if (Configuration.Initialization is not null)
-            Hub.InvokeAsync(async ct =>
-            {
-                var initialValue = await Configuration.Initialization.Invoke(this, ct);
-                SetCurrent(new ChangeItem<TStream>(initialValue, StreamId, Hub.Version));
-            }, Configuration.ExceptionCallback);
-    }
-
-
-
     public void OnCompleted()
     {
-        if(!Store.IsDisposed)
+        if (!Store.IsDisposed)
             Store.OnCompleted();
     }
 
@@ -177,7 +165,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public void OnNext(ChangeItem<TStream> value)
     {
-        Hub.InvokeAsync(() => SetCurrent(value), ex => throw new SynchronizationException("An error occurred during synchronization", ex));
+        Hub.Post(new SetCurrentRequest(value));
     }
 
     public virtual void RequestChange(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback)
@@ -196,31 +184,25 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         if (Host.RunLevel > MessageHubRunLevel.Started)
             throw new ObjectDisposedException($"ParentHub {Host.Address} is disposing. Cannot create synchronization stream for {Reference}.");
 
-        
+
         this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
-
-
-        this.Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
 
 
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
         this.Reference = Reference;
 
-
-        logger = Hub.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
-
+        logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
+        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
+        if (Configuration.Initialization is null)
+            startupDeferrable = Hub.Defer(StartupDeferrable);
 
-        if (Configuration.Initialization is not null)
-        {
-            startupDeferrable = Hub.Defer(d => d.Message is not ExecutionRequest);
-            Hub.InvokeAsync(Initialize);
-        }
-        else if (Configuration.Deferral is not null)
-            startupDeferrable = Hub.Defer(Configuration.Deferral);
+
+
+
     }
 
     private IDisposable? startupDeferrable;
@@ -258,22 +240,57 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 var exceptionCallback = request.Message.ExceptionCallback;
                 try
                 {
-                    SetCurrent(await update.Invoke(Current is null ? default : Current.Value, ct));
+                    // Read the current state right before invoking the update function
+                    // This ensures we have the latest state including any updates that occurred
+                    // while previous updates were being processed
+                    var currentValue = Current is null ? default : Current.Value;
+                    var newChangeItem = await update.Invoke(currentValue, ct);
+
+                    // SetCurrent will be called with the computed result
+                    // The Message Hub serializes these messages, so only one UpdateStreamRequest
+                    // is processed at a time per stream, preventing race conditions
+                    SetCurrent(newChangeItem);
                 }
                 catch (Exception e)
                 {
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            });
+            }).WithHandler<SetCurrentRequest>((_, request) =>
+            {
+                try
+                {
+                    SetCurrent(request.Message.Value);
+                }
+                catch (Exception ex)
+                {
+                    throw new SynchronizationException("An error occurred during synchronization", ex);
+                }
+                return request.Processed();
+            }).WithStartupDeferral(StartupDeferrable)
+            .WithInitialization((_, ct) => InitializeAsync(ct));
 
+    }
+
+    private static readonly Predicate<IMessageDelivery> StartupDeferrable = x =>
+        x.Message is not InitializeHubRequest
+        && x.Message is not SetCurrentRequest &&
+        x.Message is not DataChangedEvent { ChangeType: ChangeType.Full };
+
+    private async Task InitializeAsync(CancellationToken ct)
+    {
+        if (Configuration.Initialization is null)
+            return;
+
+        var init = await Configuration.Initialization(this, ct);
+        SetCurrent(new ChangeItem<TStream>(init, StreamId, Host.Version));
     }
 
 
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
-        if(Hub.Disposal is not null)
+        if (Hub.Disposal is not null)
             return;
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
@@ -337,7 +354,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
         Store.OnCompleted();
         Store.Dispose();
-        if(Hub.RunLevel <= MessageHubRunLevel.Started)
+        if (Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
     private ConcurrentDictionary<string, object?> Properties { get; } = new();
@@ -360,6 +377,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
 
+    public record SetCurrentRequest(ChangeItem<TStream> Value);
+
 }
 
 
@@ -371,14 +390,12 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal bool NullReturn { get; init; }
 
-    internal Predicate<IMessageDelivery>? Deferral { get; init; }
-
     public StreamConfiguration<TStream> ReturnNullWhenNotPresent()
         => this with { NullReturn = true };
 
     internal Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>>? Initialization { get; init; }
 
-    
+
     internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
@@ -389,7 +406,4 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
-
-    public StreamConfiguration<TStream> WithDeferral(Predicate<IMessageDelivery> deferral)
-        => this with { Deferral = deferral };
 }

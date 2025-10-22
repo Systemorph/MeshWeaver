@@ -1,7 +1,43 @@
-﻿@inherits SkinnedView<MeshWeaver.ContentCollections.ArticleCatalogSkin, ArticleCatalogView>
+﻿@using MeshWeaver.ContentCollections
+@inherits BlazorView<MeshWeaver.ContentCollections.ArticleCatalogControl, ArticleCatalogView>
 
-<FluentStack Class="articles-catalog">
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area"></DispatchView>
-</FluentStack>
+<div class="articles-catalog-page">
+    @if (ShowPicker && collectionOptions != null && collectionOptions.Any())
+    {
+        <FluentToolbar Class="toolbar">
+            <FluentSelect Width="150px"
+                         Placeholder="(all)"
+                         @bind-Value="SelectedCollection"
+                         Items="@collectionOptions"
+                         OptionText="@(a => a.Text)"
+                         OptionValue="@(a => a.Value)" />
+        </FluentToolbar>
+        <div class="toolbar-spacer"></div>
+    }
+
+    @if (collectionOptions == null || !collectionOptions.Any())
+    {
+        <b>No article collections are available.</b>
+    }
+    else if (!Articles.Any())
+    {
+        <b>
+            No articles found in the selected collection(s).
+        </b>
+    }
+    else
+    {
+        <FluentStack Orientation="Orientation.Vertical" Class="articles-catalog">
+            @foreach (var article in Articles)
+            {
+                var catalogItem = new ArticleCatalogItemControl(
+                    article with { Content = string.Empty, PrerenderedHtml = string.Empty },
+                    article.Url
+                );
+                <ArticleCatalogItemView ViewModel="@catalogItem" />
+            }
+        </FluentStack>
+    }
+</div>
 
 

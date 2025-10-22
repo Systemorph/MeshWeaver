@@ -16,7 +16,7 @@ body {
     display: flex;
     flex-direction: column;
     height: 100%;
-    min-height: calc(100vh - 120px);
+    max-height: 100%;
     overflow: hidden;
     background-color: var(--neutral-layer-1);
     color: var(--neutral-foreground-rest);
@@ -31,6 +31,7 @@ body {
     min-width: 0;
     position: relative;
     min-height: 0;
+    overflow: hidden;
 }
 
 .chat-messages-area {
@@ -64,9 +65,9 @@ body {
     border-bottom: 1px solid var(--neutral-stroke-divider);
     background-color: var(--neutral-layer-2);
     flex-shrink: 0;
-    position: sticky;
-    top: 0;
-    z-index: 900;
+    position: relative;
+    z-index: 1000;
+    min-height: 48px;
 }
 
 .chat-title {

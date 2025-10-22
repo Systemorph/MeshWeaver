@@ -1,14 +1,14 @@
-﻿using MeshWeaver.Layout;
-using Microsoft.AspNetCore.Components;
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Blazor.Pages;
 
-public partial class ApplicationPage
+public partial class ApplicationPage : ComponentBase
 {
     private DesignThemeModes Mode;
     private LayoutAreaControl ViewModel { get; set; } = null!;
@@ -40,37 +40,29 @@ public partial class ApplicationPage
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IReadOnlyDictionary<string, object>? Options { get; set; } = ImmutableDictionary<string, object>.Empty;
-    private object? Address => IsValidAddressType ? MeshExtensions.MapAddress(AddressType!, Application!) : null;
-    private bool IsValidAddressType => GetValidAddressTypes().Contains(AddressType!);
-    
-    private HashSet<string> GetValidAddressTypes() => 
-        Hub.TypeRegistry.Types
-            .Where(kvp => kvp.Value.Type.IsAssignableTo(typeof(Address)))
-            .Select(kvp => kvp.Key)
-            .ToHashSet();
+    private object? Address => Hub.TypeRegistry.MapAddress(AddressType!, Application!);
 
     private LayoutAreaReference Reference { get; set; } = null!;
-    protected override async Task OnParametersSetAsync()
+    protected override Task OnParametersSetAsync()
     {
-        await base.OnParametersSetAsync();
 
         var id = (string)WorkspaceReference.Decode(Id);
         var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query;
         if (!string.IsNullOrEmpty(query))
             id += "?" + query;
-        
+
         Reference = new((string)WorkspaceReference.Decode(Area!))
         {
             Id = id,
         };
 
 
-
-        if (!IsValidAddressType)
+        var addressType = Hub.TypeRegistry.GetType(AddressType!);
+        if (addressType is null || !typeof(Address).IsAssignableFrom(addressType))
         {
             // Handle invalid address type
             PageTitle = $"Invalid Address Type: {AddressType}";
-            return;
+            return Task.CompletedTask;
         }
 
         ViewModel = Controls.LayoutArea(Address!, Reference)
@@ -78,8 +70,9 @@ public partial class ApplicationPage
         {
             ShowProgress = true
         };
-        PageTitle = $"{ViewModel.ProgressMessage} - {Application!}";
+        PageTitle = $"{Application!}";
 
+        return Task.CompletedTask;
     }
 
 

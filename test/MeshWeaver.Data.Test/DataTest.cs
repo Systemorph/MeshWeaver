@@ -273,7 +273,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         var logPath = "/tmp/savedata.log";
         var itemsInfo = string.Join(", ", instanceCollection.Instances.Select(kvp => $"{kvp.Key}:{((MyData)kvp.Value).Text}"));
         File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} SaveMyData called with {instanceCollection.Instances.Count} instances: {itemsInfo}\n");
-        
+
         storage = instanceCollection.Instances;
         return instanceCollection;
     }
@@ -678,7 +678,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync();
 
         // assert
-        collection.Should().BeEquivalentTo(MyData.InitialData); 
+        collection.Should().BeEquivalentTo(MyData.InitialData);
         collection.Should().AllBeOfType<MyData>();
     }
 

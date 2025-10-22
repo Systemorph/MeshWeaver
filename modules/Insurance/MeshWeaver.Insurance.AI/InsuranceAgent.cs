@@ -1,0 +1,151 @@
+﻿using MeshWeaver.AI;
+using MeshWeaver.AI.Plugins;
+using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
+using MeshWeaver.Insurance.Domain;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
+using Microsoft.SemanticKernel;
+
+namespace MeshWeaver.Insurance.AI;
+
+/// <summary>
+/// Main Insurance agent that provides access to insurance pricing data and collections.
+/// </summary>
+[DefaultAgent]
+public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
+{
+    private Dictionary<string, TypeDescription>? typeDefinitionMap;
+    private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
+
+    public string Name => "InsuranceAgent";
+
+    public string Description =>
+        "Handles all questions and actions related to insurance pricings, property risks, and dimensions. " +
+        "Provides access to pricing data, allows creation and management of pricings and property risks. " +
+        "Also manages submission documents and files for each pricing.";
+
+    public string Instructions =>
+        $$$"""
+        The agent is the InsuranceAgent, specialized in managing insurance pricings:
+
+        ## Working with Submission Documents and Files
+
+        CRITICAL: When users ask about submission files, documents, or content:
+        - DO NOT call {{{nameof(DataPlugin.GetData)}}} for Pricing or any other data first
+        - DO NOT try to verify the pricing exists before accessing files
+        - The SubmissionPlugin is already configured for the current pricing context
+        - Simply call the SubmissionPlugin functions directly
+
+        Available SubmissionPlugin functions (all collectionName parameters are optional):
+        - {{{nameof(ContentCollectionPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
+        - {{{nameof(ContentCollectionPlugin.ListFolders)}}}() - List all folders
+        - {{{nameof(ContentCollectionPlugin.ListCollectionItems)}}}() - List both files and folders
+        - {{{nameof(ContentCollectionPlugin.GetDocument)}}}(documentPath) - Get document content
+        - {{{nameof(ContentCollectionPlugin.SaveDocument)}}}(documentPath, content) - Save a document
+        - {{{nameof(ContentCollectionPlugin.DeleteFile)}}}(filePath) - Delete a file
+        - {{{nameof(ContentCollectionPlugin.CreateFolder)}}}(folderPath) - Create a folder
+        - {{{nameof(ContentCollectionPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
+
+        Examples:
+        - User: "Show me the submission files" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
+        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
+        - User: "Read the slip document" → You: Call {{{nameof(ContentCollectionPlugin.GetDocument)}}}("Slip.md")
+
+        ## Working with Pricing Data
+
+        When users ask about pricing entities, risks, or dimensions (NOT files):
+        1. Use the DataPlugin to get available data (function: {{{nameof(DataPlugin.GetData)}}}) with the appropriate type:
+            {{{nameof(Pricing)}}}, {{{nameof(PropertyRisk)}}}, {{{nameof(LineOfBusiness)}}}, {{{nameof(Country)}}}, {{{nameof(LegalEntity)}}}, {{{nameof(Currency)}}}
+        2. When asked to modify an entity, load it using {{{nameof(DataPlugin.GetData)}}} with the entityId parameter,
+           modify it, and save it back using {{{nameof(DataPlugin.UpdateData)}}}.
+
+        ## Displaying Layout Areas
+
+        Use the LayoutAreaPlugin with {{{nameof(LayoutAreaPlugin.DisplayLayoutArea)}}} function.
+        Available layout areas can be listed using {{{nameof(LayoutAreaPlugin.GetLayoutAreas)}}} function.
+        """;
+
+    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
+    {
+        yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
+        yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap).CreateKernelPlugin();
+
+        // Always provide ContentCollectionPlugin - it will use ContextToConfigMap to determine the collection
+        var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
+        yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
+    }
+
+    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    {
+        return new ContentCollectionPluginConfig
+        {
+            Collections = [],
+            ContextToConfigMap = context =>
+            {
+                // Only handle pricing contexts
+                if (context?.Address?.Type != PricingAddress.TypeName)
+                    return null!;
+
+                var pricingId = context.Address.Id;
+
+                // Parse pricingId in format {company}-{uwy}
+                var parts = pricingId.Split('-');
+                if (parts.Length != 2)
+                    return null!;
+
+                var company = parts[0];
+                var uwy = parts[1];
+                var subPath = $"{company}/{uwy}";
+
+                // Create Hub-based collection config pointing to the pricing address
+                // This matches the logic in InsuranceApplicationExtensions
+                return new ContentCollectionConfig
+                {
+                    SourceType = HubStreamProviderFactory.SourceType,
+                    Name = $"Submissions-{pricingId}",
+                    Address = context.Address,
+                    BasePath = subPath
+                };
+            }
+        };
+    }
+
+    async Task IInitializableAgent.InitializeAsync()
+    {
+        try
+        {
+            var typesResponse = await hub.AwaitResponse(
+                new GetDomainTypesRequest(),
+                o => o.WithTarget(new PricingAddress("default")));
+            typeDefinitionMap = typesResponse.Message.Types.Select(t => t with { Address = null }).ToDictionary(x => x.Name);
+        }
+        catch
+        {
+            typeDefinitionMap = null;
+        }
+
+        try
+        {
+            var layoutAreaResponse = await hub.AwaitResponse(
+                new GetLayoutAreasRequest(),
+                o => o.WithTarget(new PricingAddress("default")));
+            layoutAreaMap = layoutAreaResponse.Message.Areas.ToDictionary(x => x.Area);
+        }
+        catch
+        {
+            layoutAreaMap = null;
+        }
+    }
+
+    /// <summary>
+    /// Determines whether this agent should handle messages for contexts starting with "insurance-pricing".
+    /// </summary>
+    public bool Matches(AgentContext? context)
+    {
+        if (context?.Address == null)
+            return false;
+
+        return context.Address.Type == PricingAddress.TypeName;
+    }
+}

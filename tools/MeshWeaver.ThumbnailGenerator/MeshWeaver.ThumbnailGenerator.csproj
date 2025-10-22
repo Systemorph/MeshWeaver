@@ -23,7 +23,5 @@
       <PackageReference Include="Microsoft.Playwright" />
       <PackageReference Include="System.CommandLine" />
       <PackageReference Include="System.CommandLine.NamingConventionBinder" />
-      <PackageReference Include="System.Net.Http" />
-      <PackageReference Include="System.Text.RegularExpressions" />
   </ItemGroup>
 </Project>

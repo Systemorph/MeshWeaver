@@ -11,6 +11,8 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.SignalR;
+using MeshWeaver.Insurance.Domain;
+using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Mesh;
 using MeshWeaver.Portal.AI;
 using MeshWeaver.Portal.Shared.Web.Infrastructure;
@@ -69,6 +71,7 @@ public static class SharedPortalConfiguration
         services.AddScoped<CacheStorageAccessor>();
         services.AddSingleton<IAppVersionService, AppVersionService>();
         services.AddSingleton<DimensionManager>();
+        services.AddSingleton<IPricingService, InMemoryPricingService>();
 
         services.AddHttpContextAccessor();
 
@@ -112,20 +115,38 @@ public static class SharedPortalConfiguration
 
 
         builder.Services.AddSignalR();
-        builder.Services.Configure<List<ContentSourceConfig>>(builder.Configuration.GetSection("ArticleCollections"));
+
 
         builder.Services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
     }
 
-    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder)
+    public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder, IConfiguration configuration)
             where TBuilder : MeshBuilder
             =>
             (TBuilder)builder
-                .ConfigureHub(mesh => mesh.AddAgGrid().AddChartJs().AddGoogleMaps())
+                .ConfigureHub(mesh => mesh
+                    .WithType(typeof(PricingAddress), PricingAddress.TypeName)
+                    .AddContentCollections()
+                    .AddAgGrid()
+                    .AddChartJs()
+                    .AddGoogleMaps()
+                )
                 .AddBlazor(layoutClient => layoutClient
                         .WithPortalConfiguration(c =>
-                            c.AddArticles()
+                            c.AddArticles(new ContentCollectionConfig()
+                            {
+                                SourceType = HubStreamProviderFactory.SourceType,
+                                Name = "Documentation",
+                                Address = new ApplicationAddress("Documentation")
+                            },
+                                new ContentCollectionConfig()
+                                {
+                                    SourceType = HubStreamProviderFactory.SourceType,
+                                    Name = "Todo",
+                                    Address = new ApplicationAddress("Todo")
+                                }
+                            )
                         )
                 )
                 .AddSignalRHubs();

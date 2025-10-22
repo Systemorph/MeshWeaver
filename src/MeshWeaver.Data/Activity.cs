@@ -17,7 +17,7 @@ public class Activity : ILogger, IDisposable
         ParentHub = parentHub ?? throw new ArgumentNullException(nameof(parentHub));
         Id = Guid.NewGuid().AsString();
         Address = new ActivityAddress(Id);
-        Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this,conf));
+        Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this, conf));
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         this.autoClose = autoClose;
         activityLog = new(category);
@@ -28,7 +28,7 @@ public class Activity : ILogger, IDisposable
 
     public string Category { get; }
 
-    public string Id { get; } 
+    public string Id { get; }
     public ActivityAddress Address { get; }
 
     public ConcurrentBag<Activity> SubActivities { get; } = new();
@@ -51,7 +51,7 @@ public class Activity : ILogger, IDisposable
 
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
     {
-        Hub.Post(new UpdateActivityLogRequest(log => log with{Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) }));
+        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) }));
     }
 
     public Task<ActivityLog> GetLogAsync()
@@ -64,7 +64,7 @@ public class Activity : ILogger, IDisposable
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state,exception), logLevel) ) }));
+        Hub.Post(new UpdateActivityLogRequest(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state, exception), logLevel)) }));
     }
 
     public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
@@ -102,7 +102,7 @@ public class Activity : ILogger, IDisposable
 
     public void Dispose()
     {
-        if(Hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)    
+        if (Hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
             Hub.Dispose();
     }
 

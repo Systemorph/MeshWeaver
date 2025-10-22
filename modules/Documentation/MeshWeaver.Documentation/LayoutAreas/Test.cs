@@ -1,6 +1,5 @@
 ﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using static MeshWeaver.Layout.Controls;
 
 namespace MeshWeaver.Documentation.LayoutAreas;
 
@@ -38,13 +37,13 @@ public static class CalculatorLayoutArea
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="ctx">The rendering context.</param>
-    public static UiControl CalculatorArea(LayoutAreaHost host, RenderingContext ctx) 
-        => host.Edit(new Calculator{Summand1 = 1, Summand2 = 2}, CalculatorSum);
+    public static UiControl CalculatorArea(LayoutAreaHost host, RenderingContext ctx)
+        => host.Edit(new Calculator { Summand1 = 1, Summand2 = 2 }, CalculatorSum);
 
     /// <summary>
     /// The business logic for how to compute the sum.
     /// </summary>
     /// <param name="calculator">The calculator instance</param>
     /// <returns>A Markdown Control with the sum.</returns>
-    static UiControl CalculatorSum(Calculator calculator) => Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
+    static UiControl CalculatorSum(Calculator calculator) => Controls.Markdown($"**Sum**: {calculator.Summand1 + calculator.Summand2}");
 }

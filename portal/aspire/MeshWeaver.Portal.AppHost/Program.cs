@@ -24,6 +24,7 @@ var orleans = builder.AddOrleans("mesh")
     .WithClustering(orleansTables);
 
 // Add the EntraId parameters
+var entraIdInstance = builder.AddParameter("EntraIdInstance", secret: false);
 var entraIdTenantId = builder.AddParameter("EntraIdTenantId");
 var entraIdClientId = builder.AddParameter("EntraIdClientId");
 var entraIdAdminGroupId = builder.AddParameter("PortalAdminGroup");
@@ -45,25 +46,18 @@ if (!builder.ExecutionContext.IsPublishMode)
         .WithReference(meshweaverdb)
         .WaitFor(meshweaverdb);
 
-    // Configure the silo to wait for database migrations to complete
+    // Configure the silo (co-hosting web) to wait for database migrations to complete
     var silo = builder
         .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
+        .WithExternalHttpEndpoints()
         .WithReference(orleans)
         .WithReference(meshweaverdb)
-        .WaitForCompletion(migrationService)
-        .WaitFor(orleansTables);
-
-    // Configure the frontend to wait for database migrations to complete
-    var frontend = builder
-        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-        .WithExternalHttpEndpoints()
-        .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
+        .WithEnvironment("EntraId__Instance", entraIdInstance)
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
         .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
-        .WithReference(meshweaverdb)
         .WaitForCompletion(migrationService)
         .WaitFor(orleansTables);
 }
@@ -82,24 +76,18 @@ else
         .WithReference(azureMeshweaverdb)
         .WaitFor(azureMeshweaverdb);
 
-    // Configure the silo to wait for database migrations to complete
+    var googleTrackingId = builder.AddParameter("GoogleAnalyticsTrackingId");
+
+    // Configure the silo (co-hosting web) to wait for database migrations to complete
     var silo = builder
         .AddProject<Projects.MeshWeaver_Portal_Orleans>("silo")
         .WithReplicas(1)
+        .WithExternalHttpEndpoints()
         .WithReference(orleans)
         .WithReference(azureMeshweaverdb)
-        .WaitForCompletion(migrationService)
-        .WaitFor(orleansTables);
-
-    var googleTrackingId = builder.AddParameter("GoogleAnalyticsTrackingId");
-        // Configure the frontend to wait for database migrations to complete
-    var frontend = builder
-        .AddProject<Projects.MeshWeaver_Portal_Web>("frontend")
-        .WithExternalHttpEndpoints()
-        .WithReference(orleans.AsClient())
         .WithReference(appStorage.AddBlobs("documentation"))
         .WithReference(appStorage.AddBlobs("reinsurance"))
-        .WithReference(azureMeshweaverdb)
+        .WithEnvironment("EntraId__Instance", entraIdInstance)
         .WithEnvironment("EntraId__TenantId", entraIdTenantId)
         .WithEnvironment("EntraId__ClientId", entraIdClientId)
         .WithEnvironment("EntraId__RoleMappings__PortalAdmin", entraIdAdminGroupId)
@@ -110,14 +98,13 @@ else
     // Add Application Insights
     //var insights = builder.AddAzureApplicationInsights("meshweaverinsights");
     //silo.WithReference(insights);
-    //frontend.WithReference(insights);
 
     // Register all parameters upfront for both domains
     var meshweaverDomain = builder.AddParameter("meshweaverDomain");
     var meshweaverCertificate = builder.AddParameter("meshweaverCertificate");
     // Add Azure PostgreSQL connection string parameter for production
 
-    frontend
+    silo
         .PublishAsAzureContainerApp((module, app) =>
         {
 #pragma warning disable ASPIREACADOMAINS001 // Suppress warning about evaluation features

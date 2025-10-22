@@ -1,4 +1,4 @@
-@page "/chat"
+@inherits BlazorView<AgentChatControl, AgentChatView>
 
 @using MeshWeaver.AI.Persistence
 @implements IDisposable
@@ -10,7 +10,7 @@
 <div class="chat-app-container">
     <!-- Sticky Chat Header -->
     <div class="chat-header">
-        <h3 class="chat-title">AI Chat</h3>
+        <h3 class="chat-title">@chatTitle</h3>
         <div class="chat-actions">
             @if (isGeneratingResponse)
             {
@@ -32,14 +32,6 @@
                     <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
                     Right
                     @if (currentPosition == ChatPosition.Right)
-                    {
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
-                    }
-                </FluentMenuItem>
-                <FluentMenuItem OnClick="@(() => ChangeChatPosition(ChatPosition.Left))">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.PanelLeft())" />
-                    Left
-                    @if (currentPosition == ChatPosition.Left)
                     {
                         <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
                     }

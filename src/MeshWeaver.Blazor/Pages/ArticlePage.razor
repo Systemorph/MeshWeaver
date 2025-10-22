@@ -1,12 +1,10 @@
 @page "/article/{**Path}"
-@using System.Reactive.Linq
 @using MeshWeaver.Blazor.Infrastructure
 @inject PortalApplication PortalApplication
 
-<LayoutArea Address="@PortalApplication.Hub.Address" Area="Article" Id="@Path"></LayoutArea>
+<LayoutArea Address="@PortalApplication.Hub.Address" Area="Articles" Id="@Path"></LayoutArea>
 
 @code
 {
     [Parameter] public string? Path { get; set; }
-
 }

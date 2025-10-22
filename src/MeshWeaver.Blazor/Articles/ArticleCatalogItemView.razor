@@ -1,15 +1,16 @@
 ﻿@using MeshWeaver.ContentCollections
+@using Microsoft.AspNetCore.Components
 @inherits BlazorView<MeshWeaver.ContentCollections.ArticleCatalogItemControl, ArticleCatalogItemView>
 
-<a href="@Data.Url" class="article-card-link">
+<a href="@Url" class="article-card-link">
     <article class="article-card">
         <FluentStack Orientation="Orientation.Vertical">
             <div class="header">
                 <div class="author-info">
-                    @foreach (var author in Data.AuthorDetails)
+                    @foreach (var author in Data.AuthorDetails ?? [])
                     {
                         <div class="author">
-                            <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl"/>
+                            <FluentPersona Name="@author.FormatName()" ImageSize="24px" Image="@author.ImageUrl" InitialsTextColor="var(--neutral-foreground-rest)" ImageInitials="@GetInitials(author)"/>
                         </div>
                     }
                 </div>
@@ -25,7 +26,7 @@
                 <div class="content">
                     <div class="text">
                         <h3 class="title">@Data.Title</h3>
-                        <p class="summary">@Data.Abstract</p>
+                        <div class="summary">@((MarkupString)(Data.AbstractHtml ?? string.Empty))</div>
                         @if (HasVideo)
                         {
                             <div class="video-info">
@@ -35,7 +36,7 @@
                         }
                     </div>
                     <div class="thumbnail">
-                        <img alt="@Data.Title" src="@Thumbnail" width="160" height="160"/>
+                        <img alt="@Data.Title" src="@Data.Thumbnail" width="160" height="160"/>
                     </div>
                 </div>
             </FluentStack>
@@ -46,22 +47,29 @@
 @code
 {
     private Article Data { get; set; } = null!;
-    private string PublishedDate => Data.Published is null 
-        ? "unpublished" 
-        : Data.Published.Value.Year == DateTime.Now.Year 
-            ? Data.Published.Value.ToString("dd MMM") 
+    private string? Url { get; set; }
+
+    private string PublishedDate => Data.Published is null
+        ? "unpublished"
+        : Data.Published.Value.Year == DateTime.Now.Year
+            ? Data.Published.Value.ToString("dd MMM")
             : Data.Published.Value.ToString("dd MMM yyyy");
     private bool IsNewArticle => Data.Published is not null && (DateTime.Now - Data.Published.Value).TotalDays <= 7;
     private bool HasVideo => !string.IsNullOrEmpty(Data.VideoUrl);
     private string? VideoDuration => Data.VideoDuration?.ToString(@"hh\:mm\:ss");
 
-    private string ImageBasePath => $"static/{Data.Collection}";
-    private string Thumbnail => $"{ImageBasePath}/{Data.Thumbnail}";
+    private string GetInitials(Author author)
+    {
+        var first = author.FirstName?.FirstOrDefault() ?? ' ';
+        var last = author.LastName?.FirstOrDefault() ?? ' ';
+        return $"{first}{last}".Trim();
+    }
 
     protected override void BindData()
     {
         base.BindData();
 
         DataBind(ViewModel.Article, x => x.Data);
+        DataBind(ViewModel.Url, x => x.Url);
     }
 }

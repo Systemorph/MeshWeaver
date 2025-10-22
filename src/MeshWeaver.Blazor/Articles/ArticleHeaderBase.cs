@@ -44,6 +44,11 @@ public abstract class ArticleHeaderBase : ComponentBase
         set => Model?.Update(a => a with { Abstract = value! });
     }
 
+    protected string? AbstractHtml
+    {
+        get => Model?.Element.AbstractHtml;
+    }
+
     protected IReadOnlyCollection<Author>? Authors
     {
         get => Model?.Element.AuthorDetails;
@@ -71,7 +76,14 @@ public abstract class ArticleHeaderBase : ComponentBase
         set => Model?.Update(a => a with { VideoUrl = value! });
     }
     protected string EditLink => $"/article/edit/{CollectionName}/{Name}";
-    protected string ThumbnailPath => $"/static/{CollectionName}/{Thumbnail}";
+
+    protected string GetInitials(Author author)
+    {
+        var first = author.FirstName?.FirstOrDefault() ?? ' ';
+        var last = author.LastName?.FirstOrDefault() ?? ' ';
+        return $"{first}{last}".Trim();
+    }
+
     protected string GetEmbedUrl(string? videoUrl)
     {
         if (videoUrl?.Contains("youtube.com/watch") == true)

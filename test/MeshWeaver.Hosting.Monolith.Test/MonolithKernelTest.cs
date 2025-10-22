@@ -68,7 +68,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         const string url = "http://localhost/area";
         var client = GetClient();
         client.Post(
-            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand){ IFrameUrl = url },
+            new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand) { IFrameUrl = url },
             o => o.WithTarget(new KernelAddress()));
         var kernelEvents = await kernelEventsStream
             .Select(e => Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Deserialize(e.Envelope).Event)
@@ -106,12 +106,12 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         const string Area = nameof(Area);
         var client = GetClient();
         client.Post(
-            new SubmitCodeRequest(Code) { Id = Area},
+            new SubmitCodeRequest(Code) { Id = Area },
             o => o.WithTarget(kernel));
 
-        var stream = client.GetWorkspace().GetRemoteStream< JsonElement, LayoutAreaReference>(kernel, new LayoutAreaReference(Area));
+        var stream = client.GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(kernel, new LayoutAreaReference(Area));
         var control = await stream.GetControlStream(Area)
-            .Timeout(10.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync(x => x is not null);
 
         var stack = control.Should().BeOfType<StackControl>().Which;

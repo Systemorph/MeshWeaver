@@ -8,12 +8,12 @@ using FluentAssertions;
 using FluentAssertions.Equivalency;
 using FluentAssertions.Execution;
 using FluentAssertions.Extensions;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Data.TestDomain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Import.Test;
@@ -71,7 +71,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
             o => o.WithTarget(new ImportAddress(2024)),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
-                new CancellationTokenSource(30.Seconds()).Token
+                new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
         Logger.LogInformation("DistributedImportTest {TestId}: Import response received with status {Status}", testId, importResponse.Message.Log.Status);
@@ -80,7 +80,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
-        var transactionalItems1 = await (await GetWorkspace(
+        var transactionalItems1 = await (GetWorkspace(
                 Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
             ))
             .GetObservable<TransactionalData>()
@@ -89,7 +89,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting computed workspace", testId);
-        var computedItems1 = await (await GetWorkspace(
+        var computedItems1 = await (GetWorkspace(
                 Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
             ))
             .GetObservable<ComputedData>()
@@ -111,9 +111,8 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
-    private async Task<IWorkspace> GetWorkspace(IMessageHub hub)
+    private IWorkspace GetWorkspace(IMessageHub hub)
     {
-        await hub.Started;
         return hub.ServiceProvider.GetRequiredService<IWorkspace>();
     }
 
@@ -140,7 +139,7 @@ Id,Year,LoB,BusinessUnit,Value
             ).Token
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
-        var workspace = await GetWorkspace(
+        var workspace = GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var items = await workspace
@@ -182,7 +181,7 @@ SystemName,DisplayName
             TestContext.Current.CancellationToken,
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
-        var workspace = await GetWorkspace(
+        var workspace = GetWorkspace(
             Router.GetHostedHub(new ReferenceDataAddress(), null!)
         );
         var actualLoBs = await workspace.GetObservable<LineOfBusiness>().FirstAsync(x => x.First().DisplayName.StartsWith("LoB"));

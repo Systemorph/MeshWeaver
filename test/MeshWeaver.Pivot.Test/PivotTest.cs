@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using MeshWeaver.Arithmetics;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
@@ -18,6 +19,7 @@ using MeshWeaver.TestDomain;
 using MeshWeaver.TestDomain.Cubes;
 using MeshWeaver.TestDomain.SimpleData;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Pivot.Test;
@@ -81,6 +83,7 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
 
         var model = await GetModel(pivotBuilder);
         await model.JsonShouldMatch(Options, $"{fileName}.json");
+        Logger.LogDebug("Test {file} finished", fileName);
     }
 
     [Theory]
@@ -908,13 +911,13 @@ public class PivotTest(ITestOutputHelper output) : HubTestBase(output)
         PivotBuilder<T, TIntermediate, TAggregate> pivotBuilder
     )
     {
-        return await pivotBuilder.Execute().FirstAsync();
+        return await pivotBuilder.Execute().Timeout(10.Seconds()).FirstAsync();
     }
 
     protected virtual async Task<PivotModel> GetModel<TElement, TIntermediate, TAggregate>(
         DataCubePivotBuilder<IDataCube<TElement>, TElement, TIntermediate, TAggregate> pivotBuilder
     )
     {
-        return await pivotBuilder.Execute().FirstAsync();
+        return await pivotBuilder.Execute().Timeout(10.Seconds()).FirstAsync();
     }
 }

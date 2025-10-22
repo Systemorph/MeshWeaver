@@ -21,46 +21,21 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Kernel.Hub;
 
-public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
+public class KernelContainer(IServiceProvider serviceProvider)
 {
 
     private readonly HashSet<Address> subscriptions = new();
     private readonly IMeshCatalog meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
     private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
-    private IUiControlService uiControlService = null!;
-    private IMessageHub executionHub = null!;
-    private void Initialize(IMessageHub hub)
-    {
-        Hub = hub;
-        uiControlService = hub.ServiceProvider.GetRequiredService<IUiControlService>();
-        executionHub = hub.ServiceProvider.CreateMessageHub(new KernelExecutionAddress());
-        Kernel = CreateKernel();
-        Kernel.KernelEvents.Subscribe(PublishEventToContext);
-        AreasStream =
-            new SynchronizationStream<ImmutableDictionary<string, object>>(
-                new(Guid.NewGuid().AsString(), Hub.Address),
-                Hub,
-                new AggregateWorkspaceReference(),
-                new ReduceManager<ImmutableDictionary<string, object>>(Hub),
-                x => x
-                    .WithInitialization((_, _) => Task.FromResult(ImmutableDictionary<string, object>.Empty))
-            );
-            
-        Hub.RegisterForDisposal(this);
-        DisposeOnTimeout();
-    }
-
-    private ISynchronizationStream<ImmutableDictionary<string, object>> AreasStream { get; set; } = null!;
-
 
     /// <summary>
     /// When the kernel does not receive messages in a given timeout,
     /// it will dispose itself.
     /// </summary>
-    private void DisposeOnTimeout()
+    private void DisposeOnTimeout(IMessageHub hub)
     {
-        var timer = new Timer(_ => Dispose(), this, DisconnectTimeout, DisconnectTimeout);
-        Hub.Register<object>(d =>
+        var timer = new Timer(_ => hub.Dispose(), this, DisconnectTimeout, DisconnectTimeout);
+        hub.Register<object>(d =>
         {
             timer.Change(DisconnectTimeout, DisconnectTimeout);
             return d;
@@ -71,50 +46,65 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
     {
         return config
             .AddLayout(layout =>
-                layout.WithView(_ => true, 
-                    (_,ctx) => AreasStream
+                layout.WithView(_ => true,
+                    (host, ctx) => GetAreaStream(host.Hub.ServiceProvider)
                         .Select(a =>
                         {
                             var valueOrDefault = a.Value!.GetValueOrDefault(ctx.Area);
                             if (valueOrDefault is null)
                                 return null;
+                            var uiControlService = host.Hub.ServiceProvider.GetRequiredService<IUiControlService>();
                             return uiControlService.Convert(valueOrDefault);
                         })
                 )
             )
             .AddMeshTypes()
             .WithRoutes(routes => routes.WithHandler((d, ct) => RouteToSubHubs(routes.Hub, d, ct)))
+            .WithServices(services => services
+                .AddScoped(CreateKernelAsync)
+                .AddScoped(CreateAreaStream)
+            )
             .WithInitialization((hub, _) =>
             {
-                Initialize(hub);
-                return Task.WhenAll(Kernel.ChildKernels.OfType<CSharpKernel>()
-                    .Select(k => k.SetValueAsync(nameof(Mesh), Hub, typeof(IMessageHub))));
+                DisposeOnTimeout(hub);
+                return Task.CompletedTask;
             })
-            .WithHandler<KernelCommandEnvelope>((_, request) => HandleKernelCommandEnvelope(request))
-            .WithHandler<SubmitCodeRequest>((_, request) => HandleKernelCommand(request))
+            .WithHandler<KernelCommandEnvelope>(HandleKernelCommandEnvelope)
+            .WithHandler<SubmitCodeRequest>(HandleKernelCommand)
             .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
             .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
             .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request));
+
     }
 
+    ISynchronizationStream<ImmutableDictionary<string, object>> GetAreaStream(IServiceProvider sp)
+        => sp.GetRequiredService<ISynchronizationStream<ImmutableDictionary<string, object>>>();
+    private ISynchronizationStream<ImmutableDictionary<string, object>> CreateAreaStream(IServiceProvider sp)
+    {
+        var hub = sp.GetRequiredService<IMessageHub>();
+        return new SynchronizationStream<ImmutableDictionary<string, object>>(
+            new(Guid.NewGuid().AsString(), hub.Address),
+            hub,
+            new AggregateWorkspaceReference(),
+            new ReduceManager<ImmutableDictionary<string, object>>(hub),
+            x => x
+                .WithInitialization((_, _) => Task.FromResult(ImmutableDictionary<string, object>.Empty))
+        );
 
-    private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
+    }
 
     private async Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
     {
+        if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
+            return request;
         try
         {
-            await kernelHub.Started;
-            if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
-                return request;
-
             var hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
             if (hub is not null)
             {
                 hub.DeliverMessage(request);
                 return request.Processed();
             }
-
 
             var meshNode = await meshCatalog.GetNodeAsync(hosted.Address);
             if (meshNode == null)
@@ -123,7 +113,8 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
             if (meshNode.StartupScript is null)
                 return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}");
 
-            var result = await Kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
+            var kernel = await kernelHub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+            var result = await kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
             if (!result.Events.Any(e => e is CommandSucceeded))
             {
                 var message = $"Startup script failed:\n{string.Join('\n',
@@ -146,8 +137,8 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         }
         catch (ObjectDisposedException)
         {
-            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}: {Command}", Hub.Address, request);
-            Hub.Dispose();
+            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}: {Command}", kernelHub.Address, request);
+            kernelHub.Dispose();
             return request.Failed($"Kernel disposed");
         }
         catch (Exception e)
@@ -161,6 +152,10 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
             return request.Failed($"No mesh node was found for {request.Target}");
         }
     }
+
+
+    private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
+
 
     private static IMessageDelivery DeliveryFailure(IMessageHub kernelHub, IMessageDelivery request, string message)
     {
@@ -178,16 +173,16 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         return request.Failed(deliveryFailure.Message ?? string.Empty);
     }
 
-    private void PublishEventToContext(KernelEvent @event)
+    private void PublishEventToContext(IMessageHub hub, KernelEvent @event)
     {
         var isNotebookKernel = IsNotebookKernel(@event);
         if (isNotebookKernel)
-            HandleNotebookEvent(@event);
+            HandleNotebookEvent(hub, @event);
         else
-            HandleInteractiveMarkdownEvent(@event);
+            HandleInteractiveMarkdownEvent(hub, @event);
     }
 
-    private void HandleInteractiveMarkdownEvent(KernelEvent @event)
+    private void HandleInteractiveMarkdownEvent(IMessageHub hub, KernelEvent @event)
     {
         var viewId = GetViewId(@event.Command);
 
@@ -201,56 +196,57 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
             CommandFailed failed => Controls.Markdown($"**Execution failed**:\n{failed.Message}"),
             _ => null,
         };
-        if (view is not null) 
-            UpdateView(viewId, view);
+        if (view is not null)
+            UpdateView(hub, viewId, view);
     }
 
     private string? GetViewId(KernelCommand command)
     {
         if (command is not SubmitCode submit)
             return null;
-        
-        if(submit.Parameters.TryGetValue(ViewId, out var ret))
+
+        if (submit.Parameters.TryGetValue(ViewId, out var ret))
             return ret;
 
         return command.Parent != null ? GetViewId(command.Parent) : null;
     }
 
-    private void UpdateView(string viewId, object view)
+    private void UpdateView(IMessageHub hub, string viewId, object view)
     {
-        AreasStream.Update(x =>
+        var areasStream = GetAreaStream(hub.ServiceProvider);
+        areasStream.Update(x =>
             (
-                    AreasStream.Current
+                    areasStream.Current
                     ?? new ChangeItem<ImmutableDictionary<string, object>>(
                         ImmutableDictionary<string, object>.Empty,
-                        Hub.Address, 
-                        AreasStream.StreamId,
-                        ChangeType.Full, 
-                        0, 
+                        hub.Address,
+                        areasStream.StreamId,
+                        ChangeType.Full,
+                        0,
                         []))
                 with
-                {
-                    Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
-                }
+            {
+                Value = (x ?? ImmutableDictionary<string, object>.Empty).SetItem(viewId, view)
+            }
         , _ => Task.CompletedTask);
     }
 
-    private void HandleNotebookEvent(KernelEvent @event)
+    private void HandleNotebookEvent(IMessageHub hub, KernelEvent @event)
     {
-        if (@event is ReturnValueProduced retProduced 
+        if (@event is ReturnValueProduced retProduced
             && @event.Command is SubmitCode submit
             && submit.Parameters.TryGetValue(ViewId, out var viewId)
            )
         {
-            UpdateView(viewId, retProduced.Value);
-            if(submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
-                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(retProduced.Value as UiControl, iframeUrl, viewId))]);
+            UpdateView(hub, viewId, retProduced.Value);
+            if (submit.Parameters.TryGetValue(IframeUrl, out var iframeUrl))
+                @event = new ReturnValueProduced(retProduced.Value, retProduced.Command, [new("text/html", FormatControl(hub, retProduced.Value as UiControl, iframeUrl, viewId))]);
         }
         var eventEnvelope = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Create(@event);
         var eventEnvelopeSerialized = Microsoft.DotNet.Interactive.Connection.KernelEventEnvelope.Serialize(eventEnvelope);
 
         foreach (var a in subscriptions)
-            Hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
+            hub.Post(new KernelEventEnvelope(eventEnvelopeSerialized), o => o.WithTarget(a));
     }
 
     private static bool IsNotebookKernel(KernelEvent @event)
@@ -259,12 +255,11 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         return @event.Command is SubmitCode submit3 && submit3.Parameters.ContainsKey(IframeUrl);
     }
 
-    private IMessageHub Hub { get; set; } = null!;
-    public CompositeKernel Kernel { get; set; } = null!;
 
-    protected CompositeKernel CreateKernel()
+    protected async Task<CompositeKernel> CreateKernelAsync(IServiceProvider sp)
     {
         Formatter.SetPreferredMimeTypesFor(typeof(TabularDataResource), HtmlFormatter.MimeType, CsvFormatter.MimeType);
+        var hub = sp.GetRequiredService<IMessageHub>();
 
         var ret = new CSharpKernel()
             .UseKernelHelpers()
@@ -280,6 +275,11 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
             .UseNugetDirective(OnResolve);
         composite.KernelInfo.Uri = new(composite.KernelInfo.Uri.ToString().Replace("local", "mesh"));
         composite.Add(ret);
+        await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
+            .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
+        composite.KernelEvents.Subscribe(e => PublishEventToContext(hub, e));
+
+        hub.RegisterForDisposal(composite);
         return composite;
     }
 
@@ -291,21 +291,21 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
     private Task OnResolve(CSharpKernel kernel, IReadOnlyList<ResolvedPackageReference> packages)
     {
         var assemblies = packages.SelectMany(p => p.AssemblyPaths).Distinct().ToArray();
-                try
-                {
-                    // Use the correct method to add assembly references
-                    kernel.AddAssemblyReferences(assemblies);
-                    logger.LogInformation("Added assembly reference: {Assembly}", string.Join(',', assemblies));
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning("Failed to add assembly reference {Assembly}: {Message}",
-                        string.Join(',', assemblies), ex.Message);
-                }
+        try
+        {
+            // Use the correct method to add assembly references
+            kernel.AddAssemblyReferences(assemblies);
+            logger.LogInformation("Added assembly reference: {Assembly}", string.Join(',', assemblies));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Failed to add assembly reference {Assembly}: {Message}",
+                string.Join(',', assemblies), ex.Message);
+        }
 
         return Task.CompletedTask;
     }
-    private string FormatControl(UiControl? control, string iframeUrl, string viewId)
+    private string FormatControl(IMessageHub hub, UiControl? control, string iframeUrl, string viewId)
     {
 
         var style = control?.Style?.ToString() ?? string.Empty;
@@ -318,7 +318,7 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         if (!style.Contains("height"))
             style += "height: 500px; ";
 
-        var view = $@"<iframe id='{viewId}' src='{iframeUrl}/{Hub.Address}/{viewId}' style='{style}'></iframe>";
+        var view = $@"<iframe id='{viewId}' src='{iframeUrl}/{hub.Address}/{viewId}' style='{style}'></iframe>";
         return view;
     }
 
@@ -331,7 +331,7 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
 
     private const string ViewId = "viewId";
     private const string IframeUrl = "iframeUrl";
-    public IMessageDelivery HandleKernelCommandEnvelope(IMessageDelivery<KernelCommandEnvelope> request)
+    public async Task<IMessageDelivery> HandleKernelCommandEnvelope(IMessageHub hub, IMessageDelivery<KernelCommandEnvelope> request, CancellationToken ct)
     {
         subscriptions.Add(request.Sender);
         var envelope = Microsoft.DotNet.Interactive.Connection.KernelCommandEnvelope.Deserialize(request.Message.Command);
@@ -339,13 +339,13 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         if (command is SubmitCode submit)
         {
             submit.Parameters[ViewId] = request.Message.ViewId;
-            if(!string.IsNullOrEmpty(request.Message.IFrameUrl))
+            if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
                 submit.Parameters[IframeUrl] = request.Message.IFrameUrl;
         }
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), _ => Task.CompletedTask); 
+        await SubmitCommand(hub, request, ct, command);
         return request.Processed();
     }
-    public IMessageDelivery HandleKernelCommand(IMessageDelivery<SubmitCodeRequest> request)
+    public async Task<IMessageDelivery> HandleKernelCommand(IMessageHub hub, IMessageDelivery<SubmitCodeRequest> request, CancellationToken ct)
     {
         subscriptions.Add(request.Sender);
         var command = new SubmitCode(request.Message.Code)
@@ -354,13 +354,13 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         };
         if (!string.IsNullOrEmpty(request.Message.IFrameUrl))
             command.Parameters[IframeUrl] = request.Message.IFrameUrl;
-        executionHub.InvokeAsync(ct => SubmitCommand(request, ct, command), _ => Task.CompletedTask);
-        return request.Processed();
+        return await SubmitCommand(hub, request, ct, command);
     }
 
-    private async Task<IMessageDelivery> SubmitCommand(IMessageDelivery request, CancellationToken ct, KernelCommand command)
+    private async Task<IMessageDelivery> SubmitCommand(IMessageHub hub, IMessageDelivery request, CancellationToken ct, KernelCommand command)
     {
-        await Kernel.SendAsync(command, ct);
+        var kernel = await hub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
+        var ret = await kernel.SendAsync(command, ct);
         return request.Processed();
     }
 
@@ -375,11 +375,5 @@ public class KernelContainer(IServiceProvider serviceProvider) : IDisposable
         return request.Processed();
     }
 
-    public void Dispose()
-    {
-        Kernel.Dispose();
-        Hub.Dispose();
-    }
 
-    private record KernelExecutionAddress() : Address("execution", Guid.NewGuid().AsString());
 }

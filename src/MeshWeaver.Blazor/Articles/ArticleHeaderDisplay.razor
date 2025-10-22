@@ -1,4 +1,5 @@
 ﻿@using MeshWeaver.ContentCollections
+@using Microsoft.AspNetCore.Components
 @inherits ArticleHeaderBase
 
 <PageTitle>@Title</PageTitle>
@@ -13,7 +14,9 @@
                         <div class="author">
                             <FluentPersona Name="@author.FormatName()"
                                            ImageSize="24px"
-                                           Image="@author.ImageUrl" />
+                                           Image="@author.ImageUrl"
+                                           InitialsTextColor="var(--neutral-foreground-rest)"
+                                           ImageInitials="@GetInitials(author)" />
                         </div>
                     }
                 </div>
@@ -43,7 +46,7 @@
                     </Authorized>
                 </AuthorizeView>            </div>
             <h1 class="title">@Title</h1>
-            <p class="abstract">@Abstract</p>
+            <div class="abstract">@((MarkupString)(AbstractHtml ?? string.Empty))</div>
         </div>
         <div class="media">
             @if (!string.IsNullOrEmpty(VideoUrl))
@@ -60,7 +63,7 @@
             }
             else
             {
-                <img class="thumbnail" src="@ThumbnailPath" alt="Article Thumbnail" />
+                <img class="thumbnail" src="@Thumbnail" alt="Article Thumbnail" />
             }
         </div>
 </div>
