@@ -113,7 +113,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
             if (meshNode.StartupScript is null)
                 return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}");
 
-            var kernel = await serviceProvider.GetRequiredService<Task<CompositeKernel>>();
+            var kernel = await kernelHub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
             var result = await kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
             if (!result.Events.Any(e => e is CommandSucceeded))
             {
