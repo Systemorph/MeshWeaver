@@ -37,8 +37,11 @@ public static class WorkspaceStreams
             var dataSource = groups[0].Key;
             if (dataSource == null)
                 throw new ArgumentException($"Collections {string.Join(", ", collections)} are are not mapped to any source.");
-            var reduced = dataSource
-                .GetStreamForPartition(partition)
+            var stream = dataSource
+                .GetStreamForPartition(partition);
+            if (stream?.Current?.Value is { } store)
+                logger.LogDebug("Data source is initialized with {Count} collections of {Types}", store.Collections.Count, string.Join(',', store.Collections.Keys));
+            var reduced = stream
                 ?.Reduce(reference, configuration);
             logger.LogDebug("Having single collection {Collection}. Returning reduced stream {StreamId}", groups[0].Key, reduced?.StreamId);
             return reduced;
@@ -71,9 +74,9 @@ c => c
 
         ret.RegisterForDisposal(combinedStream
             .Synchronize()
-            .Subscribe(changes => 
+            .Subscribe(changes =>
         {
-            try 
+            try
             {
                 logger.LogDebug("Retrieved values {Changes}", changes.Select(c => JsonSerializer.Serialize(c, ret.Host.JsonSerializerOptions)));
                 if (!isInitialized)
@@ -82,38 +85,38 @@ c => c
                     var initialStore = changes
                         .Where(c => c.Value != null)
                         .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
-                    
+
                     var initialChange = new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version);
-                    
+
                     ret.OnNext(initialChange);
-                    
+
                     // Track all initial ChangeItems as processed
                     foreach (var change in changes)
                     {
                         processedChangeItems.Add(change);
                     }
-                    
+
                     isInitialized = true;
                 }
                 else
                 {
                     // Subsequent emissions: only process new ChangeItems we haven't seen before
                     var newChanges = changes.Where(c => !processedChangeItems.Contains(c)).ToArray();
-                    
+
                     if (newChanges.Any())
                     {
                         var updatedStore = newChanges
                             .Where(c => c.Value != null)
                             .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
-                        
+
                         var updateChange = new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
                         {
                             ChangedBy = string.Join(", ", newChanges.Select(c => c.ChangedBy).Where(cb => !string.IsNullOrEmpty(cb))),
                             Updates = newChanges.SelectMany(c => c.Updates).ToArray(),
                         };
-                        
+
                         ret.OnNext(updateChange);
-                        
+
                         // Track new ChangeItems as processed
                         foreach (var change in newChanges)
                         {
@@ -124,12 +127,12 @@ c => c
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error processing combined stream for {Address} with reference {Reference}", 
+                logger.LogError(ex, "Error processing combined stream for {Address} with reference {Reference}",
                     workspace.Hub.Address, reference);
             }
         }, ex =>
         {
-            logger.LogError(ex, "Error in combined stream for {Address} with reference {Reference}", 
+            logger.LogError(ex, "Error in combined stream for {Address} with reference {Reference}",
                 workspace.Hub.Address, reference);
         }));
 

@@ -161,6 +161,29 @@ public record LayoutAreaHost : IDisposable
 
         return ret;
     }
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T?>>> asyncGenerator, EntityStore store)
+    {
+        var ret = DisposeExistingAreas(store, context);
+        InvokeAsync(async ct =>
+        {
+            logger.LogDebug("Start rendering of {area}", context.Area);
+            var observable = await asyncGenerator.Invoke(this, context, ct);
+            RegisterForDisposal(context.Parent?.Area ?? context.Area,
+                observable
+                    .Subscribe(c => UpdateArea(context, c), FailRendering)
+            );
+
+            logger.LogDebug("End rendering of {area}", context.Area);
+
+        }, ex =>
+        {
+            FailRendering(ex);
+            return Task.CompletedTask;
+        });
+
+
+        return ret;
+    }
 
 
     public void UpdateArea(RenderingContext context, object? view)
@@ -334,6 +357,28 @@ public record LayoutAreaHost : IDisposable
         );
         return ret;
     }
+    internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, AsyncViewStream<T> asyncGenerator, EntityStore store) where T : UiControl?
+    {
+        var ret = DisposeExistingAreas(store, context);
+
+        logger.LogDebug("Schedule rendering of {area}", context.Area);
+        InvokeAsync(async ct =>
+        {
+            logger.LogDebug("Start rendering of {area}", context.Area);
+            var observable = await asyncGenerator.Invoke(this, context, store, ct);
+            RegisterForDisposal(context.Parent?.Area ?? context.Area,
+                observable
+                    .Subscribe(c => UpdateArea(context, c), FailRendering)
+            );
+
+            logger.LogDebug("End rendering of {area}", context.Area);
+        }, ex =>
+        {
+            FailRendering(ex);
+            return Task.CompletedTask;
+        });
+        return ret;
+    }
 
     private void FailRendering(Exception ex)
     {
@@ -345,6 +390,7 @@ public record LayoutAreaHost : IDisposable
 
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, ViewDefinition generator, EntityStore store)
     {
+        var ret = DisposeExistingAreas(store, context);
         logger.LogDebug("Schedule rendering of {area}", context.Area);
         InvokeAsync(async ct =>
         {
@@ -358,7 +404,7 @@ public record LayoutAreaHost : IDisposable
             FailRendering(ex);
             return Task.CompletedTask;
         });
-        return DisposeExistingAreas(store, context);
+        return ret;
     }
     internal EntityStoreAndUpdates RenderArea(
         RenderingContext context,

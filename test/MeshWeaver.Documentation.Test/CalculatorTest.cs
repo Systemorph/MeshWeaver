@@ -39,16 +39,16 @@ public class CalculatorTest(ITestOutputHelper output) : DocumentationTestBase(ou
             .FirstAsync(x => x is not null);
 
         var articleControl = control.Should().BeOfType<ArticleControl>().Which;
-        var articleReference = articleControl.Article.Should().BeOfType<JsonPointerReference>().Which;
-        var id = GetIdFromDataContext(articleControl);
-        var entity = await articleStream!.GetDataAsync(id).Timeout(5.Seconds());
-        var article = entity.Should().BeOfType<Article>().Which;
+        var article = articleControl.Article.Should().BeOfType<Article>().Which;
         article.Name.Should().Be("Calculator");
         article.Content.Should().NotBeNull();
         article.PrerenderedHtml.Should().NotBeNull();
         var kernelAddress = new KernelAddress();
-        foreach (var s in article.CodeSubmissions)
-            client.Post(s, o => o.WithTarget(kernelAddress));
+        if (article.CodeSubmissions != null)
+        {
+            foreach (var s in article.CodeSubmissions)
+                client.Post(s, o => o.WithTarget(kernelAddress));
+        }
 
         var html = article.PrerenderedHtml!.ToString()!.Replace(ExecutableCodeBlockRenderer.KernelAddressPlaceholder, kernelAddress.ToString());
 

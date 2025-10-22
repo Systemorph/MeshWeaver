@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Data;
+﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Todo.Domain;
@@ -20,32 +21,35 @@ public static class TodoApplicationExtensions
     public static MessageHubConfiguration ConfigureTodoApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(
-                typeof(TodoStatus)
-            )
-            .AddData(data =>
-                data.AddSource(dataSource =>
-                    dataSource.WithType<TodoItem>(t =>
-                        t.WithKey(todo => todo.Id)
-                         .WithInitialData(TodoSampleData.GetSampleTodos())
-                    )
+                .AddEmbeddedResourceContentCollection("Todo", typeof(TodoApplicationAttribute).Assembly, "Content")
+                .WithTypes(
+                    typeof(TodoStatus)
                 )
-                .AddSource(dataSource =>
-                    dataSource.WithType<TodoCategory>(t =>
-                        t.WithKey(category => category.Name)
-                         .WithInitialData(TodoSampleData.GetSampleCategories())
-                    )
+                .AddData(data =>
+                    data.AddSource(dataSource =>
+                            dataSource.WithType<TodoItem>(t =>
+                                t.WithKey(todo => todo.Id)
+                                    .WithInitialData(TodoSampleData.GetSampleTodos())
+                            )
+                        )
+                        .AddSource(dataSource =>
+                            dataSource.WithType<TodoCategory>(t =>
+                                t.WithKey(category => category.Name)
+                                    .WithInitialData(TodoSampleData.GetSampleCategories())
+                            )
+                        )
                 )
-            )
-            .AddLayout(layout =>
-                layout.WithView(nameof(TodoLayoutAreas.AllItems), TodoLayoutAreas.AllItems)
-                      .WithView(nameof(TodoLayoutAreas.TodosByCategory), TodoLayoutAreas.TodosByCategory)
-                      .WithView(nameof(TodoLayoutAreas.Summary), TodoLayoutAreas.Summary)
-                      .WithView(nameof(TodoLayoutAreas.Planning), TodoLayoutAreas.Planning)
-                      .WithView(nameof(TodoLayoutAreas.MyTasks), TodoLayoutAreas.MyTasks)
-                      .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
-                      .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
-                      .WithThumbnailBasePath("/static/Todo/thumbnails")
-            );
+                .AddLayout(layout =>
+                    layout.WithView(nameof(TodoLayoutAreas.AllItems), TodoLayoutAreas.AllItems)
+                        .WithView(nameof(TodoLayoutAreas.TodosByCategory), TodoLayoutAreas.TodosByCategory)
+                        .WithView(nameof(TodoLayoutAreas.Summary), TodoLayoutAreas.Summary)
+                        .WithView(nameof(TodoLayoutAreas.Planning), TodoLayoutAreas.Planning)
+                        .WithView(nameof(TodoLayoutAreas.MyTasks), TodoLayoutAreas.MyTasks)
+                        .WithView(nameof(TodoLayoutAreas.Backlog), TodoLayoutAreas.Backlog)
+                        .WithView(nameof(TodoLayoutAreas.TodaysFocus), TodoLayoutAreas.TodaysFocus)
+                        .WithThumbnailBasePath("/app/Todo/static/Todo/thumbnails")
+                )
+                .AddArticles()
+            ;
     }
 }

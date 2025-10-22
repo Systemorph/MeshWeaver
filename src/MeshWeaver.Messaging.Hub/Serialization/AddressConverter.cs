@@ -49,6 +49,31 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
         return ParseAddress(type, id);
     }
 
+    private Address ReadFromArray(IReadOnlyList<string> parts)
+    {
+        if (parts.Count == 0 || parts.Count == 1)
+        {
+            throw new JsonException("Invalid address format");
+        }
+
+        if (parts.Count == 2)
+        {
+            var addressType = parts[0];
+            var id = parts[1];
+            return ParseAddress(addressType, id);
+        }
+        if (parts.Count == 3)
+        {
+            var addressType = parts[0];
+            var id = $"{parts[1]}/{parts[2]}";
+            return ParseAddress(addressType, id);
+        }
+
+        var host = ReadFromArray(parts.Take(2).ToArray());
+        var address = ReadFromArray(parts.Skip(2).ToArray());
+        return new HostedAddress(address, host);
+    }
+
     private Address ReadFromString(ref Utf8JsonReader reader)
     {
         var addressString = reader.GetString();
@@ -58,15 +83,7 @@ public class AddressConverter(ITypeRegistry typeRegistry) : JsonConverter<Addres
         }
 
         var parts = addressString.Split('/');
-        if (parts.Length == 0)
-        {
-            throw new JsonException("Invalid address format");
-        }
-
-        var addressType = parts[0];
-        var id = parts.Length > 1 ? string.Join('/', parts, 1, parts.Length - 1) : string.Empty;
-
-        return ParseAddress(addressType, id);
+        return ReadFromArray(parts);
     }
 
     private Address ParseAddress(string addressType, string id)

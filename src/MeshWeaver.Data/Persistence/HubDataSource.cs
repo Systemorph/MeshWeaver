@@ -5,7 +5,7 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Data.Persistence;
 
 
-public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) : UnpartitionedDataSource<UnpartitionedHubDataSource,ITypeSource>(Address, Workspace)
+public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) : UnpartitionedDataSource<UnpartitionedHubDataSource, ITypeSource>(Address, Workspace)
 {
     protected JsonSerializerOptions Options => Hub.JsonSerializerOptions;
     public override UnpartitionedHubDataSource WithType<T>(Func<ITypeSource, ITypeSource>? typeSource) =>
@@ -15,9 +15,9 @@ public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) 
         Func<TypeSourceWithType<T>, TypeSourceWithType<T>> typeSource
     ) => WithTypeSource(typeof(T), typeSource.Invoke(new TypeSourceWithType<T>(Workspace, Id)));
 
-    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity) => 
-        CreateStream(identity, x => x.WithDeferral(d => d.Message is not DataChangedEvent{ChangeType:ChangeType.Full}));
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity) =>
+        CreateStream(identity, x => x);
 
-    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config) => 
+    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config) =>
         Workspace.GetRemoteStream(Address, GetReference());
 }

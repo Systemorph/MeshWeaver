@@ -15,7 +15,7 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithTypes(typeof(Ping), typeof(Pong))
-            .WithHandler<Ping>((hub,request) =>
+            .WithHandler<Ping>((hub, request) =>
             {
                 hub.Post(new Pong(), o => o.ResponseFor(request));
                 return request.Processed();
@@ -31,7 +31,6 @@ public class HostedHubTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task HostedPingPong()
     {
-
         var client = GetClient();
         var subHub =
             client.ServiceProvider.CreateMessageHub(new NewAddress(),

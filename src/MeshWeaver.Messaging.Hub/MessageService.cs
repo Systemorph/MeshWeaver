@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
 using Json.More;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,7 @@ public class MessageService : IMessageService
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
-    private readonly AsyncDelivery deliveryPipeline; 
+    private readonly AsyncDelivery deliveryPipeline;
     private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
@@ -39,11 +40,10 @@ public class MessageService : IMessageService
 
         deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
         deliveryAction =
-            new(x => x.Invoke()); 
+            new(x => x.Invoke());
         postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d,_) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
-        startupDeferral = Defer(_ => true);
+        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
     }
     void IMessageService.Start()
     {
@@ -53,67 +53,10 @@ public class MessageService : IMessageService
         // Link the delivery buffer to the action block immediately to avoid race conditions
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
 
-        executionBuffer.Post(async ct =>
-      {
-          CancellationTokenSource? timeoutCts = null;
-          try
-          {
-              // Add a timeout to prevent startup hangs
-              timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-              using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token); 
-              await hub.StartAsync(combinedCts.Token);              
-              // Mark as started and complete the startup task
-              startupCompletionSource.SetResult(true);
-
-              logger.LogDebug("Startup deferral disposed immediately for {Address} (no pending messages)", Address);
-              startupDeferral.Dispose();
-              logger.LogInformation("MessageService startup completed for {Address}", Address);
-          }
-          catch (OperationCanceledException) when (timeoutCts?.IsCancellationRequested == true)
-          {
-              logger.LogError("MessageService startup timed out after 30 seconds for {Address}", Address);
-              startupCompletionSource.SetException(new TimeoutException("MessageService startup timed out"));
-
-              // If startup timed out, dispose the startup deferral to unblock any pending operations
-              try
-              {
-                  startupDeferral.Dispose();
-                  logger.LogDebug("Startup deferral disposed due to startup timeout in {Address}", Address);
-              }
-              catch (Exception disposeEx)
-              {
-                  logger.LogError(disposeEx, "Error disposing startup deferral after startup timeout in {Address}", Address);
-              }
-
-              throw;
-          }
-          catch (Exception ex)
-          {
-              logger.LogError(ex, "MessageService startup failed for {Address}", Address);
-              startupCompletionSource.TrySetException(ex);
-
-              // If startup failed, dispose the startup deferral to unblock any pending operations
-              try
-              {
-                  startupDeferral.Dispose();
-                  logger.LogDebug("Startup deferral disposed due to startup failure in {Address}", Address);
-              }
-              catch (Exception disposeEx)
-              {
-                  logger.LogError(disposeEx, "Error disposing startup deferral after startup failure in {Address}", Address);
-              }
-
-              throw;
-          }
-          finally
-          {
-              timeoutCts?.Dispose();
-          }
-      });
     }
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
-        logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}", 
+        logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
 
         // Prevent recursive failure reporting - don't report failures for DeliveryFailure messages
@@ -126,13 +69,13 @@ public class MessageService : IMessageService
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to post DeliveryFailure message for {MessageType} (ID: {MessageId}) in {Address} - breaking error cascade", 
+                logger.LogError(ex, "Failed to post DeliveryFailure message for {MessageType} (ID: {MessageId}) in {Address} - breaking error cascade",
                     delivery.Message.GetType().Name, delivery.Id, Address);
             }
         }
         else
         {
-            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {MessageType} (ID: {MessageId}) in {Address}", 
+            logger.LogWarning("Suppressing recursive DeliveryFailure reporting for {MessageType} (ID: {MessageId}) in {Address}",
                 delivery.Message.GetType().Name, delivery.Id, Address);
         }
 
@@ -146,14 +89,14 @@ public class MessageService : IMessageService
         deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
-        ScheduleNotify(delivery, cancellationToken); 
-    
+        ScheduleNotify(delivery, cancellationToken);
+
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
-        
-        logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}", 
+
+        logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
 
         logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
@@ -165,23 +108,18 @@ public class MessageService : IMessageService
     }
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogTrace("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}", 
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+        var name = GetMessageType(delivery);
+        logger.LogDebug("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+            name, Address, delivery.Id, delivery.Target);
 
-        //var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
-        //// Double-check disposal state to prevent processing during shutdown
-        //if (isDisposing && delivery.Message is not ShutdownRequest)
-        //{
-        //    logger.LogTrace("MESSAGE_FLOW: REJECTING_NOTIFY_DURING_DISPOSAL | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-        //        delivery.Message.GetType().Name, Address, delivery.Id);
-        //    return delivery.Failed("Hub disposing - message rejected");
-        //}
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
-        if (ParentHub is MessageHub parentMessageHub)
+
+        // For initialization messages, skip waiting for parent startup to avoid deadlocks
+        // For all other messages, wait for parent to be ready before routing
+        if (ParentHub is not null)
         {
-            await parentMessageHub.Started;
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub?.Address))
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub.Address))
                 delivery = delivery.WithTarget(ha.Address);
         }
 
@@ -194,44 +132,60 @@ public class MessageService : IMessageService
         {
             delivery = UnpackIfNecessary(delivery);
             logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
+                name, Address, delivery.Id);
 
-            if(delivery.State == MessageDeliveryState.Failed)
+            if (delivery.State == MessageDeliveryState.Failed)
                 return ReportFailure(delivery);
         }
 
-        
+
 
         logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+            name, Address, delivery.Id, delivery.Target);
         delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
         logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
+            name, Address, delivery.Id, delivery.State);
 
         if (isOnTarget)
         {
             logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
+                name, Address, delivery.Id);
             return await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
         return delivery;
     }
 
-    private CancellationTokenSource cancellationTokenSource = new();
+    private static string GetMessageType(IMessageDelivery delivery)
+    {
+        if (delivery.Message is RawJson rawJson)
+            return ExtractJsonType(rawJson.Content);
+
+        return delivery.Message.GetType().Name;
+    }
+
+    private static string ExtractJsonType(string rawJsonContent)
+    {
+        var node = JsonNode.Parse(rawJsonContent);
+        if (node is JsonObject jo && jo.TryGetPropertyValue("$type", out var typeNode))
+            return typeNode!.ToString();
+        return "Unknown";
+    }
+
+    private readonly CancellationTokenSource cancellationTokenSource = new();
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
     {
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        
 
-        
+
+
         executionBuffer.Post(async _ =>
         {
-            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}", 
+            logger.LogTrace("MESSAGE_FLOW: EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
-            
+            logger.LogDebug("Start processing {@Delivery} in {Address}", delivery, Address);
+
             var executionStopwatch = Stopwatch.StartNew();
             var isDisposing = hub.RunLevel >= MessageHubRunLevel.ShutDown;
             try
@@ -240,7 +194,7 @@ public class MessageService : IMessageService
                 // Add timeout for disposal-related messages to prevent hangs
                 if (!isDisposing || delivery.Message is ShutdownRequest)
                 {
-                    
+
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                 }
                 else
@@ -256,11 +210,11 @@ public class MessageService : IMessageService
             {
                 logger.LogTrace("MESSAGE_FLOW: EXECUTION_TIMEOUT_DURING_DISPOSAL | {MessageType} | Hub: {Address} | Duration: {Duration}ms",
                     delivery.Message.GetType().Name, Address, executionStopwatch.ElapsedMilliseconds);
-                
+
                 // During disposal, timeouts are acceptable to prevent hangs
                 if (delivery.Message is not ExecutionRequest)
                 {
-                    logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}", 
+                    logger.LogWarning("Execution timed out during disposal for {@Delivery} after {Duration}ms in {Address}",
                         delivery, executionStopwatch.ElapsedMilliseconds, Address);
                 }
             }
@@ -273,18 +227,18 @@ public class MessageService : IMessageService
                     await er.ExceptionCallback.Invoke(e);
                 else
                 {
-                    logger.LogError("An exception occurred during the processing of {@Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.", 
+                    logger.LogError("An exception occurred during the processing of {@Delivery} after {Duration}ms. Exception: {Exception}. Address: {Address}.",
                         delivery, executionStopwatch.ElapsedMilliseconds, e, Address);
                     ReportFailure(delivery.Failed(e.ToString()));
                 }
             }
 
             if (delivery.Message is not ExecutionRequest)
-                logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms", 
+                logger.LogDebug("Finished processing {Delivery} in {Address} after {Duration}ms",
                     delivery.Id, Address, executionStopwatch.ElapsedMilliseconds);
 
         });
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded", 
+        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded(hub.Address);
     }
@@ -298,7 +252,7 @@ public class MessageService : IMessageService
             if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
-            if(!ExcludedFromLogging.Contains(message.GetType()))
+            if (!ExcludedFromLogging.Contains(message.GetType()))
                 logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, hub.JsonSerializerOptions), ret.Id, Address);
             return ret;
@@ -312,7 +266,7 @@ public class MessageService : IMessageService
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to deserialize delivery {MessageType} (ID: {MessageId}) in {Address} - marking as failed to prevent endless propagation", 
+            logger.LogWarning(ex, "Failed to deserialize delivery {MessageType} (ID: {MessageId}) in {Address} - marking as failed to prevent endless propagation",
                 delivery.Message.GetType().Name, delivery.Id, Address);
             return delivery.Failed($"Deserialization failed: {ex.Message}");
         }
@@ -362,8 +316,7 @@ public class MessageService : IMessageService
         return delivery;
     }
     private readonly Lock locker = new();
-    private readonly IDisposable startupDeferral; 
-    
+
     public async ValueTask DisposeAsync()
     {
         var totalStopwatch = Stopwatch.StartNew();
@@ -376,12 +329,12 @@ public class MessageService : IMessageService
             logger.LogDebug("Disposing hang detection timer for message service in {Address}", Address);
             await hangDetectionCts.CancelAsync();
             hangDetectionCts.Dispose();
-            logger.LogDebug("Hang detection timer disposed successfully in {elapsed}ms for {Address}", 
+            logger.LogDebug("Hang detection timer disposed successfully in {elapsed}ms for {Address}",
                 hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error disposing hang detection timer in {elapsed}ms for {Address}", 
+            logger.LogWarning(ex, "Error disposing hang detection timer in {elapsed}ms for {Address}",
                 hangDetectionStopwatch.ElapsedMilliseconds, Address);
         }
 
@@ -398,17 +351,17 @@ public class MessageService : IMessageService
             logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
             using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogDebug("Deliveries completed successfully in {elapsed}ms for {Address}", 
+            logger.LogDebug("Deliveries completed successfully in {elapsed}ms for {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}", 
+            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}", 
+            logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
         }        // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
@@ -420,12 +373,12 @@ public class MessageService : IMessageService
         {
             logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
             await deferralContainer.DisposeAsync();
-            logger.LogDebug("Deferrals completed successfully in {elapsed}ms for {Address}", 
+            logger.LogDebug("Deferrals completed successfully in {elapsed}ms for {Address}",
                 deferralsStopwatch.ElapsedMilliseconds, Address);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during deferrals disposal after {elapsed}ms in {Address}", 
+            logger.LogError(ex, "Error during deferrals disposal after {elapsed}ms in {Address}",
                 deferralsStopwatch.ElapsedMilliseconds, Address);
         }        // Complete the startup task if it's still pending
         try
@@ -441,7 +394,7 @@ public class MessageService : IMessageService
         }
 
         totalStopwatch.Stop();
-        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms", 
+        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",
             Address, totalStopwatch.ElapsedMilliseconds);
     }
 

@@ -6,6 +6,8 @@ using Azure.Storage.Blobs;
 using DotNet.Testcontainers.Containers;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting.AzureBlob;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -13,19 +15,14 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 // Helper class to provide lazy Azure client factory
-internal class LazyBlobServiceClientFactory : IAzureClientFactory<BlobServiceClient>
+internal class LazyBlobServiceClientFactory(Func<string> connectionStringProvider)
+    : IAzureClientFactory<BlobServiceClient>
 {
-    private readonly Func<string> _connectionStringProvider;
     private BlobServiceClient? _client;
-
-    public LazyBlobServiceClientFactory(Func<string> connectionStringProvider)
-    {
-        _connectionStringProvider = connectionStringProvider;
-    }
 
     public BlobServiceClient CreateClient(string name)
     {
-        return _client ??= new BlobServiceClient(_connectionStringProvider(), new BlobClientOptions(BlobClientOptions.ServiceVersion.V2021_12_02));
+        return _client ??= new BlobServiceClient(connectionStringProvider(), new BlobClientOptions(BlobClientOptions.ServiceVersion.V2021_12_02));
     }
 }
 
@@ -41,12 +38,27 @@ public class ArticlesBlobStorageTest : ArticlesTest
         azuriteConnectionString = connectionString;
     }
 
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        return base.ConfigureMesh(builder)
+            .ConfigureHub(mesh => mesh.WithServices(services =>
+                services.AddSingleton<IAzureClientFactory<BlobServiceClient>>(serviceProvider =>
+            {
+                return new LazyBlobServiceClientFactory(() => azuriteConnectionString);
+            }))
+            );
+    }
+
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        
+
         // Start containers
         await azuriteContainer.StartAsync();
+
+        // Wait for Azurite to be fully ready
+        await Task.Delay(2000);
+
         await UploadMarkdownFiles();
 
     }
@@ -86,25 +98,23 @@ public class ArticlesBlobStorageTest : ArticlesTest
         await base.DisposeAsync();
     }
 
-
-    protected override IServiceCollection ConfigureArticles(IServiceCollection services)
+    protected override MessageHubConfiguration ConfigureContentCollections(MessageHubConfiguration hub)
     {
-        // Register a factory that creates the BlobServiceClient lazily when needed
-        services.AddSingleton<IAzureClientFactory<BlobServiceClient>>(serviceProvider =>
-        {
-            return new LazyBlobServiceClientFactory(() => azuriteConnectionString);
-        });
-        return services
-            .AddAzureBlobArticles()
-            .Configure<List<ContentSourceConfig>>(
-                options => options.Add(new ContentSourceConfig()
+        return hub
+            .AddAzureBlob()
+            .AddArticles(new ContentCollectionConfig()
+            {
+                Name = "Test",
+                BasePath = StorageProviders.Articles,
+                SourceType = MeshWeaver.Hosting.AzureBlob.AzureBlobStreamProviderFactory.SourceType,
+                Settings = new Dictionary<string, string>
                 {
-                    Name = "Test",
-                    BasePath = StorageProviders.Articles,
-                    SourceType = AzureBlobContentCollectionFactory.SourceType,
-                })
-            );
+                    ["ContainerName"] = StorageProviders.Articles,
+                    ["ClientName"] = "default"
+                }
+            });
     }
+
     [Fact]
     public override Task BasicArticle()
     {

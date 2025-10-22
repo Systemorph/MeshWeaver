@@ -45,4 +45,5 @@ public interface IRoutingService
     /// Stream Namespace for incoming messages
     /// </summary>
     public const string MessageIn = nameof(MessageIn);
+
 }

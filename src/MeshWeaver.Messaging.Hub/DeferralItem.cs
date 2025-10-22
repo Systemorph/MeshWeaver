@@ -57,21 +57,34 @@ public record DeferralItem : IAsyncDisposable, IDisposable
 
     public void Dispose()
     {
-        if (isLinked)
-            return;
-        isLinked = true;
-        deferral.LinkTo(executionBuffer, new DataflowLinkOptions { PropagateCompletion = true });
+        bool shouldLink;
+        lock (locker)
+        {
+            if (isLinked)
+                return;
+            isLinked = true;
+            shouldLink = true;
+        }
+
+        // Link OUTSIDE the lock to avoid deadlock
+        if (shouldLink)
+            deferral.LinkTo(executionBuffer, new DataflowLinkOptions { PropagateCompletion = true });
     }
 
     public void Release()
     {
+        bool shouldLink;
         lock (locker)
         {
             if (isReleased)
                 return;
             isReleased = true;
+            shouldLink = true;
         }
-        deferral.LinkTo(executionBuffer);
+
+        // Link OUTSIDE the lock to avoid deadlock
+        if (shouldLink)
+            deferral.LinkTo(executionBuffer);
     }
 
     public async ValueTask DisposeAsync()

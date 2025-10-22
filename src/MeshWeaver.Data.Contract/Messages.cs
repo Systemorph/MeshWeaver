@@ -2,16 +2,16 @@
 
 namespace MeshWeaver.Data;
 
-public record DataChangeRequest 
+public record DataChangeRequest
     : IRequest<DataChangeResponse>
 {
-    public string? ChangedBy { get; init; } 
+    public string? ChangedBy { get; init; }
     public IReadOnlyCollection<object> Creations { get; init; } = [];
 
     public IReadOnlyCollection<object> Updates { get; init; } = [];
     public IReadOnlyCollection<object> Deletions { get; init; } = [];
-    public UpdateOptions? Options { get; init; } 
-    public string? ClientId { get; init; } 
+    public UpdateOptions? Options { get; init; }
+    public string? ClientId { get; init; }
     public DataChangeRequest WithCreations(params IEnumerable<object> creations)
         => this with { Creations = Creations.Concat(creations).ToArray() };
 
@@ -25,7 +25,7 @@ public record DataChangeRequest
     public static DataChangeRequest Update(IReadOnlyCollection<object> updates, string? changedBy = null, UpdateOptions? options = null) =>
         new() { Updates = updates, ChangedBy = changedBy!, Options = options! };
     public static DataChangeRequest Delete(IReadOnlyCollection<object> deletes, string changedBy) =>
-        new() { Deletions = deletes, ChangedBy = changedBy};
+        new() { Deletions = deletes, ChangedBy = changedBy };
 
 };
 

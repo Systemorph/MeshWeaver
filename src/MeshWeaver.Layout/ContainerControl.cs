@@ -170,6 +170,8 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
         => WithView(Observable.Return((ViewDefinition)(async (h, c, ct) => await viewDefinition.Invoke(h, c, ct))), options ?? (x => x));
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition) where T : UiControl?
         => WithView((h, c, _) => viewDefinition.Invoke(h, c), x => x);
+    public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, CancellationToken, Task<IObservable<T>>> viewDefinition) where T : UiControl?
+        => WithView((h, c, _, ct) => viewDefinition.Invoke(h, c, ct), x => x);
     public TControl WithView<T>(ViewStream<T> viewDefinition) where T : UiControl?
         => WithView(viewDefinition, x => x);
     public TControl WithView<T>(Func<LayoutAreaHost, RenderingContext, IObservable<T>> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl?
@@ -189,8 +191,25 @@ public abstract record ContainerControl<TControl>(string ModuleName, string ApiV
             })
         };
     }
+    public TControl WithView<T>(AsyncViewStream<T> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options) where T : UiControl?
+    {
+        var area = Evaluate(options);
+
+        return This with
+        {
+            Areas = Areas.Add(area),
+            Views = Views.Add(viewDefinition),
+            Renderers = Renderers.Add((host, context, store) =>
+            {
+                var areaContext = GetContextForArea(context, area.Id!.ToString()!);
+                return host.RenderArea(areaContext, viewDefinition.Invoke, store);
+            })
+        };
+    }
 
     public TControl WithView<T>(ViewStream<T> viewDefinition, string area) where T : UiControl?
+        => WithView(viewDefinition, control => control.WithId(area));
+    public TControl WithView<T>(AsyncViewStream<T> viewDefinition, string area) where T : UiControl?
         => WithView(viewDefinition, control => control.WithId(area));
 
     public TControl WithView(Func<LayoutAreaHost, RenderingContext, EntityStore, UiControl?> viewDefinition, Func<NamedAreaControl, NamedAreaControl>? options)

@@ -1,5 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Messaging;
 using MeshWeaver.Portal;
@@ -15,10 +14,9 @@ builder.AddServiceDefaults();
 builder.UseMeshWeaver(
     new MeshAddress(),
     config => config
-        .ConfigureWebPortal()
+        .ConfigureWebPortal(builder.Configuration)
         .ConfigurePortalMesh()
         .UseMonolithMesh()
-        .ConfigureServices(services => services.AddContentCollections())
 );
 
 var app = builder.Build();

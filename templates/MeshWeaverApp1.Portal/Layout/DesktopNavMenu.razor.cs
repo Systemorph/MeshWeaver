@@ -41,17 +41,6 @@ public partial class DesktopNavMenu : ComponentBase
             ? new Icons.Filled.Size24.Chat()
             : new Icons.Regular.Size24.Chat();
 
-    public static Icon DocumentationLayoutAreaIcon(bool active = false)
-        => active
-            ? new Icons.Filled.Size24.AppGeneric()
-            : new Icons.Regular.Size24.AppGeneric();
-
     public static string LayoutAreas(string app)
         => $"app/{app}/{LayoutAreaCatalogArea.LayoutAreas}";
-
-
-    public static Icon NorthwindLayoutAreaIcon(bool active = false)
-        => active
-            ? new Icons.Filled.Size24.ShoppingBag()
-            : new Icons.Regular.Size24.ShoppingBag();
 }
