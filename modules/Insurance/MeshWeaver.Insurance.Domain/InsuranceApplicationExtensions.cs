@@ -1,5 +1,6 @@
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Import;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
@@ -20,7 +21,7 @@ public static class InsuranceApplicationExtensions
     /// </summary>
     public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
         => configuration
-            .WithTypes(typeof(PricingAddress))
+            .WithTypes(typeof(PricingAddress), typeof(ExcelImportConfiguration), typeof(Structure))
             .AddData(data =>
             {
                 var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
@@ -43,7 +44,6 @@ public static class InsuranceApplicationExtensions
     public static MessageHubConfiguration ConfigureSinglePricingApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(InsuranceApplicationExtensions))
             .AddContentCollection(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
@@ -89,6 +89,7 @@ public static class InsuranceApplicationExtensions
                     }))
                     .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
                         (IEnumerable<PropertyRisk>)await svc.GetRisksAsync(pricingId, ct)))
+                    .WithType<Structure>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<Structure>())))
                     .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
                         await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
                 );
@@ -104,6 +105,7 @@ public static class InsuranceApplicationExtensions
                     LayoutAreas.RiskMapLayoutArea.RiskMap)
                 .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                     LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
-            );
+            )
+            .AddImport();
     }
 }
