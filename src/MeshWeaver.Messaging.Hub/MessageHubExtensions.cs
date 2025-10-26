@@ -67,4 +67,55 @@ public static class MessageHubExtensions
 
         return (Address)Activator.CreateInstance(type, [string.Join('/', split.Skip(1))])!;
     }
+
+    /// <summary>
+    /// Sends a request deserialized from JSON and awaits the response.
+    /// This is useful when working with JSON-based messaging without direct type references.
+    /// </summary>
+    /// <param name="hub">The message hub</param>
+    /// <param name="request">The request object (deserialized from JSON)</param>
+    /// <param name="options">Post options</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>The response message</returns>
+    public static async Task<object> AwaitResponse(
+        this IMessageHub hub,
+        object request,
+        Func<PostOptions, PostOptions> options,
+        CancellationToken cancellationToken = default)
+    {
+        // Find the IRequest<TResponse> interface to get the response type
+        var requestType = request.GetType();
+        var requestInterface = requestType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
+
+        if (requestInterface == null)
+            throw new InvalidOperationException($"Request type {requestType.Name} does not implement IRequest<TResponse>");
+
+        var responseType = requestInterface.GetGenericArguments()[0];
+
+        // Use reflection to call AwaitResponse<TResponse, TResult>
+        var awaitResponseMethod = typeof(IMessageHub).GetMethods()
+            .FirstOrDefault(m =>
+                m.Name == nameof(IMessageHub.AwaitResponse) &&
+                m.IsGenericMethodDefinition &&
+                m.GetGenericArguments().Length == 2 &&
+                m.GetParameters().Length == 3);
+
+        if (awaitResponseMethod == null)
+            throw new InvalidOperationException("Could not find AwaitResponse method");
+
+        var genericMethod = awaitResponseMethod.MakeGenericMethod(responseType, responseType);
+
+        // Create the result selector lambda: (IMessageDelivery<TResponse> d) => d.Message
+        var deliveryParam = System.Linq.Expressions.Expression.Parameter(typeof(IMessageDelivery<>).MakeGenericType(responseType), "d");
+        var messageProperty = System.Linq.Expressions.Expression.Property(deliveryParam, "Message");
+        var lambda = System.Linq.Expressions.Expression.Lambda(messageProperty, deliveryParam);
+        var resultSelector = lambda.Compile();
+
+        var task = (Task)genericMethod.Invoke(hub, new object[] { request, options, resultSelector })!;
+        await task.ConfigureAwait(false);
+
+        var resultProperty = task.GetType().GetProperty("Result");
+        return resultProperty!.GetValue(task)!;
+    }
 }

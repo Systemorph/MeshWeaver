@@ -1,5 +1,10 @@
 ﻿using System.ComponentModel;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Domain;
+using MeshWeaver.Import;
+using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
@@ -138,6 +143,73 @@ public class CollectionPlugin(IMessageHub hub)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
         return $"{baseName}_{timestamp}.{extension.TrimStart('.')}";
+    }
+
+    [KernelFunction]
+    [Description("Imports data from a file in a collection to a specified address.")]
+    public async Task<string> Import(
+        [Description("The path to the file to import")] string path,
+        [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
+        [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] object? address = null,
+        [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(collection))
+                return "Collection name is required.";
+
+            if (address == null)
+                return "Target address is required.";
+
+            // Parse the address - handle both string and Address types
+            Address targetAddress;
+            if (address is string addressString)
+            {
+                targetAddress = hub.GetAddress(addressString);
+            }
+            else if (address is Address addr)
+            {
+                targetAddress = addr;
+            }
+            else
+            {
+                return $"Invalid address type: {address.GetType().Name}. Expected string or Address.";
+            }
+
+            // Construct the ImportRequest directly
+            var importRequest = new ImportRequest(new CollectionSource(collection, path))
+            {
+                Format = format ?? ImportFormat.Default
+            };
+
+            // Post the request to the hub
+            var response = await hub.AwaitResponse(
+                importRequest,
+                o => o.WithTarget(targetAddress),
+                cancellationToken
+            );
+
+            // Format the response
+            var log = response.Message.Log;
+            var status = log.Status.ToString();
+            var result = $"Import {status.ToLower()}.\n";
+
+            if (log.Messages.Any())
+            {
+                result += "Log messages:\n";
+                foreach (var msg in log.Messages)
+                {
+                    result += $"  [{msg.LogLevel}] {msg.Message}\n";
+                }
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return $"Error importing file '{path}' from collection '{collection}' to address '{address}': {ex.Message}";
+        }
     }
 
     /// <summary>

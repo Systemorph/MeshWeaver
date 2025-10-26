@@ -10,5 +10,6 @@
     <ProjectReference Include="..\MeshWeaver.DataSetReader.Csv\MeshWeaver.DataSetReader.Csv.csproj" />
     <ProjectReference Include="..\MeshWeaver.DataSetReader.Excel\MeshWeaver.DataSetReader.Excel.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
   </ItemGroup>
 </Project>

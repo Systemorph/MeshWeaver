@@ -3,23 +3,29 @@ using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.DataSetReader;
 using MeshWeaver.DataSetReader.Csv;
 using MeshWeaver.DataSetReader.Excel;
 using MeshWeaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Import.Configuration;
 
 public record ImportConfiguration
 {
     public IWorkspace Workspace { get; }
+    public IServiceProvider? ServiceProvider { get; init; }
 
     public ImportConfiguration(
-        IWorkspace workspace
+        IWorkspace workspace,
+        IServiceProvider? serviceProvider = null
     )
     {
         this.Workspace = workspace;
+        this.ServiceProvider = serviceProvider;
+        StreamProviders = InitializeStreamProviders();
         Validations = ImmutableList<ValidationFunction>
             .Empty.Add(StandardValidations)
             .Add(CategoriesValidation);
@@ -90,12 +96,15 @@ public record ImportConfiguration
             DataSetReaders = DataSetReaders.SetItem(fileType, dataSetReader)
         };
 
-    internal ImmutableDictionary<Type, Func<ImportRequest, Stream>> StreamProviders { get; init; } =
-        ImmutableDictionary<Type, Func<ImportRequest, Stream>>
-            .Empty.Add(typeof(StringStream), CreateMemoryStream)
-            .Add(typeof(EmbeddedResource), CreateEmbeddedResourceStream);
+    internal ImmutableDictionary<Type, Func<ImportRequest, Task<Stream>>> StreamProviders { get; init; }
 
-    private static Stream CreateEmbeddedResourceStream(ImportRequest request)
+    private ImmutableDictionary<Type, Func<ImportRequest, Task<Stream>>> InitializeStreamProviders() =>
+        ImmutableDictionary<Type, Func<ImportRequest, Task<Stream>>>
+            .Empty.Add(typeof(StringStream), CreateMemoryStream)
+            .Add(typeof(EmbeddedResource), CreateEmbeddedResourceStream)
+            .Add(typeof(CollectionSource), CreateCollectionStreamAsync);
+
+    private static Task<Stream> CreateEmbeddedResourceStream(ImportRequest request)
     {
         var embeddedResource = (EmbeddedResource)request.Source;
         var assembly = embeddedResource.Assembly;
@@ -105,22 +114,41 @@ public record ImportConfiguration
         {
             throw new ArgumentException($"Resource '{resourceName}' not found.");
         }
-        return stream;
+        return Task.FromResult<Stream>(stream);
     }
 
-    private static Stream CreateMemoryStream(ImportRequest request)
+    private static Task<Stream> CreateMemoryStream(ImportRequest request)
     {
         var stream = new MemoryStream();
         var writer = new StreamWriter(stream);
         writer.Write(((StringStream)request.Source).Content);
         writer.Flush();
         stream.Position = 0;
+        return Task.FromResult<Stream>(stream);
+    }
+
+    private async Task<Stream> CreateCollectionStreamAsync(ImportRequest request)
+    {
+        var collectionSource = (CollectionSource)request.Source;
+
+        // Resolve from ContentCollection
+        if (ServiceProvider == null)
+            throw new ImportException("ServiceProvider is not available to resolve CollectionSource from ContentCollection");
+
+        var contentService = ServiceProvider.GetService<IContentService>();
+        if (contentService == null)
+            throw new ImportException("IContentService is not registered. Ensure ContentCollections are configured.");
+
+        var stream = await contentService.GetContentAsync(collectionSource.Collection, collectionSource.Path);
+        if (stream == null)
+            throw new ImportException($"Could not find content at collection '{collectionSource.Collection}' path '{collectionSource.Path}'");
+
         return stream;
     }
 
     public ImportConfiguration WithStreamReader(
         Type sourceType,
-        Func<ImportRequest, Stream> reader
+        Func<ImportRequest, Task<Stream>> reader
     ) => this with { StreamProviders = StreamProviders.SetItem(sourceType, reader) };
 
     internal ImmutableList<ValidationFunction> Validations { get; init; }

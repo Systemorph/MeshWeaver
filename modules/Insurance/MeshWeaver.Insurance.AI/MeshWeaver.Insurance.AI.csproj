@@ -14,4 +14,10 @@
     <ProjectReference Include="..\MeshWeaver.Insurance.Domain\MeshWeaver.Insurance.Domain.csproj" />
   </ItemGroup>
 
+
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" />
+    <PackageReference Include="itext7" />
+  </ItemGroup>
+
 </Project>

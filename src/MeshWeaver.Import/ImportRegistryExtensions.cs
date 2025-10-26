@@ -30,6 +30,14 @@ public static class ImportExtensions
             .AddData()
             .WithServices(x => x.AddScoped<ImportManager>())
             .AddHandlers()
+            .WithTypes(
+                typeof(ImportRequest),
+                typeof(ImportResponse),
+                typeof(Source),
+                typeof(StringStream),
+                typeof(CollectionSource),
+                typeof(EmbeddedResource)
+            )
             .WithInitialization(h => h.ServiceProvider.GetRequiredService<ImportManager>())
             ;
 

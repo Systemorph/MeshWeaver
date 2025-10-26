@@ -14,5 +14,6 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
   </ItemGroup>
 </Project>

@@ -22,7 +22,7 @@ public class ImportManager
 
         Workspace = workspace;
         Hub = hub;
-        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c, l) => l.Invoke(c));
+        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace, hub.ServiceProvider), (c, l) => l.Invoke(c));
 
         // Don't initialize the import hub in constructor - do it lazily to avoid timing issues
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
@@ -83,18 +83,17 @@ public class ImportManager
     private async Task ImportImpl(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
+        var importActivity = activity.StartSubActivity(ActivityCategory.Import);
         try
         {
 
             activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-            var importActivity = activity.StartSubActivity(ActivityCategory.Import);
             var imported = await ImportInstancesAsync(request.Message, importActivity, cancellationToken);
             importActivity.Complete(log =>
             {
                 if (log.HasErrors())
                 {
-
                     Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                     return;
                 }
@@ -114,6 +113,9 @@ public class ImportManager
         }
         catch (Exception e)
         {
+            importActivity.LogError(e.Message);
+            importActivity.Complete();
+
             activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
             FinishWithException(request, e, activity);
         }
@@ -137,7 +139,7 @@ public class ImportManager
         if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
             throw new ImportException($"Unknown stream type: {sourceType.FullName}");
 
-        var stream = streamProvider.Invoke(importRequest);
+        var stream = await streamProvider.Invoke(importRequest);
         if (stream == null)
             throw new ImportException($"Could not open stream: {importRequest.Source}");
 

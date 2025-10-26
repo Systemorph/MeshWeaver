@@ -17,7 +17,7 @@ public record ImportRequest(Source Source) : IRequest<ImportResponse>
 
     public string MimeType { get; init; } =
         MimeTypes.MapFileExtension(
-            Source is StreamSource stream ? Path.GetExtension(stream.Name) : ""
+            Source is CollectionSource stream ? Path.GetExtension(stream.Path) : ""
         ) ?? "";
 
     public string Format { get; init; } = ImportFormat.Default;
@@ -47,6 +47,6 @@ public abstract record Source { }
 
 public record StringStream(string Content) : Source;
 
-public record StreamSource(string Name, Stream Stream) : Source;
+public record CollectionSource(string Collection, string Path) : Source;
 
 //public record FileStream(string FileName) : Source;
