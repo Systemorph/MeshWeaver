@@ -1,6 +1,8 @@
 ﻿using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClosedXML.Excel;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,8 +20,9 @@ public class CollectionPlugin(IMessageHub hub)
     [KernelFunction]
     [Description("Gets the content of a file from a specified collection.")]
     public async Task<string> GetFile(
-        [Description("The name of the collection to read from")] string collectionName,
+        [Description("The name of the collection to read from. If null, uses the default collection.")] string collectionName,
         [Description("The path to the file within the collection")] string filePath,
+        [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")] int? numberOfRows = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -32,10 +35,32 @@ public class CollectionPlugin(IMessageHub hub)
             if (stream == null)
                 return $"File '{filePath}' not found in collection '{collectionName}'.";
 
-            using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync(cancellationToken);
+            // Check if this is an Excel file
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+            if (extension == ".xlsx" || extension == ".xls")
+            {
+                return await ReadExcelFileAsync(stream, filePath, numberOfRows, cancellationToken);
+            }
 
-            return content;
+            // For non-Excel files, read as text
+            using var reader = new StreamReader(stream);
+            if (numberOfRows.HasValue)
+            {
+                var sb = new StringBuilder();
+                var linesRead = 0;
+                while (!reader.EndOfStream && linesRead < numberOfRows.Value)
+                {
+                    var line = await reader.ReadLineAsync(cancellationToken);
+                    sb.AppendLine(line);
+                    linesRead++;
+                }
+                return sb.ToString();
+            }
+            else
+            {
+                var content = await reader.ReadToEndAsync(cancellationToken);
+                return content;
+            }
         }
         catch (FileNotFoundException)
         {
@@ -45,6 +70,84 @@ public class CollectionPlugin(IMessageHub hub)
         {
             return $"Error reading file '{filePath}' from collection '{collectionName}': {ex.Message}";
         }
+    }
+
+    private async Task<string> ReadExcelFileAsync(Stream stream, string filePath, int? numberOfRows, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var wb = new XLWorkbook(stream);
+            var sb = new StringBuilder();
+
+            foreach (var ws in wb.Worksheets)
+            {
+                var used = ws.RangeUsed();
+                sb.AppendLine($"## Sheet: {ws.Name}");
+                sb.AppendLine();
+                if (used is null)
+                {
+                    sb.AppendLine("(No data)");
+                    sb.AppendLine();
+                    continue;
+                }
+
+                var firstRow = used.FirstRow().RowNumber();
+                var lastRow = numberOfRows.HasValue
+                    ? Math.Min(used.FirstRow().RowNumber() + numberOfRows.Value - 1, used.LastRow().RowNumber())
+                    : used.LastRow().RowNumber();
+                var firstCol = 1;
+                var lastCol = used.LastColumn().ColumnNumber();
+
+                // Build markdown table with column letters as headers
+                var columnHeaders = new List<string> { "Row" };
+                for (var c = firstCol; c <= lastCol; c++)
+                {
+                    // Convert column number to Excel letter (1=A, 2=B, ..., 27=AA, etc.)
+                    columnHeaders.Add(GetExcelColumnLetter(c));
+                }
+
+                // Header row
+                sb.AppendLine("| " + string.Join(" | ", columnHeaders) + " |");
+                // Separator row
+                sb.AppendLine("|" + string.Join("", columnHeaders.Select(_ => "---:|")));
+
+                // Data rows
+                for (var r = firstRow; r <= lastRow; r++)
+                {
+                    var rowVals = new List<string> { r.ToString() };
+                    for (var c = firstCol; c <= lastCol; c++)
+                    {
+                        var cell = ws.Cell(r, c);
+                        var raw = cell.GetValue<string>();
+                        var val = raw?.Replace('\n', ' ').Replace('\r', ' ').Replace("|", "\\|").Trim();
+                        // Empty cells show as empty in table
+                        rowVals.Add(string.IsNullOrEmpty(val) ? "" : val);
+                    }
+
+                    sb.AppendLine("| " + string.Join(" | ", rowVals) + " |");
+                }
+
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading Excel file '{filePath}': {ex.Message}";
+        }
+    }
+
+    private static string GetExcelColumnLetter(int columnNumber)
+    {
+        var columnLetter = "";
+        while (columnNumber > 0)
+        {
+            var modulo = (columnNumber - 1) % 26;
+            columnLetter = Convert.ToChar('A' + modulo) + columnLetter;
+            columnNumber = (columnNumber - 1) / 26;
+        }
+        return columnLetter;
     }
     [KernelFunction]
     [Description("Saves content as a file to a specified collection.")]
@@ -277,7 +380,7 @@ public class CollectionPlugin(IMessageHub hub)
         }
         catch (Exception)
         {
-            // If we can't create directories through reflection, 
+            // If we can't create directories through reflection,
             // let the SaveFileAsync method handle any directory creation or fail gracefully
         }
     }
