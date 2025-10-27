@@ -12,7 +12,7 @@ public record PropertyRisk
 {
     /// <summary>
     /// Unique identifier for the property risk record.
-    /// Synonyms: "Plant code", "Plant ID", "Site Code", "Asset ID", "Code".
+    /// Synonyms: Plant code, Plant ID, Site Code, Asset ID, Code.
     /// </summary>
     [Key]
     public required string Id { get; init; }
@@ -41,38 +41,38 @@ public record PropertyRisk
 
     /// <summary>
     /// Human-friendly site or facility name.
-    /// Synonyms: "Plant Description", "Site Name", "Location Name".
+    /// Synonyms: Plant Description, Site Name, Location Name.
     /// </summary>
     public string? LocationName { get; init; }
 
     /// <summary>
     /// Country; typically ISO code or name (dimension).
-    /// Synonyms: "Country Code", "Country".
+    /// Synonyms: Country Code, Country.
     /// </summary>
     [Dimension<Country>]
     public string? Country { get; init; }
 
     /// <summary>
     /// Street address.
-    /// Synonyms: "Property Address", "Address".
+    /// Synonyms: Property Address, Address.
     /// </summary>
     public string? Address { get; init; }
 
     /// <summary>
     /// State/region/province.
-    /// Synonyms: "State/Province", "Region".
+    /// Synonyms: State/Province, Region.
     /// </summary>
     public string? State { get; init; }
 
     /// <summary>
     /// County/district.
-    /// Synonyms: "District", "County".
+    /// Synonyms: District, County.
     /// </summary>
     public string? County { get; init; }
 
     /// <summary>
     /// Postal/ZIP code.
-    /// Synonyms: "ZIP", "Postcode".
+    /// Synonyms: ZIP, Postcode.
     /// </summary>
     public string? ZipCode { get; init; }
 
@@ -83,14 +83,14 @@ public record PropertyRisk
 
     /// <summary>
     /// Base currency for the risk.
-    /// Synonyms: "Currency", "Curr.", "Curr", "CCY".
+    /// Synonyms: Currency, Curr., Curr, CCY.
     /// </summary>
     [Dimension<Currency>]
     public string? Currency { get; init; }
 
     /// <summary>
     /// Sum insured for buildings.
-    /// Synonyms: "Buildings", "Building Value", "TSI Building(s)".
+    /// Synonyms: Buildings, Building Value, TSI Building(s).
     /// </summary>
     public double TsiBuilding { get; init; }
 
@@ -101,7 +101,7 @@ public record PropertyRisk
 
     /// <summary>
     /// Sum insured for contents.
-    /// Synonyms: "Stock", "Fixtures &amp; Fittings", "IT Equipment", "Equipment".
+    /// Synonyms: Stock, Fixtures, Fittings, IT Equipment, Equipment.
     /// </summary>
     public double TsiContent { get; init; }
 
@@ -112,7 +112,7 @@ public record PropertyRisk
 
     /// <summary>
     /// Business Interruption TSI.
-    /// Synonyms: "BI", "Business Interruption", "Gross Profit".
+    /// Synonyms: BI, Business Interruption, Gross Profit.
     /// </summary>
     public double TsiBi { get; init; }
 
@@ -123,7 +123,7 @@ public record PropertyRisk
 
     /// <summary>
     /// Account identifier.
-    /// Synonyms: "Account #", "Account No".
+    /// Synonyms: Account #, Account No.
     /// </summary>
     public string? AccountNumber { get; init; }
 

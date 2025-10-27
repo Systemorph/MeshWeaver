@@ -13,7 +13,7 @@ namespace MeshWeaver.Layout.Client;
 
 public static class LayoutClientExtensions
 {
-    public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream, 
+    public static void UpdatePointer(this ISynchronizationStream<JsonElement> stream,
         object? value,
         string? dataContext,
         JsonPointerReference? reference, ModelParameter<JsonElement>? model = null)
@@ -68,14 +68,14 @@ public static class LayoutClientExtensions
     }
 
     public static IObservable<T> DataBind<T>(this ISynchronizationStream<JsonElement> stream,
-        JsonPointerReference reference, 
-        string? dataContext = null, 
-        Func<object?,T?, T?>? conversion = null,
+        JsonPointerReference reference,
+        string? dataContext = null,
+        Func<object?, T?, T?>? conversion = null,
         T? defaultValue = default(T)) =>
         stream.GetStream<object>(JsonPointer.Parse(GetPointer(reference.Pointer, dataContext ?? "")))
-            .Select(x => 
-                conversion is not null 
-                    ? conversion.Invoke(x, defaultValue) 
+            .Select(x =>
+                conversion is not null
+                    ? conversion.Invoke(x, defaultValue)
                     : stream.Hub.ConvertSingle(x, null, defaultValue!))
             .Where(x => x is not null)
             .Select(x => (T)x!)
@@ -139,7 +139,7 @@ public static class LayoutClientExtensions
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
-    public static T? ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T?,T?>? conversion, T? defaultValue = default(T))
+    public static T? ConvertSingle<T>(this IMessageHub hub, object? value, Func<object?, T?, T?>? conversion, T? defaultValue = default(T))
     {
         conversion ??= null;
         if (conversion != null)
@@ -169,7 +169,7 @@ public static class LayoutClientExtensions
                 // This is a nullable type - check if it has a value
                 var underlyingValue = valueType.GetProperty("Value")?.GetValue(value);
                 var hasValue = (bool)(valueType.GetProperty("HasValue")?.GetValue(value) ?? false);
-                
+
                 if (hasValue && underlyingValue != null)
                 {
                     // Use the underlying value for conversion
@@ -182,7 +182,7 @@ public static class LayoutClientExtensions
                 }
             }
         }
-        
+
         // Not a nullable type, proceed with normal numeric conversion
         return ConvertNumericValue<T>(value);
     }
@@ -190,13 +190,13 @@ public static class LayoutClientExtensions
     private static T? ConvertNumericValue<T>(object? value)
     {
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
-        
+
         // Handle numeric conversions more safely
         if (IsNumericType(targetType))
         {
             return ConvertNumericSafely<T>(value, targetType);
         }
-        
+
         // Fall back to Convert.ChangeType for non-numeric types
         return (T?)Convert.ChangeType(value, typeof(T));
     }
@@ -205,8 +205,8 @@ public static class LayoutClientExtensions
     {
         return Type.GetTypeCode(type) switch
         {
-            TypeCode.Byte or TypeCode.SByte or TypeCode.UInt16 or TypeCode.UInt32 or TypeCode.UInt64 or 
-            TypeCode.Int16 or TypeCode.Int32 or TypeCode.Int64 or 
+            TypeCode.Byte or TypeCode.SByte or TypeCode.UInt16 or TypeCode.UInt32 or TypeCode.UInt64 or
+            TypeCode.Int16 or TypeCode.Int32 or TypeCode.Int64 or
             TypeCode.Decimal or TypeCode.Double or TypeCode.Single => true,
             _ => false
         };
@@ -219,27 +219,27 @@ public static class LayoutClientExtensions
         {
             if (double.IsNaN(d) || double.IsInfinity(d))
                 throw new OverflowException($"Cannot convert {d} to {targetType.Name}");
-                
+
             // For integer targets, check if the value is within range and truncate
             if (IsIntegerType(targetType))
             {
                 return ConvertDoubleToInteger<T>(d, targetType);
             }
         }
-        
-        // Handle special float values  
+
+        // Handle special float values
         if (value is float f)
         {
             if (float.IsNaN(f) || float.IsInfinity(f))
                 throw new OverflowException($"Cannot convert {f} to {targetType.Name}");
-                
+
             // For integer targets, check if the value is within range and truncate
             if (IsIntegerType(targetType))
             {
                 return ConvertDoubleToInteger<T>(f, targetType);
             }
         }
-        
+
         // Use Convert.ChangeType for other numeric conversions
         return value is null ? default : (T?)Convert.ChangeType(value, targetType);
     }
@@ -248,7 +248,7 @@ public static class LayoutClientExtensions
     {
         return Type.GetTypeCode(type) switch
         {
-            TypeCode.Byte or TypeCode.SByte or TypeCode.UInt16 or TypeCode.UInt32 or TypeCode.UInt64 or 
+            TypeCode.Byte or TypeCode.SByte or TypeCode.UInt16 or TypeCode.UInt32 or TypeCode.UInt64 or
             TypeCode.Int16 or TypeCode.Int32 or TypeCode.Int64 => true,
             _ => false
         };
@@ -259,28 +259,28 @@ public static class LayoutClientExtensions
         // Check bounds and truncate the value
         return Type.GetTypeCode(targetType) switch
         {
-            TypeCode.Int32 => value > int.MaxValue || value < int.MinValue 
+            TypeCode.Int32 => value > int.MaxValue || value < int.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for Int32")
                 : (T)(object)(int)Math.Truncate(value),
-            TypeCode.Int16 => value > short.MaxValue || value < short.MinValue 
+            TypeCode.Int16 => value > short.MaxValue || value < short.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for Int16")
                 : (T)(object)(short)Math.Truncate(value),
-            TypeCode.Int64 => value > long.MaxValue || value < long.MinValue 
+            TypeCode.Int64 => value > long.MaxValue || value < long.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for Int64")
                 : (T)(object)(long)Math.Truncate(value),
-            TypeCode.Byte => value > byte.MaxValue || value < byte.MinValue 
+            TypeCode.Byte => value > byte.MaxValue || value < byte.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for Byte")
                 : (T)(object)(byte)Math.Truncate(value),
-            TypeCode.SByte => value > sbyte.MaxValue || value < sbyte.MinValue 
+            TypeCode.SByte => value > sbyte.MaxValue || value < sbyte.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for SByte")
                 : (T)(object)(sbyte)Math.Truncate(value),
-            TypeCode.UInt16 => value > ushort.MaxValue || value < ushort.MinValue 
+            TypeCode.UInt16 => value > ushort.MaxValue || value < ushort.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for UInt16")
                 : (T)(object)(ushort)Math.Truncate(value),
-            TypeCode.UInt32 => value > uint.MaxValue || value < uint.MinValue 
+            TypeCode.UInt32 => value > uint.MaxValue || value < uint.MinValue
                 ? throw new OverflowException($"Value {value} is out of range for UInt32")
                 : (T)(object)(uint)Math.Truncate(value),
-            TypeCode.UInt64 => value > ulong.MaxValue || value < 0 
+            TypeCode.UInt64 => value > ulong.MaxValue || value < 0
                 ? throw new OverflowException($"Value {value} is out of range for UInt64")
                 : (T)(object)(ulong)Math.Truncate(value),
             _ => throw new InvalidOperationException($"Unsupported integer type: {targetType.Name}")

@@ -149,7 +149,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
                 o => o.WithTarget(new PricingAddress("default")));
-            typeDefinitionMap = typesResponse.Message.Types.Select(t => t with { Address = null }).ToDictionary(x => x.Name);
+            typeDefinitionMap = typesResponse?.Message?.Types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
         catch
         {
@@ -161,7 +161,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
             var layoutAreaResponse = await hub.AwaitResponse(
                 new GetLayoutAreasRequest(),
                 o => o.WithTarget(new PricingAddress("default")));
-            layoutAreaMap = layoutAreaResponse.Message.Areas.ToDictionary(x => x.Area);
+            layoutAreaMap = layoutAreaResponse?.Message?.Areas?.ToDictionary(x => x.Area);
         }
         catch
         {

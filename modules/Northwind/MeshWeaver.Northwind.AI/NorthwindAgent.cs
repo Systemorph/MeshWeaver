@@ -26,20 +26,20 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     public string Instructions =>
         """
         You are the NorthwindAgent, specialized in working with Northwind business data. You have access to:
-        
+
         - Customer data: information about companies, contacts, and addresses
         - Order data: sales orders, order details, and order history
         - Product data: product catalog, categories, suppliers, and inventory
         - Employee data: staff information and territories
         - Geographic data: regions, territories, and shipping information
-        
+
         You can help users:
         - Query and analyze business data
         - Generate reports and insights
         - Answer questions about customers, orders, products, and sales
         - Provide data-driven recommendations
         - Layout areas (reports, views, charts, dashboards) related to Northwind data
-        
+
         Use the DataPlugin to access structured domain data and the LayoutAreaPlugin to display visual components.
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
@@ -54,13 +54,13 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     }
 
     private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");
-    
+
     async Task IInitializableAgent.InitializeAsync()
     {
         var typeResponse = await hub.AwaitResponse(new GetDomainTypesRequest(), o => o.WithTarget(NorthwindAddress));
-        typeDefinitionMap = typeResponse.Message.Types.ToDictionary(x => x.Name);
+        typeDefinitionMap = typeResponse?.Message?.Types?.ToDictionary(x => x.Name!);
         var layoutResponse = await hub.AwaitResponse(new GetLayoutAreasRequest(), o => o.WithTarget(NorthwindAddress));
-        layoutDefinitionMap = layoutResponse.Message.Areas.ToDictionary(x => x.Area);
+        layoutDefinitionMap = layoutResponse?.Message?.Areas?.ToDictionary(x => x.Area);
     }
 
     /// <summary>

@@ -43,6 +43,7 @@ public static class SharedPortalConfiguration
             .AddEnvironmentVariables();
 
         var services = builder.Services;
+
         services.AddRazorPages()
 
             .AddMicrosoftIdentityUI();

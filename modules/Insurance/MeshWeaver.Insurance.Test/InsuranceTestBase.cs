@@ -27,7 +27,7 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
             o => o.WithTarget(address),
             TestContext.Current.CancellationToken);
 
-        return (risksResp.Message.Data as IEnumerable<object>)?
+        return (risksResp?.Message?.Data as IEnumerable<object>)?
             .Select(x => x as PropertyRisk ?? (x as JsonObject)?.Deserialize<PropertyRisk>(hub.JsonSerializerOptions))
             .Where(x => x != null)
             .Cast<PropertyRisk>()
@@ -43,7 +43,7 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
             o => o.WithTarget(InsuranceApplicationAttribute.Address),
             TestContext.Current.CancellationToken);
 
-        return (pricingsResp.Message.Data as IEnumerable<object>)?
+        return (pricingsResp?.Message?.Data as IEnumerable<object>)?
             .Select(x => x as Pricing ?? (x as JsonObject)?.Deserialize<Pricing>(hub.JsonSerializerOptions))
             .Where(x => x != null)
             .Cast<Pricing>()
