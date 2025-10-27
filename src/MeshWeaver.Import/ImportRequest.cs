@@ -32,6 +32,12 @@ public record ImportRequest : IRequest<ImportResponse>
     public string MimeType { get; init; }
 
     public string Format { get; init; } = ImportFormat.Default;
+
+    /// <summary>
+    /// Optional import configuration. When provided, this configuration will be used instead of the Format string.
+    /// </summary>
+    public ImportConfiguration? Configuration { get; init; }
+
     public object? TargetDataSource { get; init; }
     public UpdateOptions UpdateOptions { get; init; } = UpdateOptions.Default;
     public DataSetReaderOptions DataSetReaderOptions { get; init; } = new();

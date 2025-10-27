@@ -14,7 +14,7 @@ public static class ExcelImportExtensions
     /// <param name="entityBuilder">Function to build an entity from property dictionary</param>
     /// <returns>Enumerable of imported entities</returns>
     public static IEnumerable<T> ImportExcel<T>(
-        this ImportConfiguration configuration,
+        this ImportBuilder configuration,
         Stream stream,
         ExcelImportConfiguration excelConfig,
         Func<Dictionary<string, object?>, T> entityBuilder) where T : class
@@ -33,7 +33,7 @@ public static class ExcelImportExtensions
     /// <param name="entityBuilder">Function to build an entity from property dictionary</param>
     /// <returns>Enumerable of imported entities</returns>
     public static IEnumerable<T> ImportExcel<T>(
-        this ImportConfiguration configuration,
+        this ImportBuilder configuration,
         string filePath,
         ExcelImportConfiguration excelConfig,
         Func<Dictionary<string, object?>, T> entityBuilder) where T : class

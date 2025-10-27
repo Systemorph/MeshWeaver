@@ -17,7 +17,7 @@ public static class ImportExtensions
 
     public static MessageHubConfiguration AddImport(
         this MessageHubConfiguration configuration,
-        Func<ImportConfiguration, ImportConfiguration> importConfiguration
+        Func<ImportBuilder, ImportBuilder> importConfiguration
     )
     {
         var lambdas = configuration.GetListOfLambdas();
@@ -117,10 +117,10 @@ public static class ImportExtensions
         return ret;
     }
 
-    internal static ImmutableList<Func<ImportConfiguration, ImportConfiguration>> GetListOfLambdas(
+    internal static ImmutableList<Func<ImportBuilder, ImportBuilder>> GetListOfLambdas(
         this MessageHubConfiguration config
     ) =>
-        config.Get<ImmutableList<Func<ImportConfiguration, ImportConfiguration>>>() ?? [];
+        config.Get<ImmutableList<Func<ImportBuilder, ImportBuilder>>>() ?? [];
 }
 
 public record EmbeddedResource(Assembly Assembly, string Resource) : Source;

@@ -30,11 +30,11 @@ public record ImportUnpartitionedDataSource(Source Source, IWorkspace Workspace)
     }
 
     private ImmutableList<
-        Func<ImportConfiguration, ImportConfiguration>
+        Func<ImportBuilder, ImportBuilder>
     > Configurations { get; init; } =
-        ImmutableList<Func<ImportConfiguration, ImportConfiguration>>.Empty;
+        ImmutableList<Func<ImportBuilder, ImportBuilder>>.Empty;
 
     public ImportUnpartitionedDataSource WithImportConfiguration(
-        Func<ImportConfiguration, ImportConfiguration> config
+        Func<ImportBuilder, ImportBuilder> config
     ) => this with { Configurations = Configurations.Add(config) };
 }

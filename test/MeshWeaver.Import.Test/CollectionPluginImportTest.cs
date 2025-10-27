@@ -186,4 +186,50 @@ SystemName,DisplayName
 
         allData.Should().HaveCount(3);
     }
+
+    [Fact]
+    public async Task CollectionPlugin_Import_WithConfiguration_ShouldImportWithoutFormat()
+    {
+        // Arrange
+        var client = GetClient();
+        var plugin = new CollectionPlugin(client);
+
+        // Create a configuration JSON that is not registered as a format
+        var configurationJson = @"{
+            ""$type"": ""MeshWeaver.Import.Configuration.ImportConfiguration"",
+            ""name"": ""test-config-not-registered"",
+            ""entityId"": ""2024""
+        }";
+
+        // Act
+        var result = await plugin.Import(
+            path: "test-data.csv",
+            collection: "TestCollection",
+            address: new ImportAddress(2024),
+            format: null,
+            configuration: configurationJson,
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        // Assert
+        // The import should succeed even though "test-config-not-registered" is not a registered format
+        // This demonstrates that when configuration is provided, it bypasses format resolution
+        result.Should().Contain("succeeded", "import should succeed with configuration even if not registered as format");
+        result.Should().NotContain("Error", "there should be no errors");
+        result.Should().NotContain("Unknown format", "should not try to resolve configuration as format");
+
+        // Verify data was imported
+        var referenceDataHub = Router.GetHostedHub(new ReferenceDataAddress());
+        var workspace = referenceDataHub.ServiceProvider.GetRequiredService<IWorkspace>();
+
+        var allData = await workspace.GetObservable<LineOfBusiness>()
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x.Count >= 3);
+
+        allData.Should().HaveCount(3);
+        var items = allData.OrderBy(x => x.SystemName).ToList();
+        items[0].DisplayName.Should().Be("LoB 1");
+        items[1].DisplayName.Should().Be("LoB 2");
+        items[2].DisplayName.Should().Be("LoB 3");
+    }
 }

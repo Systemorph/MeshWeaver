@@ -6,7 +6,7 @@ namespace MeshWeaver.Import.Configuration;
 /// <summary>
 /// Configuration describing how to transform an Excel worksheet into typed entities.
 /// </summary>
-public class ExcelImportConfiguration
+public class ExcelImportConfiguration : ImportConfiguration
 {
     public ExcelImportConfiguration()
     {
@@ -26,13 +26,11 @@ public class ExcelImportConfiguration
     }
 
     /// <summary>
-    /// File name of the Excel workbook used for this mapping (key).
+    /// The fully qualified type name of the entity to import (e.g., "MeshWeaver.Insurance.Domain.PropertyRisk").
+    /// Used for automatic entity instantiation.
     /// </summary>
-    [Key] public required string Name { get; init; }
-    /// <summary>
-    /// Entity identifier that this configuration applies to (e.g., PricingId, ProjectId, etc.).
-    /// </summary>
-    public required string EntityId { get; init; }
+    public string? TypeName { get; set; }
+
     /// <summary>
     /// Name of the worksheet within the Excel file to process.
     /// </summary>

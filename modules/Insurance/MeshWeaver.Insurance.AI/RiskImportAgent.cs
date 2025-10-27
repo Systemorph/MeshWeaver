@@ -44,8 +44,8 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 When the user asks you to import risks, you should:
                 1) Get the existing risk mapping configuration for the specified file using the function {{{nameof(RiskImportPlugin.GetRiskImportConfiguration)}}} with the filename.
                 2) If no import configuration was returned in 1, get a sample of the worksheet using {{{nameof(RiskImportPlugin.GetWorksheetSample)}}} with the filename and extract the table start row as well as the mapping as in the schema provided below.
-                   Consider any input from the user to modify the configuration. Use the {{{nameof(RiskImportPlugin.UpdateRiskImportConfiguration)}}} function to update.
-                3) call Import with the filename.
+                   Consider any input from the user to modify the configuration. Use the {{{nameof(RiskImportPlugin.UpdateRiskImportConfiguration)}}} function to save the configuration.
+                3) Call Import with the filename. The Import function will automatically use the saved configuration.
 
                 # Updating Risk Import Configuration
                 When the user asks you to update the risk import configuration, you should:
@@ -191,13 +191,30 @@ public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
         var collectionName = $"Submissions-{pricingId}";
         var address = new PricingAddress(pricingId);
 
+        // Try to get the saved configuration for this file
+        string? configuration = null;
+        try
+        {
+            var configJson = await GetRiskImportConfiguration(filename);
+            // Check if we got a valid configuration (not an error message)
+            if (!configJson.StartsWith("Error") && !configJson.StartsWith("Please navigate"))
+            {
+                configuration = configJson;
+            }
+        }
+        catch
+        {
+            // If we can't get the configuration, fall back to format-based import
+        }
+
         // Delegate to CollectionPlugin's Import method
         var collectionPlugin = new CollectionPlugin(hub);
         return await collectionPlugin.Import(
             path: filename,
             collection: collectionName,
             address: address,
-            format: "PropertyRiskImport"
+            format: configuration != null ? null : "PropertyRiskImport", // Use format only if no configuration
+            configuration: configuration // Pass configuration if available
         );
     }
 
@@ -214,7 +231,19 @@ public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
                 new GetDataRequest(new EntityReference("ExcelImportConfiguration", filename)),
                 o => o.WithTarget(new PricingAddress(chat.Context.Address.Id))
             );
-            return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+
+            // Serialize the data
+            var json = JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+
+            // Parse and ensure $type is set to ExcelImportConfiguration
+            var jsonObject = JsonNode.Parse(json) as JsonObject;
+            if (jsonObject != null)
+            {
+                var withType = EnsureTypeFirst(jsonObject, "ExcelImportConfiguration");
+                return JsonSerializer.Serialize(withType, hub.JsonSerializerOptions);
+            }
+
+            return json;
         }
         catch (Exception e)
         {

@@ -149,6 +149,7 @@ public class CollectionPlugin(IMessageHub hub)
         [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
         [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] object? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
+        [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -187,6 +188,16 @@ public class CollectionPlugin(IMessageHub hub)
                 ["format"] = format ?? "Default"
             };
 
+            // Add configuration if provided
+            if (!string.IsNullOrWhiteSpace(configuration))
+            {
+                var configNode = JsonNode.Parse(configuration);
+                if (configNode != null)
+                {
+                    importRequestJson["configuration"] = configNode;
+                }
+            }
+
             // Serialize and deserialize through hub's serializer to get proper type
             var jsonString = importRequestJson.ToJsonString();
             var importRequestObj = JsonSerializer.Deserialize<object>(jsonString, hub.JsonSerializerOptions)!;
@@ -222,8 +233,6 @@ public class CollectionPlugin(IMessageHub hub)
             }
 
             return result;
-
-            return "Import completed but response format was unexpected.";
         }
         catch (Exception ex)
         {
