@@ -18,7 +18,6 @@
       <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
       <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
       <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
-      <ProjectReference Include="..\MeshWeaver.Import\MeshWeaver.Import.csproj" />
     </ItemGroup>
 
 </Project>

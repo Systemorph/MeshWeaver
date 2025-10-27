@@ -2,9 +2,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Domain;
-using MeshWeaver.Import;
-using MeshWeaver.Import.Configuration;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
@@ -36,7 +33,7 @@ public class CollectionPlugin(IMessageHub hub)
                 return $"File '{filePath}' not found in collection '{collectionName}'.";
 
             using var reader = new StreamReader(stream);
-            var content = await reader.ReadToEndAsync();
+            var content = await reader.ReadToEndAsync(cancellationToken);
 
             return content;
         }
@@ -177,34 +174,56 @@ public class CollectionPlugin(IMessageHub hub)
                 return $"Invalid address type: {address.GetType().Name}. Expected string or Address.";
             }
 
-            // Construct the ImportRequest directly
-            var importRequest = new ImportRequest(new CollectionSource(collection, path))
+            // Build ImportRequest JSON structure
+            var importRequestJson = new JsonObject
             {
-                Format = format ?? ImportFormat.Default
+                ["$type"] = "MeshWeaver.Import.ImportRequest",
+                ["source"] = new JsonObject
+                {
+                    ["$type"] = "MeshWeaver.Import.CollectionSource",
+                    ["collection"] = collection,
+                    ["path"] = path
+                },
+                ["format"] = format ?? "Default"
             };
 
+            // Serialize and deserialize through hub's serializer to get proper type
+            var jsonString = importRequestJson.ToJsonString();
+            var importRequestObj = JsonSerializer.Deserialize<object>(jsonString, hub.JsonSerializerOptions)!;
+
             // Post the request to the hub
-            var response = await hub.AwaitResponse(
-                importRequest,
+            var responseMessage = await hub.AwaitResponse(
+                importRequestObj,
                 o => o.WithTarget(targetAddress),
                 cancellationToken
             );
 
-            // Format the response
-            var log = response.Message.Log;
-            var status = log.Status.ToString();
-            var result = $"Import {status.ToLower()}.\n";
+            // Serialize the response back to JSON for processing
+            var responseJson = JsonSerializer.Serialize(responseMessage, hub.JsonSerializerOptions);
+            var responseObj = JsonNode.Parse(responseJson)!;
 
-            if (log.Messages.Any())
+            var log = responseObj["log"] as JsonObject;
+            var status = log?["status"]?.ToString() ?? "Unknown";
+            var messages = log?["messages"] as JsonArray ?? new JsonArray();
+
+            var result = $"Import {status.ToLower()}.\n";
+            if (messages.Count > 0)
             {
                 result += "Log messages:\n";
-                foreach (var msg in log.Messages)
+                foreach (var msg in messages)
                 {
-                    result += $"  [{msg.LogLevel}] {msg.Message}\n";
+                    if (msg is JsonObject msgObj)
+                    {
+                        var level = msgObj["logLevel"]?.ToString() ?? "Info";
+                        var message = msgObj["message"]?.ToString() ?? "";
+                        result += $"  [{level}] {message}\n";
+                    }
                 }
             }
 
             return result;
+
+            return "Import completed but response format was unexpected.";
         }
         catch (Exception ex)
         {

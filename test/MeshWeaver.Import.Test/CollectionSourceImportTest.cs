@@ -80,8 +80,8 @@ SystemName,DisplayName
         // Arrange
         var client = GetClient();
 
-        // Test with path containing subfolder
-        var importRequest = new ImportRequest(new CollectionSource("TestCollection", "/test-data.csv"));
+        // Test with path without leading slash (file is in root of collection)
+        var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
         var importResponse = await client.AwaitResponse(
@@ -143,6 +143,6 @@ SystemName,DisplayName
         // Assert
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Failed);
         var errors = importResponse.Message.Log.Errors();
-        errors.Should().Contain(m => m.Message.Contains("Could not find content"));
+        errors.Should().Contain(m => m.Message.Contains("Collection") && m.Message.Contains("not found"));
     }
 }

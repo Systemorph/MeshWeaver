@@ -32,7 +32,7 @@ SystemName,DisplayName
         File.WriteAllText(Path.Combine(_testFilesPath, "test-data.csv"), csvContent);
 
         return base.ConfigureRouter(configuration)
-            .WithTypes(typeof(ImportAddress))
+            .WithTypes(typeof(ImportAddress), typeof(ImportRequest), typeof(CollectionSource))
             .AddContentCollections()
             .AddFileSystemContentCollection("TestCollection", _ => _testFilesPath)
             .WithRoutes(forward =>

@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
-using Json.More;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
 
@@ -271,11 +270,6 @@ public class MessageService : IMessageService
             return delivery.Failed($"Deserialization failed: {ex.Message}");
         }
 
-        if (delivery.Message is JsonElement je)
-        {
-            return delivery.Failed($"Could not deserialize message {je.ToJsonString()}");
-        }
-
         return delivery;
     }
     private IMessageDelivery DeserializeDelivery(IMessageDelivery delivery)
@@ -290,7 +284,16 @@ public class MessageService : IMessageService
     }
 
     private IMessageDelivery PostImpl(object message, PostOptions opt)
-    => (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType()).Invoke(this, new[] { message, opt })!;
+    {
+        if (message is JsonElement je)
+            message = new RawJson(je.ToString());
+        if (message is JsonNode jn)
+            message = new RawJson(jn.ToString());
+
+        return (IMessageDelivery)PostImplMethod.MakeGenericMethod(message.GetType())
+                .Invoke(this, [message, opt])!;
+
+    }
 
 
     private static readonly MethodInfo PostImplMethod = typeof(MessageService).GetMethod(nameof(PostImplGeneric), BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -299,11 +302,6 @@ public class MessageService : IMessageService
     {
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-
-        if (typeof(TMessage) != message.GetType())
-            return (IMessageDelivery<TMessage>)PostImplMethod
-                .MakeGenericMethod(message.GetType())
-                .Invoke(this, [message, opt])!;
 
         var delivery = new MessageDelivery<TMessage>(message, opt, hub.JsonSerializerOptions)
         {

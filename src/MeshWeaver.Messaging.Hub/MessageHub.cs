@@ -6,7 +6,6 @@ using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
-using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,6 +21,8 @@ public sealed class MessageHub : IMessageHub
         Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
+
+
     private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
 
@@ -339,66 +340,13 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
+
+
+
+
+    public Task<object?> AwaitResponse(object r, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default)
     {
-        var tcs = new TaskCompletionSource<IMessageDelivery<TResponse>>(cancellationToken);
-        var callbackTask = RegisterCallback(
-            request.Id,
-            d =>
-            {
-                tcs.SetResult((IMessageDelivery<TResponse>)d);
-                return d.Processed();
-            },
-            cancellationToken
-        );
-        return callbackTask.ContinueWith(_ => tcs.Task.Result, cancellationToken);
-    }
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        CancellationToken cancellationToken
-    ) => AwaitResponse(request, x => x, x => x, cancellationToken);
-
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options
-    ) =>
-        AwaitResponse(
-            request,
-            options,
-            new CancellationTokenSource(IMessageHub.DefaultTimeout).Token
-        );
-
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options,
-        CancellationToken cancellationToken
-    ) => AwaitResponse(request, options, x => x, cancellationToken);
-
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
-        var id = Guid.NewGuid().AsString();
-        var ret = AwaitResponse(
-            id,
-            selector,
-            cancellationToken
-        );
-
-        Post(request, o => options.Invoke(o).WithMessageId(id));
-        return ret;
-    }
-
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        IMessageDelivery request,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
+        var request = r as IMessageDelivery ?? Post(r, options)!;
         var response = RegisterCallback(
             request.Id,
             d => d,
@@ -406,43 +354,25 @@ public sealed class MessageHub : IMessageHub
         );
         var task = response
             .ContinueWith(t =>
-                    InnerCallback(request.Id, t.Result, selector),
+            {
+                var ret = t.Result;
+                return InnerCallback(request.Id, ret, selector);
+
+            },
                 cancellationToken
             );
         return task;
     }
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        string id,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
-        var response = RegisterCallback(
-            id,
-            d => d,
-            cancellationToken
-        );
-        var task = response.ContinueWith(async t =>
-        {
-            // Await the task to propagate the original exception
-            var result = await t;
-            return InnerCallback(id, result, selector);
-        }, cancellationToken).Unwrap();
 
-        return task;
-    }
-
-    private TResult InnerCallback<TResponse, TResult>(
+    private object? InnerCallback(
         string id,
         IMessageDelivery response,
-        Func<IMessageDelivery<TResponse>, TResult> selector)
+        Func<IMessageDelivery, object?> selector)
     {
 
         try
         {
-            if (response is IMessageDelivery<TResponse> tResponse)
-                return selector.Invoke(tResponse);
-            throw new DeliveryFailureException($"Response for {id} was of unexpected type: {response}");
+            return selector.Invoke(response);
         }
         catch (DeliveryFailureException)
         {
