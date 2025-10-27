@@ -44,7 +44,8 @@
       "Bash(python:*)",
       "Bash(python3:*)",
       "Bash(test:*)",
-      "Bash(Select-Object -Last 20)"
+      "Bash(Select-Object -Last 20)",
+      "Bash(git mv:*)"
     ],
     "deny": []
   }

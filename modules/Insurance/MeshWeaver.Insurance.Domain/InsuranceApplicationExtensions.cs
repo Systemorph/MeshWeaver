@@ -21,7 +21,7 @@ public static class InsuranceApplicationExtensions
     /// </summary>
     public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
         => configuration
-            .WithTypes(typeof(PricingAddress), typeof(ExcelImportConfiguration), typeof(Structure))
+            .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(Structure), typeof(ImportRequest), typeof(CollectionSource))
             .AddData(data =>
             {
                 var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
