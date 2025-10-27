@@ -180,26 +180,26 @@ public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
         return hub.JsonSerializerOptions;
     }
 
-    //[KernelFunction]
-    //[Description("Imports a file with filename")]
-    //public async Task<string> Import(string filename)
-    //{
-    //    if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-    //        return "Please navigate to the pricing for which you want to import risks.";
+    [KernelFunction]
+    [Description("Imports a file with filename")]
+    public async Task<string> Import(string filename)
+    {
+        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
+            return "Please navigate to the pricing for which you want to import risks.";
 
-    //    var pricingId = chat.Context.Address.Id;
-    //    var collectionName = $"Submissions-{pricingId}";
-    //    var address = $"{PricingAddress.TypeName}/{pricingId}";
+        var pricingId = chat.Context.Address.Id;
+        var collectionName = $"Submissions-{pricingId}";
+        var address = new PricingAddress(pricingId);
 
-    //    // Delegate to CollectionPlugin's Import method
-    //    var collectionPlugin = new CollectionPlugin(hub);
-    //    return await collectionPlugin.Import(
-    //        path: filename,
-    //        collection: collectionName,
-    //        address: address,
-    //        format: "PropertyRiskImport"
-    //    );
-    //}
+        // Delegate to CollectionPlugin's Import method
+        var collectionPlugin = new CollectionPlugin(hub);
+        return await collectionPlugin.Import(
+            path: filename,
+            collection: collectionName,
+            address: address,
+            format: "PropertyRiskImport"
+        );
+    }
 
     [KernelFunction]
     [Description("Gets the risk configuration for a particular file")]

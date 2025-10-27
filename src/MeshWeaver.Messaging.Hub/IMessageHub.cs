@@ -16,19 +16,30 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
         AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken);
+    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
+        => (IMessageDelivery<TResponse>)(await AwaitResponse(request, o => o, o => o, cancellationToken))!;
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
+        CancellationToken cancellationToken)
+        => AwaitResponse(request, x => x, x => x, cancellationToken)!;
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default);
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector)
+    Task<IMessageDelivery<TResponse>?> AwaitResponse<TResponse>(IRequest<TResponse> request,
+        Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default)
+        => AwaitResponse(request, options, o => o, cancellationToken);
+    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+        Func<IMessageDelivery<TResponse>, TResult> selector)
         => AwaitResponse(request, x => x, selector);
 
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
+    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, selector, cancellationToken);
 
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default);
+    async Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
+        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default)
+        => (TResult?)await AwaitResponse((object)request, options, o => selector((IMessageDelivery<TResponse>)o), cancellationToken);
 
+
+    Task<object?> AwaitResponse(object request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default);
     Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
         AsyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
         => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),

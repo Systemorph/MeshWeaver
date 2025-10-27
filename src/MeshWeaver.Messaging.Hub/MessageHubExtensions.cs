@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
@@ -77,45 +78,46 @@ public static class MessageHubExtensions
     /// <param name="options">Post options</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>The response message</returns>
-    public static async Task<object> AwaitResponse(
+    public static async Task<object?> AwaitResponse(
         this IMessageHub hub,
         object request,
         Func<PostOptions, PostOptions> options,
         CancellationToken cancellationToken = default)
     {
+        // If the request is a JsonElement, we need to deserialize it to the concrete type first
+        if (request is JsonElement jsonElement)
+        {
+            //  Get the type discriminator from the JSON
+            if (!jsonElement.TryGetProperty("$type", out var typeElement))
+                throw new InvalidOperationException("JSON request must have a '$type' property");
+
+            var typeName = typeElement.GetString();
+            if (string.IsNullOrEmpty(typeName))
+                throw new InvalidOperationException("'$type' property cannot be empty");
+
+            // Find the type in the type registry
+            var concreteType = hub.GetTypeRegistry().GetType(typeName);
+            if (concreteType == null)
+                concreteType = typeof(JsonElement);
+
+            // Deserialize to the concrete type
+            request = JsonSerializer.Deserialize(jsonElement.GetRawText(), concreteType, hub.JsonSerializerOptions)!;
+        }
+
         // Find the IRequest<TResponse> interface to get the response type
         var requestType = request.GetType();
         var requestInterface = requestType.GetInterfaces()
             .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequest<>));
 
-        if (requestInterface == null)
-            throw new InvalidOperationException($"Request type {requestType.Name} does not implement IRequest<TResponse>");
 
-        var responseType = requestInterface.GetGenericArguments()[0];
-
-        // Use reflection to call AwaitResponse<TResponse, TResult>
-        var awaitResponseMethod = typeof(IMessageHub).GetMethods()
-            .FirstOrDefault(m =>
-                m.Name == nameof(IMessageHub.AwaitResponse) &&
-                m.IsGenericMethodDefinition &&
-                m.GetGenericArguments().Length == 2 &&
-                m.GetParameters().Length == 3);
-
-        if (awaitResponseMethod == null)
-            throw new InvalidOperationException("Could not find AwaitResponse method");
-
-        var genericMethod = awaitResponseMethod.MakeGenericMethod(responseType, responseType);
 
         // Create the result selector lambda: (IMessageDelivery<TResponse> d) => d.Message
-        var deliveryParam = System.Linq.Expressions.Expression.Parameter(typeof(IMessageDelivery<>).MakeGenericType(responseType), "d");
+        var deliveryParam = System.Linq.Expressions.Expression.Parameter(typeof(IMessageDelivery), "d");
         var messageProperty = System.Linq.Expressions.Expression.Property(deliveryParam, "Message");
-        var lambda = System.Linq.Expressions.Expression.Lambda(messageProperty, deliveryParam);
+        var lambda = System.Linq.Expressions.Expression.Lambda<Func<IMessageDelivery, object?>>(messageProperty, deliveryParam);
         var resultSelector = lambda.Compile();
 
-        var task = (Task)genericMethod.Invoke(hub, new object[] { request, options, resultSelector })!;
-        await task.ConfigureAwait(false);
-
-        var resultProperty = task.GetType().GetProperty("Result");
-        return resultProperty!.GetValue(task)!;
+        var resultProperty = await hub.AwaitResponse(request, options, resultSelector, cancellationToken);
+        return resultProperty;
     }
 }
