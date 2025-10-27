@@ -39,7 +39,7 @@ public class CollectionPlugin(IMessageHub hub)
             var extension = Path.GetExtension(filePath).ToLowerInvariant();
             if (extension == ".xlsx" || extension == ".xls")
             {
-                return await ReadExcelFileAsync(stream, filePath, numberOfRows, cancellationToken);
+                return await ReadExcelFileAsync(stream, filePath, numberOfRows);
             }
 
             // For non-Excel files, read as text
@@ -72,7 +72,7 @@ public class CollectionPlugin(IMessageHub hub)
         }
     }
 
-    private async Task<string> ReadExcelFileAsync(Stream stream, string filePath, int? numberOfRows, CancellationToken cancellationToken)
+    private async Task<string> ReadExcelFileAsync(Stream stream, string filePath, int? numberOfRows)
     {
         try
         {

@@ -1,10 +1,12 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
+using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Insurance.Domain.LayoutAreas;
 
@@ -37,7 +39,8 @@ public static class PropertyRisksLayoutArea
 
             return Controls.Stack
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
-                .WithView(dataGrid);
+                .WithView(dataGrid)
+                .WithView(GeocodingArea);
         })
         .StartWith(Controls.Stack
             .WithView(PricingLayoutShared.BuildToolbar(pricingId, "PropertyRisks"))
@@ -93,6 +96,40 @@ public static class PropertyRisksLayoutArea
         return Controls.Stack
             .WithView(Controls.Title("Property Risks", 1))
             .WithView(dataGrid);
+    }
+
+    private static IObservable<UiControl> GeocodingArea(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var svc = host.Hub.ServiceProvider.GetRequiredService<IGeocodingService>();
+        return svc.Progress.Select(p => p is null
+            ? (UiControl)Controls.Button("Geocode").WithClickAction(ClickGeocoding)
+            : Controls.Progress($"Processing {p.CurrentRiskName}: {p.ProcessedRisks} of {p.TotalRisks}",
+                p.TotalRisks == 0 ? 0 : (int)(100.0 * p.ProcessedRisks / p.TotalRisks)));
+    }
+
+    private static async Task ClickGeocoding(UiActionContext obj)
+    {
+        // Show initial progress
+        obj.Host.UpdateArea(obj.Area, Controls.Progress("Starting geocoding...", 0));
+
+        try
+        {
+            // Start the geocoding process
+            var response = await obj.Host.Hub.AwaitResponse(
+                new GeocodingRequest(),
+                o => o.WithTarget(obj.Hub.Address));
+
+            // Show completion message
+            var resultMessage = response?.Message?.Success == true
+                ? $"✅ Geocoding Complete: {response.Message.GeocodedCount} locations geocoded successfully."
+                : $"❌ Geocoding Failed: {response?.Message?.Error}";
+
+            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**{resultMessage}**"));
+        }
+        catch (Exception ex)
+        {
+            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**Geocoding Failed**: {ex.Message}"));
+        }
     }
 }
 

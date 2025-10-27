@@ -23,9 +23,9 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
         CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, x => x, cancellationToken)!;
 
-    Task<IMessageDelivery<TResponse>?> AwaitResponse<TResponse>(IRequest<TResponse> request,
+    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
         Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default)
-        => AwaitResponse(request, options, o => o, cancellationToken);
+        => (await AwaitResponse(request, options, o => o, cancellationToken))!;
     Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
         Func<IMessageDelivery<TResponse>, TResult> selector)
         => AwaitResponse(request, x => x, selector);

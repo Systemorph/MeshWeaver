@@ -1,3 +1,7 @@
+﻿using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using iText.Kernel.Pdf;
 using iText.Kernel.Pdf.Canvas.Parser;
 using iText.Kernel.Pdf.Canvas.Parser.Listener;
@@ -9,10 +13,6 @@ using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
-using System.ComponentModel;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace MeshWeaver.Insurance.AI;
 
@@ -144,7 +144,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
                 o => o.WithTarget(pricingAddress));
-            typeDefinitionMap = typesResponse.Message.Types.Select(t => t with { Address = null }).ToDictionary(x => x.Name);
+            typeDefinitionMap = typesResponse?.Message?.Types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
         catch
         {
@@ -156,7 +156,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
             var resp = await hub.AwaitResponse(
                 new GetSchemaRequest(nameof(Pricing)),
                 o => o.WithTarget(pricingAddress));
-            pricingSchema = resp.Message.Schema;
+            pricingSchema = resp?.Message?.Schema;
         }
         catch
         {
@@ -168,7 +168,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
             var resp = await hub.AwaitResponse(
                 new GetSchemaRequest(nameof(Structure)),
                 o => o.WithTarget(pricingAddress));
-            structureSchema = resp.Message.Schema;
+            structureSchema = resp?.Message?.Schema;
         }
         catch
         {
@@ -279,12 +279,12 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
 
             // Step 4: Post DataChangeRequest
             var updateRequest = new DataChangeRequest { Updates = updates };
-            var response = await hub.AwaitResponse<DataChangeResponse>(updateRequest, o => o.WithTarget(pricingAddress));
+            var response = await hub.AwaitResponse(updateRequest, o => o.WithTarget(pricingAddress));
 
             return response.Message.Status switch
             {
                 DataChangeStatus.Committed => $"Slip data imported successfully. Updated {updates.Count} entities.",
-                _ => $"Data update failed:\n{string.Join('\n', response.Message.Log.Messages.Select(l => l.LogLevel + ": " + l.Message))}"
+                _ => $"Data update failed:\n{string.Join('\n', response.Message.Log.Messages?.Select(l => l.LogLevel + ": " + l.Message) ?? Array.Empty<string>())}"
             };
         }
         catch (Exception e)
@@ -301,7 +301,7 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
                 new GetDataRequest(new EntityReference(nameof(Pricing), pricingId)),
                 o => o.WithTarget(pricingAddress));
 
-            return response.Message.Data as Pricing;
+            return response?.Message?.Data as Pricing;
         }
         catch
         {

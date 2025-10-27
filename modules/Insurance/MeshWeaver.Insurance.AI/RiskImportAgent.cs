@@ -98,7 +98,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
 
         // Add ContentCollectionPlugin for submissions
-        var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
+        var submissionPluginConfig = CreateSubmissionPluginConfig();
         yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
 
         // Add CollectionPlugin for import functionality
@@ -110,7 +110,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         yield return KernelPluginFactory.CreateFromObject(plugin);
     }
 
-    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig()
     {
         return new ContentCollectionPluginConfig
         {
@@ -151,7 +151,8 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
                 o => o.WithTarget(new PricingAddress("default")));
-            typeDefinitionMap = typesResponse.Message.Types.Select(t => t with { Address = null }).ToDictionary(x => x.Name);
+            var types = typesResponse?.Message?.Types;
+            typeDefinitionMap = types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
         catch
         {
@@ -165,7 +166,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 o => o.WithTarget(new PricingAddress("default")));
 
             // Hard-code TypeName to "PropertyRisk" in the schema
-            var schema = resp.Message.Schema;
+            var schema = resp?.Message?.Schema;
             if (!string.IsNullOrEmpty(schema))
             {
                 // Parse the schema as JSON to modify it
@@ -201,7 +202,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
             var resp = await hub.AwaitResponse(
                 new GetSchemaRequest(nameof(PropertyRisk)),
                 o => o.WithTarget(new PricingAddress("default")));
-            propertyRiskSchema = resp.Message.Schema;
+            propertyRiskSchema = resp?.Message?.Schema;
         }
         catch
         {
@@ -270,7 +271,7 @@ public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
             );
 
             // Serialize the data
-            var json = JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+            var json = JsonSerializer.Serialize(response?.Message?.Data, hub.JsonSerializerOptions);
 
             // Parse and ensure $type is set to ExcelImportConfiguration
             var jsonObject = JsonNode.Parse(json) as JsonObject;
@@ -307,7 +308,7 @@ public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
             parsed["entityId"] = pa.Id;
             parsed["name"] = filename;
             var response = await hub.AwaitResponse(new DataChangeRequest() { Updates = [parsed] }, o => o.WithTarget(pa));
-            return JsonSerializer.Serialize(response.Message, hub.JsonSerializerOptions);
+            return JsonSerializer.Serialize(response?.Message, hub.JsonSerializerOptions);
         }
         catch (Exception e)
         {
