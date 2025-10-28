@@ -5,6 +5,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// <summary>
 /// Represents the reinsurance acceptance with financial terms and coverage sections.
 /// </summary>
+[Display(GroupName = "Structure")]
 public record ReinsuranceAcceptance
 {
     /// <summary>

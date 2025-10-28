@@ -5,6 +5,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// <summary>
 /// Represents a reinsurance coverage section with layer structure and financial terms.
 /// </summary>
+[Display(GroupName = "Structure")]
 public record ReinsuranceSection
 {
     /// <summary>

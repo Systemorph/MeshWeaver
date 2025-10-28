@@ -5,6 +5,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// <summary>
 /// Line of business dimension for insurance classification.
 /// </summary>
+[Display(GroupName = "Reference Data")]
 public record LineOfBusiness
 {
     /// <summary>
@@ -27,6 +28,7 @@ public record LineOfBusiness
 /// <summary>
 /// Country dimension for geographic classification.
 /// </summary>
+[Display(GroupName = "Reference Data")]
 public record Country
 {
     /// <summary>
@@ -54,6 +56,7 @@ public record Country
 /// <summary>
 /// Legal entity dimension for organizational structure.
 /// </summary>
+[Display(GroupName = "Reference Data")]
 public record LegalEntity
 {
     /// <summary>
@@ -81,6 +84,7 @@ public record LegalEntity
 /// <summary>
 /// Currency dimension for monetary values.
 /// </summary>
+[Display(GroupName = "Reference Data")]
 public record Currency
 {
     /// <summary>
