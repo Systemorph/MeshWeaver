@@ -1,6 +1,5 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text;
-using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -23,44 +22,47 @@ public static class ReinsuranceAcceptanceLayoutArea
     /// <summary>
     /// Renders the reinsurance acceptances structure for a specific pricing.
     /// </summary>
-    public static IObservable<UiControl> ReinsuranceAcceptances(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl> Structure(LayoutAreaHost host, RenderingContext ctx)
     {
         _ = ctx;
         var pricingId = host.Hub.Address.Id;
+        var pricingStream = host.Workspace.GetStream<Pricing>()!;
         var acceptanceStream = host.Workspace.GetStream<ReinsuranceAcceptance>()!;
         var sectionStream = host.Workspace.GetStream<ReinsuranceSection>()!;
 
         return Observable.CombineLatest(
+            pricingStream,
             acceptanceStream,
             sectionStream,
-            (acceptances, sections) => (acceptances, sections))
+            (pricings, acceptances, sections) => (pricings, acceptances, sections))
             .Select(data =>
             {
+                var pricing = data.pricings?.FirstOrDefault();
                 var acceptanceList = data.acceptances?.ToList() ?? new List<ReinsuranceAcceptance>();
                 var sectionList = data.sections?.ToList() ?? new List<ReinsuranceSection>();
 
                 if (!acceptanceList.Any() && !sectionList.Any())
                 {
                     return Controls.Stack
-                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ReinsuranceAcceptances"))
+                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Structure"))
                         .WithView(Controls.Markdown("# Reinsurance Structure\n\n*No reinsurance acceptances loaded. Import or add acceptances to begin.*"));
                 }
 
-                var diagram = BuildMermaidDiagram(pricingId, acceptanceList, sectionList);
+                var diagram = BuildMermaidDiagram(pricingId, pricing, acceptanceList, sectionList);
                 var mermaidControl = new MarkdownControl($"```mermaid\n{diagram}\n```")
                     .WithStyle(style => style.WithWidth("100%").WithHeight("600px"));
 
                 return Controls.Stack
-                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ReinsuranceAcceptances"))
+                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Structure"))
                     .WithView(Controls.Title("Reinsurance Structure", 1))
                     .WithView(mermaidControl);
             })
             .StartWith(Controls.Stack
-                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "ReinsuranceAcceptances"))
+                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "Structure"))
                 .WithView(Controls.Markdown("# Reinsurance Structure\n\n*Loading...*")));
     }
 
-    private static string BuildMermaidDiagram(string pricingId, List<ReinsuranceAcceptance> acceptances, List<ReinsuranceSection> sections)
+    private static string BuildMermaidDiagram(string pricingId, Pricing? pricing, List<ReinsuranceAcceptance> acceptances, List<ReinsuranceSection> sections)
     {
         var sb = new StringBuilder();
 
@@ -69,7 +71,20 @@ public static class ReinsuranceAcceptanceLayoutArea
         sb.AppendLine("    classDef leftAlign text-align:left");
 
         // Add the pricing node (main node)
-        sb.AppendLine($"    pricing[\"<b>Pricing: {pricingId}</b>\"]");
+        var pricingContent = new StringBuilder();
+        pricingContent.Append($"<b>Pricing: {pricingId}</b>");
+
+        if (pricing?.PrimaryInsurance != null)
+        {
+            pricingContent.Append($"<br/>Primary: {pricing.PrimaryInsurance}");
+        }
+
+        if (pricing?.BrokerName != null)
+        {
+            pricingContent.Append($"<br/>Broker: {pricing.BrokerName}");
+        }
+
+        sb.AppendLine($"    pricing[\"{pricingContent}\"]");
         sb.AppendLine($"    style pricing fill:{PricingColor},color:{PricingTextColor},stroke:#333,stroke-width:1px");
         sb.AppendLine($"    class pricing leftAlign");
 
@@ -86,10 +101,10 @@ public static class ReinsuranceAcceptanceLayoutArea
             RenderAcceptance(sb, acceptance, pricingId);
 
             // Add sections for this acceptance
-            // Sort sections by Type first, then by Attach to group coverage types together
+            // Sort sections by LineOfBusiness first, then by Attach to group coverage types together
             if (sectionsByAcceptance.TryGetValue(acceptance.Id, out var acceptanceSections))
             {
-                foreach (var section in acceptanceSections.OrderBy(s => s.Type).ThenBy(s => s.Attach))
+                foreach (var section in acceptanceSections.OrderBy(s => s.LineOfBusiness).ThenBy(s => s.Attach))
                 {
                     RenderSection(sb, section, acceptance.Id);
                 }
@@ -139,11 +154,11 @@ public static class ReinsuranceAcceptanceLayoutArea
 
         // Build section content
         var sectionContent = new StringBuilder();
-        sectionContent.Append($"<b>{section.Name ?? section.Type ?? section.Id}</b><br/>");
+        sectionContent.Append($"<b>{section.Name ?? section.LineOfBusiness ?? section.Id}</b><br/>");
 
-        if (!string.IsNullOrEmpty(section.Type) && section.Type != section.Name)
+        if (!string.IsNullOrEmpty(section.LineOfBusiness) && section.LineOfBusiness != section.Name)
         {
-            sectionContent.Append($"Type: {section.Type}<br/>");
+            sectionContent.Append($"LoB: {section.LineOfBusiness}<br/>");
         }
 
         sectionContent.Append($"Attach: {section.Attach:N0}<br/>");

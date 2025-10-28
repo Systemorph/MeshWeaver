@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
@@ -30,8 +30,8 @@ public static class PricingCatalogLayoutArea
         {
             "# Insurance Pricing Catalog",
             "",
-            "| Insured | Line of Business | Country | Legal Entity | Inception | Expiration | Premium | Status |",
-            "|---------|------------------|---------|--------------|-----------|------------|---------|--------|"
+            "| Insured | Line of Business | Country | Legal Entity | Inception | Expiration | Status |",
+            "|---------|------------------|---------|--------------|-----------|------------|--------|"
         };
 
         lines.AddRange(pricings
@@ -41,10 +41,7 @@ public static class PricingCatalogLayoutArea
                 var link = $"[{p.InsuredName}](/pricing/{p.Id}/Overview)";
                 var inception = p.InceptionDate?.ToString("yyyy-MM-dd") ?? "-";
                 var expiration = p.ExpirationDate?.ToString("yyyy-MM-dd") ?? "-";
-                var premium = p.Premium.HasValue && p.Currency != null
-                    ? $"{p.Currency} {p.Premium:N0}"
-                    : "-";
-                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {p.LegalEntity ?? "-"} | {inception} | {expiration} | {premium} | {p.Status ?? "-"} |";
+                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {p.LegalEntity ?? "-"} | {inception} | {expiration} |  {p.Status ?? "-"} |";
             }));
 
         return string.Join("\n", lines);
