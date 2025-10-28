@@ -20,11 +20,12 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? pricingSchema;
-    private string? structureSchema;
+    private string? acceptanceSchema;
+    private string? sectionSchema;
 
     public string Name => nameof(SlipImportAgent);
 
-    public string Description => "Imports insurance slip documents from PDF files and structures them into Pricing and Structure data models using LLM-based extraction.";
+    public string Description => "Imports insurance slip documents from PDF or Markdown files and structures them into Pricing and ReinsuranceAcceptance data models using LLM-based extraction.";
 
     public string Instructions
     {
@@ -32,41 +33,77 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         {
             var baseText =
                 $$$"""
-                You are a slip import agent that processes PDF documents containing insurance submission slips.
+                You are a slip import agent that processes insurance submission slip documents in PDF or Markdown format.
                 Your task is to extract structured data and map it to the insurance domain models using the provided schemas.
 
                 ## Content Collection Context
 
                 IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
-                - The submission files collection is named "Submissions-{pricingId}"
-                - All file paths are relative to the root (/) of this collection
-                - When listing files, you'll see paths like "/slip.pdf", "/submission.pdf"
-                - When accessing files, use paths starting with "/" (e.g., "/slip.pdf")
+                - The submission files collection is automatically named "Submissions-{pricingId}"
+                - Files are stored at the root level of this collection
+                - When listing files, you'll see filenames like "Slip.pdf", "Slip.md", etc.
+                - When accessing files with ExtractCompleteText, use just the filename (e.g., "Slip.pdf" or "Slip.md")
 
                 # Importing Slips
                 When the user asks you to import a slip:
                 1) First, use {{{nameof(ContentCollectionPlugin.ListFiles)}}}() to see available files in the submissions collection
-                2) Use {{{nameof(SlipImportPlugin.ExtractCompleteText)}}} to extract the PDF content (e.g., "slip.pdf" without the leading /)
+                2) Use {{{nameof(SlipImportPlugin.ExtractCompleteText)}}} to extract the document content from PDF or Markdown files
+                   - Simply pass the filename (e.g., "Slip.pdf" or "Slip.md")
+                   - The collection name will be automatically resolved to "Submissions-{pricingId}"
                 3) Review the extracted text and identify data that matches the domain schemas
                 4) Use {{{nameof(SlipImportPlugin.ImportSlipData)}}} to save the structured data as JSON
                 5) Provide feedback on what data was successfully imported or if any issues were encountered
 
                 # Data Mapping Guidelines
-                Based on the extracted PDF text, create JSON objects that match the schemas provided below:
+                Based on the extracted document text, create JSON objects that match the schemas provided below:
                 - **Pricing**: Basic pricing information (insured name, broker, dates, premium, country, legal entity)
-                - **Structure**: Reinsurance layer structure and financial terms (cession, limits, rates, commissions)
+                - **ReinsuranceAcceptance**: Represents a reinsurance layer (Layer 1, Layer 2, Layer 3) with financial terms
+                - **ReinsuranceSection**: Represents a coverage type within a layer (Fire Damage, Natural Catastrophe, Business Interruption)
+
+                # Structure Hierarchy
+                The data structure follows this hierarchy:
+                1. **Pricing** (the main insurance program)
+                2. **ReinsuranceAcceptance** (the layers: Layer 1, Layer 2, Layer 3, etc.)
+                3. **ReinsuranceSection** (the coverage types within each layer: Fire Damage, Natural Catastrophe, Business Interruption, etc.)
 
                 # Important Rules
-                - Only extract data that is explicitly present in the PDF text
+                - Only extract data that is explicitly present in the document text
                 - Use null or default values for missing data points
                 - Ensure all monetary values are properly formatted as numbers
                 - Convert percentages to decimal format (e.g., 25% → 0.25)
                 - Provide clear feedback on what data was successfully extracted
                 - If data is ambiguous or unclear, note it in your response
-                - For Structure records, generate appropriate LayerId values (e.g., "Layer1", "Layer2")
-                - Multiple layers can be imported if the slip contains multiple layer structures
 
-                # PDF Section Processing
+                # Creating ReinsuranceAcceptance Records (Layers)
+                - First, create ReinsuranceAcceptance records for each layer (Layer 1, Layer 2, Layer 3)
+                - Use IDs like "Layer1", "Layer2", "Layer3"
+                - Set the Name property to "Layer 1", "Layer 2", "Layer 3"
+                - Include financial terms like share, cession, rate, commission on the acceptance
+                - If there is a "Reinsurance Terms" section in the header with properties like EPI and Brokerage, apply these values to ALL ReinsuranceAcceptance records (all layers get the same EPI and Brokerage)
+                - Convert percentage values to decimals (e.g., 10% → 0.10, 100% → 1.0)
+
+                # Creating ReinsuranceSection Records (Coverage Types)
+                - Then, create ReinsuranceSection records for each coverage type within each layer
+                - Use IDs like "Layer1-Fire", "Layer1-NatCat", "Layer1-BI", "Layer2-Fire", etc.
+                - Set the AcceptanceId to link the section to its parent layer (e.g., "Layer1")
+                - Set the Type to the coverage type (e.g., "Fire Damage", "Natural Catastrophe", "Business Interruption")
+                - Set the Name to a descriptive name (e.g., "Fire Damage - Layer 1")
+                - Include the attachment point (Attach), limit, aggregate deductible (AggAttach), and aggregate limit (AggLimit)
+
+                # Example from a Slip
+                If the slip shows:
+                - Fire Damage → Layer 1: Attach 5M, Limit 100M, AAD 25M, AAL 300M
+                - Fire Damage → Layer 2: Attach 100M, Limit 150M, AAL 450M
+                - Natural Catastrophe → Layer 1: Attach 10M, Limit 75M, AAD 30M, AAL 225M
+
+                Create:
+                1. ReinsuranceAcceptance: Id="Layer1", Name="Layer 1"
+                2. ReinsuranceAcceptance: Id="Layer2", Name="Layer 2"
+                3. ReinsuranceSection: Id="Layer1-Fire", AcceptanceId="Layer1", Type="Fire Damage", Attach=5000000, Limit=100000000, AggAttach=25000000, AggLimit=300000000
+                4. ReinsuranceSection: Id="Layer2-Fire", AcceptanceId="Layer2", Type="Fire Damage", Attach=100000000, Limit=150000000, AggLimit=450000000
+                5. ReinsuranceSection: Id="Layer1-NatCat", AcceptanceId="Layer1", Type="Natural Catastrophe", Attach=10000000, Limit=75000000, AggAttach=30000000, AggLimit=225000000
+
+                # Document Section Processing
                 Look for common sections in insurance slips:
                 - Insured information (name, location, industry)
                 - Coverage details (inception/expiration dates, policy terms)
@@ -75,14 +112,18 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 - Reinsurance terms (commission, brokerage, taxes)
 
                 Notes:
-                - When listing files, paths will include "/" prefix (e.g., "/slip.pdf")
-                - When calling import functions, provide only the filename without "/" (e.g., "slip.pdf")
+                - When listing files, you may see paths with "/" prefix (e.g., "/Slip.pdf", "/Slip.md")
+                - When calling ExtractCompleteText, provide only the filename (e.g., "Slip.pdf" or "Slip.md")
+                - The collection name is automatically determined from the pricing context
+                - Both PDF and Markdown (.md) files are supported
                 """;
 
             if (pricingSchema is not null)
                 baseText += $"\n\n# Pricing Schema\n```json\n{pricingSchema}\n```";
-            if (structureSchema is not null)
-                baseText += $"\n\n# Structure Schema\n```json\n{structureSchema}\n```";
+            if (acceptanceSchema is not null)
+                baseText += $"\n\n# ReinsuranceAcceptance Schema\n```json\n{acceptanceSchema}\n```";
+            if (sectionSchema is not null)
+                baseText += $"\n\n# ReinsuranceSection Schema\n```json\n{sectionSchema}\n```";
 
             return baseText;
         }
@@ -166,13 +207,25 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         try
         {
             var resp = await hub.AwaitResponse(
-                new GetSchemaRequest(nameof(Structure)),
+                new GetSchemaRequest(nameof(ReinsuranceAcceptance)),
                 o => o.WithTarget(pricingAddress));
-            structureSchema = resp?.Message?.Schema;
+            acceptanceSchema = resp?.Message?.Schema;
         }
         catch
         {
-            structureSchema = null;
+            acceptanceSchema = null;
+        }
+
+        try
+        {
+            var resp = await hub.AwaitResponse(
+                new GetSchemaRequest(nameof(ReinsuranceSection)),
+                o => o.WithTarget(pricingAddress));
+            sectionSchema = resp?.Message?.Schema;
+        }
+        catch
+        {
+            sectionSchema = null;
         }
     }
 
@@ -190,8 +243,10 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
     }
 
     [KernelFunction]
-    [Description("Extracts the complete text from a PDF slip document and returns it for LLM processing")]
-    public async Task<string> ExtractCompleteText(string filename)
+    [Description("Extracts the complete text from a slip document (PDF or Markdown) and returns it for LLM processing")]
+    public async Task<string> ExtractCompleteText(
+        [Description("The filename to extract (e.g., 'Slip.pdf' or 'Slip.md')")] string filename,
+        [Description("The collection name (optional, defaults to context-based resolution)")] string? collectionName = null)
     {
         if (chat.Context?.Address?.Type != PricingAddress.TypeName)
             return "Please navigate to the pricing first.";
@@ -200,14 +255,38 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
         {
             var pricingId = chat.Context.Address.Id;
             var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-            var stream = await OpenContentReadStreamAsync(contentService, pricingId, filename);
+
+            // Get collection name using the same pattern as ContentCollectionPlugin
+            var resolvedCollectionName = collectionName ?? $"Submissions-{pricingId}";
+
+            // Use ContentService directly with the correct collection name and simple path
+            var stream = await contentService.GetContentAsync(resolvedCollectionName, filename, CancellationToken.None);
 
             if (stream is null)
-                return $"Content not found: {filename}";
+                return $"Content not found: {filename} in collection {resolvedCollectionName}";
 
             await using (stream)
             {
-                var completeText = await ExtractCompletePdfText(stream);
+                string completeText;
+
+                // Determine file type by extension
+                if (filename.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Read markdown file directly as text
+                    using var reader = new StreamReader(stream);
+                    completeText = await reader.ReadToEndAsync();
+                }
+                else if (filename.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Extract text from PDF
+                    completeText = await ExtractCompletePdfText(stream);
+                }
+                else
+                {
+                    // Try to read as text for unknown file types
+                    using var reader = new StreamReader(stream);
+                    completeText = await reader.ReadToEndAsync();
+                }
 
                 var sb = new StringBuilder();
                 sb.AppendLine("=== INSURANCE SLIP DOCUMENT TEXT ===");
@@ -219,7 +298,7 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
         }
         catch (Exception e)
         {
-            return $"Error extracting PDF text: {e.Message}";
+            return $"Error extracting document text: {e.Message}";
         }
     }
 
@@ -227,7 +306,8 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
     [Description("Imports the structured slip data as JSON into the pricing")]
     public async Task<string> ImportSlipData(
         [Description("Pricing data as JSON (optional if updating existing)")] string? pricingJson,
-        [Description("Array of Structure layer data as JSON (can contain multiple layers)")] string? structuresJson)
+        [Description("Array of ReinsuranceAcceptance data as JSON (can contain multiple acceptances)")] string? acceptancesJson,
+        [Description("Array of ReinsuranceSection data as JSON (sections/layers within acceptances)")] string? sectionsJson)
     {
         if (chat.Context?.Address?.Type != PricingAddress.TypeName)
             return "Please navigate to the pricing first.";
@@ -254,22 +334,41 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
                 }
             }
 
-            // Step 3: Process Structure layers (can be multiple)
-            if (!string.IsNullOrWhiteSpace(structuresJson))
+            // Step 3: Process ReinsuranceAcceptance records (can be multiple)
+            if (!string.IsNullOrWhiteSpace(acceptancesJson))
             {
-                var structuresData = JsonNode.Parse(ExtractJson(structuresJson));
+                var acceptancesData = JsonNode.Parse(ExtractJson(acceptancesJson));
 
                 // Handle both array and single object
-                var structureArray = structuresData is JsonArray arr ? arr : new JsonArray { structuresData };
+                var acceptanceArray = acceptancesData is JsonArray arr ? arr : new JsonArray { acceptancesData };
 
-                foreach (var structureData in structureArray)
+                foreach (var acceptanceData in acceptanceArray)
                 {
-                    if (structureData is JsonObject structureObj)
+                    if (acceptanceData is JsonObject acceptanceObj)
                     {
-                        var processedStructure = EnsureTypeFirst(structureObj, nameof(Structure));
-                        processedStructure["pricingId"] = pricingId;
-                        RemoveNullProperties(processedStructure);
-                        updates.Add(processedStructure);
+                        var processedAcceptance = EnsureTypeFirst(acceptanceObj, nameof(ReinsuranceAcceptance));
+                        processedAcceptance["pricingId"] = pricingId;
+                        RemoveNullProperties(processedAcceptance);
+                        updates.Add(processedAcceptance);
+                    }
+                }
+            }
+
+            // Step 4: Process ReinsuranceSection records (can be multiple)
+            if (!string.IsNullOrWhiteSpace(sectionsJson))
+            {
+                var sectionsData = JsonNode.Parse(ExtractJson(sectionsJson));
+
+                // Handle both array and single object
+                var sectionArray = sectionsData is JsonArray arr ? arr : new JsonArray { sectionsData };
+
+                foreach (var sectionData in sectionArray)
+                {
+                    if (sectionData is JsonObject sectionObj)
+                    {
+                        var processedSection = EnsureTypeFirst(sectionObj, nameof(ReinsuranceSection));
+                        RemoveNullProperties(processedSection);
+                        updates.Add(processedSection);
                     }
                 }
             }
@@ -277,7 +376,7 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
             if (updates.Count == 0)
                 return "No valid data provided for import.";
 
-            // Step 4: Post DataChangeRequest
+            // Step 5: Post DataChangeRequest
             var updateRequest = new DataChangeRequest { Updates = updates };
             var response = await hub.AwaitResponse(updateRequest, o => o.WithTarget(pricingAddress));
 
@@ -431,34 +530,6 @@ public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
         }
 
         return completeText.ToString();
-    }
-
-    private static async Task<Stream?> OpenContentReadStreamAsync(
-        IContentService contentService,
-        string pricingId,
-        string filename)
-    {
-        try
-        {
-            // Parse pricingId in format {company}-{uwy}
-            var parts = pricingId.Split('-');
-            if (parts.Length != 2)
-                return null;
-
-            var company = parts[0];
-            var uwy = parts[1];
-            var contentPath = $"{company}/{uwy}/{filename}";
-
-            var collection = await contentService.GetCollectionAsync("Submissions", CancellationToken.None);
-            if (collection is null)
-                return null;
-
-            return await collection.GetContentAsync(contentPath);
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private string ExtractJson(string json)

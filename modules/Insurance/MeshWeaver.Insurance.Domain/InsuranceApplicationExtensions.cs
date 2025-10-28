@@ -33,7 +33,7 @@ public static class InsuranceApplicationExtensions
     /// </summary>
     public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
         => configuration
-            .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(Structure), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
+            .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
             .AddData(data =>
             {
                 var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
@@ -102,7 +102,8 @@ public static class InsuranceApplicationExtensions
                     }))
                     .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
                         (IEnumerable<PropertyRisk>)await svc.GetRisksAsync(pricingId, ct)))
-                    .WithType<Structure>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<Structure>())))
+                    .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
+                    .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
                     .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
                         await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
                 );
@@ -116,6 +117,8 @@ public static class InsuranceApplicationExtensions
                     LayoutAreas.PropertyRisksLayoutArea.PropertyRisks)
                 .WithView(nameof(LayoutAreas.RiskMapLayoutArea.RiskMap),
                     LayoutAreas.RiskMapLayoutArea.RiskMap)
+                .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.ReinsuranceAcceptances),
+                    LayoutAreas.ReinsuranceAcceptanceLayoutArea.ReinsuranceAcceptances)
                 .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                     LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
             )
@@ -175,7 +178,7 @@ public static class InsuranceApplicationExtensions
                     Updates = geocodingResponse.UpdatedRisks.ToList()
                 };
 
-                await hub.AwaitResponse(dataChangeRequest, o => o.WithTarget(hub.Address), ct);
+                hub.Post(dataChangeRequest, o => o.WithTarget(hub.Address));
             }
 
             // Post the response

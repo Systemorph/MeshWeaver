@@ -1,8 +1,12 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Data;
+using MeshWeaver.GoogleMaps;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Insurance.Domain.LayoutAreas;
@@ -15,42 +19,50 @@ public static class RiskMapLayoutArea
     /// <summary>
     /// Renders a map view of property risks for a specific pricing.
     /// </summary>
-    public static IObservable<UiControl> RiskMap(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl> RiskMap(LayoutAreaHost host, RenderingContext _)
     {
-        _ = ctx;
         var pricingId = host.Hub.Address.Id;
-        var riskStream = host.Workspace.GetStream<PropertyRisk>()!;
 
-        return riskStream.Select(risks =>
-        {
-            var riskList = risks?.ToList() ?? new List<PropertyRisk>();
-            var geocodedRisks = riskList.Where(r => r.GeocodedLocation?.Latitude != null && r.GeocodedLocation?.Longitude != null).ToList();
-
-            if (!riskList.Any())
+        return host.Workspace.GetStream<PropertyRisk>()!
+            .Select(risks =>
             {
+                var riskList = risks?.ToList() ?? new List<PropertyRisk>();
+                var geocodedRisks = riskList.Where(r => r.GeocodedLocation?.Latitude != null && r.GeocodedLocation?.Longitude != null).ToList();
+
+                if (!riskList.Any())
+                {
+                    return Controls.Stack
+                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
+                        .WithView(Controls.Markdown("# Risk Map\n\n*No risks loaded. Import or add risks to begin.*"));
+                }
+
+                if (!geocodedRisks.Any())
+                {
+                    return Controls.Stack
+                        .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
+                        .WithView(Controls.Markdown($"# Risk Map\n\n*No geocoded risks found. {riskList.Count} risk(s) available but none have valid coordinates.*"))
+                        .WithView(GeocodingArea);
+                }
+
+                var mapControl = BuildGoogleMapControl(geocodedRisks);
+                var riskDetailsSubject = new ReplaySubject<string?>(1);
+                riskDetailsSubject.OnNext(null);
+                mapControl = mapControl.WithClickAction(ctx => riskDetailsSubject.OnNext(ctx.Payload?.ToString()));
+
                 return Controls.Stack
                     .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                    .WithView(Controls.Markdown("# Risk Map\n\n*No risks loaded. Import or add risks to begin.*"));
-            }
-
-            if (!geocodedRisks.Any())
-            {
-                return Controls.Stack
-                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                    .WithView(Controls.Markdown($"# Risk Map\n\n*No geocoded risks found. {riskList.Count} risk(s) available but none have valid coordinates.*"))
-                    .WithView(GeocodingArea);
-            }
-
-            var mapContent = RenderMapContent(geocodedRisks);
-
-            return Controls.Stack
+                    .WithView(Controls.Title("Risk Map", 2))
+                    .WithView(mapControl)
+                    .WithView(GeocodingArea)
+                    .WithView(Controls.Title("Risk Details", 3))
+                    .WithView((h, c) => riskDetailsSubject
+                        .SelectMany(id => id == null ?
+                            Observable.Return(Controls.Html("Click marker to see details.")) : RenderRiskDetails(host.Hub, id))
+                    );
+            })
+            .StartWith(Controls.Stack
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                .WithView(Controls.Markdown(mapContent))
-                .WithView(GeocodingArea);
-        })
-        .StartWith(Controls.Stack
-            .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-            .WithView(Controls.Markdown("# Risk Map\n\n*Loading...*")));
+                .WithView(Controls.Markdown("# Risk Map\n\n*Loading...*")));
     }
 
     private static IObservable<UiControl> GeocodingArea(LayoutAreaHost host, RenderingContext ctx)
@@ -87,36 +99,76 @@ public static class RiskMapLayoutArea
         }
     }
 
-    private static string RenderMapContent(List<PropertyRisk> geocodedRisks)
+    private static IObservable<UiControl> RenderRiskDetails(IMessageHub hub, string id)
     {
-        var lines = new List<string>
+        return hub.GetWorkspace()
+            .GetStream(new EntityReference(nameof(PropertyRisk), id))!
+            .Select(r => BuildRiskDetailsMarkdown(r.Value as PropertyRisk));
+    }
+
+    private static UiControl BuildRiskDetailsMarkdown(PropertyRisk? risk)
+    {
+        if (risk is null)
+            return Controls.Html("Risk not found");
+
+        return Controls.Stack
+            .WithView(Controls.Markdown("## Risk Details"))
+            .WithView(Controls.Markdown($"**ID:** {risk.Id}"))
+            .WithView(Controls.Markdown($"**Location:** {risk.LocationName ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**Address:** {risk.GeocodedLocation?.FormattedAddress ?? risk.Address ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**City:** {risk.City ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**State:** {risk.State ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**Country:** {risk.Country ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**Currency:** {risk.Currency ?? "N/A"}"))
+            .WithView(Controls.Markdown($"**TSI Building:** {risk.TsiBuilding:N0}"))
+            .WithView(Controls.Markdown($"**TSI Content:** {risk.TsiContent:N0}"))
+            .WithView(Controls.Markdown($"**TSI BI:** {risk.TsiBi:N0}"))
+            .WithView(Controls.Markdown($"**Latitude:** {risk.GeocodedLocation?.Latitude:F6}"))
+            .WithView(Controls.Markdown($"**Longitude:** {risk.GeocodedLocation?.Longitude:F6}"));
+    }
+
+    private static GoogleMapControl BuildGoogleMapControl(IReadOnlyCollection<PropertyRisk> risks)
+    {
+        var riskList = risks.Where(r => r.GeocodedLocation?.Latitude is not null && r.GeocodedLocation?.Longitude is not null).ToList();
+
+        // Find center point
+        LatLng center;
+        if (riskList.Any())
         {
-            "# Risk Map",
-            "",
-            $"**Total Geocoded Risks:** {geocodedRisks.Count}",
-            "",
-            "## Risk Locations",
-            ""
+            var avgLat = riskList.Average(r => r.GeocodedLocation!.Latitude!.Value);
+            var avgLng = riskList.Average(r => r.GeocodedLocation!.Longitude!.Value);
+            center = new LatLng(avgLat, avgLng);
+        }
+        else
+        {
+            center = new LatLng(0, 0);
+        }
+
+        // Create markers
+        var markers = riskList.Select(r => new MapMarker
+        {
+            Position = new LatLng(r.GeocodedLocation!.Latitude!.Value, r.GeocodedLocation.Longitude!.Value),
+            Title = ((r.LocationName ?? r.Address) + " " + (r.City ?? "")).Trim(),
+            Id = r.Id,
+            Data = r
+        }).ToList();
+
+        var mapOptions = new MapOptions
+        {
+            Center = center,
+            Zoom = riskList.Any() ? 6 : 2,
+            MapTypeId = "roadmap",
+            ZoomControl = true,
+            MapTypeControl = true,
+            StreetViewControl = false,
+            FullscreenControl = true
         };
 
-        foreach (var risk in geocodedRisks.Take(10))
+        return new GoogleMapControl()
         {
-            lines.Add($"- **{risk.LocationName ?? "Unknown"}**: {risk.City}, {risk.State}, {risk.Country}");
-            lines.Add($"  - Coordinates: {risk.GeocodedLocation!.Latitude:F6}, {risk.GeocodedLocation.Longitude:F6}");
-            lines.Add($"  - TSI Building: {risk.Currency} {risk.TsiBuilding:N0}");
-            lines.Add("");
-        }
-
-        if (geocodedRisks.Count > 10)
-        {
-            lines.Add($"*... and {geocodedRisks.Count - 10} more risk(s)*");
-            lines.Add("");
-        }
-
-        lines.Add("---");
-        lines.Add("");
-        lines.Add("*Interactive map visualization coming soon...*");
-
-        return string.Join("\n", lines);
+            Options = mapOptions,
+            Markers = markers,
+            Id = "risk-map"
+        }.WithStyle(style => style.WithHeight("500px").WithWidth("80%"));
     }
 }
