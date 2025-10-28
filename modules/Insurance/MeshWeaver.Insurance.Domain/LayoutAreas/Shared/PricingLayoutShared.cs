@@ -18,6 +18,7 @@ public static class PricingLayoutShared
 {Item("Submission", "📎", "Submission")}
 {Item("PropertyRisks", "📄", "Risks")}
 {Item("RiskMap", "🗺️", "Map")}
+{Item("ReinsuranceAcceptances", "🏦", "Reinsurance")}
 {Item("ImportConfigs", "⚙️", "Import")}
 </nav>";
 
