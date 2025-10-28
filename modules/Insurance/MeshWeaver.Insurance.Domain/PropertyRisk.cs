@@ -8,6 +8,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// Represents a property risk within an insurance pricing.
 /// Contains location details, values, and dimensions for property insurance underwriting.
 /// </summary>
+[Display(GroupName = "Risk")]
 public record PropertyRisk
 {
     /// <summary>

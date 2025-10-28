@@ -28,14 +28,14 @@ public static class PricingCatalogLayoutArea
 
         var lines = new List<string>
         {
-            "# Insurance Pricing Catalog",
+            "# Insurance Pricing Catalog | [Data Model](/pricing/default/DataModel)",
             "",
             "| Insured | Line of Business | Country | Legal Entity | Inception | Expiration | Status |",
             "|---------|------------------|---------|--------------|-----------|------------|--------|"
         };
 
         lines.AddRange(pricings
-            .OrderByDescending(p => p.InceptionDate)
+            .OrderByDescending(p => p.InceptionDate ?? DateTime.MaxValue)
             .Select(p =>
             {
                 var link = $"[{p.InsuredName}](/pricing/{p.Id}/Overview)";

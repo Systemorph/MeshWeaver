@@ -6,6 +6,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// <summary>
 /// Represents an insurance pricing entity with dimension-based classification.
 /// </summary>
+[Display(GroupName = "Structure")]
 public record Pricing
 {
     /// <summary>

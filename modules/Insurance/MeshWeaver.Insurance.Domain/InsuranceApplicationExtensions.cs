@@ -5,6 +5,7 @@ using MeshWeaver.Import;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -121,6 +122,7 @@ public static class InsuranceApplicationExtensions
                     LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
                 .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                     LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
+                .AddDomainViews()
             )
             .AddImport()
             .WithHandler<GeocodingRequest>(HandleGeocodingRequest);
