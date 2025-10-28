@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Insurance.Domain;
 
@@ -26,7 +26,7 @@ public record ReinsuranceSection
     /// <summary>
     /// Gets or initializes the section type (e.g., "Fire Damage", "Natural Catastrophe", "Business Interruption").
     /// </summary>
-    public string? Type { get; init; }
+    public string? LineOfBusiness { get; init; }
 
     /// <summary>
     /// Gets or initializes the attachment point.

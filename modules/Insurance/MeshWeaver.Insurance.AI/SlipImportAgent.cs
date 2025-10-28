@@ -56,7 +56,11 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 # Data Mapping Guidelines
                 Based on the extracted document text, create JSON objects that match the schemas provided below:
-                - **Pricing**: Basic pricing information (insured name, broker, dates, premium, country, legal entity)
+                - **Pricing**: Basic pricing information including:
+                  - Insured name (e.g., "Microsoft Corporation")
+                  - Primary insurance company (labeled as "Primary Insurer" or similar in slip header) - populate the PrimaryInsurance field
+                  - Broker name (labeled as "Broker" in slip header) - populate the BrokerName field
+                  - Dates (inception, expiration), premium, country, legal entity
                 - **ReinsuranceAcceptance**: Represents a reinsurance layer (Layer 1, Layer 2, Layer 3) with financial terms
                 - **ReinsuranceSection**: Represents a coverage type within a layer (Fire Damage, Natural Catastrophe, Business Interruption)
 
@@ -86,7 +90,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 - Then, create ReinsuranceSection records for each coverage type within each layer
                 - Use IDs like "Layer1-Fire", "Layer1-NatCat", "Layer1-BI", "Layer2-Fire", etc.
                 - Set the AcceptanceId to link the section to its parent layer (e.g., "Layer1")
-                - Set the Type to the coverage type (e.g., "Fire Damage", "Natural Catastrophe", "Business Interruption")
+                - Set the LineOfBusiness to the coverage type (e.g., "Fire Damage", "Natural Catastrophe", "Business Interruption")
                 - Set the Name to a descriptive name (e.g., "Fire Damage - Layer 1")
                 - Include the attachment point (Attach), limit, aggregate deductible (AggAttach), and aggregate limit (AggLimit)
 
@@ -99,17 +103,19 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 Create:
                 1. ReinsuranceAcceptance: Id="Layer1", Name="Layer 1"
                 2. ReinsuranceAcceptance: Id="Layer2", Name="Layer 2"
-                3. ReinsuranceSection: Id="Layer1-Fire", AcceptanceId="Layer1", Type="Fire Damage", Attach=5000000, Limit=100000000, AggAttach=25000000, AggLimit=300000000
-                4. ReinsuranceSection: Id="Layer2-Fire", AcceptanceId="Layer2", Type="Fire Damage", Attach=100000000, Limit=150000000, AggLimit=450000000
-                5. ReinsuranceSection: Id="Layer1-NatCat", AcceptanceId="Layer1", Type="Natural Catastrophe", Attach=10000000, Limit=75000000, AggAttach=30000000, AggLimit=225000000
+                3. ReinsuranceSection: Id="Layer1-Fire", AcceptanceId="Layer1", LineOfBusiness="Fire Damage", Attach=5000000, Limit=100000000, AggAttach=25000000, AggLimit=300000000
+                4. ReinsuranceSection: Id="Layer2-Fire", AcceptanceId="Layer2", LineOfBusiness="Fire Damage", Attach=100000000, Limit=150000000, AggLimit=450000000
+                5. ReinsuranceSection: Id="Layer1-NatCat", AcceptanceId="Layer1", LineOfBusiness="Natural Catastrophe", Attach=10000000, Limit=75000000, AggAttach=30000000, AggLimit=225000000
 
                 # Document Section Processing
                 Look for common sections in insurance slips:
-                - Insured information (name, location, industry)
-                - Coverage details (inception/expiration dates, policy terms)
-                - Premium and financial information
-                - Layer structures (limits, attachments, rates)
-                - Reinsurance terms (commission, brokerage, taxes)
+                - **Header section**: Insured name, Primary Insurer, Broker, dates
+                - **Insured information**: Name, location, industry
+                - **Coverage details**: Inception/expiration dates, policy terms
+                - **Premium and financial information**: Premium amounts, currency
+                - **Reinsurance terms section**: EPI (Estimated Premium Income), Brokerage percentage, Commission, Taxes
+                - **Layer structures**: Layer 1, Layer 2, Layer 3 with limits, attachments, rates
+                - **Coverage types within layers**: Fire Damage, Natural Catastrophe, Business Interruption, etc.
 
                 Notes:
                 - When listing files, you may see paths with "/" prefix (e.g., "/Slip.pdf", "/Slip.md")

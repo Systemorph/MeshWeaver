@@ -49,7 +49,7 @@
 
 ---
 
-### 2. Natural Catastrophe (Earthquake, Flood, Storm)
+### 2. Natural Catastrophe (Windstorm, Earthquake)
 
 - **Layer 1:**
   - Deductible per Occurrence: USD 5,000,000

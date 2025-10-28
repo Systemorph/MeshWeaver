@@ -117,8 +117,8 @@ public static class InsuranceApplicationExtensions
                     LayoutAreas.PropertyRisksLayoutArea.PropertyRisks)
                 .WithView(nameof(LayoutAreas.RiskMapLayoutArea.RiskMap),
                     LayoutAreas.RiskMapLayoutArea.RiskMap)
-                .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.ReinsuranceAcceptances),
-                    LayoutAreas.ReinsuranceAcceptanceLayoutArea.ReinsuranceAcceptances)
+                .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure),
+                    LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
                 .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                     LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
             )
