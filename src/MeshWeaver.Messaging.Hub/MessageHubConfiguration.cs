@@ -23,7 +23,7 @@ public record MessageHubConfiguration
     internal Predicate<IMessageDelivery> StartupDeferral { get; init; } = x => x.Message is not InitializeHubRequest;
 
     public MessageHubConfiguration WithStartupDeferral(Predicate<IMessageDelivery> startupDeferral)
-        => this with { StartupDeferral = startupDeferral };
+        => this with { StartupDeferral = x => startupDeferral(x) && StartupDeferral(x) };
 
     public IMessageHub? ParentHub
     {

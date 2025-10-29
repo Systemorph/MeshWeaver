@@ -272,9 +272,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     }
 
-    private static readonly Predicate<IMessageDelivery> StartupDeferrable = x =>
-        x.Message is not InitializeHubRequest
-        && x.Message is not SetCurrentRequest &&
+    private static bool StartupDeferrable(IMessageDelivery x) =>
+        x.Message is not SetCurrentRequest &&
         x.Message is not DataChangedEvent { ChangeType: ChangeType.Full };
 
     private async Task InitializeAsync(CancellationToken ct)
