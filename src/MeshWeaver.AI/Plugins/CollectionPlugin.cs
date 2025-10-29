@@ -3,10 +3,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
+using UglyToad.PdfPig;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -35,14 +38,22 @@ public class CollectionPlugin(IMessageHub hub)
             if (stream == null)
                 return $"File '{filePath}' not found in collection '{collectionName}'.";
 
-            // Check if this is an Excel file
+            // Check file type and read accordingly
             var extension = Path.GetExtension(filePath).ToLowerInvariant();
             if (extension == ".xlsx" || extension == ".xls")
             {
                 return await ReadExcelFileAsync(stream, filePath, numberOfRows);
             }
+            else if (extension == ".docx")
+            {
+                return await ReadWordFileAsync(stream, filePath, numberOfRows);
+            }
+            else if (extension == ".pdf")
+            {
+                return await ReadPdfFileAsync(stream, filePath, numberOfRows);
+            }
 
-            // For non-Excel files, read as text
+            // For other files, read as text
             using var reader = new StreamReader(stream);
             if (numberOfRows.HasValue)
             {
@@ -149,6 +160,106 @@ public class CollectionPlugin(IMessageHub hub)
         }
         return columnLetter;
     }
+
+    private async Task<string> ReadWordFileAsync(Stream stream, string filePath, int? numberOfRows)
+    {
+        try
+        {
+            using var wordDoc = WordprocessingDocument.Open(stream, false);
+            var body = wordDoc.MainDocumentPart?.Document?.Body;
+
+            if (body == null)
+                return $"Word document '{filePath}' has no readable content.";
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"# Document: {Path.GetFileName(filePath)}");
+            sb.AppendLine();
+
+            var paragraphs = body.Elements<Paragraph>().ToList();
+            var paragraphsToRead = numberOfRows.HasValue
+                ? paragraphs.Take(numberOfRows.Value).ToList()
+                : paragraphs;
+
+            foreach (var paragraph in paragraphsToRead)
+            {
+                var text = paragraph.InnerText;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    sb.AppendLine(text);
+                    sb.AppendLine();
+                }
+            }
+
+            // Also handle tables
+            var tables = body.Elements<Table>().ToList();
+            foreach (var table in tables)
+            {
+                sb.AppendLine("## Table");
+                sb.AppendLine();
+
+                var rows = table.Elements<TableRow>().ToList();
+                var rowsToRead = numberOfRows.HasValue
+                    ? rows.Take(numberOfRows.Value).ToList()
+                    : rows;
+
+                foreach (var row in rowsToRead)
+                {
+                    var cells = row.Elements<TableCell>().ToList();
+                    var cellTexts = cells.Select(c => c.InnerText.Replace('|', '\\').Trim()).ToList();
+                    sb.AppendLine("| " + string.Join(" | ", cellTexts) + " |");
+                }
+
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading Word document '{filePath}': {ex.Message}";
+        }
+    }
+
+    private async Task<string> ReadPdfFileAsync(Stream stream, string filePath, int? numberOfRows)
+    {
+        try
+        {
+            using var pdfDocument = PdfDocument.Open(stream);
+            var sb = new StringBuilder();
+            sb.AppendLine($"# PDF Document: {Path.GetFileName(filePath)}");
+            sb.AppendLine($"Total pages: {pdfDocument.NumberOfPages}");
+            sb.AppendLine();
+
+            var pagesToRead = numberOfRows.HasValue
+                ? Math.Min(numberOfRows.Value, pdfDocument.NumberOfPages)
+                : pdfDocument.NumberOfPages;
+
+            for (int pageNum = 1; pageNum <= pagesToRead; pageNum++)
+            {
+                var page = pdfDocument.GetPage(pageNum);
+                sb.AppendLine($"## Page {pageNum}");
+                sb.AppendLine();
+
+                var text = page.Text;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    sb.AppendLine(text);
+                }
+                else
+                {
+                    sb.AppendLine("(No text content)");
+                }
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading PDF document '{filePath}': {ex.Message}";
+        }
+    }
+
     [KernelFunction]
     [Description("Saves content as a file to a specified collection.")]
     public async Task<string> SaveFile(

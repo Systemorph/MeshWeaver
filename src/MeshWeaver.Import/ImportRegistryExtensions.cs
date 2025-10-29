@@ -116,7 +116,6 @@ public static class ImportExtensions
 
         return ret;
     }
-
     internal static ImmutableList<Func<ImportBuilder, ImportBuilder>> GetListOfLambdas(
         this MessageHubConfiguration config
     ) =>
