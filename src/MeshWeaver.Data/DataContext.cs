@@ -1,9 +1,9 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Data;
 
@@ -24,7 +24,10 @@ public sealed record DataContext : IDisposable
                 type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
             ) ?? null
         );
+        deferral = Hub.Defer(x => x.Message is not DataChangedEvent { ChangeType: ChangeType.Full });
     }
+
+    private readonly IDisposable deferral;
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
@@ -87,6 +90,8 @@ public sealed record DataContext : IDisposable
         foreach (var typeSource in TypeSources.Values)
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
+        Task.WhenAll(DataSourcesById.Values.Select(d => d.Initialized))
+            .ContinueWith(_ => deferral.Dispose());
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;

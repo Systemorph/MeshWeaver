@@ -149,7 +149,7 @@ public class MessageService : IMessageService
         {
             logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
-            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+            delivery = await deliveryPipeline.Invoke(delivery, cancellationToken);
         }
 
         return delivery;
@@ -195,6 +195,8 @@ public class MessageService : IMessageService
                 {
 
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
+                    if (delivery.State == MessageDeliveryState.Ignored)
+                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
                 }
                 else
                 {

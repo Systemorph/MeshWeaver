@@ -27,6 +27,7 @@ public interface IDataSource : IDisposable
     ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition);
     IEnumerable<ITypeSource> TypeSources { get; }
 
+    Task Initialized { get; }
 }
 
 public interface IUnpartitionedDataSource : IDataSource
@@ -110,8 +111,16 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
 
 
-    protected readonly Dictionary<object, ISynchronizationStream<EntityStore>?> Streams = new();
+    protected readonly Dictionary<object, ISynchronizationStream<EntityStore>> Streams = new();
 
+    public Task Initialized
+    {
+        get
+        {
+            lock (Streams)
+                return Task.WhenAll(Streams.Values.Select(s => s.Hub.Started));
+        }
+    }
     public CollectionsReference Reference => GetReference();
 
     protected virtual CollectionsReference GetReference() =>
@@ -120,7 +129,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public virtual void Dispose()
     {
         foreach (var stream in Streams.Values)
-            stream?.Dispose();
+            stream.Dispose();
 
         if (changesSubscriptions != null)
             foreach (var subscription in changesSubscriptions)
@@ -129,10 +138,10 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
     public virtual ISynchronizationStream<EntityStore> GetStream(WorkspaceReference<EntityStore> reference)
     {
         var stream = GetStreamForPartition(reference is IPartitionedWorkspaceReference partitioned ? partitioned.Partition : null);
-        return stream?.Reduce(reference) ?? throw new InvalidOperationException("Unable to create stream");
+        return stream.Reduce(reference) ?? throw new InvalidOperationException("Unable to create stream");
     }
 
-    public ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition)
+    public ISynchronizationStream<EntityStore> GetStreamForPartition(object? partition)
     {
         var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
         lock (Streams)
@@ -144,13 +153,13 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
         }
     }
 
-    protected abstract ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity);
+    protected abstract ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity);
 
-    protected virtual ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity,
+    protected virtual ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
         => SetupDataSourceStream(identity, config);
 
-    protected virtual ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity,
+    protected virtual ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity,
         Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
     {
         var reference = GetReference();
@@ -175,7 +184,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 public record GenericUnpartitionedDataSource(object Id, IWorkspace Workspace)
     : GenericUnpartitionedDataSource<GenericUnpartitionedDataSource>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore>? GetStream()
+    public ISynchronizationStream<EntityStore> GetStream()
         => GetStreamForPartition(null);
 }
 
@@ -193,7 +202,7 @@ public abstract record GenericUnpartitionedDataSource<TDataSource>(object Id, IW
 public abstract record GenericPartitionedDataSource<TPartition>(object Id, IWorkspace Workspace)
     : GenericPartitionedDataSource<GenericPartitionedDataSource<TPartition>, TPartition>(Id, Workspace)
 {
-    public ISynchronizationStream<EntityStore>? GetStream()
+    public ISynchronizationStream<EntityStore> GetStream()
         => GetStreamForPartition(null);
 
 }
@@ -258,7 +267,7 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
     }
 
 
-    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity)
+    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
     {
         return CreateStream(identity,
             config => config.WithInitialization(GetInitialValueAsync).WithExceptionCallback(LogException));
@@ -270,10 +279,9 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
         return Task.CompletedTask;
     }
 
-    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
+    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
     {
         var stream = base.SetupDataSourceStream(identity, config);
-        if (stream == null) return null;
 
         var isFirst = true;
         stream.RegisterForDisposal(
@@ -347,15 +355,14 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         return initial;
     }
 
-    protected override ISynchronizationStream<EntityStore>? CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
+    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
     {
         return SetupDataSourceStream(identity, config);
     }
 
-    protected override ISynchronizationStream<EntityStore>? SetupDataSourceStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
+    protected override ISynchronizationStream<EntityStore> SetupDataSourceStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
     {
         var stream = base.SetupDataSourceStream(identity, config);
-        if (stream == null) return null;
 
         // Always use async initialization to call GetInitialValueAsync properly
 
