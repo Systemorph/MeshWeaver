@@ -19,12 +19,12 @@ public interface IWorkspace : IAsyncDisposable
     ISynchronizationStream<EntityStore> GetStream(params Type[] types);
     ReduceManager<EntityStore> ReduceManager { get; }
 
-    ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
+    ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         Address owner,
         WorkspaceReference<TReduced> reference
     );
     ISynchronizationStream<TReduced>? GetStream<TReduced>(
-        WorkspaceReference<TReduced> reference,  
+        WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration = null);
 
     IObservable<IEnumerable<TType>>? GetRemoteStream<TType>(Address address);
