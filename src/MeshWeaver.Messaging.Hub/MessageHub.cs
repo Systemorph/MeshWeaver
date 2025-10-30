@@ -25,6 +25,7 @@ public sealed class MessageHub : IMessageHub
 
     private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
+    private readonly ConcurrentDictionary<string, IDisposable> namedDeferrals = new();
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -83,6 +84,22 @@ public sealed class MessageHub : IMessageHub
         Register(HandleCallbacks);
 
         messageService.Start();
+
+        // Create all named deferrals before starting message processing
+        foreach (var (name, predicate) in configuration.NamedDeferrals)
+        {
+            var deferral = Defer(predicate);
+            if (!namedDeferrals.TryAdd(name, deferral))
+            {
+                logger.LogWarning("Duplicate named deferral '{Name}' for hub {Address}", name, Address);
+                deferral.Dispose();
+            }
+            else
+            {
+                logger.LogDebug("Created named deferral '{Name}' for hub {Address}", name, Address);
+            }
+        }
+
         Post(new InitializeHubRequest(Defer(Configuration.StartupDeferral)));
     }
 
@@ -637,6 +654,14 @@ public sealed class MessageHub : IMessageHub
 
     private void DisposeImpl()
     {
+        // Dispose all remaining named deferrals
+        foreach (var (name, deferral) in namedDeferrals)
+        {
+            logger.LogDebug("Disposing remaining named deferral '{Name}' during hub disposal for {Address}", name, Address);
+            deferral.Dispose();
+        }
+        namedDeferrals.Clear();
+
         while (disposeActions.TryTake(out var disposeAction))
             disposeAction.Invoke(this);
 
@@ -830,6 +855,18 @@ public sealed class MessageHub : IMessageHub
 
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         messageService.Defer(deferredFilter);
+
+    public bool ReleaseDeferral(string name)
+    {
+        if (namedDeferrals.TryRemove(name, out var deferral))
+        {
+            logger.LogDebug("Releasing named deferral '{Name}' for hub {Address}", name, Address);
+            deferral.Dispose();
+            return true;
+        }
+        logger.LogWarning("Named deferral '{Name}' not found in hub {Address}", name, Address);
+        return false;
+    }
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object?> properties = new();
 
