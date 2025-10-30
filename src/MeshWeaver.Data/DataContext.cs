@@ -95,11 +95,29 @@ public sealed record DataContext : IDisposable
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
         Task.WhenAll(DataSourcesById.Values.Select(d => d.Initialized))
-            .ContinueWith(_ =>
+            .ContinueWith(task =>
             {
-                logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
-                deferral.Dispose();
-            });
+                try
+                {
+                    if (task.IsFaulted)
+                    {
+                        logger.LogError(task.Exception, "DataContext initialization failed for {Address}, disposing deferral anyway", Hub.Address);
+                    }
+                    else if (task.IsCanceled)
+                    {
+                        logger.LogWarning("DataContext initialization was canceled for {Address}, disposing deferral anyway", Hub.Address);
+                    }
+                    else
+                    {
+                        logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
+                    }
+                }
+                finally
+                {
+                    // Always dispose deferral to release buffered messages, even if initialization fails
+                    deferral.Dispose();
+                }
+            }, TaskScheduler.Default);
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
