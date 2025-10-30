@@ -107,9 +107,9 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
-    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    private static ContentPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
     {
-        return new ContentCollectionPluginConfig
+        return new ContentPluginConfig
         {
             Collections = [],
             ContextToConfigMap = context =>

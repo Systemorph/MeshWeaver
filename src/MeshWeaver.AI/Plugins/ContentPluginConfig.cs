@@ -6,7 +6,7 @@ namespace MeshWeaver.AI.Plugins;
 /// <summary>
 /// Configuration for the SubmissionPlugin.
 /// </summary>
-public class ContentCollectionPluginConfig
+public class ContentPluginConfig
 {
     /// <summary>
     /// Collection of content collection configurations.
