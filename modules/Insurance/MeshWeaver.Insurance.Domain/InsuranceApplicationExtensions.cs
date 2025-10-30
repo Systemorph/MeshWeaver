@@ -64,11 +64,6 @@ public static class InsuranceApplicationExtensions
                 var addressId = hub.Address.Id;
                 var conf = sp.GetRequiredService<IConfiguration>();
 
-                // Get the global Submissions configuration from appsettings
-                var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
-                if (globalConfig == null)
-                    throw new InvalidOperationException("Submissions collection not found in configuration");
-
                 // Parse addressId in format {company}-{uwy}
                 var parts = addressId.Split('-');
                 if (parts.Length != 2)
@@ -77,6 +72,23 @@ public static class InsuranceApplicationExtensions
                 var company = parts[0];
                 var uwy = parts[1];
                 var subPath = $"{company}/{uwy}";
+
+                // Get the global Submissions configuration from appsettings, or create a default one
+                var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
+
+                // If no configuration exists, create a default FileSystem-based collection
+                if (globalConfig == null)
+                {
+                    // Default to a "Submissions" folder in the current directory
+                    var defaultBasePath = Path.Combine(Directory.GetCurrentDirectory(), "Submissions");
+                    globalConfig = new ContentCollectionConfig
+                    {
+                        SourceType = FileSystemStreamProvider.SourceType,
+                        Name = "Submissions",
+                        BasePath = defaultBasePath,
+                        DisplayName = "Submission Files"
+                    };
+                }
 
                 // Create localized config with modified name and basepath
                 var localizedName = GetLocalizedCollectionName("Submissions", addressId);
