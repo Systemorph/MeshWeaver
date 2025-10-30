@@ -279,7 +279,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private async Task InitializeAsync(CancellationToken ct)
     {
         if (Configuration.Initialization is null)
+        {
+            // If no custom initialization, immediately dispose startup deferrable to release buffered messages
+            if (startupDeferrable is not null)
+            {
+                logger.LogDebug("No initialization configured, disposing startup deferrable for Stream {StreamId}", StreamId);
+                startupDeferrable.Dispose();
+                startupDeferrable = null;
+            }
             return;
+        }
 
         var init = await Configuration.Initialization(this, ct);
         SetCurrent(new ChangeItem<TStream>(init, StreamId, Host.Version));

@@ -96,16 +96,23 @@ public sealed class MessageHub : IMessageHub
     {
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
-        var actions = Configuration.BuildupActions;
-        foreach (var buildup in actions)
-            await buildup(this, cancellationToken);
+        try
+        {
+            var actions = Configuration.BuildupActions;
+            foreach (var buildup in actions)
+                await buildup(this, cancellationToken);
 
-        RunLevel = MessageHubRunLevel.Started;
-        hasStarted.SetResult();
+            RunLevel = MessageHubRunLevel.Started;
+            hasStarted.SetResult();
 
-        logger.LogInformation("Message hub {address} fully initialized", Address);
-        request.Message.Deferral.Dispose();
-        return request.Processed();
+            logger.LogInformation("Message hub {address} fully initialized", Address);
+            return request.Processed();
+        }
+        finally
+        {
+            // Always dispose deferral to release buffered messages, even if initialization fails
+            request.Message.Deferral.Dispose();
+        }
     }
 
     #region Message Types
