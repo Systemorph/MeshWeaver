@@ -111,9 +111,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private void SetCurrent(ChangeItem<TStream>? value)
     {
-        // Release startup deferral if it hasn't been released yet
-        Hub.ReleaseDeferral(StartupDeferralName);
-
         if (isDisposed || value == null)
         {
             logger.LogWarning("Not setting {StreamId} to {Value} because the stream is disposed or value is null.", StreamId, value);
@@ -195,8 +192,6 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
     }
 
-    private const string StartupDeferralName = "SynchronizationStreamStartup";
-
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
         return config
@@ -257,21 +252,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     throw new SynchronizationException("An error occurred during synchronization", ex);
                 }
                 return request.Processed();
-            }).WithNamedDeferral(StartupDeferralName, StartupDeferrable)
-            .WithInitialization((_, ct) => InitializeAsync(ct));
+            }).WithInitialization((_, ct) => InitializeAsync(ct));
 
     }
-
-    private static bool StartupDeferrable(IMessageDelivery x) =>
-        x.Message is not SetCurrentRequest &&
-        x.Message is not DataChangedEvent { ChangeType: ChangeType.Full };
 
     private async Task InitializeAsync(CancellationToken ct)
     {
         if (Configuration.Initialization is null)
         {
-            // If no custom initialization, immediately release startup deferral to process buffered messages
-            Hub.ReleaseDeferral(StartupDeferralName);
+            // No custom initialization
             return;
         }
 

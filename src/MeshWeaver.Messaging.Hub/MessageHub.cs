@@ -25,7 +25,7 @@ public sealed class MessageHub : IMessageHub
 
     private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
-    private readonly ConcurrentDictionary<string, IDisposable> namedDeferrals = new();
+    private readonly ConcurrentDictionary<string, IDisposable> initializationGates = new();
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -85,18 +85,20 @@ public sealed class MessageHub : IMessageHub
 
         messageService.Start();
 
-        // Create all named deferrals before starting message processing
-        foreach (var (name, predicate) in configuration.NamedDeferrals)
+        // Create all initialization gates before starting message processing
+        // The gate defers all messages EXCEPT those matching the predicate
+        foreach (var (name, allowDuringInit) in configuration.InitializationGates)
         {
-            var deferral = Defer(predicate);
-            if (!namedDeferrals.TryAdd(name, deferral))
+            // Invert the predicate: defer everything that is NOT allowed
+            var gate = Defer(delivery => !allowDuringInit(delivery));
+            if (!initializationGates.TryAdd(name, gate))
             {
-                logger.LogWarning("Duplicate named deferral '{Name}' for hub {Address}", name, Address);
-                deferral.Dispose();
+                logger.LogWarning("Duplicate initialization gate '{Name}' for hub {Address}", name, Address);
+                gate.Dispose();
             }
             else
             {
-                logger.LogDebug("Created named deferral '{Name}' for hub {Address}", name, Address);
+                logger.LogDebug("Created initialization gate '{Name}' for hub {Address}", name, Address);
             }
         }
 
@@ -654,13 +656,11 @@ public sealed class MessageHub : IMessageHub
 
     private void DisposeImpl()
     {
-        // Dispose all remaining named deferrals
-        foreach (var (name, deferral) in namedDeferrals)
+        // Open all remaining initialization gates to release any buffered messages
+        foreach (var gateName in initializationGates.Keys.ToArray())
         {
-            logger.LogDebug("Disposing remaining named deferral '{Name}' during hub disposal for {Address}", name, Address);
-            deferral.Dispose();
+            OpenGate(gateName);
         }
-        namedDeferrals.Clear();
 
         while (disposeActions.TryTake(out var disposeAction))
             disposeAction.Invoke(this);
@@ -856,15 +856,15 @@ public sealed class MessageHub : IMessageHub
     public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
         messageService.Defer(deferredFilter);
 
-    public bool ReleaseDeferral(string name)
+    public bool OpenGate(string name)
     {
-        if (namedDeferrals.TryRemove(name, out var deferral))
+        if (initializationGates.TryRemove(name, out var gate))
         {
-            logger.LogDebug("Releasing named deferral '{Name}' for hub {Address}", name, Address);
-            deferral.Dispose();
+            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
+            gate.Dispose();
             return true;
         }
-        logger.LogWarning("Named deferral '{Name}' not found in hub {Address}", name, Address);
+        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name, Address);
         return false;
     }
 

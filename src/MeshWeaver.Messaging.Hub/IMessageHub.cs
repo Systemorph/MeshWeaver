@@ -111,11 +111,11 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
     /// <summary>
-    /// Releases a named deferral, allowing deferred messages to be processed.
+    /// Opens a named initialization gate, allowing all deferred messages to be processed.
     /// </summary>
-    /// <param name="name">The name of the deferral to release</param>
-    /// <returns>True if the deferral was found and released, false otherwise</returns>
-    bool ReleaseDeferral(string name);
+    /// <param name="name">The name of the gate to open</param>
+    /// <returns>True if the gate was found and opened, false if already opened or not found</returns>
+    bool OpenGate(string name);
 
 
     internal Task<IMessageDelivery> HandleMessageAsync(
