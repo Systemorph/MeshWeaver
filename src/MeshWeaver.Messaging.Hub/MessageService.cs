@@ -23,7 +23,10 @@ public class MessageService : IMessageService
     private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
     //private volatile int pendingStartupMessages;
+    private JsonSerializerOptions? loggingSerializerOptions;
 
+    private JsonSerializerOptions LoggingSerializerOptions =>
+        loggingSerializerOptions ??= hub.CreateLoggingSerializerOptions();
 
     public MessageService(
         Address address,
@@ -255,7 +258,7 @@ public class MessageService : IMessageService
             var ret = PostImpl(message, opt);
             if (!ExcludedFromLogging.Contains(message.GetType()))
                 logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
-                    JsonSerializer.Serialize(ret, hub.JsonSerializerOptions), ret.Id, Address);
+                    JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
         }
     }

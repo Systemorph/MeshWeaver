@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging.Serialization;
 using Microsoft.Extensions.DependencyInjection;
@@ -85,6 +86,26 @@ public static class SerializationExtensions
             o.IncludeFields = true; // Enable field serialization for ValueTuple support
             o.Converters.Add(new EnumMemberJsonStringEnumConverter());
         });
+    }
+
+    /// <summary>
+    /// Creates a JsonSerializerOptions configured for logging purposes.
+    /// This wraps the hub's standard serializer options with a LoggingTypeInfoResolver
+    /// that filters out properties marked with [PreventLogging] attribute.
+    /// </summary>
+    public static JsonSerializerOptions CreateLoggingSerializerOptions(this IMessageHub hub)
+    {
+        var baseOptions = hub.JsonSerializerOptions;
+
+        // Create new options that copy settings from base options
+        var loggingOptions = new JsonSerializerOptions(baseOptions);
+
+        // Wrap the existing TypeInfoResolver with LoggingTypeInfoResolver
+        loggingOptions.TypeInfoResolver = new LoggingTypeInfoResolver(
+            baseOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver()
+        );
+
+        return loggingOptions;
     }
 
 }

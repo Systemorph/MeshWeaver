@@ -57,7 +57,7 @@ public abstract record StreamMessage(string StreamId);
 public abstract record JsonChange(
     string StreamId,
     long Version,
-    RawJson Change,
+    [property: PreventLogging] RawJson Change,
     ChangeType ChangeType,
     string? ChangedBy
 ) : StreamMessage(StreamId);
