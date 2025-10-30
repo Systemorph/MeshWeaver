@@ -26,20 +26,23 @@ public record MessageHubConfiguration
         => this with { StartupDeferral = x => startupDeferral(x) && StartupDeferral(x) };
 
     /// <summary>
-    /// Named deferrals that are created during hub initialization and can be released by name.
-    /// The key is the deferral name, the value is the predicate that determines which messages to defer.
+    /// Named initialization gates that are created during hub initialization and can be opened by name.
+    /// The key is the gate name, the value is the predicate that determines which messages are allowed during initialization.
+    /// All other messages are deferred until the gate is opened.
     /// </summary>
-    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> NamedDeferrals { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty;
+    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> InitializationGates { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty;
 
     /// <summary>
-    /// Adds a named deferral that will be created during hub initialization.
-    /// This ensures the deferral is in place before any messages are processed.
+    /// Adds a named initialization gate that will be created during hub initialization.
+    /// This ensures the gate is in place before any messages are processed.
+    /// Only messages matching the predicate will be allowed through during initialization.
+    /// All other messages will be deferred until the gate is opened via OpenGate().
     /// </summary>
-    /// <param name="name">Unique name for this deferral</param>
-    /// <param name="predicate">Predicate that determines which messages to defer</param>
+    /// <param name="name">Unique name for this initialization gate</param>
+    /// <param name="allowDuringInit">Predicate that determines which messages are allowed during initialization (e.g. InitializeHubRequest, SetCurrentRequest)</param>
     /// <returns>Updated configuration</returns>
-    public MessageHubConfiguration WithNamedDeferral(string name, Predicate<IMessageDelivery> predicate)
-        => this with { NamedDeferrals = NamedDeferrals.SetItem(name, predicate) };
+    public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery> allowDuringInit)
+        => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit) };
 
     public IMessageHub? ParentHub
     {

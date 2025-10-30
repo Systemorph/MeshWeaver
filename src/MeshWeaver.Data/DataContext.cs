@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 
 public sealed record DataContext : IDisposable
 {
-    public const string DataContextDeferralName = "DataContextInitialization";
+    public const string InitializationGateName = "DataContextInit";
 
     public ITypeRegistry TypeRegistry { get; }
 
@@ -115,8 +115,7 @@ public sealed record DataContext : IDisposable
                 }
                 finally
                 {
-                    // Always release deferral to process buffered messages, even if initialization fails
-                    Hub.ReleaseDeferral(DataContextDeferralName);
+                    // Initialization complete
                 }
             }, TaskScheduler.Default);
     }

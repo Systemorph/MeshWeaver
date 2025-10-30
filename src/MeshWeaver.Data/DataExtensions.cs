@@ -33,7 +33,6 @@ public static class DataExtensions
         if (existingLambdas.Any())
             return ret;
         return ret
-                .WithNamedDeferral(DataContext.DataContextDeferralName, x => x.Message is not DataChangedEvent { ChangeType: ChangeType.Full })
                 .WithInitialization(h => h.GetWorkspace())
                 .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
                 .WithServices(sc => sc.AddScoped<IWorkspace>(sp =>
