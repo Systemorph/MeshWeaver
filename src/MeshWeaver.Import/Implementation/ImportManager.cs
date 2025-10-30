@@ -106,6 +106,7 @@ public class ImportManager
                     request
                 );
                 activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
 
             });
@@ -129,7 +130,7 @@ public class ImportManager
         // If ExcelImportConfiguration is provided, use ConfiguredExcelImporter directly
         if (importRequest.Configuration is ExcelImportConfiguration excelConfig)
         {
-            return await ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity, cancellationToken);
+            return await ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity);
         }
 
         var (dataSet, format) = await ReadDataSetAsync(importRequest, activity, cancellationToken);
@@ -140,8 +141,7 @@ public class ImportManager
     private async Task<EntityStore> ImportWithConfiguredExcelImporter(
         ImportRequest importRequest,
         ExcelImportConfiguration config,
-        Activity? activity,
-        CancellationToken cancellationToken)
+        Activity? activity)
     {
         activity?.LogInformation("Using ConfiguredExcelImporter with TypeName: {TypeName}", config.TypeName);
 
