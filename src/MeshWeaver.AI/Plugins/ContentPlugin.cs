@@ -150,7 +150,7 @@ public class ContentPlugin
 
     [KernelFunction]
     [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
-    public async Task<string> GetFile(
+    public async Task<string> GetContent(
         [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")]
         string? filePath = null,
         [Description("The name of the collection to read from. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")]

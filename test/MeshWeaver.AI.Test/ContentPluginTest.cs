@@ -14,7 +14,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for ContentPlugin functionality, specifically the GetFile method with Excel support
+/// Tests for ContentPlugin functionality, specifically the GetContent method with Excel support
 /// </summary>
 public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), IAsyncLifetime
 {
@@ -126,7 +126,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile preserves null values in Excel files with empty cells at the start of rows
+    /// Tests that GetContent preserves null values in Excel files with empty cells at the start of rows
     /// </summary>
     [Fact]
     public async Task GetFile_ExcelWithEmptyCellsAtStart_ShouldPreserveNulls()
@@ -136,7 +136,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -163,7 +163,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile with numberOfRows parameter limits Excel file output
+    /// Tests that GetContent with numberOfRows parameter limits Excel file output
     /// </summary>
     [Fact]
     public async Task GetFile_ExcelWithNumberOfRows_ShouldLimitRows()
@@ -174,7 +174,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 5;
 
         // act
-        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -195,7 +195,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile with numberOfRows parameter limits text file output
+    /// Tests that GetContent with numberOfRows parameter limits text file output
     /// </summary>
     [Fact]
     public async Task GetFile_TextWithNumberOfRows_ShouldLimitRows()
@@ -206,7 +206,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 10;
 
         // act
-        var result = await plugin.GetFile(TestTextFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(TestTextFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -221,7 +221,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile without numberOfRows parameter reads entire text file
+    /// Tests that GetContent without numberOfRows parameter reads entire text file
     /// </summary>
     [Fact]
     public async Task GetFile_TextWithoutNumberOfRows_ShouldReadEntireFile()
@@ -231,7 +231,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestTextFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(TestTextFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -246,7 +246,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile without numberOfRows parameter reads entire Excel file
+    /// Tests that GetContent without numberOfRows parameter reads entire Excel file
     /// </summary>
     [Fact]
     public async Task GetFile_ExcelWithoutNumberOfRows_ShouldReadEntireFile()
@@ -256,7 +256,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -276,7 +276,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
     }
 
     /// <summary>
-    /// Tests that GetFile handles non-existent collection
+    /// Tests that GetContent handles non-existent collection
     /// </summary>
     [Fact]
     public async Task GetFile_NonExistentCollection_ShouldReturnErrorMessage()
@@ -286,14 +286,14 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile("test.xlsx", "non-existent-collection", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent("test.xlsx", "non-existent-collection", cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("Collection 'non-existent-collection' not found");
     }
 
     /// <summary>
-    /// Tests that GetFile handles non-existent file
+    /// Tests that GetContent handles non-existent file
     /// </summary>
     [Fact]
     public async Task GetFile_NonExistentFile_ShouldReturnErrorMessage()
@@ -303,7 +303,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile("non-existent.xlsx", TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetContent("non-existent.xlsx", TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("File 'non-existent.xlsx' not found");

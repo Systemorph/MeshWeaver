@@ -1,5 +1,4 @@
-﻿using System.Text.Json;
-using System.Text.Json.Nodes;
+﻿using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.ContentCollections;
@@ -39,7 +38,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 # Importing Risks
                 When the user asks you to import risks, you should:
                 1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
-                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetFile function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
+                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetContent function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
                    Consider any input from the user to modify the configuration. Ensure the JSON includes "name" field set to the filename. Use DataPlugin's UpdateData function with type="ExcelImportConfiguration" to save the configuration.
                 3) Call ContentPlugin's Import function with path=filename, collection="Submissions-{pricingId}", address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
 
@@ -50,7 +49,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 3) Upload the new configuration using DataPlugin's UpdateData function with type="ExcelImportConfiguration" and the updated JSON (ensure "name" field is set to filename).
 
                 # Automatic Risk Import Configuration
-                - Use ContentPlugin's GetFile with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
+                - Use ContentPlugin's GetContent with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
                   - First column: Row numbers (1-based)
                   - Remaining columns: Labeled A, B, C, D, etc. (Excel column letters)
                   - Empty cells appear as empty values in the table (not "null")
