@@ -101,9 +101,9 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
-    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig()
+    private static ContentPluginConfig CreateSubmissionPluginConfig()
     {
-        return new ContentCollectionPluginConfig
+        return new ContentPluginConfig
         {
             Collections = [],
             ContextToConfigMap = context =>
@@ -119,17 +119,13 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 if (parts.Length != 2)
                     return null!;
 
-                var company = parts[0];
-                var uwy = parts[1];
-                var subPath = $"{company}/{uwy}";
-
-                // Create Hub-based collection config pointing to the pricing address
+                // Use Hub-based collection config pointing to the pricing address
+                // This allows the ContentPlugin to query the pricing hub for the actual collection configuration
                 return new ContentCollectionConfig
                 {
                     SourceType = HubStreamProviderFactory.SourceType,
                     Name = $"Submissions-{pricingId}",
-                    Address = context.Address,
-                    BasePath = subPath
+                    Address = context.Address
                 };
             }
         };

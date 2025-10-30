@@ -41,21 +41,21 @@ public class ContentPlugin
 {
     private readonly IMessageHub hub;
     private readonly IContentService contentService;
-    private readonly ContentCollectionPluginConfig config;
+    private readonly ContentPluginConfig config;
     private readonly IAgentChat? chat;
 
     /// <summary>
     /// Creates a ContentPlugin with basic functionality (no context resolution).
     /// </summary>
     public ContentPlugin(IMessageHub hub)
-        : this(hub, new ContentCollectionPluginConfig { Collections = [] }, null!)
+        : this(hub, new ContentPluginConfig { Collections = [] }, null!)
     {
     }
 
     /// <summary>
     /// Creates a ContentPlugin with context resolution and dynamic collection configuration.
     /// </summary>
-    public ContentPlugin(IMessageHub hub, ContentCollectionPluginConfig config, IAgentChat chat)
+    public ContentPlugin(IMessageHub hub, ContentPluginConfig config, IAgentChat chat)
     {
         this.hub = hub;
         this.config = config;
@@ -151,9 +151,12 @@ public class ContentPlugin
     [KernelFunction]
     [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetFile(
-        [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
-        [Description("The name of the collection to read from. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")] int? numberOfRows = null,
+        [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")]
+        string? filePath = null,
+        [Description("The name of the collection to read from. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")]
+        string? collectionName = null,
+        [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")]
+        int? numberOfRows = null,
         CancellationToken cancellationToken = default)
     {
         var resolvedCollectionName = GetCollectionName(collectionName);

@@ -136,7 +136,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, TestExcelFileName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -174,7 +174,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 5;
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, TestExcelFileName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -206,7 +206,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         const int rowLimit = 10;
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, TestTextFileName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile(TestTextFileName, TestCollectionName, numberOfRows: rowLimit, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -231,7 +231,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, TestTextFileName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile(TestTextFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -256,7 +256,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, TestExcelFileName, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile(TestExcelFileName, TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().NotBeNullOrEmpty();
@@ -286,7 +286,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile("non-existent-collection", "test.xlsx", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile("test.xlsx", "non-existent-collection", cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("Collection 'non-existent-collection' not found");
@@ -303,7 +303,7 @@ public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), 
         var plugin = new ContentPlugin(client);
 
         // act
-        var result = await plugin.GetFile(TestCollectionName, "non-existent.xlsx", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await plugin.GetFile("non-existent.xlsx", TestCollectionName, cancellationToken: TestContext.Current.CancellationToken);
 
         // assert
         result.Should().Contain("File 'non-existent.xlsx' not found");
