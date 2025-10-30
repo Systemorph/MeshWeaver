@@ -5,10 +5,10 @@
 /// </summary>
 public class FileSystemStreamProviderFactory : IStreamProviderFactory
 {
-    public IStreamProvider Create(ContentCollectionConfig config)
+    public Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
     {
         var basePath = config.BasePath ?? config.Settings?.GetValueOrDefault("BasePath") ?? "";
-        return new FileSystemStreamProvider(basePath);
+        return Task.FromResult<IStreamProvider>(new FileSystemStreamProvider(basePath));
     }
 
 }
