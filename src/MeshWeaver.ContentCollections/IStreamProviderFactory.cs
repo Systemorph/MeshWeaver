@@ -9,6 +9,7 @@ public interface IStreamProviderFactory
     /// Creates a stream provider from the given configuration
     /// </summary>
     /// <param name="config">Content collection configuration</param>
+    /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>The created stream provider</returns>
-    IStreamProvider Create(ContentCollectionConfig config);
+    Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default);
 }
