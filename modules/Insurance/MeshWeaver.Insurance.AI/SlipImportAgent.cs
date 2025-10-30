@@ -39,7 +39,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
                 # Importing Slips
                 When the user asks you to import a slip:
                 1) First, use ContentCollectionPlugin's ListFiles() to see available files in the submissions collection
-                2) Use ContentPlugin's GetFile function to extract the document content from PDF or Markdown files
+                2) Use ContentPlugin's GetContent function to extract the document content from PDF or Markdown files
                    - Pass collectionName="Submissions-{pricingId}" and filePath=filename (e.g., "Slip.pdf" or "Slip.md")
                    - For PDFs, this will extract all pages of text
                 3) Review the extracted text and identify data that matches the domain schemas
@@ -116,7 +116,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 Notes:
                 - When listing files, you may see paths with "/" prefix (e.g., "/Slip.pdf", "/Slip.md")
-                - When calling ContentPlugin's GetFile, use collectionName="Submissions-{pricingId}" and provide the filename
+                - When calling ContentPlugin's GetContent, use collectionName="Submissions-{pricingId}" and provide the filename
                 - Both PDF and Markdown (.md) files are supported
                 - When updating data, ensure each JSON object has the correct $type field and required ID fields (id, pricingId, acceptanceId, etc.)
                 - Remove null-valued properties from JSON before calling UpdateData
