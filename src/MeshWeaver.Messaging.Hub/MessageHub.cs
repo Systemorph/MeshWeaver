@@ -90,7 +90,11 @@ public sealed class MessageHub : IMessageHub
         foreach (var (name, allowDuringInit) in configuration.InitializationGates)
         {
             // Invert the predicate: defer everything that is NOT allowed
-            var gate = Defer(delivery => !allowDuringInit(delivery));
+            // IMPORTANT: Never defer response messages (messages with RequestId property)
+            // as they need to flow back to awaiting requests immediately
+            var gate = Defer(delivery =>
+                !allowDuringInit(delivery) &&
+                !delivery.Properties.ContainsKey(PostOptions.RequestId));
             if (!initializationGates.TryAdd(name, gate))
             {
                 logger.LogWarning("Duplicate initialization gate '{Name}' for hub {Address}", name, Address);
