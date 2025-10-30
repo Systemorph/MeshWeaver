@@ -517,7 +517,7 @@ public sealed class MessageHub : IMessageHub
 
         logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        return delivery;
+        return delivery.Processed();
     }
 
     Address IMessageHub.Address => Address;
