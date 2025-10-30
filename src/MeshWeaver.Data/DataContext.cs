@@ -4,6 +4,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
@@ -14,6 +15,7 @@ public sealed record DataContext : IDisposable
     public DataContext(IWorkspace workspace)
     {
         Hub = workspace.Hub;
+        logger = Hub.ServiceProvider.GetRequiredService<ILogger<DataContext>>();
         Workspace = workspace;
         ReduceManager = Hub.CreateReduceManager();
 
@@ -27,6 +29,7 @@ public sealed record DataContext : IDisposable
         deferral = Hub.Defer(x => x.Message is not DataChangedEvent { ChangeType: ChangeType.Full });
     }
 
+    private readonly ILogger<DataContext> logger;
     private readonly IDisposable deferral;
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
@@ -76,6 +79,7 @@ public sealed record DataContext : IDisposable
 
     public void Initialize()
     {
+        logger.LogDebug("Starting initialization of DataContext for {Address}", Hub.Address);
         DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
 
         DataSourcesByType = DataSourcesById.Values
@@ -91,7 +95,11 @@ public sealed record DataContext : IDisposable
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
         Task.WhenAll(DataSourcesById.Values.Select(d => d.Initialized))
-            .ContinueWith(_ => deferral.Dispose());
+            .ContinueWith(_ =>
+            {
+                logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
+                deferral.Dispose();
+            });
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
