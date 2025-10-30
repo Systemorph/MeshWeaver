@@ -1,17 +1,9 @@
-﻿using System.ComponentModel;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using iText.Kernel.Pdf;
-using iText.Kernel.Pdf.Canvas.Parser;
-using iText.Kernel.Pdf.Canvas.Parser.Listener;
-using MeshWeaver.AI;
+﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
 
 namespace MeshWeaver.Insurance.AI;
@@ -46,13 +38,18 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 # Importing Slips
                 When the user asks you to import a slip:
-                1) First, use {{{nameof(ContentCollectionPlugin.ListFiles)}}}() to see available files in the submissions collection
-                2) Use {{{nameof(SlipImportPlugin.ExtractCompleteText)}}} to extract the document content from PDF or Markdown files
-                   - Simply pass the filename (e.g., "Slip.pdf" or "Slip.md")
-                   - The collection name will be automatically resolved to "Submissions-{pricingId}"
+                1) First, use ContentCollectionPlugin's ListFiles() to see available files in the submissions collection
+                2) Use ContentPlugin's GetFile function to extract the document content from PDF or Markdown files
+                   - Pass collectionName="Submissions-{pricingId}" and filePath=filename (e.g., "Slip.pdf" or "Slip.md")
+                   - For PDFs, this will extract all pages of text
                 3) Review the extracted text and identify data that matches the domain schemas
-                4) Use {{{nameof(SlipImportPlugin.ImportSlipData)}}} to save the structured data as JSON
-                5) Provide feedback on what data was successfully imported or if any issues were encountered
+                4) Create JSON objects for each entity type following the schemas below
+                5) Import the data using DataPlugin's UpdateData function:
+                   - First, retrieve existing Pricing data using DataPlugin's GetData with type="Pricing" and entityId=pricingId
+                   - Merge new pricing fields with existing data and call DataPlugin's UpdateData with type="Pricing"
+                   - For each ReinsuranceAcceptance (layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceAcceptance"
+                   - For each ReinsuranceSection (coverage within layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceSection"
+                6) Provide feedback on what data was successfully imported or if any issues were encountered
 
                 # Data Mapping Guidelines
                 Based on the extracted document text, create JSON objects that match the schemas provided below:
@@ -119,9 +116,10 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 Notes:
                 - When listing files, you may see paths with "/" prefix (e.g., "/Slip.pdf", "/Slip.md")
-                - When calling ExtractCompleteText, provide only the filename (e.g., "Slip.pdf" or "Slip.md")
-                - The collection name is automatically determined from the pricing context
+                - When calling ContentPlugin's GetFile, use collectionName="Submissions-{pricingId}" and provide the filename
                 - Both PDF and Markdown (.md) files are supported
+                - When updating data, ensure each JSON object has the correct $type field and required ID fields (id, pricingId, acceptanceId, etc.)
+                - Remove null-valued properties from JSON before calling UpdateData
                 """;
 
             if (pricingSchema is not null)
@@ -139,13 +137,9 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
     {
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
 
-        // Add ContentCollectionPlugin for submissions
+        // Add ContentPlugin for submissions and file reading functionality
         var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
-        yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
-
-        // Add slip import specific plugin
-        var plugin = new SlipImportPlugin(hub, chat);
-        yield return KernelPluginFactory.CreateFromObject(plugin);
+        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
     private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
@@ -238,310 +232,5 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
     public bool Matches(AgentContext? context)
     {
         return context?.Address?.Type == PricingAddress.TypeName;
-    }
-}
-
-public class SlipImportPlugin(IMessageHub hub, IAgentChat chat)
-{
-    private JsonSerializerOptions GetJsonOptions()
-    {
-        return hub.JsonSerializerOptions;
-    }
-
-    [KernelFunction]
-    [Description("Extracts the complete text from a slip document (PDF or Markdown) and returns it for LLM processing")]
-    public async Task<string> ExtractCompleteText(
-        [Description("The filename to extract (e.g., 'Slip.pdf' or 'Slip.md')")] string filename,
-        [Description("The collection name (optional, defaults to context-based resolution)")] string? collectionName = null)
-    {
-        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-            return "Please navigate to the pricing first.";
-
-        try
-        {
-            var pricingId = chat.Context.Address.Id;
-            var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-
-            // Get collection name using the same pattern as ContentCollectionPlugin
-            var resolvedCollectionName = collectionName ?? $"Submissions-{pricingId}";
-
-            // Use ContentService directly with the correct collection name and simple path
-            var stream = await contentService.GetContentAsync(resolvedCollectionName, filename, CancellationToken.None);
-
-            if (stream is null)
-                return $"Content not found: {filename} in collection {resolvedCollectionName}";
-
-            await using (stream)
-            {
-                string completeText;
-
-                // Determine file type by extension
-                if (filename.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Read markdown file directly as text
-                    using var reader = new StreamReader(stream);
-                    completeText = await reader.ReadToEndAsync();
-                }
-                else if (filename.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Extract text from PDF
-                    completeText = await ExtractCompletePdfText(stream);
-                }
-                else
-                {
-                    // Try to read as text for unknown file types
-                    using var reader = new StreamReader(stream);
-                    completeText = await reader.ReadToEndAsync();
-                }
-
-                var sb = new StringBuilder();
-                sb.AppendLine("=== INSURANCE SLIP DOCUMENT TEXT ===");
-                sb.AppendLine();
-                sb.AppendLine(completeText);
-
-                return sb.ToString();
-            }
-        }
-        catch (Exception e)
-        {
-            return $"Error extracting document text: {e.Message}";
-        }
-    }
-
-    [KernelFunction]
-    [Description("Imports the structured slip data as JSON into the pricing")]
-    public async Task<string> ImportSlipData(
-        [Description("Pricing data as JSON (optional if updating existing)")] string? pricingJson,
-        [Description("Array of ReinsuranceAcceptance data as JSON (can contain multiple acceptances)")] string? acceptancesJson,
-        [Description("Array of ReinsuranceSection data as JSON (sections/layers within acceptances)")] string? sectionsJson)
-    {
-        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-            return "Please navigate to the pricing first.";
-
-        var pricingId = chat.Context.Address.Id;
-        var pricingAddress = new PricingAddress(pricingId);
-
-        try
-        {
-            // Step 1: Retrieve existing Pricing data
-            var existingPricing = await GetExistingPricingAsync(pricingAddress, pricingId);
-
-            var updates = new List<JsonObject>();
-
-            // Step 2: Update Pricing if provided
-            if (!string.IsNullOrWhiteSpace(pricingJson))
-            {
-                var newPricingData = JsonNode.Parse(ExtractJson(pricingJson));
-                if (newPricingData is JsonObject newPricingObj)
-                {
-                    var mergedPricing = MergeWithExistingPricing(existingPricing, newPricingObj, pricingId);
-                    RemoveNullProperties(mergedPricing);
-                    updates.Add(mergedPricing);
-                }
-            }
-
-            // Step 3: Process ReinsuranceAcceptance records (can be multiple)
-            if (!string.IsNullOrWhiteSpace(acceptancesJson))
-            {
-                var acceptancesData = JsonNode.Parse(ExtractJson(acceptancesJson));
-
-                // Handle both array and single object
-                var acceptanceArray = acceptancesData is JsonArray arr ? arr : new JsonArray { acceptancesData };
-
-                foreach (var acceptanceData in acceptanceArray)
-                {
-                    if (acceptanceData is JsonObject acceptanceObj)
-                    {
-                        var processedAcceptance = EnsureTypeFirst(acceptanceObj, nameof(ReinsuranceAcceptance));
-                        processedAcceptance["pricingId"] = pricingId;
-                        RemoveNullProperties(processedAcceptance);
-                        updates.Add(processedAcceptance);
-                    }
-                }
-            }
-
-            // Step 4: Process ReinsuranceSection records (can be multiple)
-            if (!string.IsNullOrWhiteSpace(sectionsJson))
-            {
-                var sectionsData = JsonNode.Parse(ExtractJson(sectionsJson));
-
-                // Handle both array and single object
-                var sectionArray = sectionsData is JsonArray arr ? arr : new JsonArray { sectionsData };
-
-                foreach (var sectionData in sectionArray)
-                {
-                    if (sectionData is JsonObject sectionObj)
-                    {
-                        var processedSection = EnsureTypeFirst(sectionObj, nameof(ReinsuranceSection));
-                        RemoveNullProperties(processedSection);
-                        updates.Add(processedSection);
-                    }
-                }
-            }
-
-            if (updates.Count == 0)
-                return "No valid data provided for import.";
-
-            // Step 5: Post DataChangeRequest
-            var updateRequest = new DataChangeRequest { Updates = updates };
-            var response = await hub.AwaitResponse(updateRequest, o => o.WithTarget(pricingAddress));
-
-            return response.Message.Status switch
-            {
-                DataChangeStatus.Committed => $"Slip data imported successfully. Updated {updates.Count} entities.",
-                _ => $"Data update failed:\n{string.Join('\n', response.Message.Log.Messages?.Select(l => l.LogLevel + ": " + l.Message) ?? Array.Empty<string>())}"
-            };
-        }
-        catch (Exception e)
-        {
-            return $"Import failed: {e.Message}";
-        }
-    }
-
-    private async Task<Pricing?> GetExistingPricingAsync(Address pricingAddress, string pricingId)
-    {
-        try
-        {
-            var response = await hub.AwaitResponse(
-                new GetDataRequest(new EntityReference(nameof(Pricing), pricingId)),
-                o => o.WithTarget(pricingAddress));
-
-            return response?.Message?.Data as Pricing;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private JsonObject MergeWithExistingPricing(Pricing? existing, JsonObject newData, string pricingId)
-    {
-        JsonObject baseData;
-        if (existing != null)
-        {
-            var existingJson = JsonSerializer.Serialize(existing, GetJsonOptions());
-            baseData = JsonNode.Parse(existingJson) as JsonObject ?? new JsonObject();
-        }
-        else
-        {
-            baseData = new JsonObject();
-        }
-
-        var merged = MergeJsonObjects(baseData, newData);
-        merged = EnsureTypeFirst(merged, nameof(Pricing));
-        merged["id"] = pricingId;
-        return merged;
-    }
-
-    private static JsonObject MergeJsonObjects(JsonObject? existing, JsonObject? newData)
-    {
-        if (existing == null)
-            return newData?.DeepClone() as JsonObject ?? new JsonObject();
-
-        if (newData == null)
-            return existing.DeepClone() as JsonObject ?? new JsonObject();
-
-        var merged = existing.DeepClone() as JsonObject ?? new JsonObject();
-
-        foreach (var kvp in newData)
-        {
-            var isNullValue = kvp.Value == null ||
-                             (kvp.Value?.GetValueKind() == System.Text.Json.JsonValueKind.String &&
-                              kvp.Value.GetValue<string>() == "null");
-
-            if (!isNullValue)
-            {
-                if (merged.ContainsKey(kvp.Key) &&
-                    merged[kvp.Key] is JsonObject existingObj &&
-                    kvp.Value is JsonObject newObj)
-                {
-                    merged[kvp.Key] = MergeJsonObjects(existingObj, newObj);
-                }
-                else
-                {
-                    merged[kvp.Key] = kvp.Value?.DeepClone();
-                }
-            }
-        }
-
-        return merged;
-    }
-
-    private static JsonObject EnsureTypeFirst(JsonObject source, string typeName)
-    {
-        var ordered = new JsonObject
-        {
-            ["$type"] = typeName
-        };
-        foreach (var kv in source)
-        {
-            if (string.Equals(kv.Key, "$type", StringComparison.Ordinal)) continue;
-            ordered[kv.Key] = kv.Value?.DeepClone();
-        }
-        return ordered;
-    }
-
-    private static void RemoveNullProperties(JsonNode? node)
-    {
-        if (node is JsonObject obj)
-        {
-            foreach (var kvp in obj.ToList())
-            {
-                var value = kvp.Value;
-                if (value is null)
-                {
-                    obj.Remove(kvp.Key);
-                }
-                else
-                {
-                    RemoveNullProperties(value);
-                }
-            }
-        }
-        else if (node is JsonArray arr)
-        {
-            foreach (var item in arr)
-            {
-                RemoveNullProperties(item);
-            }
-        }
-    }
-
-    private async Task<string> ExtractCompletePdfText(Stream stream)
-    {
-        var completeText = new StringBuilder();
-
-        try
-        {
-            using var pdfReader = new PdfReader(stream);
-            using var pdfDocument = new PdfDocument(pdfReader);
-
-            for (int pageNum = 1; pageNum <= pdfDocument.GetNumberOfPages(); pageNum++)
-            {
-                var page = pdfDocument.GetPage(pageNum);
-                var strategy = new SimpleTextExtractionStrategy();
-                var pageText = PdfTextExtractor.GetTextFromPage(page, strategy);
-
-                if (!string.IsNullOrWhiteSpace(pageText))
-                {
-                    completeText.AppendLine($"=== PAGE {pageNum} ===");
-                    completeText.AppendLine(pageText.Trim());
-                    completeText.AppendLine();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            completeText.AppendLine($"Error extracting PDF: {ex.Message}");
-        }
-
-        return completeText.ToString();
-    }
-
-    private string ExtractJson(string json)
-    {
-        return json.Replace("```json", "")
-            .Replace("```", "")
-            .Trim();
     }
 }

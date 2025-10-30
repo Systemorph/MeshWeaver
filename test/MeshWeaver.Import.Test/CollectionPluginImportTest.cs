@@ -47,7 +47,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -82,7 +82,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -102,7 +102,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -122,7 +122,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -142,7 +142,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -162,7 +162,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Act
         var result = await plugin.Import(
@@ -192,7 +192,7 @@ SystemName,DisplayName
     {
         // Arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // Create a configuration JSON that is not registered as a format
         var configurationJson = @"{

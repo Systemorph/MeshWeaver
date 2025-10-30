@@ -1,5 +1,4 @@
-﻿using System.ComponentModel;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
@@ -39,19 +38,19 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 # Importing Risks
                 When the user asks you to import risks, you should:
-                1) Get the existing risk mapping configuration for the specified file using the function {{{nameof(RiskImportPlugin.GetRiskImportConfiguration)}}} with the filename.
-                2) If no import configuration was returned in 1, get a sample of the worksheet using CollectionPlugin's GetFile function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
-                   Consider any input from the user to modify the configuration. Use the {{{nameof(RiskImportPlugin.UpdateRiskImportConfiguration)}}} function to save the configuration.
-                3) Call Import with the filename and the configuration you have updated or created.
+                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
+                2) If no import configuration was returned in 1, get a sample of the worksheet using ContentPlugin's GetFile function with the collection name "Submissions-{pricingId}", the filename, and numberOfRows=20. Extract the table start row as well as the mapping as in the schema provided below.
+                   Consider any input from the user to modify the configuration. Ensure the JSON includes "name" field set to the filename. Use DataPlugin's UpdateData function with type="ExcelImportConfiguration" to save the configuration.
+                3) Call ContentPlugin's Import function with path=filename, collection="Submissions-{pricingId}", address=PricingAddress, and configuration=the JSON configuration you created or retrieved.
 
                 # Updating Risk Import Configuration
                 When the user asks you to update the risk import configuration, you should:
-                1) Get the existing risk mapping configuration for the specified file using the function {{{nameof(RiskImportPlugin.GetRiskImportConfiguration)}}} with the filename.
+                1) Get the existing risk mapping configuration for the specified file using DataPlugin's GetData function with type="ExcelImportConfiguration" and entityId=filename.
                 2) Modify it according to the user's input, ensuring it follows the schema provided below.
-                3) Upload the new configuration using the function {{{nameof(RiskImportPlugin.UpdateRiskImportConfiguration)}}} with the filename and the updated mapping.
+                3) Upload the new configuration using DataPlugin's UpdateData function with type="ExcelImportConfiguration" and the updated JSON (ensure "name" field is set to filename).
 
                 # Automatic Risk Import Configuration
-                - Use CollectionPlugin's GetFile with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
+                - Use ContentPlugin's GetFile with numberOfRows=20 to get a sample of the file. It returns a markdown table with:
                   - First column: Row numbers (1-based)
                   - Remaining columns: Labeled A, B, C, D, etc. (Excel column letters)
                   - Empty cells appear as empty values in the table (not "null")
@@ -76,7 +75,7 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
 
                 IMPORTANT OUTPUT RULES:
                 - do not output JSON to the user.
-                - When the user asks you to import, your job is not finished by creating the risk import configuration. You will actually have to call import.
+                - When the user asks you to import, your job is not finished by creating the risk import configuration. You will actually have to call ContentPlugin's Import function.
                 """;
 
             if (excelImportConfigSchema is not null)
@@ -97,17 +96,9 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
     {
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
 
-        // Add ContentCollectionPlugin for submissions
+        // Add ContentPlugin for submissions and import functionality
         var submissionPluginConfig = CreateSubmissionPluginConfig();
-        yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
-
-        // Add CollectionPlugin for import functionality
-        var collectionPlugin = new CollectionPlugin(hub);
-        yield return KernelPluginFactory.CreateFromObject(collectionPlugin);
-
-        // Add risk import specific plugin
-        var plugin = new RiskImportPlugin(hub, chat);
-        yield return KernelPluginFactory.CreateFromObject(plugin);
+        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
     private static ContentCollectionPluginConfig CreateSubmissionPluginConfig()
@@ -208,132 +199,5 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         {
             propertyRiskSchema = null;
         }
-    }
-}
-
-public class RiskImportPlugin(IMessageHub hub, IAgentChat chat)
-{
-    private JsonSerializerOptions GetJsonOptions()
-    {
-        return hub.JsonSerializerOptions;
-    }
-
-    [KernelFunction]
-    [Description("Imports a file with filename")]
-    public async Task<string> Import(string filename)
-    {
-        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-            return "Please navigate to the pricing for which you want to import risks.";
-
-        var pricingId = chat.Context.Address.Id;
-        var collectionName = $"Submissions-{pricingId}";
-        var address = new PricingAddress(pricingId);
-
-        // Try to get the saved configuration for this file
-        string? configuration = null;
-        try
-        {
-            var configJson = await GetRiskImportConfiguration(filename);
-            // Check if we got a valid configuration (not an error message)
-            if (!configJson.StartsWith("Error") && !configJson.StartsWith("Please navigate"))
-            {
-                configuration = configJson;
-            }
-        }
-        catch
-        {
-            // If we can't get the configuration, fall back to format-based import
-        }
-
-        // Delegate to CollectionPlugin's Import method
-        var collectionPlugin = new CollectionPlugin(hub);
-        return await collectionPlugin.Import(
-            path: filename,
-            collection: collectionName,
-            address: address,
-            format: configuration != null ? null : "PropertyRiskImport", // Use format only if no configuration
-            configuration: configuration // Pass configuration if available
-        );
-    }
-
-    [KernelFunction]
-    [Description("Gets the risk configuration for a particular file")]
-    public async Task<string> GetRiskImportConfiguration(string filename)
-    {
-        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-            return "Please navigate to the pricing for which you want to create a risk import mapping.";
-
-        try
-        {
-            var response = await hub.AwaitResponse(
-                new GetDataRequest(new EntityReference("ExcelImportConfiguration", filename)),
-                o => o.WithTarget(new PricingAddress(chat.Context.Address.Id))
-            );
-
-            // Serialize the data
-            var json = JsonSerializer.Serialize(response?.Message?.Data, hub.JsonSerializerOptions);
-
-            // Parse and ensure $type is set to ExcelImportConfiguration
-            var jsonObject = JsonNode.Parse(json) as JsonObject;
-            if (jsonObject != null)
-            {
-                var withType = EnsureTypeFirst(jsonObject, "ExcelImportConfiguration");
-                return JsonSerializer.Serialize(withType, hub.JsonSerializerOptions);
-            }
-
-            return json;
-        }
-        catch (Exception e)
-        {
-            return $"Error processing file '{filename}': {e.Message}";
-        }
-    }
-
-    [KernelFunction]
-    [Description("Updates the mapping configuration for risks import")]
-    public async Task<string> UpdateRiskImportConfiguration(
-        string filename,
-        [Description("Needs to follow the schema provided in the system prompt")] string mappingJson)
-    {
-        if (chat.Context?.Address?.Type != PricingAddress.TypeName)
-            return "Please navigate to the pricing for which you want to update the risk import configuration.";
-
-        var pa = new PricingAddress(chat.Context.Address.Id);
-        if (string.IsNullOrWhiteSpace(mappingJson))
-            return "Json mapping is empty. Please provide valid JSON.";
-
-        try
-        {
-            var parsed = EnsureTypeFirst((JsonObject)JsonNode.Parse(ExtractJson(mappingJson))!, "ExcelImportConfiguration");
-            parsed["entityId"] = pa.Id;
-            parsed["name"] = filename;
-            var response = await hub.AwaitResponse(new DataChangeRequest() { Updates = [parsed] }, o => o.WithTarget(pa));
-            return JsonSerializer.Serialize(response?.Message, hub.JsonSerializerOptions);
-        }
-        catch (Exception e)
-        {
-            return $"Mapping JSON is invalid. Please provide valid JSON. Exception: {e.Message}";
-        }
-    }
-
-    private static JsonObject EnsureTypeFirst(JsonObject source, string typeName)
-    {
-        var ordered = new JsonObject
-        {
-            ["$type"] = typeName
-        };
-        foreach (var kv in source)
-        {
-            if (string.Equals(kv.Key, "$type", StringComparison.Ordinal)) continue;
-            ordered[kv.Key] = kv.Value?.DeepClone();
-        }
-        return ordered;
-    }
-
-    private string ExtractJson(string json)
-    {
-        return json.Replace("```json", "")
-            .Replace("```", "")
-            .Trim();
     }
 }

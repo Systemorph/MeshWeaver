@@ -64,24 +64,24 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         CRITICAL: When users ask about submission files, documents, or content:
         - DO NOT call {{{nameof(DataPlugin.GetData)}}} for Pricing or any other data first
         - DO NOT try to verify the pricing exists before accessing files
-        - The SubmissionPlugin is already configured for the current pricing context
-        - Simply call the SubmissionPlugin functions directly
+        - The ContentPlugin is already configured for the current pricing context
+        - Simply call the ContentPlugin functions directly
         - All file paths should start with "/" (e.g., "/slip.pdf", "/risks.xlsx")
 
-        Available SubmissionPlugin functions (all collectionName parameters are optional):
-        - {{{nameof(ContentCollectionPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
-        - {{{nameof(ContentCollectionPlugin.ListFolders)}}}() - List all folders
-        - {{{nameof(ContentCollectionPlugin.ListCollectionItems)}}}() - List both files and folders
-        - {{{nameof(ContentCollectionPlugin.GetDocument)}}}(documentPath) - Get document content (use path like "/Slip.md")
-        - {{{nameof(ContentCollectionPlugin.SaveDocument)}}}(documentPath, content) - Save a document
-        - {{{nameof(ContentCollectionPlugin.DeleteFile)}}}(filePath) - Delete a file
-        - {{{nameof(ContentCollectionPlugin.CreateFolder)}}}(folderPath) - Create a folder
-        - {{{nameof(ContentCollectionPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
+        Available ContentPlugin functions (all collectionName parameters are optional):
+        - {{{nameof(ContentPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
+        - {{{nameof(ContentPlugin.ListFolders)}}}() - List all folders
+        - {{{nameof(ContentPlugin.ListCollectionItems)}}}() - List both files and folders
+        - {{{nameof(ContentPlugin.GetDocument)}}}(documentPath) - Get document content (use path like "/Slip.md")
+        - {{{nameof(ContentPlugin.SaveFile)}}}(documentPath, content) - Save a document
+        - {{{nameof(ContentPlugin.DeleteFile)}}}(filePath) - Delete a file
+        - {{{nameof(ContentPlugin.CreateFolder)}}}(folderPath) - Create a folder
+        - {{{nameof(ContentPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
 
         Examples:
-        - User: "Show me the submission files" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
-        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
-        - User: "Read the slip document" → You: Call {{{nameof(ContentCollectionPlugin.GetDocument)}}}("/Slip.md")
+        - User: "Show me the submission files" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
+        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
+        - User: "Read the slip document" → You: Call {{{nameof(ContentPlugin.GetDocument)}}}("/Slip.md")
 
         ## Working with Pricing Data
 
@@ -102,9 +102,9 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
         yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap).CreateKernelPlugin();
 
-        // Always provide ContentCollectionPlugin - it will use ContextToConfigMap to determine the collection
+        // Always provide ContentPlugin - it will use ContextToConfigMap to determine the collection
         var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
-        yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
+        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
     private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)

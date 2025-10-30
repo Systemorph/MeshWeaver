@@ -14,9 +14,9 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for CollectionPlugin functionality, specifically the GetFile method with Excel support
+/// Tests for ContentPlugin functionality, specifically the GetFile method with Excel support
 /// </summary>
-public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output), IAsyncLifetime
+public class ContentPluginTest(ITestOutputHelper output) : HubTestBase(output), IAsyncLifetime
 {
     private const string TestCollectionName = "test-collection";
     private const string TestExcelFileName = "test.xlsx";
@@ -133,7 +133,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // act
         var result = await plugin.GetFile(TestCollectionName, TestExcelFileName, cancellationToken: TestContext.Current.CancellationToken);
@@ -170,7 +170,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
         const int rowLimit = 5;
 
         // act
@@ -202,7 +202,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
         const int rowLimit = 10;
 
         // act
@@ -228,7 +228,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // act
         var result = await plugin.GetFile(TestCollectionName, TestTextFileName, cancellationToken: TestContext.Current.CancellationToken);
@@ -253,7 +253,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // act
         var result = await plugin.GetFile(TestCollectionName, TestExcelFileName, cancellationToken: TestContext.Current.CancellationToken);
@@ -283,7 +283,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // act
         var result = await plugin.GetFile("non-existent-collection", "test.xlsx", cancellationToken: TestContext.Current.CancellationToken);
@@ -300,7 +300,7 @@ public class CollectionPluginTest(ITestOutputHelper output) : HubTestBase(output
     {
         // arrange
         var client = GetClient();
-        var plugin = new CollectionPlugin(client);
+        var plugin = new ContentPlugin(client);
 
         // act
         var result = await plugin.GetFile(TestCollectionName, "non-existent.xlsx", cancellationToken: TestContext.Current.CancellationToken);

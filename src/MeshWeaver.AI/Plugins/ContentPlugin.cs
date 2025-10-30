@@ -2,16 +2,22 @@
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.SemanticKernel;
+using UglyToad.PdfPig;
 
 namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
-/// Plugin for managing documents and files in content collections.
-/// Provides functions for listing, loading, saving, and deleting documents.
+/// Generalized plugin for reading and writing files to configured collections.
+/// Supports context resolution via LayoutAreaReference and dynamic collection configuration.
 ///
 /// Context Resolution:
 /// - When LayoutAreaReference.Area is "Content" or "Collection"
@@ -31,14 +37,27 @@ namespace MeshWeaver.AI.Plugins;
 ///    - Parsed collection: "Documents"
 ///    - Parsed path: "/" (root)
 /// </summary>
-public class ContentCollectionPlugin
+public class ContentPlugin
 {
+    private readonly IMessageHub hub;
     private readonly IContentService contentService;
     private readonly ContentCollectionPluginConfig config;
-    private readonly IAgentChat chat;
+    private readonly IAgentChat? chat;
 
-    public ContentCollectionPlugin(IMessageHub hub, ContentCollectionPluginConfig config, IAgentChat chat)
+    /// <summary>
+    /// Creates a ContentPlugin with basic functionality (no context resolution).
+    /// </summary>
+    public ContentPlugin(IMessageHub hub)
+        : this(hub, new ContentCollectionPluginConfig { Collections = [] }, null!)
     {
+    }
+
+    /// <summary>
+    /// Creates a ContentPlugin with context resolution and dynamic collection configuration.
+    /// </summary>
+    public ContentPlugin(IMessageHub hub, ContentCollectionPluginConfig config, IAgentChat chat)
+    {
+        this.hub = hub;
         this.config = config;
         this.chat = chat;
         contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
@@ -61,6 +80,9 @@ public class ContentCollectionPlugin
     {
         if (!string.IsNullOrEmpty(collectionName))
             return collectionName;
+
+        if (chat == null)
+            return null;
 
         // Only parse from LayoutAreaReference.Id when area is "Content" or "Collection"
         if (chat.Context?.LayoutArea != null)
@@ -105,7 +127,7 @@ public class ContentCollectionPlugin
     /// </summary>
     private string? GetPathFromContext()
     {
-        if (chat.Context?.LayoutArea == null)
+        if (chat?.Context?.LayoutArea == null)
             return null;
 
         var area = chat.Context.LayoutArea.Area?.ToString();
@@ -127,31 +149,292 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Lists all available collections with their configurations.")]
-    public Task<string> GetCollections()
+    [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    public async Task<string> GetFile(
+        [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
+        [Description("The name of the collection to read from. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")] int? numberOfRows = null,
+        CancellationToken cancellationToken = default)
     {
+        var resolvedCollectionName = GetCollectionName(collectionName);
+        if (string.IsNullOrEmpty(resolvedCollectionName))
+            return "No collection specified and no default collection configured.";
+
+        var resolvedFilePath = filePath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedFilePath))
+            return "No file path specified and no path found in context.";
+
         try
         {
-            if (config.Collections.Count == 0)
-                return Task.FromResult("No collections configured.");
+            var collection = await contentService.GetCollectionAsync(resolvedCollectionName, cancellationToken);
+            if (collection == null)
+                return $"Collection '{resolvedCollectionName}' not found.";
 
-            var collectionList = config.Collections.Select(c => new
+            await using var stream = await collection.GetContentAsync(resolvedFilePath, cancellationToken);
+            if (stream == null)
+                return $"File '{resolvedFilePath}' not found in collection '{resolvedCollectionName}'.";
+
+            // Check file type and read accordingly
+            var extension = Path.GetExtension(resolvedFilePath).ToLowerInvariant();
+            if (extension == ".xlsx" || extension == ".xls")
             {
-                c.Name,
-                DisplayName = c.DisplayName ?? c.Name,
-                Address = c.Address?.ToString() ?? "No address",
-                c.SourceType,
-                BasePath = c.BasePath ?? "Not specified"
-            }).ToList();
+                return await ReadExcelFileAsync(stream, resolvedFilePath, numberOfRows);
+            }
+            else if (extension == ".docx")
+            {
+                return await ReadWordFileAsync(stream, resolvedFilePath, numberOfRows);
+            }
+            else if (extension == ".pdf")
+            {
+                return await ReadPdfFileAsync(stream, resolvedFilePath, numberOfRows);
+            }
 
-            var result = string.Join("\n", collectionList.Select(c =>
-                $"- {c.DisplayName} (Name: {c.Name}, Type: {c.SourceType}, Path: {c.BasePath}, Address: {c.Address})"));
-
-            return Task.FromResult(result);
+            // For other files, read as text
+            using var reader = new StreamReader(stream);
+            if (numberOfRows.HasValue)
+            {
+                var sb = new StringBuilder();
+                var linesRead = 0;
+                while (!reader.EndOfStream && linesRead < numberOfRows.Value)
+                {
+                    var line = await reader.ReadLineAsync(cancellationToken);
+                    sb.AppendLine(line);
+                    linesRead++;
+                }
+                return sb.ToString();
+            }
+            else
+            {
+                var content = await reader.ReadToEndAsync(cancellationToken);
+                return content;
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            return $"File '{resolvedFilePath}' not found in collection '{resolvedCollectionName}'.";
         }
         catch (Exception ex)
         {
-            return Task.FromResult($"Error retrieving collections: {ex.Message}");
+            return $"Error reading file '{resolvedFilePath}' from collection '{resolvedCollectionName}': {ex.Message}";
+        }
+    }
+
+    private async Task<string> ReadExcelFileAsync(Stream stream, string filePath, int? numberOfRows)
+    {
+        try
+        {
+            using var wb = new XLWorkbook(stream);
+            var sb = new StringBuilder();
+
+            foreach (var ws in wb.Worksheets)
+            {
+                var used = ws.RangeUsed();
+                sb.AppendLine($"## Sheet: {ws.Name}");
+                sb.AppendLine();
+                if (used is null)
+                {
+                    sb.AppendLine("(No data)");
+                    sb.AppendLine();
+                    continue;
+                }
+
+                var firstRow = used.FirstRow().RowNumber();
+                var lastRow = numberOfRows.HasValue
+                    ? Math.Min(used.FirstRow().RowNumber() + numberOfRows.Value - 1, used.LastRow().RowNumber())
+                    : used.LastRow().RowNumber();
+                var firstCol = 1;
+                var lastCol = used.LastColumn().ColumnNumber();
+
+                // Build markdown table with column letters as headers
+                var columnHeaders = new List<string> { "Row" };
+                for (var c = firstCol; c <= lastCol; c++)
+                {
+                    // Convert column number to Excel letter (1=A, 2=B, ..., 27=AA, etc.)
+                    columnHeaders.Add(GetExcelColumnLetter(c));
+                }
+
+                // Header row
+                sb.AppendLine("| " + string.Join(" | ", columnHeaders) + " |");
+                // Separator row
+                sb.AppendLine("|" + string.Join("", columnHeaders.Select(_ => "---:|")));
+
+                // Data rows
+                for (var r = firstRow; r <= lastRow; r++)
+                {
+                    var rowVals = new List<string> { r.ToString() };
+                    for (var c = firstCol; c <= lastCol; c++)
+                    {
+                        var cell = ws.Cell(r, c);
+                        var raw = cell.GetValue<string>();
+                        var val = raw?.Replace('\n', ' ').Replace('\r', ' ').Replace("|", "\\|").Trim();
+                        // Empty cells show as empty in table
+                        rowVals.Add(string.IsNullOrEmpty(val) ? "" : val);
+                    }
+
+                    sb.AppendLine("| " + string.Join(" | ", rowVals) + " |");
+                }
+
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading Excel file '{filePath}': {ex.Message}";
+        }
+    }
+
+    private static string GetExcelColumnLetter(int columnNumber)
+    {
+        var columnLetter = "";
+        while (columnNumber > 0)
+        {
+            var modulo = (columnNumber - 1) % 26;
+            columnLetter = Convert.ToChar('A' + modulo) + columnLetter;
+            columnNumber = (columnNumber - 1) / 26;
+        }
+        return columnLetter;
+    }
+
+    private async Task<string> ReadWordFileAsync(Stream stream, string filePath, int? numberOfRows)
+    {
+        try
+        {
+            using var wordDoc = WordprocessingDocument.Open(stream, false);
+            var body = wordDoc.MainDocumentPart?.Document?.Body;
+
+            if (body == null)
+                return $"Word document '{filePath}' has no readable content.";
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"# Document: {Path.GetFileName(filePath)}");
+            sb.AppendLine();
+
+            var paragraphs = body.Elements<Paragraph>().ToList();
+            var paragraphsToRead = numberOfRows.HasValue
+                ? paragraphs.Take(numberOfRows.Value).ToList()
+                : paragraphs;
+
+            foreach (var paragraph in paragraphsToRead)
+            {
+                var text = paragraph.InnerText;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    sb.AppendLine(text);
+                    sb.AppendLine();
+                }
+            }
+
+            // Also handle tables
+            var tables = body.Elements<Table>().ToList();
+            foreach (var table in tables)
+            {
+                sb.AppendLine("## Table");
+                sb.AppendLine();
+
+                var rows = table.Elements<TableRow>().ToList();
+                var rowsToRead = numberOfRows.HasValue
+                    ? rows.Take(numberOfRows.Value).ToList()
+                    : rows;
+
+                foreach (var row in rowsToRead)
+                {
+                    var cells = row.Elements<TableCell>().ToList();
+                    var cellTexts = cells.Select(c => c.InnerText.Replace('|', '\\').Trim()).ToList();
+                    sb.AppendLine("| " + string.Join(" | ", cellTexts) + " |");
+                }
+
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading Word document '{filePath}': {ex.Message}";
+        }
+    }
+
+    private async Task<string> ReadPdfFileAsync(Stream stream, string filePath, int? numberOfRows)
+    {
+        try
+        {
+            using var pdfDocument = PdfDocument.Open(stream);
+            var sb = new StringBuilder();
+            sb.AppendLine($"# PDF Document: {Path.GetFileName(filePath)}");
+            sb.AppendLine($"Total pages: {pdfDocument.NumberOfPages}");
+            sb.AppendLine();
+
+            var pagesToRead = numberOfRows.HasValue
+                ? Math.Min(numberOfRows.Value, pdfDocument.NumberOfPages)
+                : pdfDocument.NumberOfPages;
+
+            for (int pageNum = 1; pageNum <= pagesToRead; pageNum++)
+            {
+                var page = pdfDocument.GetPage(pageNum);
+                sb.AppendLine($"## Page {pageNum}");
+                sb.AppendLine();
+
+                var text = page.Text;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    sb.AppendLine(text);
+                }
+                else
+                {
+                    sb.AppendLine("(No text content)");
+                }
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error reading PDF document '{filePath}': {ex.Message}";
+        }
+    }
+
+    [KernelFunction]
+    [Description("Saves content as a file to a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    public async Task<string> SaveFile(
+        [Description("The path where the file should be saved within the collection")] string filePath,
+        [Description("The content to save to the file")] string content,
+        [Description("The name of the collection to save to. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedCollectionName = GetCollectionName(collectionName);
+        if (string.IsNullOrEmpty(resolvedCollectionName))
+            return "No collection specified and no default collection configured.";
+
+        if (string.IsNullOrEmpty(filePath))
+            return "File path is required.";
+
+        try
+        {
+            var collection = await contentService.GetCollectionAsync(resolvedCollectionName, cancellationToken);
+            if (collection == null)
+                return $"Collection '{resolvedCollectionName}' not found.";
+
+            // Ensure directory structure exists if the collection has a base path
+            EnsureDirectoryExists(collection, filePath);
+
+            // Extract directory and filename components
+            var directoryPath = Path.GetDirectoryName(filePath) ?? "";
+            var fileName = Path.GetFileName(filePath);
+
+            if (string.IsNullOrEmpty(fileName))
+                return $"Invalid file path: '{filePath}'. Must include a filename.";
+
+            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
+            await collection.SaveFileAsync(directoryPath, fileName, stream);
+
+            return $"File '{filePath}' successfully saved to collection '{resolvedCollectionName}'.";
+        }
+        catch (Exception ex)
+        {
+            return $"Error saving file '{filePath}' to collection '{resolvedCollectionName}': {ex.Message}";
         }
     }
 
@@ -183,6 +466,35 @@ public class ContentCollectionPlugin
         catch (Exception ex)
         {
             return $"Error listing files in collection at path '{path ?? GetPathFromContext() ?? "/"}': {ex.Message}";
+        }
+    }
+
+    [KernelFunction]
+    [Description("Lists all available collections with their configurations.")]
+    public Task<string> GetCollections()
+    {
+        try
+        {
+            if (config.Collections.Count == 0)
+                return Task.FromResult("No collections configured.");
+
+            var collectionList = config.Collections.Select(c => new
+            {
+                c.Name,
+                DisplayName = c.DisplayName ?? c.Name,
+                Address = c.Address?.ToString() ?? "No address",
+                c.SourceType,
+                BasePath = c.BasePath ?? "Not specified"
+            }).ToList();
+
+            var result = string.Join("\n", collectionList.Select(c =>
+                $"- {c.DisplayName} (Name: {c.Name}, Type: {c.SourceType}, Path: {c.BasePath}, Address: {c.Address})"));
+
+            return Task.FromResult(result);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error retrieving collections: {ex.Message}");
         }
     }
 
@@ -253,7 +565,7 @@ public class ContentCollectionPlugin
     }
 
     [KernelFunction]
-    [Description("Gets the content of a specific document from a collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Gets the content of a specific document from a collection (simple text reading). If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetDocument(
         [Description("Document path in collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/', e.g., 'Slip.md' from 'Submissions-Microsoft-2026/Slip.md'); else null.")] string? documentPath = null,
         [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
@@ -287,41 +599,6 @@ public class ContentCollectionPlugin
         catch (Exception ex)
         {
             return $"Error reading document '{resolvedDocumentPath}' from collection: {ex.Message}";
-        }
-    }
-
-    [KernelFunction]
-    [Description("Saves content as a document to a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
-    public async Task<string> SaveDocument(
-        [Description("The path where the document should be saved within the collection")] string documentPath,
-        [Description("The content to save to the document")] string content,
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        CancellationToken cancellationToken = default)
-    {
-        var resolvedCollectionName = GetCollectionName(collectionName);
-        if (string.IsNullOrEmpty(resolvedCollectionName))
-            return "No collection specified and no default collection configured.";
-
-        try
-        {
-            var collection = await contentService.GetCollectionAsync(resolvedCollectionName, cancellationToken);
-            if (collection == null)
-                return $"Collection '{resolvedCollectionName}' not found.";
-
-            var directoryPath = Path.GetDirectoryName(documentPath) ?? "";
-            var fileName = Path.GetFileName(documentPath);
-
-            if (string.IsNullOrEmpty(fileName))
-                return $"Invalid document path: '{documentPath}'. Must include a filename.";
-
-            await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));
-            await collection.SaveFileAsync(directoryPath, fileName, stream);
-
-            return $"Document '{documentPath}' successfully saved to collection '{resolvedCollectionName}'.";
-        }
-        catch (Exception ex)
-        {
-            return $"Error saving document '{documentPath}' to collection: {ex.Message}";
         }
     }
 
@@ -532,14 +809,204 @@ public class ContentCollectionPlugin
         }
     }
 
+    [KernelFunction]
+    [Description("Checks if a specific file exists in a collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    public async Task<string> FileExists(
+        [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
+        [Description("The name of the collection to check. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedCollectionName = GetCollectionName(collectionName);
+        if (string.IsNullOrEmpty(resolvedCollectionName))
+            return "No collection specified and no default collection configured.";
+
+        var resolvedFilePath = filePath ?? GetPathFromContext();
+        if (string.IsNullOrEmpty(resolvedFilePath))
+            return "No file path specified and no path found in context.";
+
+        try
+        {
+            var collection = await contentService.GetCollectionAsync(resolvedCollectionName, cancellationToken);
+            if (collection == null)
+                return $"Collection '{resolvedCollectionName}' not found.";
+
+            await using var stream = await collection.GetContentAsync(resolvedFilePath, cancellationToken);
+            if (stream == null)
+                return $"File '{resolvedFilePath}' does not exist in collection '{resolvedCollectionName}'.";
+
+            return $"File '{resolvedFilePath}' exists in collection '{resolvedCollectionName}'.";
+        }
+        catch (FileNotFoundException)
+        {
+            return $"File '{resolvedFilePath}' does not exist in collection '{resolvedCollectionName}'.";
+        }
+        catch (Exception ex)
+        {
+            return $"Error checking file '{resolvedFilePath}' in collection '{resolvedCollectionName}': {ex.Message}";
+        }
+    }
+
+    [KernelFunction]
+    [Description("Generates a unique filename with timestamp for saving temporary files.")]
+    public string GenerateUniqueFileName(
+        [Description("The base name for the file (without extension)")] string baseName,
+        [Description("The file extension (e.g., 'json', 'txt')")] string extension)
+    {
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff");
+        return $"{baseName}_{timestamp}.{extension.TrimStart('.')}";
+    }
+
+    [KernelFunction]
+    [Description("Imports data from a file in a collection to a specified address.")]
+    public async Task<string> Import(
+        [Description("The path to the file to import")] string path,
+        [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
+        [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] object? address = null,
+        [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
+        [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(collection))
+                return "Collection name is required.";
+
+            if (address == null)
+                return "Target address is required.";
+
+            // Parse the address - handle both string and Address types
+            Address targetAddress;
+            if (address is string addressString)
+            {
+                targetAddress = hub.GetAddress(addressString);
+            }
+            else if (address is Address addr)
+            {
+                targetAddress = addr;
+            }
+            else
+            {
+                return $"Invalid address type: {address.GetType().Name}. Expected string or Address.";
+            }
+
+            // Build ImportRequest JSON structure
+            var importRequestJson = new JsonObject
+            {
+                ["$type"] = "MeshWeaver.Import.ImportRequest",
+                ["source"] = new JsonObject
+                {
+                    ["$type"] = "MeshWeaver.Import.CollectionSource",
+                    ["collection"] = collection,
+                    ["path"] = path
+                },
+                ["format"] = format ?? "Default"
+            };
+
+            // Add configuration if provided
+            if (!string.IsNullOrWhiteSpace(configuration))
+            {
+                var configNode = JsonNode.Parse(configuration);
+                if (configNode != null)
+                {
+                    importRequestJson["configuration"] = configNode;
+                }
+            }
+
+            // Serialize and deserialize through hub's serializer to get proper type
+            var jsonString = importRequestJson.ToJsonString();
+            var importRequestObj = JsonSerializer.Deserialize<object>(jsonString, hub.JsonSerializerOptions)!;
+
+            // Post the request to the hub
+            var responseMessage = await hub.AwaitResponse(
+                importRequestObj,
+                o => o.WithTarget(targetAddress),
+                cancellationToken
+            );
+
+            // Serialize the response back to JSON for processing
+            var responseJson = JsonSerializer.Serialize(responseMessage, hub.JsonSerializerOptions);
+            var responseObj = JsonNode.Parse(responseJson)!;
+
+            var log = responseObj["log"] as JsonObject;
+            var status = log?["status"]?.ToString() ?? "Unknown";
+            var messages = log?["messages"] as JsonArray ?? new JsonArray();
+
+            var result = $"Import {status.ToLower()}.\n";
+            if (messages.Count > 0)
+            {
+                result += "Log messages:\n";
+                foreach (var msg in messages)
+                {
+                    if (msg is JsonObject msgObj)
+                    {
+                        var level = msgObj["logLevel"]?.ToString() ?? "Info";
+                        var message = msgObj["message"]?.ToString() ?? "";
+                        result += $"  [{level}] {message}\n";
+                    }
+                }
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return $"Error importing file '{path}' from collection '{collection}' to address '{address}': {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Creates a KernelPlugin from this instance using reflection.
+    /// </summary>
     public KernelPlugin CreateKernelPlugin()
     {
         var plugin = KernelPluginFactory.CreateFromFunctions(
-            nameof(ContentCollectionPlugin),
+            nameof(ContentPlugin),
             GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
                 .Where(m => m.GetCustomAttribute<KernelFunctionAttribute>() != null)
                 .Select(m => KernelFunctionFactory.CreateFromMethod(m, this))
         );
         return plugin;
+    }
+
+    /// <summary>
+    /// Ensures that the directory structure exists for the given file path within the collection.
+    /// </summary>
+    /// <param name="collection">The collection to check</param>
+    /// <param name="filePath">The file path that may contain directories</param>
+    private void EnsureDirectoryExists(object collection, string filePath)
+    {
+        try
+        {
+            // Normalize path separators and get the directory path from the file path
+            var normalizedPath = filePath.Replace('/', Path.DirectorySeparatorChar);
+            var directoryPath = Path.GetDirectoryName(normalizedPath);
+
+            if (string.IsNullOrEmpty(directoryPath) || directoryPath == "." || directoryPath == Path.DirectorySeparatorChar.ToString())
+            {
+                // No directory structure needed, file is in root
+                return;
+            }
+
+            // Try to get the collection's base path using reflection if available
+            var collectionType = collection.GetType();
+            var basePathProperty = collectionType.GetProperty("BasePath") ??
+                                 collectionType.GetProperty("Path") ??
+                                 collectionType.GetProperty("RootPath");
+
+            if (basePathProperty != null)
+            {
+                var basePath = basePathProperty.GetValue(collection) as string;
+                if (!string.IsNullOrEmpty(basePath))
+                {
+                    var fullDirectoryPath = Path.Combine(basePath, directoryPath);
+                    Directory.CreateDirectory(fullDirectoryPath);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // If we can't create directories through reflection,
+            // let the SaveFileAsync method handle any directory creation or fail gracefully
+        }
     }
 }
