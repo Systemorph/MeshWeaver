@@ -128,7 +128,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         current = value;
         try
         {
-            logger.LogDebug("Setting value for {StreamId}", StreamId);
+            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
             Store.OnNext(value);
         }
         catch (Exception e)
