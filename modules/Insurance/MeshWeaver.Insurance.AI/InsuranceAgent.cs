@@ -103,11 +103,11 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap).CreateKernelPlugin();
 
         // Always provide ContentPlugin - it will use ContextToConfigMap to determine the collection
-        var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
+        var submissionPluginConfig = CreateSubmissionPluginConfig();
         yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
-    private static ContentPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    private static ContentPluginConfig CreateSubmissionPluginConfig()
     {
         return new ContentPluginConfig
         {

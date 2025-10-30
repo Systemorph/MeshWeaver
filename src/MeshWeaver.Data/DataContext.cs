@@ -11,6 +11,7 @@ namespace MeshWeaver.Data;
 public sealed record DataContext : IDisposable
 {
     public const string InitializationGateName = "DataContextInit";
+    private const string DataContextGateName = InitializationGateName;
 
     public ITypeRegistry TypeRegistry { get; }
 
@@ -28,7 +29,6 @@ public sealed record DataContext : IDisposable
                 type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
             ) ?? null
         );
-        // Named deferral is now created in MessageHubConfiguration via AddData()
     }
 
     private readonly ILogger<DataContext> logger;
@@ -95,27 +95,24 @@ public sealed record DataContext : IDisposable
         foreach (var typeSource in TypeSources.Values)
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
+        // Initialize each data source
+        foreach (var dataSource in DataSourcesById.Values)
+            dataSource.Initialize();
+
         Task.WhenAll(DataSourcesById.Values.Select(d => d.Initialized))
             .ContinueWith(task =>
             {
-                try
+                if (task.IsFaulted)
                 {
-                    if (task.IsFaulted)
-                    {
-                        logger.LogError(task.Exception, "DataContext initialization failed for {Address}, releasing deferral anyway", Hub.Address);
-                    }
-                    else if (task.IsCanceled)
-                    {
-                        logger.LogWarning("DataContext initialization was canceled for {Address}, releasing deferral anyway", Hub.Address);
-                    }
-                    else
-                    {
-                        logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
-                    }
+                    logger.LogError(task.Exception, "DataContext initialization failed for {Address}", Hub.Address);
                 }
-                finally
+                else if (task.IsCanceled)
                 {
-                    // Initialization complete
+                    logger.LogWarning("DataContext initialization was canceled for {Address}", Hub.Address);
+                }
+                else
+                {
+                    logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
                 }
             }, TaskScheduler.Default);
     }

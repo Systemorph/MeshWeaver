@@ -20,4 +20,10 @@ public record UnpartitionedHubDataSource(Address Address, IWorkspace Workspace) 
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config) =>
         Workspace.GetRemoteStream(Address, GetReference());
+
+    public override void Initialize()
+    {
+        base.Initialize();
+        GetStream(GetReference());
+    }
 }

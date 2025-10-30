@@ -27,7 +27,8 @@ public interface IDataSource : IDisposable
     ISynchronizationStream<EntityStore>? GetStreamForPartition(object? partition);
     IEnumerable<ITypeSource> TypeSources { get; }
 
-    Task Initialized { get; }
+    internal Task Initialized { get; }
+    internal void Initialize();
 }
 
 public interface IUnpartitionedDataSource : IDataSource

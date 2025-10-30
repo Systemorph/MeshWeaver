@@ -123,6 +123,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         {
             logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
             Store.OnNext(value);
+            Hub.OpenGate(SynchronizationGate);
         }
         catch (Exception e)
         {
@@ -130,6 +131,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
     }
 
+    private const string SynchronizationGate = nameof(SynchronizationGate);
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
         Hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
 
@@ -189,7 +191,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
+        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
     }
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
@@ -252,7 +254,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     throw new SynchronizationException("An error occurred during synchronization", ex);
                 }
                 return request.Processed();
-            }).WithInitialization((_, ct) => InitializeAsync(ct));
+            })
+            .WithInitialization((_, ct) => InitializeAsync(ct))
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
     }
 

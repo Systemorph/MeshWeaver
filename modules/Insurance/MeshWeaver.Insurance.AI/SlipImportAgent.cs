@@ -138,11 +138,11 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
 
         // Add ContentPlugin for submissions and file reading functionality
-        var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
+        var submissionPluginConfig = CreateSubmissionPluginConfig();
         yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
-    private static ContentPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    private static ContentPluginConfig CreateSubmissionPluginConfig()
     {
         return new ContentPluginConfig
         {

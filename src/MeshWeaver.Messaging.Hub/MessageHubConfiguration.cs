@@ -9,6 +9,8 @@ namespace MeshWeaver.Messaging;
 
 public record MessageHubConfiguration
 {
+    public const string InitializeGateName = "Initialize";
+
     public Address Address { get; }
     protected readonly IServiceProvider? ParentServiceProvider;
     public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
@@ -20,17 +22,14 @@ public record MessageHubConfiguration
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
 
-    internal Predicate<IMessageDelivery> StartupDeferral { get; init; } = x => x.Message is not InitializeHubRequest;
-
-    public MessageHubConfiguration WithStartupDeferral(Predicate<IMessageDelivery> startupDeferral)
-        => this with { StartupDeferral = x => startupDeferral(x) && StartupDeferral(x) };
-
     /// <summary>
     /// Named initialization gates that are created during hub initialization and can be opened by name.
     /// The key is the gate name, the value is the predicate that determines which messages are allowed during initialization.
     /// All other messages are deferred until the gate is opened.
+    /// The Initialize gate doesn't allow any additional messages - it's just a marker for when BuildupActions complete.
     /// </summary>
-    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> InitializationGates { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty;
+    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> InitializationGates { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty
+        .Add(InitializeGateName, d => d.Message is InitializeHubRequest); // Initialize gate doesn't allow any messages - just marks completion of BuildupActions
 
     /// <summary>
     /// Adds a named initialization gate that will be created during hub initialization.
