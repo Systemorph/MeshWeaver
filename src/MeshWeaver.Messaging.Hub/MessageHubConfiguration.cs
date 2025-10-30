@@ -25,6 +25,22 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithStartupDeferral(Predicate<IMessageDelivery> startupDeferral)
         => this with { StartupDeferral = x => startupDeferral(x) && StartupDeferral(x) };
 
+    /// <summary>
+    /// Named deferrals that are created during hub initialization and can be released by name.
+    /// The key is the deferral name, the value is the predicate that determines which messages to defer.
+    /// </summary>
+    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> NamedDeferrals { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty;
+
+    /// <summary>
+    /// Adds a named deferral that will be created during hub initialization.
+    /// This ensures the deferral is in place before any messages are processed.
+    /// </summary>
+    /// <param name="name">Unique name for this deferral</param>
+    /// <param name="predicate">Predicate that determines which messages to defer</param>
+    /// <returns>Updated configuration</returns>
+    public MessageHubConfiguration WithNamedDeferral(string name, Predicate<IMessageDelivery> predicate)
+        => this with { NamedDeferrals = NamedDeferrals.SetItem(name, predicate) };
+
     public IMessageHub? ParentHub
     {
         get

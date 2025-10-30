@@ -10,6 +10,8 @@ namespace MeshWeaver.Data;
 
 public sealed record DataContext : IDisposable
 {
+    public const string DataContextDeferralName = "DataContextInitialization";
+
     public ITypeRegistry TypeRegistry { get; }
 
     public DataContext(IWorkspace workspace)
@@ -26,11 +28,10 @@ public sealed record DataContext : IDisposable
                 type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
             ) ?? null
         );
-        deferral = Hub.Defer(x => x.Message is not DataChangedEvent { ChangeType: ChangeType.Full });
+        // Named deferral is now created in MessageHubConfiguration via AddData()
     }
 
     private readonly ILogger<DataContext> logger;
-    private readonly IDisposable deferral;
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
@@ -101,11 +102,11 @@ public sealed record DataContext : IDisposable
                 {
                     if (task.IsFaulted)
                     {
-                        logger.LogError(task.Exception, "DataContext initialization failed for {Address}, disposing deferral anyway", Hub.Address);
+                        logger.LogError(task.Exception, "DataContext initialization failed for {Address}, releasing deferral anyway", Hub.Address);
                     }
                     else if (task.IsCanceled)
                     {
-                        logger.LogWarning("DataContext initialization was canceled for {Address}, disposing deferral anyway", Hub.Address);
+                        logger.LogWarning("DataContext initialization was canceled for {Address}, releasing deferral anyway", Hub.Address);
                     }
                     else
                     {
@@ -114,8 +115,8 @@ public sealed record DataContext : IDisposable
                 }
                 finally
                 {
-                    // Always dispose deferral to release buffered messages, even if initialization fails
-                    deferral.Dispose();
+                    // Always release deferral to process buffered messages, even if initialization fails
+                    Hub.ReleaseDeferral(DataContextDeferralName);
                 }
             }, TaskScheduler.Default);
     }

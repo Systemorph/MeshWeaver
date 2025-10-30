@@ -111,12 +111,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private void SetCurrent(ChangeItem<TStream>? value)
     {
-        if (startupDeferrable is not null)
-        {
-            logger.LogDebug("Disposing startup deferrable for Stream {StreamId}", StreamId);
-            startupDeferrable.Dispose();
-            startupDeferrable = null;
-        }
+        // Release startup deferral if it hasn't been released yet
+        Hub.ReleaseDeferral(StartupDeferralName);
 
         if (isDisposed || value == null)
         {
@@ -197,15 +193,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
         Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
-        if (Configuration.Initialization is null)
-            startupDeferrable = Hub.Defer(StartupDeferrable);
-
-
-
-
     }
 
-    private IDisposable? startupDeferrable;
+    private const string StartupDeferralName = "SynchronizationStreamStartup";
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
@@ -267,7 +257,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     throw new SynchronizationException("An error occurred during synchronization", ex);
                 }
                 return request.Processed();
-            }).WithStartupDeferral(StartupDeferrable)
+            }).WithNamedDeferral(StartupDeferralName, StartupDeferrable)
             .WithInitialization((_, ct) => InitializeAsync(ct));
 
     }
@@ -280,13 +270,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (Configuration.Initialization is null)
         {
-            // If no custom initialization, immediately dispose startup deferrable to release buffered messages
-            if (startupDeferrable is not null)
-            {
-                logger.LogDebug("No initialization configured, disposing startup deferrable for Stream {StreamId}", StreamId);
-                startupDeferrable.Dispose();
-                startupDeferrable = null;
-            }
+            // If no custom initialization, immediately release startup deferral to process buffered messages
+            Hub.ReleaseDeferral(StartupDeferralName);
             return;
         }
 

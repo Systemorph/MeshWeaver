@@ -110,6 +110,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     MessageHubRunLevel RunLevel { get; }
     IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
+    /// <summary>
+    /// Releases a named deferral, allowing deferred messages to be processed.
+    /// </summary>
+    /// <param name="name">The name of the deferral to release</param>
+    /// <returns>True if the deferral was found and released, false otherwise</returns>
+    bool ReleaseDeferral(string name);
+
 
     internal Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
