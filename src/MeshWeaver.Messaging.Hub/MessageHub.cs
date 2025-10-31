@@ -34,11 +34,18 @@ public sealed class MessageHub : IMessageHub
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
+    public void Start()
+    {
+        if (RunLevel < MessageHubRunLevel.Started)
+        {
+            RunLevel = MessageHubRunLevel.Started;
+            hasStarted.SetResult();
+        }
+    }
+
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
-    private readonly IDisposable startupDeferral;
-    private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -82,43 +89,11 @@ public sealed class MessageHub : IMessageHub
         }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
-        // Store gate names from configuration for tracking which gates are still open
-        // All gates reference the same single deferral
-        gates = new(Configuration.InitializationGates);
-
-        // Create a single deferral that combines all allow-list predicates
-        // Messages are allowed if they match InitializationAllowList OR any of the InitializationGates
-        startupDeferral = messageService.Defer(delivery =>
-        {
-            // Check all gate predicates
-            foreach (var (name, allowDuringInit) in gates)
-            {
-                if (allowDuringInit(delivery))
-                {
-                    logger.LogDebug(
-                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                        delivery.Message.GetType().Name, delivery.Id, name, Address);
-                    return false; // Don't defer - message is allowed by this gate
-                }
-            }
-
-            // Message doesn't match any allow-list - defer it
-            return true;
-        });
         messageService.Start();
-        startupTimer = new(StartupTimeout, null, Configuration.StartupTimeout, Timeout.InfiniteTimeSpan);
-
         Post(new InitializeHubRequest());
 
     }
 
-    public void StartupTimeout(object? _)
-    {
-        messageService.NotifyStartupFailure();
-    }
-
-
-    private readonly Timer startupTimer;
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
     {
         Post(new PingResponse(), o => o.ResponseFor(request));
@@ -292,29 +267,7 @@ public sealed class MessageHub : IMessageHub
 
     public bool OpenGate(string name)
     {
-        if (gates.TryRemove(name, out var gate))
-        {
-            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
-
-            // If this was the last gate, dispose the single deferral and mark hub as started
-            if (gates.IsEmpty)
-            {
-                if (RunLevel < MessageHubRunLevel.Started)
-                {
-                    startupTimer.Dispose();
-                    RunLevel = MessageHubRunLevel.Started;
-                    hasStarted.SetResult();
-                    startupDeferral.Dispose();
-                    logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
-                }
-            }
-
-            return true;
-        }
-
-        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
-            Address);
-        return false;
+        return messageService.OpenGate(name);
     }
 
 
@@ -693,11 +646,6 @@ public sealed class MessageHub : IMessageHub
 
     private void DisposeImpl()
     {
-        // Open all remaining initialization gates to release any buffered messages
-        foreach (var gateName in gates.Keys.ToArray())
-        {
-            OpenGate(gateName);
-        }
 
         while (disposeActions.TryTake(out var disposeAction))
             disposeAction.Invoke(this);
