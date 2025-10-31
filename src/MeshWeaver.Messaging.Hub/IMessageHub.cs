@@ -108,7 +108,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     MessageHubRunLevel RunLevel { get; }
-    IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
 
     /// <summary>
     /// Opens a named initialization gate, allowing all deferred messages to be processed.

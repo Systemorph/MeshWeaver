@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -84,10 +85,12 @@ SystemName,DisplayName
         var importRequest = new ImportRequest(new CollectionSource("TestCollection", "test-data.csv"));
 
         // Act
+        var token = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken,
+            new CancellationTokenSource(5.Seconds()).Token).Token;
         var importResponse = await client.AwaitResponse(
             importRequest,
             o => o.WithTarget(new ImportAddress(2024)),
-            TestContext.Current.CancellationToken
+            token
         );
 
         // Assert

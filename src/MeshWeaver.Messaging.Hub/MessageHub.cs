@@ -25,7 +25,6 @@ public sealed class MessageHub : IMessageHub
 
     private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
-    private readonly ConcurrentDictionary<string, IDisposable> initializationGates = new();
 
     private readonly ILogger logger;
     public MessageHubConfiguration Configuration { get; }
@@ -38,7 +37,8 @@ public sealed class MessageHub : IMessageHub
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
-
+    private readonly IDisposable startupDeferral;
+    private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -82,19 +82,21 @@ public sealed class MessageHub : IMessageHub
         }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
-
-        messageService.Start();
+        // Store gate names from configuration for tracking which gates are still open
+        // All gates reference the same single deferral
+        gates = new(Configuration.InitializationGates);
 
         // Create a single deferral that combines all allow-list predicates
         // Messages are allowed if they match InitializationAllowList OR any of the InitializationGates
-        var singleDeferral = Defer(delivery =>
+        startupDeferral = messageService.Defer(delivery =>
         {
             // Check all gate predicates
-            foreach (var (name, allowDuringInit) in Configuration.InitializationGates)
+            foreach (var (name, allowDuringInit) in gates)
             {
                 if (allowDuringInit(delivery))
                 {
-                    logger.LogDebug("Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                    logger.LogDebug(
+                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
                         delivery.Message.GetType().Name, delivery.Id, name, Address);
                     return false; // Don't defer - message is allowed by this gate
                 }
@@ -103,16 +105,9 @@ public sealed class MessageHub : IMessageHub
             // Message doesn't match any allow-list - defer it
             return true;
         });
+        messageService.Start();
 
-        // Store gate names from configuration for tracking which gates are still open
-        // All gates reference the same single deferral
-        foreach (var (name, _) in configuration.InitializationGates)
-        {
-            initializationGates[name] = singleDeferral;
-            logger.LogDebug("Registered initialization gate '{Name}' for hub {Address}", name, Address);
-        }
-
-        Post(new InitializeHubRequest(singleDeferral));
+        Post(new InitializeHubRequest());
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
@@ -125,24 +120,16 @@ public sealed class MessageHub : IMessageHub
     {
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
-        try
-        {
-            var actions = Configuration.BuildupActions;
-            foreach (var buildup in actions)
-                await buildup(this, cancellationToken);
+        var actions = Configuration.BuildupActions;
+        foreach (var buildup in actions)
+            await buildup(this, cancellationToken);
 
-            logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
+        logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 
-            // Open the Initialize gate - this will set RunLevel to Started if all other gates are also open
-            OpenGate(MessageHubConfiguration.InitializeGateName);
+        // Open the Initialize gate - this will set RunLevel to Started if all other gates are also open
+        OpenGate(MessageHubConfiguration.InitializeGateName);
 
-            return request.Processed();
-        }
-        finally
-        {
-            // Always dispose deferral to release buffered messages, even if initialization fails
-            request.Message.Deferral.Dispose();
-        }
+        return request.Processed();
     }
 
     #region Message Types
@@ -293,6 +280,34 @@ public sealed class MessageHub : IMessageHub
             delivery.Message.GetType().Name, Address, delivery.Id);
         return await HandleMessageAsync(delivery, node.Next, cancellationToken);
     }
+
+    public bool OpenGate(string name)
+    {
+        if (gates.TryRemove(name, out var gate))
+        {
+            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
+
+            // If this was the last gate, dispose the single deferral and mark hub as started
+            if (gates.IsEmpty)
+            {
+                if (RunLevel < MessageHubRunLevel.Started)
+                {
+                    RunLevel = MessageHubRunLevel.Started;
+                    hasStarted.SetResult();
+                    startupDeferral.Dispose();
+                    logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                }
+            }
+
+            return true;
+        }
+
+        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
+            Address);
+        return false;
+    }
+
+
     async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
@@ -669,7 +684,7 @@ public sealed class MessageHub : IMessageHub
     private void DisposeImpl()
     {
         // Open all remaining initialization gates to release any buffered messages
-        foreach (var gateName in initializationGates.Keys.ToArray())
+        foreach (var gateName in gates.Keys.ToArray())
         {
             OpenGate(gateName);
         }
@@ -865,32 +880,7 @@ public sealed class MessageHub : IMessageHub
     private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> asyncDisposeActions = new();
     private readonly ConcurrentBag<Action<IMessageHub>> disposeActions = new();
 
-    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
-        messageService.Defer(deferredFilter);
 
-    public bool OpenGate(string name)
-    {
-        if (initializationGates.TryRemove(name, out var gate))
-        {
-            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
-
-            // If this was the last gate, dispose the single deferral and mark hub as started
-            if (initializationGates.IsEmpty)
-            {
-                gate.Dispose(); // Dispose the single deferral when last gate opens
-                if (RunLevel < MessageHubRunLevel.Started)
-                {
-                    RunLevel = MessageHubRunLevel.Started;
-                    hasStarted.SetResult();
-                    logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
-                }
-            }
-
-            return true;
-        }
-        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name, Address);
-        return false;
-    }
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object?> properties = new();
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -38,7 +38,16 @@ SystemName,DisplayName
             .WithRoutes(forward =>
                 forward
                     .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
+                    .RouteAddressToHostedHub<ImportAddress>(c => c
+                        .AddData(data => data.AddHubSource(
+                                new ReferenceDataAddress(),
+                                dataSource =>
+                                    dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
+                            )
+                            .AddSource(dataSource => dataSource.WithType<ActivityLog>(t => t)
+                            )
+                        )
+                    )
             );
     }
 

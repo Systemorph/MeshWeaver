@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.Data;
 using Json.Patch;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,6 +131,11 @@ public static class WorkspaceOperations
             }
 
             var stream = group.Key.DataSource.GetStreamForPartition(group.Key.Partition);
+            if (stream is null)
+                throw new DataException($"Data source {group.Key.DataSource.Reference} does not have a stream for partition {group.Key.Partition}");
+            if (!stream.Hub.Started.IsCompleted)
+                throw new DataException($"Data source {group.Key.DataSource.Reference} for partition {group.Key.Partition} is not initialized.");
+
             // Start sub-activity for data update
             var subActivity = activity?.StartSubActivity(ActivityCategory.DataUpdate);
 

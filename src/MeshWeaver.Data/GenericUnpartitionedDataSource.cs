@@ -149,6 +149,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
         {
             if (Streams.TryGetValue(partition ?? Id, out var ret))
                 return ret;
+            Logger.LogDebug("Creating new stream for Id {Id} and Partition {Partition}", Id, partition);
             Streams[partition ?? Id] = ret = CreateStream(identity);
             return ret;
         }

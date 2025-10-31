@@ -11,7 +11,6 @@ namespace MeshWeaver.Data;
 public sealed record DataContext : IDisposable
 {
     public const string InitializationGateName = "DataContextInit";
-    private const string DataContextGateName = InitializationGateName;
 
     public ITypeRegistry TypeRegistry { get; }
 
@@ -100,6 +99,7 @@ public sealed record DataContext : IDisposable
         {
             dataSource.Initialize();
             tasks.Add(dataSource.Initialized);
+            initialized.Add(dataSource.Reference);
         }
 
         Task.WhenAll(tasks)
@@ -115,6 +115,7 @@ public sealed record DataContext : IDisposable
                 }
                 else
                 {
+                    Hub.OpenGate(InitializationGateName);
                     logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
                 }
             }, TaskScheduler.Default);
@@ -122,6 +123,7 @@ public sealed record DataContext : IDisposable
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
     private readonly List<Task> tasks = new();
+    private readonly List<WorkspaceReference> initialized = new();
     public void Dispose()
     {
         foreach (var dataSource in DataSourcesById.Values)

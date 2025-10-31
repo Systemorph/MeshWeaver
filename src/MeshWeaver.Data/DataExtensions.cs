@@ -90,6 +90,7 @@ public static class DataExtensions
                 .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
                 .WithType(typeof(ActivityLog), nameof(ActivityLog))
                 .RegisterDataEvents()
+                .WithInitializationGate(DataContext.InitializationGateName)
             ;
 
     }
