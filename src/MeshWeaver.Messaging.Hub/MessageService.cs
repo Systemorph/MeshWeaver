@@ -71,6 +71,13 @@ public class MessageService : IMessageService
         return deferralContainer.Defer(predicate);
     }
 
+    public void NotifyStartupFailure()
+    {
+        // TODO V10: See that we respond to each message (31.10.2025, Roland Buergi)
+        throw new DeliveryFailureException(
+            $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout}");
+    }
+
 
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {

@@ -23,14 +23,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureRouter(
         MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
-            .WithRoutes(forward =>
-                forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                    .RouteAddressToHostedHub<TransactionalDataAddress>(c => c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
-                    .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
-                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
-            );
+        return base.ConfigureRouter(configuration).ConfigureImportRouter();
     }
 
 

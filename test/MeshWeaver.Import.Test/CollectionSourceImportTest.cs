@@ -34,11 +34,7 @@ SystemName,DisplayName
         return base.ConfigureRouter(configuration)
             .AddContentCollections()
             .AddFileSystemContentCollection("TestCollection", _ => _testFilesPath)
-            .WithRoutes(forward =>
-                forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
-            );
+            .ConfigureImportRouter();
     }
 
     [Fact]

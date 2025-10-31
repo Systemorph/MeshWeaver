@@ -52,6 +52,15 @@ public static class TestHubSetup
 
     public const string CashflowImportFormat = nameof(CashflowImportFormat);
 
+    public static MessageHubConfiguration ConfigureImportRouter(this MessageHubConfiguration config)
+        => config.WithRoutes(forward =>
+            forward
+                .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
+                .RouteAddressToHostedHub<TransactionalDataAddress>(c =>
+                    c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
+                .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
+                .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
+        );
     public static MessageHubConfiguration ConfigureImportHub(
         this MessageHubConfiguration config
     ) =>

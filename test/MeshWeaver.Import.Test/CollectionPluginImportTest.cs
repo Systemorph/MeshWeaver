@@ -35,20 +35,7 @@ SystemName,DisplayName
             .WithTypes(typeof(ImportAddress), typeof(ImportRequest), typeof(CollectionSource))
             .AddContentCollections()
             .AddFileSystemContentCollection("TestCollection", _ => _testFilesPath)
-            .WithRoutes(forward =>
-                forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                    .RouteAddressToHostedHub<ImportAddress>(c => c
-                        .AddData(data => data.AddHubSource(
-                                new ReferenceDataAddress(),
-                                dataSource =>
-                                    dataSource.WithType<BusinessUnit>().WithType<LineOfBusiness>()
-                            )
-                            .AddSource(dataSource => dataSource.WithType<ActivityLog>(t => t)
-                            )
-                        )
-                    )
-            );
+            .ConfigureImportRouter();
     }
 
     [Fact]
