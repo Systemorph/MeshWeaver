@@ -68,7 +68,18 @@ public record DeferralItem : IAsyncDisposable, IDisposable
 
         // Link OUTSIDE the lock to avoid deadlock
         if (shouldLink)
+        {
+            // Link the deferral to execution buffer to start processing deferred messages
             deferral.LinkTo(executionBuffer, new DataflowLinkOptions { PropagateCompletion = true });
+
+            // Manually drain any messages that might be buffered
+            // TPL Dataflow's LinkTo doesn't retroactively pull buffered messages in all timing scenarios
+            // This ensures no messages are left stuck in the deferral buffer
+            while (deferral.TryReceive(out var message))
+            {
+                executionBuffer.Post(message);
+            }
+        }
     }
 
     public void Release()
