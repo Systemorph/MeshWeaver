@@ -6,6 +6,5 @@ internal interface IMessageService : IAsyncDisposable
     IMessageDelivery RouteMessageAsync(IMessageDelivery message, CancellationToken cancellationToken);
     IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt);
     void Start();
-    IDisposable Defer(Predicate<IMessageDelivery> predicate);
     bool OpenGate(string name);
 }
