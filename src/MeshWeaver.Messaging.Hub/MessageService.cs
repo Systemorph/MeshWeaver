@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -21,8 +22,10 @@ public class MessageService : IMessageService
     private readonly AsyncDelivery deliveryPipeline;
     private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
+    private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
 
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
+    private readonly IDisposable startupDeferral;
 
     //private volatile int pendingStartupMessages;
     private JsonSerializerOptions? loggingSerializerOptions;
@@ -53,7 +56,34 @@ public class MessageService : IMessageService
         deliveryPipeline = hub.Configuration.DeliveryPipeline
             .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))),
                 (p, c) => c.Invoke(p)).AsyncDelivery;
+        // Store gate names from configuration for tracking which gates are still open
+        // All gates reference the same single deferral
+        gates = new(hub.Configuration.InitializationGates);
+        startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout, Timeout.InfiniteTimeSpan);
+
+        // Create a single deferral that combines all allow-list predicates
+        // Messages are allowed if they match InitializationAllowList OR any of the InitializationGates
+        startupDeferral = Defer(delivery =>
+        {
+            // Check all gate predicates
+            foreach (var (name, allowDuringInit) in gates)
+            {
+                if (allowDuringInit(delivery))
+                {
+                    logger.LogDebug(
+                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, name, Address);
+                    return false; // Don't defer - message is allowed by this gate
+                }
+            }
+
+            // Message doesn't match any allow-list - defer it
+            return true;
+        });
     }
+
+
+    private readonly Timer startupTimer;
 
 
     void IMessageService.Start()
@@ -71,11 +101,38 @@ public class MessageService : IMessageService
         return deferralContainer.Defer(predicate);
     }
 
-    public void NotifyStartupFailure()
+    private void NotifyStartupFailure(object? _)
     {
         // TODO V10: See that we respond to each message (31.10.2025, Roland Buergi)
         throw new DeliveryFailureException(
             $"Message hub {Address} failed to initialize in {hub.Configuration.StartupTimeout}");
+    }
+
+    public bool OpenGate(string name)
+    {
+        if (gates.TryRemove(name, out _))
+        {
+            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
+
+            // If this was the last gate, dispose the single deferral and mark hub as started
+            if (gates.IsEmpty)
+            {
+                if (hub.RunLevel < MessageHubRunLevel.Started)
+                {
+                    startupTimer.Dispose();
+                    hub.Start();
+                    startupDeferral.Dispose();
+                    logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                }
+            }
+
+            return true;
+        }
+
+        logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
+            Address);
+        return false;
+
     }
 
 
@@ -345,6 +402,11 @@ public class MessageService : IMessageService
     {
         var totalStopwatch = Stopwatch.StartNew();
         logger.LogInformation("Starting disposal of message service in {Address}", Address);
+        // Open all remaining initialization gates to release any buffered messages
+        foreach (var gateName in gates.Keys.ToArray())
+        {
+            OpenGate(gateName);
+        }
 
         // Dispose hang detection timer first
         var hangDetectionStopwatch = Stopwatch.StartNew();

@@ -204,9 +204,21 @@ public record MessageHubConfiguration
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
     internal TimeSpan StartupTimeout { get; init; } = new(0, 0, 10); // Default 10 seconds
+    internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
 
+    /// <summary>
+    /// Sets the timeout allowed for startup
+    /// </summary>
+    /// <param name="timeout"></param>
+    /// <returns></returns>
     public MessageHubConfiguration WithStartupTimeout(TimeSpan timeout) => this with { StartupTimeout = timeout };
 
+    /// <summary>
+    /// Sets the timeout for callbacks (AwaitResponse)
+    /// </summary>
+    /// <param name="timeout"></param>
+    /// <returns></returns>
+    public MessageHubConfiguration WithRequestTimeout(TimeSpan timeout) => this with { RequestTimeout = timeout };
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {

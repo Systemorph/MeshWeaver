@@ -14,7 +14,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IServiceProvider ServiceProvider { get; }
 
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
-        AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);
+        AwaitResponse(request, new CancellationTokenSource(Configuration.RequestTimeout).Token);
 
     async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
         => (IMessageDelivery<TResponse>)(await AwaitResponse(request, o => o, o => o, cancellationToken))!;
@@ -124,12 +124,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 
-#if DEBUG
 
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
-#else
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
-
-#endif
-
+    internal void Start();
 }
