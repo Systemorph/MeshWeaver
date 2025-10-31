@@ -15,7 +15,7 @@ namespace MeshWeaver.Data.Persistence
 
 
 
-        public PartitionedHubDataSource<TPartition> InitializingPartitions(IEnumerable<object> partitions) =>
+        public PartitionedHubDataSource<TPartition> InitializingPartitions(params IEnumerable<object> partitions) =>
             this with
             {
                 InitializePartitions = InitializePartitions.Concat(partitions).ToArray()
