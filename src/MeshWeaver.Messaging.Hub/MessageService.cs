@@ -21,7 +21,9 @@ public class MessageService : IMessageService
     private readonly AsyncDelivery deliveryPipeline;
     private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
+
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
+
     //private volatile int pendingStartupMessages;
     private JsonSerializerOptions? loggingSerializerOptions;
 
@@ -33,7 +35,7 @@ public class MessageService : IMessageService
         ILogger<MessageService> logger,
         IMessageHub hub,
         IMessageHub? parentHub
-        )
+    )
     {
         Address = address;
         ParentHub = parentHub;
@@ -41,12 +43,19 @@ public class MessageService : IMessageService
         this.hub = hub;
 
         deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
+
+
         deliveryAction =
             new(x => x.Invoke());
-        postPipeline = hub.Configuration.PostPipeline.Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
+        postPipeline = hub.Configuration.PostPipeline
+            .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
-        deliveryPipeline = hub.Configuration.DeliveryPipeline.Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))), (p, c) => c.Invoke(p)).AsyncDelivery;
+        deliveryPipeline = hub.Configuration.DeliveryPipeline
+            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))),
+                (p, c) => c.Invoke(p)).AsyncDelivery;
     }
+
+
     void IMessageService.Start()
     {
         // Ensure the execution buffer is linked before we start processing
@@ -56,6 +65,13 @@ public class MessageService : IMessageService
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
 
     }
+
+    public IDisposable Defer(Predicate<IMessageDelivery> predicate)
+    {
+        return deferralContainer.Defer(predicate);
+    }
+
+
     private IMessageDelivery ReportFailure(IMessageDelivery delivery)
     {
         logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}",
@@ -87,8 +103,6 @@ public class MessageService : IMessageService
 
     public Address Address { get; }
     public IMessageHub? ParentHub { get; }
-    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
-        deferralContainer.Defer(deferredFilter);
 
     IMessageDelivery IMessageService.RouteMessageAsync(IMessageDelivery delivery, CancellationToken cancellationToken) =>
         ScheduleNotify(delivery, cancellationToken);

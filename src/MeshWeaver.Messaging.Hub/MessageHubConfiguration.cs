@@ -40,8 +40,8 @@ public record MessageHubConfiguration
     /// <param name="name">Unique name for this initialization gate</param>
     /// <param name="allowDuringInit">Predicate that determines which messages are allowed during initialization (e.g. InitializeHubRequest, SetCurrentRequest)</param>
     /// <returns>Updated configuration</returns>
-    public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery> allowDuringInit)
-        => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit) };
+    public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
+        => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
     public IMessageHub? ParentHub
     {
