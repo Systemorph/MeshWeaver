@@ -109,7 +109,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public ReduceManager<TStream> ReduceManager { get; init; }
 
-    private void SetCurrent(ChangeItem<TStream>? value)
+    private void SetCurrent(IMessageHub hub, ChangeItem<TStream>? value)
     {
         if (isDisposed || value == null)
         {
@@ -123,7 +123,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         {
             logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
             Store.OnNext(value);
-            Hub.OpenGate(SynchronizationGate);
+            hub.OpenGate(SynchronizationGate);
         }
         catch (Exception e)
         {
@@ -221,7 +221,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
-            }).WithHandler<UpdateStreamRequest>(async (_, request, ct) =>
+            }).WithHandler<UpdateStreamRequest>(async (hub, request, ct) =>
             {
                 var update = request.Message.UpdateAsync;
                 var exceptionCallback = request.Message.ExceptionCallback;
@@ -236,18 +236,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     // SetCurrent will be called with the computed result
                     // The Message Hub serializes these messages, so only one UpdateStreamRequest
                     // is processed at a time per stream, preventing race conditions
-                    SetCurrent(newChangeItem);
+                    SetCurrent(hub, newChangeItem);
                 }
                 catch (Exception e)
                 {
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            }).WithHandler<SetCurrentRequest>((_, request) =>
+            }).WithHandler<SetCurrentRequest>((hub, request) =>
             {
                 try
                 {
-                    SetCurrent(request.Message.Value);
+                    SetCurrent(hub, request.Message.Value);
                 }
                 catch (Exception ex)
                 {
@@ -255,12 +255,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 }
                 return request.Processed();
             })
-            .WithInitialization((_, ct) => InitializeAsync(ct))
+            .WithInitialization(InitializeAsync)
             .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
     }
 
-    private async Task InitializeAsync(CancellationToken ct)
+    private async Task InitializeAsync(IMessageHub hub, CancellationToken ct)
     {
         if (Configuration.Initialization is null)
         {
@@ -269,7 +269,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         }
 
         var init = await Configuration.Initialization(this, ct);
-        SetCurrent(new ChangeItem<TStream>(init, StreamId, Host.Version));
+        SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, Host.Version));
     }
 
 
@@ -284,7 +284,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
             try
             {
-                SetCurrent(new ChangeItem<TStream>(
+                SetCurrent(hub, new ChangeItem<TStream>(
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
                     Host.Version));
@@ -301,7 +301,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
-                SetCurrent(this.ToChangeItem(Current!.Value!,
+                SetCurrent(hub, this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
                     delivery.Message.ChangedBy ?? ClientId));

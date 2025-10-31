@@ -60,9 +60,11 @@ public static class TestHubSetup
                 data.AddPartitionedHubSource<TransactionalDataAddress>(
                         c =>
                             c.WithType<TransactionalData>(td => new TransactionalDataAddress(td.Year, td.BusinessUnit))
+                                .InitializingPartitions(new TransactionalDataAddress(2024, "1"), new TransactionalDataAddress(2024, "2"))
                     )
                     .AddPartitionedHubSource<ComputedDataAddress>(
                         c => c.WithType<ComputedData>(cd => new(cd.Year, cd.BusinessUnit))
+                            .InitializingPartitions(new ComputedDataAddress(2024, "1"), new ComputedDataAddress(2024, "2"))
                     )
                     .AddHubSource(
                         new ReferenceDataAddress(),
@@ -79,7 +81,7 @@ public static class TestHubSetup
                     format => format.WithAutoMappings().WithImportFunction(ImportFunction)
                 )
             );
-        
+
 
     private static EntityStore ImportFunction(
         ImportRequest request,

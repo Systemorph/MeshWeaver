@@ -97,9 +97,12 @@ public sealed record DataContext : IDisposable
 
         // Initialize each data source
         foreach (var dataSource in DataSourcesById.Values)
+        {
             dataSource.Initialize();
+            tasks.Add(dataSource.Initialized);
+        }
 
-        Task.WhenAll(DataSourcesById.Values.Select(d => d.Initialized))
+        Task.WhenAll(tasks)
             .ContinueWith(task =>
             {
                 if (task.IsFaulted)
@@ -118,7 +121,7 @@ public sealed record DataContext : IDisposable
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
-
+    private readonly List<Task> tasks = new();
     public void Dispose()
     {
         foreach (var dataSource in DataSourcesById.Values)
