@@ -7,4 +7,5 @@ internal interface IMessageService : IAsyncDisposable
     IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt);
     internal void Start();
     internal IDisposable Defer(Predicate<IMessageDelivery> predicate);
+    internal void NotifyStartupFailure();
 }

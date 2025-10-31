@@ -106,10 +106,19 @@ public sealed class MessageHub : IMessageHub
             return true;
         });
         messageService.Start();
+        startupTimer = new(StartupTimeout, null, Configuration.StartupTimeout, Timeout.InfiniteTimeSpan);
 
         Post(new InitializeHubRequest());
+
     }
 
+    public void StartupTimeout(object? _)
+    {
+        messageService.NotifyStartupFailure();
+    }
+
+
+    private readonly Timer startupTimer;
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
     {
         Post(new PingResponse(), o => o.ResponseFor(request));
@@ -292,6 +301,7 @@ public sealed class MessageHub : IMessageHub
             {
                 if (RunLevel < MessageHubRunLevel.Started)
                 {
+                    startupTimer.Dispose();
                     RunLevel = MessageHubRunLevel.Started;
                     hasStarted.SetResult();
                     startupDeferral.Dispose();
