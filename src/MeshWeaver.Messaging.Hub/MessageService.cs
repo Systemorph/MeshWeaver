@@ -14,18 +14,17 @@ public class MessageService : IMessageService
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
+    private readonly BufferBlock<Func<Task<IMessageDelivery>>> deferredBuffer = new();
     private readonly ActionBlock<Func<Task<IMessageDelivery>>> deliveryAction;
     private readonly BufferBlock<Func<CancellationToken, Task>> executionBuffer = new();
     private readonly ActionBlock<Func<CancellationToken, Task>> executionBlock = new(f => f.Invoke(default));
     private readonly HierarchicalRouting hierarchicalRouting;
     private readonly SyncDelivery postPipeline;
     private readonly AsyncDelivery deliveryPipeline;
-    private readonly DeferralContainer deferralContainer;
     private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
 
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
-    private readonly IDisposable startupDeferral;
 
     //private volatile int pendingStartupMessages;
     private JsonSerializerOptions? loggingSerializerOptions;
@@ -45,41 +44,16 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deferralContainer = new DeferralContainer(ScheduleExecution, ReportFailure);
-
-
-        deliveryAction =
-            new(x => x.Invoke());
+        deliveryAction = new(x => x.Invoke());
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
         deliveryPipeline = hub.Configuration.DeliveryPipeline
-            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(deferralContainer.DeliverMessage(d))),
+            .Aggregate(new AsyncPipelineConfig(hub, (d, _) => Task.FromResult(ScheduleExecution(d))),
                 (p, c) => c.Invoke(p)).AsyncDelivery;
         // Store gate names from configuration for tracking which gates are still open
-        // All gates reference the same single deferral
         gates = new(hub.Configuration.InitializationGates);
         startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout, Timeout.InfiniteTimeSpan);
-
-        // Create a single deferral that combines all allow-list predicates
-        // Messages are allowed if they match InitializationAllowList OR any of the InitializationGates
-        startupDeferral = Defer(delivery =>
-        {
-            // Check all gate predicates
-            foreach (var (name, allowDuringInit) in gates)
-            {
-                if (allowDuringInit(delivery))
-                {
-                    logger.LogDebug(
-                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                        delivery.Message.GetType().Name, delivery.Id, name, Address);
-                    return false; // Don't defer - message is allowed by this gate
-                }
-            }
-
-            // Message doesn't match any allow-list - defer it
-            return true;
-        });
     }
 
 
@@ -91,14 +65,9 @@ public class MessageService : IMessageService
         // Ensure the execution buffer is linked before we start processing
         executionBuffer.LinkTo(executionBlock, new DataflowLinkOptions { PropagateCompletion = true });
 
-        // Link the delivery buffer to the action block immediately to avoid race conditions
+        // Link only the main buffer to the action block initially
+        // The deferred buffer will be linked when all gates are opened
         buffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = true });
-
-    }
-
-    public IDisposable Defer(Predicate<IMessageDelivery> predicate)
-    {
-        return deferralContainer.Defer(predicate);
     }
 
     private void NotifyStartupFailure(object? _)
@@ -114,14 +83,17 @@ public class MessageService : IMessageService
         {
             logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
 
-            // If this was the last gate, dispose the single deferral and mark hub as started
+            // If this was the last gate, link the deferred buffer and mark hub as started
             if (gates.IsEmpty)
             {
                 if (hub.RunLevel < MessageHubRunLevel.Started)
                 {
                     startupTimer.Dispose();
                     hub.Start();
-                    startupDeferral.Dispose();
+                    // Link the deferred buffer to process all deferred messages
+                    deferredBuffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = false });
+                    // Complete the deferred buffer so no new messages go there
+                    deferredBuffer.Complete();
                     logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
                 }
             }
@@ -132,7 +104,6 @@ public class MessageService : IMessageService
         logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
             Address);
         return false;
-
     }
 
 
@@ -177,11 +148,41 @@ public class MessageService : IMessageService
             delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
 
         logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
-            delivery.Message.GetType().Name, delivery.Id, Address);        // Reset hang detection timer on activity (if not debugging and not already triggered)
+            delivery.Message.GetType().Name, delivery.Id, Address);
 
         logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+
+        // Determine which buffer to post to based on gate predicates
+        var shouldDefer = !gates.IsEmpty;
+        if (shouldDefer)
+        {
+            // Check all gate predicates
+            foreach (var (name, allowDuringInit) in gates)
+            {
+                if (allowDuringInit(delivery))
+                {
+                    logger.LogDebug(
+                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, name, Address);
+                    shouldDefer = false;
+                    break;
+                }
+            }
+        }
+
+        // Post to appropriate buffer
+        if (shouldDefer)
+        {
+            logger.LogDebug("Deferring message {MessageType} (ID: {MessageId}) in {Address}",
+                delivery.Message.GetType().Name, delivery.Id, Address);
+            deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
+        }
+        else
+        {
+            buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+        }
+
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
@@ -428,6 +429,7 @@ public class MessageService : IMessageService
         var bufferStopwatch = Stopwatch.StartNew();
         logger.LogDebug("Completing buffers for message service in {Address}", Address);
         buffer.Complete();
+        deferredBuffer.Complete();
         executionBuffer.Complete();
         logger.LogDebug("Buffers completed in {elapsed}ms for {Address}", bufferStopwatch.ElapsedMilliseconds, Address);
 
@@ -449,24 +451,13 @@ public class MessageService : IMessageService
         {
             logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}",
                 deliveryStopwatch.ElapsedMilliseconds, Address);
-        }        // Don't wait for execution completion during disposal as this disposal itself
+        }
+
+        // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
         logger.LogDebug("Skipping execution completion wait during disposal for {Address}", Address);
 
-        // Wait for startup processing to complete before disposing deferrals
-        var deferralsStopwatch = Stopwatch.StartNew();
-        try
-        {
-            logger.LogDebug("Awaiting finishing deferrals in {Address}", Address);
-            await deferralContainer.DisposeAsync();
-            logger.LogDebug("Deferrals completed successfully in {elapsed}ms for {Address}",
-                deferralsStopwatch.ElapsedMilliseconds, Address);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error during deferrals disposal after {elapsed}ms in {Address}",
-                deferralsStopwatch.ElapsedMilliseconds, Address);
-        }        // Complete the startup task if it's still pending
+        // Complete the startup task if it's still pending
         try
         {
             if (!startupCompletionSource.Task.IsCompleted)
