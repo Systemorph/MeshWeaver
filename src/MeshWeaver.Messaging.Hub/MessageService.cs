@@ -187,8 +187,9 @@ public class MessageService : IMessageService
         }
 
 
-        // Add current address to routing path
-        delivery = delivery.AddToRoutingPath(hub.Address);
+        // Add current address to routing path (only if not already present to handle deferred messages)
+        if (!delivery.RoutingPath.Contains(hub.Address))
+            delivery = delivery.AddToRoutingPath(hub.Address);
 
         var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
 
