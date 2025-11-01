@@ -45,20 +45,28 @@ public static class RiskMapLayoutArea
                 }
 
                 var mapControl = BuildGoogleMapControl(geocodedRisks);
-                var riskDetailsSubject = new ReplaySubject<string?>(1);
-                riskDetailsSubject.OnNext(null);
-                mapControl = mapControl.WithClickAction(ctx => riskDetailsSubject.OnNext(ctx.Payload?.ToString()));
 
-                return Controls.Stack
-                    .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                    .WithView(Controls.Title("Risk Map", 2))
-                    .WithView(mapControl)
-                    .WithView(GeocodingArea)
-                    .WithView(Controls.Title("Risk Details", 3))
-                    .WithView((h, c) => riskDetailsSubject
-                        .SelectMany(id => id == null ?
-                            Observable.Return(Controls.Html("Click marker to see details.")) : RenderRiskDetails(host.Hub, id))
-                    );
+                return Observable.Using(
+                    () => new ReplaySubject<string?>(1),
+                    riskDetailsSubject =>
+                    {
+                        riskDetailsSubject.OnNext(null);
+                        var mapControlWithClick = mapControl.WithClickAction(ctx => riskDetailsSubject.OnNext(ctx.Payload?.ToString()));
+
+                        return Observable.Return(
+                            Controls.Stack
+                                .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
+                                .WithView(Controls.Title("Risk Map", 2))
+                                .WithView(mapControlWithClick)
+                                .WithView(GeocodingArea)
+                                .WithView(Controls.Title("Risk Details", 3))
+                                .WithView((h, c) => riskDetailsSubject
+                                    .SelectMany(id => id == null ?
+                                        Observable.Return(Controls.Html("Click marker to see details.")) : RenderRiskDetails(host.Hub, id))
+                                )
+                        );
+                    }
+                );
             })
             .StartWith(Controls.Stack
                 .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
