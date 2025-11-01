@@ -203,7 +203,7 @@ public record MessageHubConfiguration
         });
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
-    internal TimeSpan StartupTimeout { get; init; } = new(0, 0, 10); // Default 10 seconds
+    internal TimeSpan StartupTimeout { get; init; } = new(0, 0, 30); // Default 10 seconds
     internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
 
     /// <summary>
