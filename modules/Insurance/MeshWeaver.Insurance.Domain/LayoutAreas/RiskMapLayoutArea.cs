@@ -24,24 +24,24 @@ public static class RiskMapLayoutArea
         var pricingId = host.Hub.Address.Id;
 
         return host.Workspace.GetStream<PropertyRisk>()!
-            .Select(risks =>
+            .SelectMany(risks =>
             {
                 var riskList = risks?.ToList() ?? new List<PropertyRisk>();
                 var geocodedRisks = riskList.Where(r => r.GeocodedLocation?.Latitude != null && r.GeocodedLocation?.Longitude != null).ToList();
 
                 if (!riskList.Any())
                 {
-                    return Controls.Stack
+                    return Observable.Return(Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
-                        .WithView(Controls.Markdown("# Risk Map\n\n*No risks loaded. Import or add risks to begin.*"));
+                        .WithView(Controls.Markdown("# Risk Map\n\n*No risks loaded. Import or add risks to begin.*")));
                 }
 
                 if (!geocodedRisks.Any())
                 {
-                    return Controls.Stack
+                    return Observable.Return(Controls.Stack
                         .WithView(PricingLayoutShared.BuildToolbar(pricingId, "RiskMap"))
                         .WithView(Controls.Markdown($"# Risk Map\n\n*No geocoded risks found. {riskList.Count} risk(s) available but none have valid coordinates.*"))
-                        .WithView(GeocodingArea);
+                        .WithView(GeocodingArea));
                 }
 
                 var mapControl = BuildGoogleMapControl(geocodedRisks);
