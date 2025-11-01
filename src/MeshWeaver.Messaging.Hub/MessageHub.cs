@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.ServiceProvider;
+using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -361,13 +362,33 @@ public sealed class MessageHub : IMessageHub
 
     public Task<object?> AwaitResponse(object r, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default)
     {
-        var request = r as IMessageDelivery ?? Post(r, options)!;
-        var response = RegisterCallback(
-            request.Id,
-            d => d,
-            cancellationToken
-        );
-        var task = response
+        // Check if r is already a delivery (in which case it's already posted)
+        if (r is IMessageDelivery existingDelivery)
+        {
+            var response = RegisterCallback(
+                existingDelivery.Id,
+                d => d,
+                cancellationToken
+            );
+            return response.ContinueWith(t =>
+            {
+                var ret = t.Result;
+                return InnerCallback(existingDelivery.Id, ret, selector);
+            }, cancellationToken);
+        }
+
+        // For new messages, we need to generate the ID first, register callback, THEN post
+        // to avoid race condition where response arrives before callback is registered
+        var messageId = Guid.NewGuid().AsString();
+        var response2 = RegisterCallback(messageId, d => d, cancellationToken);
+
+        // Now post the message with the pre-generated ID
+        var request = Post(r, opts => {
+            var configured = options(opts);
+            return configured.WithMessageId(messageId);
+        })!;
+
+        var task = response2
             .ContinueWith(t =>
             {
                 var ret = t.Result;
