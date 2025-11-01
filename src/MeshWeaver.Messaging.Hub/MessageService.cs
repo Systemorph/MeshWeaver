@@ -54,11 +54,12 @@ public class MessageService : IMessageService
                 (p, c) => c.Invoke(p)).AsyncDelivery;
         // Store gate names from configuration for tracking which gates are still open
         gates = new(hub.Configuration.InitializationGates);
-        startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout, Timeout.InfiniteTimeSpan);
+        if (hub.Configuration.StartupTimeout is not null)
+            startupTimer = new(NotifyStartupFailure, null, hub.Configuration.StartupTimeout.Value, Timeout.InfiniteTimeSpan);
     }
 
 
-    private readonly Timer startupTimer;
+    private readonly Timer? startupTimer;
 
 
     void IMessageService.Start()
@@ -82,7 +83,7 @@ public class MessageService : IMessageService
     {
         if (gates.TryRemove(name, out _))
         {
-            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
+            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name, Address, gates.Keys);
 
             // If this was the last gate, link the deferred buffer and mark hub as started
             // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
@@ -92,7 +93,7 @@ public class MessageService : IMessageService
                 {
                     if (hub.RunLevel < MessageHubRunLevel.Started)
                     {
-                        startupTimer.Dispose();
+                        startupTimer?.Dispose();
                         hub.Start();
                         // Complete the deferred buffer first to prevent new messages from entering
                         deferredBuffer.Complete();
@@ -158,63 +159,20 @@ public class MessageService : IMessageService
         logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
 
-        // Determine which buffer to post to based on gate predicates
-        // Use lock to ensure atomicity with OpenGate checking and modifying gate state
-        var shouldDefer = !gates.IsEmpty;
-        if (shouldDefer)
-        {
-            DeferMessage(delivery, cancellationToken);
-        }
-        else
-        {
-            buffer.Post(() => NotifyAsync(delivery, cancellationToken));
-        }
+        // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
+        // based on whether the message is actually targeted at this hub
+        buffer.Post(() => NotifyAsync(delivery, cancellationToken));
 
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
 
-    private void DeferMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
-    {
-        lock (gateStateLock)
-        {
-            var shouldDefer = !gates.IsEmpty;
-            if (shouldDefer)
-            {
-                // Check all gate predicates
-                foreach (var (name, allowDuringInit) in gates)
-                {
-                    if (allowDuringInit(delivery))
-                    {
-                        logger.LogDebug(
-                            "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                            delivery.Message.GetType().Name, delivery.Id, name, Address);
-                        shouldDefer = false;
-                        break;
-                    }
-                }
-            }
-
-            // Post to appropriate buffer while still holding the lock
-            // This ensures no race condition between checking gates.IsEmpty and posting
-            if (shouldDefer)
-            {
-                logger.LogDebug("Deferring message {MessageType} (ID: {MessageId}) in {Address}",
-                    delivery.Message.GetType().Name, delivery.Id, Address);
-                deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
-            }
-            else
-            {
-                buffer.Post(() => NotifyAsync(delivery, cancellationToken));
-            }
-        }
-    }
-
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
-        logger.LogDebug("MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+        logger.LogDebug(
+            "MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
 
         if (delivery.State != MessageDeliveryState.Submitted)
@@ -224,7 +182,8 @@ public class MessageService : IMessageService
         // For all other messages, wait for parent to be ready before routing
         if (ParentHub is not null)
         {
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) && ha.Host.Equals(ParentHub.Address))
+            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) &&
+                ha.Host.Equals(ParentHub.Address))
                 delivery = delivery.WithTarget(ha.Address);
         }
 
@@ -233,8 +192,12 @@ public class MessageService : IMessageService
         delivery = delivery.AddToRoutingPath(hub.Address);
 
         var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+
+        // Only defer messages that are targeted at this hub
+        // Messages being routed through should not be deferred
         if (isOnTarget)
         {
+
             delivery = UnpackIfNecessary(delivery);
             logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
@@ -245,17 +208,56 @@ public class MessageService : IMessageService
 
 
 
-        logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+        logger.LogTrace(
+            "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
         delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-        logger.LogTrace("MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+        logger.LogTrace(
+            "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
             name, Address, delivery.Id, delivery.State);
 
         if (isOnTarget)
         {
-            logger.LogTrace("MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                name, Address, delivery.Id);
-            delivery = await deliveryPipeline.Invoke(delivery, cancellationToken);
+            // Check if we need to defer this message
+            var shouldDefer = !gates.IsEmpty;
+            if (shouldDefer)
+            {
+                lock (gateStateLock)
+                {
+                    shouldDefer = !gates.IsEmpty;
+                    if (shouldDefer)
+                    {
+                        // Check all gate predicates
+                        foreach (var (gateName, allowDuringInit) in gates)
+                        {
+                            if (allowDuringInit(delivery))
+                            {
+                                logger.LogDebug(
+                                    "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                                    delivery.Message.GetType().Name, delivery.Id, gateName, Address);
+                                shouldDefer = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    // If we still need to defer, post to deferred buffer and return
+                    if (shouldDefer)
+                    {
+                        logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
+                            delivery.Message.GetType().Name, delivery.Id, Address);
+                        deferredBuffer.Post(() => deliveryPipeline.Invoke(delivery, cancellationToken));
+                        return delivery.Forwarded();
+                    }
+                }
+
+                logger.LogTrace(
+                    "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                    name, Address, delivery.Id);
+            }
+
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+
         }
 
         return delivery;

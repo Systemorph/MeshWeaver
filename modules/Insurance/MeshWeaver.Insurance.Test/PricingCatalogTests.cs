@@ -1,5 +1,11 @@
-﻿using FluentAssertions;
+﻿using System.Reactive.Linq;
+using System.Text.Json;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.Data;
+using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Insurance.Domain.Services;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -111,5 +117,31 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
         Output.WriteLine($"Pricing hub started successfully");
         Output.WriteLine($"Hub Address: {Mesh.Address}");
         Output.WriteLine($"Retrieved {pricings.Count} pricings from catalog");
+    }
+
+    [Fact]
+    public async Task GetPricingCatalog_UsingLayoutAreaReference_ShouldReturnPricingsControl()
+    {
+        // Arrange
+        var reference = new LayoutAreaReference("Pricings");
+        var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
+
+        // Act - Get the remote stream using LayoutAreaReference
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            InsuranceApplicationAttribute.Address,
+            reference
+        );
+
+        // Get the control from the stream
+        var control = await stream.GetControlStream(reference.Area)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert
+        control.Should().NotBeNull("layout area should return a control");
+
+        // Output control information
+        Output.WriteLine($"Received control type: {control.GetType().Name}");
+        Output.WriteLine($"Successfully retrieved Pricings layout area using GetRemoteStream");
     }
 }
