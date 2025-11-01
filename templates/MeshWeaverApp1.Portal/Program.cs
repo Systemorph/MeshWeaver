@@ -15,7 +15,7 @@ builder.UseMeshWeaver(
         .ConfigureWebPortal()
         .ConfigurePortalMesh()
         .UseMonolithMesh()
-        .ConfigureServices(services => services.AddContentCollections())
+        .ConfigureHub(hub => hub.AddContentCollections())
 );
 
 var app = builder.Build();

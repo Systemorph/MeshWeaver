@@ -1,9 +1,10 @@
+﻿using System.Text.Json;
+using System.Text.Json.Nodes;
+using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Mesh;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Xunit;
 
 namespace MeshWeaver.Insurance.Test;
@@ -15,8 +16,8 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
         return base.ConfigureMesh(builder)
             .ConfigureHub(c => c
                 .AddData()
-                .ConfigureInsuranceApplication()
-            );
+            )
+            .InstallAssemblies(typeof(InsuranceApplicationAttribute).Assembly.Location);
     }
 
     protected async Task<IReadOnlyCollection<PropertyRisk>> GetPropertyRisksAsync(PricingAddress address)
@@ -41,10 +42,11 @@ public abstract class InsuranceTestBase(ITestOutputHelper output) : MonolithMesh
         var pricingsResp = await hub.AwaitResponse(
             new GetDataRequest(new CollectionReference(nameof(Pricing))),
             o => o.WithTarget(InsuranceApplicationAttribute.Address),
-            TestContext.Current.CancellationToken);
+            new CancellationTokenSource(10.Seconds()).Token);
 
-        return (pricingsResp?.Message?.Data as IEnumerable<object>)?
-            .Select(x => x as Pricing ?? (x as JsonObject)?.Deserialize<Pricing>(hub.JsonSerializerOptions))
+        return (pricingsResp.Message.Data as InstanceCollection)?
+               .Instances.Values
+               .Select(x => x as Pricing ?? (x as JsonObject)?.Deserialize<Pricing>(hub.JsonSerializerOptions))
             .Where(x => x != null)
             .Cast<Pricing>()
             .ToList()
