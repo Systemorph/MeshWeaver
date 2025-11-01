@@ -290,23 +290,27 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             .FirstAsync();
 
         // Update multiple tasks simultaneously
-        var updatedTasks = tasksData.Select(task => task with 
-        { 
-            Status = "Completed", 
-            UpdatedAt = DateTime.UtcNow 
+        var updatedTasks = tasksData.Select(task => task with
+        {
+            Status = "Completed",
+            UpdatedAt = DateTime.UtcNow
         }).Cast<object>().ToArray();
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTasks);
-        
-        Output.WriteLine($"📤 Sending DataChangeRequest to complete all {updatedTasks.Length} tasks");
-        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
 
-        // Verify all tasks are now completed
-        var allCompletedControl = await stream
+        Output.WriteLine($"📤 Sending DataChangeRequest to complete all {updatedTasks.Length} tasks");
+
+        // Set up the completion watch BEFORE posting the change to avoid race condition
+        var allCompletedTask = stream
             .GetControlStream(TaskCountArea)
             .Where(x => x != null && x.ToString().Contains("✅ **Completed:** 3"))
             .Timeout(10.Seconds())
             .FirstAsync();
+
+        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
+
+        // Verify all tasks are now completed
+        var allCompletedControl = await allCompletedTask;
 
         allCompletedControl.Should().NotBeNull();
         var content = allCompletedControl.ToString();
