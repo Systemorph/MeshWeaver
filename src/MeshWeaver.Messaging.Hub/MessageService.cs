@@ -218,46 +218,41 @@ public class MessageService : IMessageService
 
         if (isOnTarget)
         {
-            // Check if we need to defer this message
-            var shouldDefer = !gates.IsEmpty;
-            if (shouldDefer)
+            // Check if we need to defer this message - must check inside lock to avoid race with OpenGate
+            bool shouldDefer;
+            lock (gateStateLock)
             {
-                lock (gateStateLock)
+                shouldDefer = !gates.IsEmpty;
+                if (shouldDefer)
                 {
-                    shouldDefer = !gates.IsEmpty;
-                    if (shouldDefer)
+                    // Check all gate predicates
+                    foreach (var (gateName, allowDuringInit) in gates)
                     {
-                        // Check all gate predicates
-                        foreach (var (gateName, allowDuringInit) in gates)
+                        if (allowDuringInit(delivery))
                         {
-                            if (allowDuringInit(delivery))
-                            {
-                                logger.LogDebug(
-                                    "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                                    delivery.Message.GetType().Name, delivery.Id, gateName, Address);
-                                shouldDefer = false;
-                                break;
-                            }
+                            logger.LogDebug(
+                                "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                                delivery.Message.GetType().Name, delivery.Id, gateName, Address);
+                            shouldDefer = false;
+                            break;
                         }
-                    }
-
-                    // If we still need to defer, post to deferred buffer and return
-                    if (shouldDefer)
-                    {
-                        logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
-                            delivery.Message.GetType().Name, delivery.Id, Address);
-                        deferredBuffer.Post(() => deliveryPipeline.Invoke(delivery, cancellationToken));
-                        return delivery.Forwarded();
                     }
                 }
 
-                logger.LogTrace(
-                    "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                    name, Address, delivery.Id);
+                // If we still need to defer, post to deferred buffer and return
+                if (shouldDefer)
+                {
+                    logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, Address);
+                    deferredBuffer.Post(() => deliveryPipeline.Invoke(delivery, cancellationToken));
+                    return delivery.Forwarded();
+                }
             }
 
+            logger.LogTrace(
+                "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                name, Address, delivery.Id);
             return await deliveryPipeline.Invoke(delivery, cancellationToken);
-
         }
 
         return delivery;
