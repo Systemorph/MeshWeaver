@@ -224,7 +224,9 @@ public class MessageService : IMessageService
                 {
                     logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
-                    deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
+                    // Post directly to processing, bypassing deferral check on reprocessing
+                    // This prevents infinite deferral loops
+                    deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
                     return delivery.Forwarded();
                 }
             }
@@ -271,6 +273,39 @@ public class MessageService : IMessageService
         if (node is JsonObject jo && jo.TryGetPropertyValue("$type", out var typeNode))
             return typeNode!.ToString();
         return "Unknown";
+    }
+
+    /// <summary>
+    /// Process a deferred message, bypassing the deferral check to prevent infinite loops
+    /// </summary>
+    private async Task<IMessageDelivery> ProcessDeferredMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        logger.LogDebug("Processing deferred message {MessageType} (ID: {MessageId}) in {Address}",
+            delivery.Message.GetType().Name, delivery.Id, Address);
+
+        // Add to routing path if not already present
+        if (!delivery.RoutingPath.Contains(hub.Address))
+            delivery = delivery.AddToRoutingPath(hub.Address);
+
+        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+
+        // Skip deferral check - we're reprocessing after gates opened
+        if (isOnTarget)
+        {
+            delivery = UnpackIfNecessary(delivery);
+
+            if (delivery.State == MessageDeliveryState.Failed)
+                return ReportFailure(delivery);
+        }
+
+        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+
+        if (isOnTarget)
+        {
+            return await deliveryPipeline.Invoke(delivery, cancellationToken);
+        }
+
+        return delivery;
     }
 
     private readonly CancellationTokenSource cancellationTokenSource = new();
