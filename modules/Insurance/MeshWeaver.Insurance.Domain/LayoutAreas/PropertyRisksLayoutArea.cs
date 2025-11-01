@@ -128,7 +128,7 @@ public static class PropertyRisksLayoutArea
         }
         catch (Exception ex)
         {
-            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**Geocoding Failed**: {ex.Message}"));
+            obj.Host.UpdateArea(obj.Area, Controls.Markdown($"**Geocoding Failed**:\n```\n{ex}\n```"));
         }
     }
 }
