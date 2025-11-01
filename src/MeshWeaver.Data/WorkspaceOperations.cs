@@ -202,7 +202,7 @@ public static class WorkspaceOperations
                         throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                     });
             subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
-            logger.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
+            logger?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
             // Complete sub-activity - this would need proper sub-activity tracking to work correctly
             return stream.ApplyChanges(updates);
         }
