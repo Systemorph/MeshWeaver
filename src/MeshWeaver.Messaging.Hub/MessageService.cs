@@ -23,6 +23,7 @@ public class MessageService : IMessageService
     private readonly AsyncDelivery deliveryPipeline;
     private readonly CancellationTokenSource hangDetectionCts = new();
     private readonly ConcurrentDictionary<string, Predicate<IMessageDelivery>> gates;
+    private readonly Lock gateStateLock = new();
 
     private readonly TaskCompletionSource<bool> startupCompletionSource = new();
 
@@ -84,17 +85,21 @@ public class MessageService : IMessageService
             logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}", name, Address);
 
             // If this was the last gate, link the deferred buffer and mark hub as started
-            if (gates.IsEmpty)
+            // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
+            lock (gateStateLock)
             {
-                if (hub.RunLevel < MessageHubRunLevel.Started)
+                if (gates.IsEmpty)
                 {
-                    startupTimer.Dispose();
-                    hub.Start();
-                    // Link the deferred buffer to process all deferred messages
-                    deferredBuffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = false });
-                    // Complete the deferred buffer so no new messages go there
-                    deferredBuffer.Complete();
-                    logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                    if (hub.RunLevel < MessageHubRunLevel.Started)
+                    {
+                        startupTimer.Dispose();
+                        hub.Start();
+                        // Complete the deferred buffer first to prevent new messages from entering
+                        deferredBuffer.Complete();
+                        // Then link it to process all buffered messages
+                        deferredBuffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = false });
+                        logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                    }
                 }
             }
 
@@ -117,7 +122,7 @@ public class MessageService : IMessageService
         {
             try
             {
-                var message = delivery.Properties.TryGetValue("Error", out var error) ? error?.ToString() : $"Message delivery failed in address {Address}d}}";
+                var message = delivery.Properties.TryGetValue("Error", out var error) ? error.ToString() : $"Message delivery failed in address {Address}d}}";
                 Post(new DeliveryFailure(delivery, message), new PostOptions(Address).ResponseFor(delivery));
             }
             catch (Exception ex)
@@ -154,29 +159,11 @@ public class MessageService : IMessageService
             delivery.Message.GetType().Name, Address, delivery.Id);
 
         // Determine which buffer to post to based on gate predicates
+        // Use lock to ensure atomicity with OpenGate checking and modifying gate state
         var shouldDefer = !gates.IsEmpty;
         if (shouldDefer)
         {
-            // Check all gate predicates
-            foreach (var (name, allowDuringInit) in gates)
-            {
-                if (allowDuringInit(delivery))
-                {
-                    logger.LogDebug(
-                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                        delivery.Message.GetType().Name, delivery.Id, name, Address);
-                    shouldDefer = false;
-                    break;
-                }
-            }
-        }
-
-        // Post to appropriate buffer
-        if (shouldDefer)
-        {
-            logger.LogDebug("Deferring message {MessageType} (ID: {MessageId}) in {Address}",
-                delivery.Message.GetType().Name, delivery.Id, Address);
-            deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
+            DeferMessage(delivery, cancellationToken);
         }
         else
         {
@@ -187,6 +174,43 @@ public class MessageService : IMessageService
             delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
+
+    private void DeferMessage(IMessageDelivery delivery, CancellationToken cancellationToken)
+    {
+        lock (gateStateLock)
+        {
+            var shouldDefer = !gates.IsEmpty;
+            if (shouldDefer)
+            {
+                // Check all gate predicates
+                foreach (var (name, allowDuringInit) in gates)
+                {
+                    if (allowDuringInit(delivery))
+                    {
+                        logger.LogDebug(
+                            "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                            delivery.Message.GetType().Name, delivery.Id, name, Address);
+                        shouldDefer = false;
+                        break;
+                    }
+                }
+            }
+
+            // Post to appropriate buffer while still holding the lock
+            // This ensures no race condition between checking gates.IsEmpty and posting
+            if (shouldDefer)
+            {
+                logger.LogDebug("Deferring message {MessageType} (ID: {MessageId}) in {Address}",
+                    delivery.Message.GetType().Name, delivery.Id, Address);
+                deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
+            }
+            else
+            {
+                buffer.Post(() => NotifyAsync(delivery, cancellationToken));
+            }
+        }
+    }
+
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
