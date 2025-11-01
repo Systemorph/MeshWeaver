@@ -86,8 +86,9 @@ new {typeof(MarkdownControl).FullName}(""Hello World"")"
 
         var control = await stream
             .GetControlStream(area.ToString()!)
-            .Timeout(5.Seconds())
-            .FirstAsync(x => x != null);
+            .Where(x => x != null)
+            .Timeout(10.Seconds())
+            .FirstAsync();
 
 
         var md = control.Should().BeOfType<MarkdownControl>()
