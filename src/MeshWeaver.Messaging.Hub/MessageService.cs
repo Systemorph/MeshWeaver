@@ -196,28 +196,8 @@ public class MessageService : IMessageService
         // Messages being routed through should not be deferred
         if (isOnTarget)
         {
-
-            delivery = UnpackIfNecessary(delivery);
-            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                name, Address, delivery.Id);
-
-            if (delivery.State == MessageDeliveryState.Failed)
-                return ReportFailure(delivery);
-        }
-
-
-
-        logger.LogTrace(
-            "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            name, Address, delivery.Id, delivery.Target);
-        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
-        logger.LogTrace(
-            "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
-            name, Address, delivery.Id, delivery.State);
-
-        if (isOnTarget)
-        {
             // Check if we need to defer this message - must check inside lock to avoid race with OpenGate
+            // IMPORTANT: Check deferral BEFORE unpacking to avoid wasted work
             bool shouldDefer;
             lock (gateStateLock)
             {
@@ -243,11 +223,30 @@ public class MessageService : IMessageService
                 {
                     logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                         delivery.Message.GetType().Name, delivery.Id, Address);
-                    deferredBuffer.Post(() => deliveryPipeline.Invoke(delivery, cancellationToken));
+                    deferredBuffer.Post(() => NotifyAsync(delivery, cancellationToken));
                     return delivery.Forwarded();
                 }
             }
 
+            // Only unpack after we've determined we're not deferring
+            delivery = UnpackIfNecessary(delivery);
+            logger.LogTrace("MESSAGE_FLOW: Unpacking message | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
+                name, Address, delivery.Id);
+
+            if (delivery.State == MessageDeliveryState.Failed)
+                return ReportFailure(delivery);
+        }
+
+        logger.LogTrace(
+            "MESSAGE_FLOW: ROUTING_TO_HIERARCHICAL | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
+            name, Address, delivery.Id, delivery.Target);
+        delivery = await hierarchicalRouting.RouteMessageAsync(delivery, cancellationToken);
+        logger.LogTrace(
+            "MESSAGE_FLOW: HIERARCHICAL_ROUTING_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: {State}",
+            name, Address, delivery.Id, delivery.State);
+
+        if (isOnTarget)
+        {
             logger.LogTrace(
                 "MESSAGE_FLOW: ROUTING_TO_LOCAL_EXECUTION | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
                 name, Address, delivery.Id);
