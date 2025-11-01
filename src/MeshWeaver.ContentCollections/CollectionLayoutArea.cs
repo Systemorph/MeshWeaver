@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Layout;
+﻿using System.ComponentModel;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.ContentCollections;
@@ -13,6 +14,7 @@ public static class CollectionLayoutArea
     /// Renders a file browser for the specified collection at the given path.
     /// The collection and path are parsed from the host reference ID in format: {collection}/{path}
     /// </summary>
+    [Browsable(false)]
     public static UiControl Collection(LayoutAreaHost host, RenderingContext _)
     {
         var split = host.Reference.Id?.ToString()?.Split("/", StringSplitOptions.RemoveEmptyEntries);
