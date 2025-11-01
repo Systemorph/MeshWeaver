@@ -256,7 +256,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full } || d.Message is UpdateStreamRequest);
 
     }
 
