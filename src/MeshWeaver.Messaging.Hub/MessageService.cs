@@ -95,9 +95,8 @@ public class MessageService : IMessageService
                     {
                         startupTimer?.Dispose();
                         hub.Start();
-                        // Complete the deferred buffer first to prevent new messages from entering
-                        deferredBuffer.Complete();
-                        // Then link it to process all buffered messages
+                        // Link the deferred buffer to process all buffered messages
+                        // DO NOT complete it - messages can still be posted during the race window
                         deferredBuffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = false });
                         logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
                     }
