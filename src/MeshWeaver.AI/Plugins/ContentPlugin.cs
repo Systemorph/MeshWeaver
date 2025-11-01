@@ -87,7 +87,7 @@ public class ContentPlugin
         // Only parse from LayoutAreaReference.Id when area is "Content" or "Collection"
         if (chat.Context?.LayoutArea != null)
         {
-            var area = chat.Context.LayoutArea.Area?.ToString();
+            var area = chat.Context.LayoutArea.Area;
             if (area == "Content" || area == "Collection")
             {
                 var id = chat.Context.LayoutArea.Id?.ToString();
@@ -106,12 +106,9 @@ public class ContentPlugin
         if (config.ContextToConfigMap != null && chat.Context != null)
         {
             var contextConfig = config.ContextToConfigMap(chat.Context);
-            if (contextConfig != null)
-            {
-                // Add the dynamically created config to IContentService
-                contentService.AddConfiguration(contextConfig);
-                return contextConfig.Name;
-            }
+            // Add the dynamically created config to IContentService
+            contentService.AddConfiguration(contextConfig);
+            return contextConfig.Name;
         }
 
         // Fall back to the first collection from config as default
@@ -130,7 +127,7 @@ public class ContentPlugin
         if (chat?.Context?.LayoutArea == null)
             return null;
 
-        var area = chat.Context.LayoutArea.Area?.ToString();
+        var area = chat.Context.LayoutArea.Area;
         if (area != "Content" && area != "Collection")
             return null;
 
@@ -181,15 +178,15 @@ public class ContentPlugin
             var extension = Path.GetExtension(resolvedFilePath).ToLowerInvariant();
             if (extension == ".xlsx" || extension == ".xls")
             {
-                return await ReadExcelFileAsync(stream, resolvedFilePath, numberOfRows);
+                return ReadExcelFile(stream, resolvedFilePath, numberOfRows);
             }
             else if (extension == ".docx")
             {
-                return await ReadWordFileAsync(stream, resolvedFilePath, numberOfRows);
+                return ReadWordFile(stream, resolvedFilePath, numberOfRows);
             }
             else if (extension == ".pdf")
             {
-                return await ReadPdfFileAsync(stream, resolvedFilePath, numberOfRows);
+                return ReadPdfFile(stream, resolvedFilePath, numberOfRows);
             }
 
             // For other files, read as text
@@ -222,7 +219,7 @@ public class ContentPlugin
         }
     }
 
-    private async Task<string> ReadExcelFileAsync(Stream stream, string filePath, int? numberOfRows)
+    private string ReadExcelFile(Stream stream, string filePath, int? numberOfRows)
     {
         try
         {
@@ -300,12 +297,12 @@ public class ContentPlugin
         return columnLetter;
     }
 
-    private async Task<string> ReadWordFileAsync(Stream stream, string filePath, int? numberOfRows)
+    private string ReadWordFile(Stream stream, string filePath, int? numberOfRows)
     {
         try
         {
             using var wordDoc = WordprocessingDocument.Open(stream, false);
-            var body = wordDoc.MainDocumentPart?.Document?.Body;
+            var body = wordDoc.MainDocumentPart?.Document.Body;
 
             if (body == null)
                 return $"Word document '{filePath}' has no readable content.";
@@ -359,7 +356,7 @@ public class ContentPlugin
         }
     }
 
-    private async Task<string> ReadPdfFileAsync(Stream stream, string filePath, int? numberOfRows)
+    private string ReadPdfFile(Stream stream, string filePath, int? numberOfRows)
     {
         try
         {
