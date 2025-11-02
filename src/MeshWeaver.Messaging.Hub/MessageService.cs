@@ -81,14 +81,15 @@ public class MessageService : IMessageService
 
     public bool OpenGate(string name)
     {
-        if (gates.TryRemove(name, out _))
+        lock (gateStateLock)
         {
-            logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name, Address, gates.Keys);
-
-            // If this was the last gate, link the deferred buffer and mark hub as started
-            // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
-            lock (gateStateLock)
+            if (gates.TryRemove(name, out _))
             {
+                logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name,
+                    Address, gates.Keys);
+
+                // If this was the last gate, link the deferred buffer and mark hub as started
+                // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
                 if (gates.IsEmpty)
                 {
                     if (hub.RunLevel < MessageHubRunLevel.Started)
@@ -101,9 +102,9 @@ public class MessageService : IMessageService
                         logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
                     }
                 }
-            }
 
-            return true;
+                return true;
+            }
         }
 
         logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
@@ -199,36 +200,40 @@ public class MessageService : IMessageService
         {
             // Check if we need to defer this message - must check inside lock to avoid race with OpenGate
             // IMPORTANT: Check deferral BEFORE unpacking to avoid wasted work
-            bool shouldDefer;
-            lock (gateStateLock)
+            bool shouldDefer = !gates.IsEmpty;
+            if (shouldDefer)
             {
-                shouldDefer = !gates.IsEmpty;
-                if (shouldDefer)
+                lock (gateStateLock)
                 {
-                    // Check all gate predicates
-                    foreach (var (gateName, allowDuringInit) in gates)
+                    shouldDefer = !gates.IsEmpty;
+                    if (shouldDefer)
                     {
-                        if (allowDuringInit(delivery))
+                        // Check all gate predicates
+                        foreach (var (gateName, allowDuringInit) in gates)
                         {
-                            logger.LogDebug(
-                                "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                                delivery.Message.GetType().Name, delivery.Id, gateName, Address);
-                            shouldDefer = false;
-                            break;
+                            if (allowDuringInit(delivery))
+                            {
+                                logger.LogDebug(
+                                    "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                                    delivery.Message.GetType().Name, delivery.Id, gateName, Address);
+                                shouldDefer = false;
+                                break;
+                            }
                         }
+                    }
+
+                    // If we still need to defer, post to deferred buffer and return
+                    if (shouldDefer)
+                    {
+                        logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
+                            delivery.Message.GetType().Name, delivery.Id, Address);
+                        // Post directly to processing, bypassing deferral check on reprocessing
+                        // This prevents infinite deferral loops
+                        deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
+                        return delivery.Forwarded();
                     }
                 }
 
-                // If we still need to defer, post to deferred buffer and return
-                if (shouldDefer)
-                {
-                    logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
-                        delivery.Message.GetType().Name, delivery.Id, Address);
-                    // Post directly to processing, bypassing deferral check on reprocessing
-                    // This prevents infinite deferral loops
-                    deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
-                    return delivery.Forwarded();
-                }
             }
 
             // Only unpack after we've determined we're not deferring
