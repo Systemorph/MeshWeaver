@@ -88,7 +88,7 @@ public class MessageService : IMessageService
                 logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name,
                     Address, gates.Keys);
 
-                // If this was the last gate, link the deferred buffer and mark hub as started
+                // If this was the last gate, link deferred buffer to main buffer and mark hub as started
                 // Use lock to ensure atomicity with ScheduleNotify checking gates.IsEmpty
                 if (gates.IsEmpty)
                 {
@@ -96,9 +96,14 @@ public class MessageService : IMessageService
                     {
                         startupTimer?.Dispose();
                         hub.Start();
-                        // Link the deferred buffer to process all buffered messages
-                        // DO NOT complete it - messages can still be posted during the race window
-                        deferredBuffer.LinkTo(deliveryAction, new DataflowLinkOptions { PropagateCompletion = false });
+
+                        // Link deferred buffer to main buffer to preserve FIFO order
+                        // This creates a chain: deferredBuffer → buffer → deliveryAction
+                        // All deferred messages will flow through the main buffer, ensuring they are
+                        // processed before any new messages that arrive after the gate opens
+                        logger.LogDebug("Linking deferred buffer to main buffer for hub {Address}", Address);
+                        deferredBuffer.LinkTo(buffer, new DataflowLinkOptions { PropagateCompletion = false });
+
                         logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
                     }
                 }
