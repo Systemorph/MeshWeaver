@@ -48,7 +48,6 @@ public record LayoutAreaHost : IDisposable
         var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
         LayoutDefinition = uiControlService.LayoutDefinition;
         configuration ??= c => c;
-        var delayedStart = new TaskCompletionSource();
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             workspace.Hub,
@@ -57,7 +56,6 @@ public record LayoutAreaHost : IDisposable
             c => configuration.Invoke(c)
                 .WithInitialization(async (_, _) =>
                 {
-                    await delayedStart.Task;
                     return (
                             await LayoutDefinition
                                 .RenderAsync(this, context, new EntityStore()
@@ -87,7 +85,6 @@ public record LayoutAreaHost : IDisposable
         );
 
         logger = Stream.Hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaHost>>();
-        delayedStart.SetResult();
     }
 
 
