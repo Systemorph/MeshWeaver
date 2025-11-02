@@ -247,8 +247,6 @@ public class MessageService : IMessageService
                     {
                         logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
                             delivery.Message.GetType().Name, delivery.Id, Address);
-                        deferredBuffer.Post(() => deliveryPipeline.Invoke(delivery, cancellationToken));
-                        // This prevents infinite deferral loops
                         deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
                         return delivery.Forwarded();
                     }
