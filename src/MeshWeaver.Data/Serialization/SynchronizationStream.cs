@@ -77,10 +77,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         try
         {
-            return Store.Synchronize().Subscribe(observer);
+            var subscription = Store.Synchronize().Subscribe(observer);
+            logger.LogDebug("[SYNC_STREAM] Subscribe for {StreamId}, subscription created", StreamId);
+            return subscription;
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException e)
         {
+            logger.LogDebug("[SYNC_STREAM] Subscribe failed for {StreamId} - Store is disposed: {Exception}", StreamId, e.Message);
             return new AnonymousDisposable(() => { });
         }
     }
@@ -113,21 +116,33 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
         {
-            logger.LogWarning("Not setting {StreamId} to {Value} because the stream is disposed or value is null.", StreamId, value);
+            logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} to {Value} because the stream is disposed or value is null. IsDisposed={IsDisposed}", StreamId, value, isDisposed);
             return;
         }
-        if (current is not null && Equals(current.Value, value.Value))
+
+        var currentVersion = current?.Version;
+        var newVersion = value.Version;
+        var valuesEqual = current is not null && Equals(current.Value, value.Value);
+
+
+        if (current is not null && current.Version == value.Version && valuesEqual)
+        {
+            logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same version and equal values", StreamId);
             return;
+        }
+
         current = value;
         try
         {
-            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
+            logger.LogDebug("[SYNC_STREAM] Emitting OnNext for {StreamId}, Version={Version}, Store.IsDisposed={IsDisposed}, Store.HasObservers={HasObservers}",
+                StreamId, value.Version, Store.IsDisposed, Store.HasObservers);
             Store.OnNext(value);
+            logger.LogDebug("[SYNC_STREAM] OnNext completed for {StreamId}, opening gate", StreamId);
             hub.OpenGate(SynchronizationGate);
         }
         catch (Exception e)
         {
-            logger.LogWarning("Exception setting current value for {Address}: {Exception}", Hub.Address, e);
+            logger.LogWarning(e, "[SYNC_STREAM] Exception setting current value for {Address}", Hub.Address);
         }
     }
 
@@ -189,7 +204,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
 
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
-        logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
+        logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
         Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
     }
@@ -281,11 +296,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
+        logger.LogDebug("[SYNC_STREAM] UpdateStream called for {StreamId}, ChangeType={ChangeType}, Version={Version}, MessageId={MessageId}",
+            StreamId, delivery.Message.ChangeType, delivery.Message.Version, delivery.Id);
+
         if (Hub.Disposal is not null)
+        {
+            logger.LogWarning("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
             return;
+        }
+
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
         {
+            logger.LogDebug("[SYNC_STREAM] Processing Full change for {StreamId}", StreamId);
             currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
             try
             {
@@ -297,12 +320,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             }
             catch (Exception ex)
             {
+                logger.LogWarning(ex, "[SYNC_STREAM] Failed to process Full change for {StreamId}", StreamId);
                 SyncFailed(delivery, ex);
             }
 
         }
         else
         {
+            logger.LogDebug("[SYNC_STREAM] Processing Patch change for {StreamId}", StreamId);
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
@@ -314,11 +339,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             }
             catch (Exception ex)
             {
+                logger.LogError(ex, "[SYNC_STREAM] Failed to process Patch change for {StreamId}", StreamId);
                 SyncFailed(delivery, ex);
             }
 
         }
         Set(currentJson);
+        logger.LogDebug("[SYNC_STREAM] UpdateStream completed for {StreamId}", StreamId);
     }
 
     private void SyncFailed(IMessageDelivery delivery, Exception exception)

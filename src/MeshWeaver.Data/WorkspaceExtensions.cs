@@ -1,7 +1,7 @@
 ﻿using System.Data;
 using System.Reactive.Linq;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
@@ -27,16 +27,30 @@ public static class WorkspaceExtensions
     {
         var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILogger<IWorkspace>>();
         var stream = workspace.GetStream(typeof(T));
-        logger.LogDebug("Retrieved stream {StreamId} for type {Type}: {Identity}, {Reference}", stream.StreamId, typeof(T).Name, stream.StreamIdentity, stream.Reference);
+        logger.LogDebug("[WORKSPACE] GetObservable called for type {Type}, StreamId={StreamId}, Identity={Identity}, Reference={Reference}",
+            typeof(T).Name, stream.StreamId, stream.StreamIdentity, stream.Reference);
 
         return stream
             .Synchronize()
-            .Select(ws => ws.Value?.GetData<T>().ToArray())
-            .Where(x => x != null)
+            .Do(_ => logger.LogDebug("[WORKSPACE] Subscription created for {Type}, StreamId={StreamId}", typeof(T).Name, stream.StreamId))
+            .Select(ws =>
+            {
+                logger.LogDebug("[WORKSPACE] Received change item for {Type}, StreamId={StreamId}, HasValue={HasValue}",
+                    typeof(T).Name, stream.StreamId, ws.Value != null);
+                return ws.Value?.GetData<T>().ToArray();
+            })
+            .Where(x =>
+            {
+                var hasData = x != null;
+                logger.LogDebug("[WORKSPACE] Filter check for {Type}, StreamId={StreamId}, HasData={HasData}",
+                    typeof(T).Name, stream.StreamId, hasData);
+                return hasData;
+            })
             .Select(x =>
             {
                 var ret = (IReadOnlyCollection<T>)x!;
-                logger.LogDebug("Stream {StreamId}: Observable Value for {Type}: {val}", stream.StreamId,typeof(T).Name, string.Join(", ", ret.Select(y => y!.ToString())));
+                logger.LogDebug("[WORKSPACE] Emitting collection for {Type}, StreamId={StreamId}, Count={Count}, Items={Items}",
+                    stream.StreamId, typeof(T).Name, ret.Count, string.Join(", ", ret.Select(y => y!.ToString())));
                 return ret;
             });
     }
@@ -50,7 +64,7 @@ public static class WorkspaceExtensions
         this ISynchronizationStream<EntityStore>? stream,
         EntityStoreAndUpdates storeAndUpdates) =>
         new(storeAndUpdates.Store,
-            storeAndUpdates.ChangedBy ?? stream!.StreamId, 
+            storeAndUpdates.ChangedBy ?? stream!.StreamId,
             stream!.StreamId,
             ChangeType.Patch,
             stream!.Hub.Version,
@@ -66,8 +80,8 @@ public static class WorkspaceExtensions
                 if (typeSource == null)
                     throw new DataException($"Type {g.Key.Name} is not mapped to the workspace.");
                 var collection = s.Collections.GetValueOrDefault(typeSource.CollectionName);
-                
-                collection = collection == null ? new InstanceCollection(g.ToDictionary(typeSource.TypeDefinition.GetKey)) : collection with{Instances = collection.Instances.SetItems(g.ToDictionary(typeSource.TypeDefinition.GetKey)) };
+
+                collection = collection == null ? new InstanceCollection(g.ToDictionary(typeSource.TypeDefinition.GetKey)) : collection with { Instances = collection.Instances.SetItems(g.ToDictionary(typeSource.TypeDefinition.GetKey)) };
                 return s with
                 {
                     Collections = s.Collections.SetItem(typeSource.CollectionName, collection)
