@@ -207,6 +207,12 @@ public record MessageHubConfiguration
     internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
 
     /// <summary>
+    /// When true, the hub will not automatically post InitializeHubRequest during construction.
+    /// Manual initialization is required by posting InitializeHubRequest to the hub.
+    /// </summary>
+    internal bool DeferredInitialization { get; init; }
+
+    /// <summary>
     /// Sets the timeout allowed for startup
     /// </summary>
     /// <param name="timeout"></param>
@@ -219,6 +225,16 @@ public record MessageHubConfiguration
     /// <param name="timeout"></param>
     /// <returns></returns>
     public MessageHubConfiguration WithRequestTimeout(TimeSpan timeout) => this with { RequestTimeout = timeout };
+
+    /// <summary>
+    /// Enables deferred initialization. When enabled, the hub will not automatically post InitializeHubRequest
+    /// during construction. Manual initialization is required by posting InitializeHubRequest to the hub.
+    /// This is useful when the hub needs to be fully constructed before initialization can proceed.
+    /// </summary>
+    /// <param name="deferred">Whether to defer initialization (default: true)</param>
+    /// <returns>Updated configuration</returns>
+    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) => this with { DeferredInitialization = deferred };
+
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {

@@ -91,7 +91,8 @@ public sealed class MessageHub : IMessageHub
         Register(ExecuteRequest);
         Register(HandleCallbacks);
         messageService.Start();
-        Post(new InitializeHubRequest());
+        if (!configuration.DeferredInitialization)
+            Post(new InitializeHubRequest());
 
     }
 
