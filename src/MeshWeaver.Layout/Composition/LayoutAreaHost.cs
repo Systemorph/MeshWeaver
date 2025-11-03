@@ -48,12 +48,14 @@ public record LayoutAreaHost : IDisposable
         var context = new RenderingContext(reference.Area) { Layout = reference.Layout };
         LayoutDefinition = uiControlService.LayoutDefinition;
         configuration ??= c => c;
+        // Create stream with deferred initialization to avoid circular dependency
+        // where initialization lambda uses 'this' before Stream property is assigned
         Stream = new SynchronizationStream<EntityStore>(
             new(workspace.Hub.Address, reference),
             workspace.Hub,
             reference,
             workspace.ReduceManager.ReduceTo<EntityStore>(),
-            c => configuration.Invoke(c)
+            c => configuration.Invoke(c.WithDeferredInitialization())
                 .WithInitialization(async (_, _) =>
                 {
                     return (
@@ -70,6 +72,10 @@ public record LayoutAreaHost : IDisposable
                 return Task.CompletedTask;
             }));
         Reference = reference;
+
+        // Manually trigger initialization now that Stream property is assigned
+        // This resolves the circular dependency where initialization lambda uses 'this'
+        Stream.Hub.Post(new InitializeHubRequest());
         Stream.RegisterForDisposal(this);
         Stream.RegisterForDisposal(
             Stream.Hub.Register<ClickedEvent>(

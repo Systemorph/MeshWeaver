@@ -196,7 +196,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
-        return config
+        config = config
             .WithTypes(
                 typeof(EntityStore),
                 typeof(JsonElement),
@@ -256,8 +256,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent);
 
+        // Apply deferred initialization if configured
+        if (Configuration.DeferredInitialization)
+            config = config.WithDeferredInitialization();
+
+        return config;
     }
 
     private async Task InitializeAsync(IMessageHub hub, CancellationToken ct)
@@ -384,6 +389,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
 
+    /// <summary>
+    /// When true, the stream's hosted hub will not automatically post InitializeHubRequest during construction.
+    /// Manual initialization is required by posting InitializeHubRequest to the stream's hub.
+    /// This is useful when the stream initialization depends on properties that are set after stream construction.
+    /// </summary>
+    internal bool DeferredInitialization { get; init; }
+
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
 
@@ -392,4 +404,14 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
+
+    /// <summary>
+    /// Enables deferred initialization for the stream's hosted hub. When enabled, the hub will not automatically
+    /// post InitializeHubRequest during construction. Manual initialization is required by posting InitializeHubRequest
+    /// to the stream's hub after the stream is fully constructed.
+    /// </summary>
+    /// <param name="deferred">Whether to defer initialization (default: true)</param>
+    /// <returns>Updated configuration</returns>
+    public StreamConfiguration<TStream> WithDeferredInitialization(bool deferred = true)
+        => this with { DeferredInitialization = deferred };
 }
