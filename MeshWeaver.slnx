@@ -1,0 +1,156 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/.github/" />
+  <Folder Name="/.github/workflows/">
+    <File Path=".github/workflows/dotnet-test.yml" />
+    <File Path=".github/workflows/publish-github.yml" />
+    <File Path=".github/workflows/release-packages.yml" />
+  </Folder>
+  <Folder Name="/modules/">
+    <File Path="modules/Directory.Build.props" />
+  </Folder>
+  <Folder Name="/modules/Documentation/">
+    <Project Path="modules/Documentation/MeshWeaver.Documentation.AI/MeshWeaver.Documentation.AI.csproj" />
+    <Project Path="modules/Documentation/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
+  </Folder>
+  <Folder Name="/modules/Insurance/">
+    <Project Path="modules/Insurance/MeshWeaver.Insurance.AI/MeshWeaver.Insurance.AI.csproj" />
+    <Project Path="modules/Insurance/MeshWeaver.Insurance.Domain/MeshWeaver.Insurance.Domain.csproj" />
+    <Project Path="modules/Insurance/MeshWeaver.Insurance.SampleData/MeshWeaver.Insurance.SampleData.csproj" />
+    <Project Path="modules/Insurance/MeshWeaver.Insurance.Test/MeshWeaver.Insurance.Test.csproj" />
+  </Folder>
+  <Folder Name="/modules/Northwind/">
+    <Project Path="modules/Northwind/MeshWeaver.Northwind.AI/MeshWeaver.Northwind.AI.csproj" />
+    <Project Path="modules/Northwind/MeshWeaver.Northwind.Application/MeshWeaver.Northwind.Application.csproj" />
+    <Project Path="modules/Northwind/MeshWeaver.Northwind.Domain/MeshWeaver.Northwind.Domain.csproj" />
+    <Project Path="modules/Northwind/MeshWeaver.Northwind.Model/MeshWeaver.Northwind.Model.csproj" />
+  </Folder>
+  <Folder Name="/modules/Todo/">
+    <Project Path="modules/Todo/MeshWeaver.Todo.AI/MeshWeaver.Todo.AI.csproj" />
+    <Project Path="modules/Todo/MeshWeaver.Todo/MeshWeaver.Todo.csproj" />
+  </Folder>
+  <Folder Name="/portal/">
+    <File Path="portal/Directory.Build.props" />
+    <Project Path="portal/MeshWeaver.Portal.AI/MeshWeaver.Portal.AI.csproj" />
+    <Project Path="portal/MeshWeaver.Portal.Shared.Mesh/MeshWeaver.Portal.Shared.Mesh.csproj" />
+    <Project Path="portal/MeshWeaver.Portal.Shared.Web/MeshWeaver.Portal.Shared.Web.csproj" />
+    <Project Path="portal/MeshWeaver.Portal/MeshWeaver.Portal.csproj" />
+  </Folder>
+  <Folder Name="/portal/aspire/">
+    <Project Path="portal/aspire/MeshWeaver.Portal.AppHost/MeshWeaver.Portal.AppHost.csproj" />
+    <Project Path="portal/aspire/MeshWeaver.Portal.MigrationService/MeshWeaver.Portal.MigrationService.csproj" />
+    <Project Path="portal/aspire/MeshWeaver.Portal.Orleans/MeshWeaver.Portal.Orleans.csproj" />
+    <Project Path="portal/aspire/MeshWeaver.Portal.ServiceDefaults/MeshWeaver.Portal.ServiceDefaults.csproj" />
+    <Project Path="portal/aspire/MeshWeaver.Portal.Web/MeshWeaver.Portal.Web.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".gitignore" />
+    <File Path="CLAUDE.md" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="nuget.config" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <File Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
+    <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
+    <Project Path="src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
+    <Project Path="src/MeshWeaver.AI.AzureOpenAI/MeshWeaver.AI.AzureOpenAI.csproj" />
+    <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
+    <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
+    <Project Path="src/MeshWeaver.Arithmetics.Abstractions/MeshWeaver.Arithmetics.Abstractions.csproj" />
+    <Project Path="src/MeshWeaver.Arithmetics/MeshWeaver.Arithmetics.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.AgGrid/MeshWeaver.Blazor.AgGrid.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.ChartJs/MeshWeaver.Blazor.ChartJs.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.Chat/MeshWeaver.Blazor.Chat.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
+    <Project Path="src/MeshWeaver.BusinessRules.Generator/MeshWeaver.BusinessRules.Generator.csproj" />
+    <Project Path="src/MeshWeaver.BusinessRules/MeshWeaver.BusinessRules.csproj" />
+    <Project Path="src/MeshWeaver.Charting.Pivot/MeshWeaver.Charting.Pivot.csproj" />
+    <Project Path="src/MeshWeaver.Charting/MeshWeaver.Charting.csproj" />
+    <Project Path="src/MeshWeaver.Connection.Notebook/MeshWeaver.Connection.Notebook.csproj" />
+    <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
+    <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
+    <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
+    <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
+    <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
+    <Project Path="src/MeshWeaver.DataCubes.Abstractions/MeshWeaver.DataCubes.Abstractions.csproj" />
+    <Project Path="src/MeshWeaver.DataCubes/MeshWeaver.DataCubes.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader.Csv/MeshWeaver.DataSetReader.Csv.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader.Excel.BinaryFormat/MeshWeaver.DataSetReader.Excel.BinaryFormat.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader.Excel.OpenXmlFormat/MeshWeaver.DataSetReader.Excel.OpenXmlFormat.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader.Excel.Utils/MeshWeaver.DataSetReader.Excel.Utils.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader.Excel/MeshWeaver.DataSetReader.Excel.csproj" />
+    <Project Path="src/MeshWeaver.DataSetReader/MeshWeaver.DataSetReader.csproj" />
+    <Project Path="src/MeshWeaver.DataStructures/MeshWeaver.DataStructures.csproj" />
+    <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
+    <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
+    <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />
+    <Project Path="src/MeshWeaver.GridModel/MeshWeaver.GridModel.csproj" />
+    <Project Path="src/MeshWeaver.Hierarchies/MeshWeaver.Hierarchies.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.AzureBlob/MeshWeaver.Hosting.AzureBlob.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Blazor/MeshWeaver.Hosting.Blazor.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
+    <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
+    <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
+    <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
+    <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
+    <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
+    <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
+    <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
+    <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
+    <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
+    <Project Path="src/MeshWeaver.Pivot/MeshWeaver.Pivot.csproj" />
+    <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
+    <Project Path="src/MeshWeaver.Reporting/MeshWeaver.Reporting.csproj" />
+    <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
+    <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
+    <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
+  </Folder>
+  <Folder Name="/Templates/">
+    <Project Path="templates/packaging/MeshWeaver.ProjectTemplates.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <File Path="test/appsettings.json" />
+    <File Path="test/Directory.Build.props" />
+    <File Path="test/Directory.Packages.props" />
+    <Project Path="src/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <Project Path="test/MeshWeaver.AI.Test/MeshWeaver.AI.Test.csproj" />
+    <Project Path="test/MeshWeaver.BusinessRules.Test/MeshWeaver.BusinessRules.Test.csproj" />
+    <Project Path="test/MeshWeaver.Charting.Pivot.Test/MeshWeaver.Charting.Pivot.Test.csproj" />
+    <Project Path="test/MeshWeaver.Charting.Test/MeshWeaver.Charting.Test.csproj" />
+    <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
+    <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
+    <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
+    <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
+    <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
+    <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
+    <Project Path="test/MeshWeaver.Json.Assertions.Test/MeshWeaver.Json.Assertions.Test.csproj" />
+    <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
+    <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
+    <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
+    <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
+    <Project Path="test/MeshWeaver.Pivot.Test/MeshWeaver.Pivot.Test.csproj" />
+    <Project Path="test/MeshWeaver.Reporting.Test/MeshWeaver.Reporting.Test.csproj" />
+    <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
+    <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
+    <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
+    <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/MeshWeaver.TemplateGenerator/MeshWeaver.TemplateGenerator.csproj" />
+    <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
+  </Folder>
+</Solution>

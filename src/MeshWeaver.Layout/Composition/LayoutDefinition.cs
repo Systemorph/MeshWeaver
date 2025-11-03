@@ -22,21 +22,21 @@ public record LayoutDefinition(IMessageHub Hub)
             AsyncRenderers = AsyncRenderers.Add((filter, renderer))
         };
 
-    public ValueTask<EntityStoreAndUpdates> RenderAsync(
+    public async ValueTask<EntityStoreAndUpdates> RenderAsync(
         LayoutAreaHost host,
         RenderingContext context,
-        EntityStore store) =>
-        AsyncRenderers
-            .ToAsyncEnumerable()
-            .Where(r => r.Filter(context))
-            .AggregateAwaitAsync(new EntityStoreAndUpdates(store, [], host.Stream.StreamId),
-                async (r,x) =>
-            {
-                var ret = await x.Renderer.Invoke(host, context, r.Store);
-                return ret with{
-                    Updates = r.Updates.Concat(ret.Updates)
-                };
-            });
+        EntityStore store)
+    {
+        var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
+
+        await foreach (var x in AsyncRenderers.ToAsyncEnumerable().Where(r => r.Filter(context)))
+        {
+            var ret = await x.Renderer.Invoke(host, context, result.Store);
+            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+        }
+
+        return result;
+    }
 
     public int Count => AsyncRenderers.Count;
 

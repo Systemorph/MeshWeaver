@@ -31,16 +31,18 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return AggregationDelegates<T>.GetAggregateByDelegate(groupKeySelector)(source);
         }
 
-        public static IAsyncEnumerable<T> AggregateByAsync<T>(this IAsyncEnumerable<T> source, params string[] propertyNames)
+        public static async IAsyncEnumerable<T> AggregateByAsync<T>(this IAsyncEnumerable<T> source, params string[] propertyNames)
             where T : class
         {
             var (groupBySelector, eq) =
-                AggregationDelegates<T>.GetGroupByDelegateAndEqualityComparer(propertyNames.ToList()); 
+                AggregationDelegates<T>.GetGroupByDelegateAndEqualityComparer(propertyNames.ToList());
 
-            var aggregatedGroups = source.GroupBy(x =>  groupBySelector(x), eq)
-                .SelectAwait(async g => await g.AggregateAsync((result, item) => SumFunction.Sum(result, item)));
+            var groups = source.GroupBy(x =>  groupBySelector(x), eq);
 
-            return aggregatedGroups;
+            await foreach (var g in groups)
+            {
+                yield return await g.ToAsyncEnumerable().AggregateAsync((result, item) => SumFunction.Sum(result, item));
+            }
         }
 
 
@@ -57,16 +59,18 @@ namespace MeshWeaver.Arithmetics.Aggregation
             return AggregationDelegates<T>.GetAggregateOverDelegate(propertyNames.ToList())(source);
         }
 
-        public static IAsyncEnumerable<T> AggregateOverAsync<T>(this IAsyncEnumerable<T> source, params string[] propertyNames)
+        public static async IAsyncEnumerable<T> AggregateOverAsync<T>(this IAsyncEnumerable<T> source, params string[] propertyNames)
             where T : class
         {
             var (groupBySelector, eq) =
                 AggregationDelegates<T>.GetGroupByDelegateAndEqualityComparer(propertyNames.ToList(), true);
 
-            var aggregatedGroups = source.GroupBy(x => groupBySelector(x), eq)
-                .SelectAwait(async g => await g.AggregateAsync((result, item) => SumFunction.Sum(result, item)));
+            var groups = source.GroupBy(x => groupBySelector(x), eq);
 
-            return aggregatedGroups;
+            await foreach (var g in groups)
+            {
+                yield return await g.ToAsyncEnumerable().AggregateAsync((result, item) => SumFunction.Sum(result, item));
+            }
         }
 
     }

@@ -101,7 +101,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var areaControls = await areas
             .ToAsyncEnumerable()
-            .SelectAwait(async a =>
+            .Select(async a =>
                 await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
                 .FirstAsync(x => x != null)!)

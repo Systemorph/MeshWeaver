@@ -26,15 +26,17 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
     protected ILogger Logger { get; }
 
     protected async Task<IReadOnlyDictionary<string, IAgentDefinition>> Initialize(
-        IEnumerable<IAgentDefinition> agentDefinitions) =>
-        await agentDefinitions.ToAsyncEnumerable().SelectAwait(async x =>
-            {
-
-                if (x is IInitializableAgent initializable)
-                    await initializable.InitializeAsync();
-                return x;
-            })
-            .ToDictionaryAsync(x => x.Name);
+        IEnumerable<IAgentDefinition> agentDefinitions)
+    {
+        var dict = new Dictionary<string, IAgentDefinition>();
+        await foreach (var x in agentDefinitions.ToAsyncEnumerable())
+        {
+            if (x is IInitializableAgent initializable)
+                await initializable.InitializeAsync();
+            dict[x.Name] = x;
+        }
+        return dict;
+    }
 
 
     public virtual async Task<IAgentChat> CreateAsync()
