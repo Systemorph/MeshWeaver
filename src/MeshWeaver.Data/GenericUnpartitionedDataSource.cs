@@ -129,7 +129,13 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     public virtual void Dispose()
     {
-        foreach (var stream in Streams.Values)
+        ISynchronizationStream<EntityStore>[] streamsToDispose;
+        lock (Streams)
+        {
+            streamsToDispose = Streams.Values.ToArray();
+        }
+
+        foreach (var stream in streamsToDispose)
             stream.Dispose();
 
         if (changesSubscriptions != null)
