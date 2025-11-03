@@ -188,6 +188,7 @@ c => c
 
         var i = 0;
         var selectedInitial = stream
+            .Synchronize()
             .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, i++ == 0));
 
         if (!reducedStream.Configuration.NullReturn)

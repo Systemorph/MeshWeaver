@@ -120,12 +120,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             return;
         }
 
-        var currentVersion = current?.Version;
-        var newVersion = value.Version;
         var valuesEqual = current is not null && Equals(current.Value, value.Value);
 
 
-        if (current is not null && current.Version == value.Version && valuesEqual)
+        if (current is not null && valuesEqual)
         {
             logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same version and equal values", StreamId);
             return;
