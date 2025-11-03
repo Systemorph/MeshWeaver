@@ -245,8 +245,8 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         );        // assert
         var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
         var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
-        var properties = FindPropertiesInSchema(schemaJson); 
-        
+        var properties = FindPropertiesInSchema(schemaJson);
+
         var statusProperty = properties.GetProperty("status");
 
         // Check if the status property has enum values (the key enum feature)
@@ -371,7 +371,9 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     public async Task DataSerialization_ShouldPreserveComplexObjects()
     {
         // arrange
-        var client = GetClient(); var testData = new SerializationTestData(
+        var client = GetClient();
+
+        var testData = new SerializationTestData(
             name: "Serialization Test",
             nullableNumber: null,
             createdAt: DateTime.UtcNow,
@@ -382,7 +384,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            DataChangeRequest.Update(new object[] { testData }),
+            DataChangeRequest.Update([testData]),
             o => o.WithTarget(new ClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
