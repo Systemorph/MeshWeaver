@@ -67,7 +67,7 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
 {
     public const string SourceType = "AzureBlob";
 
-    public IStreamProvider Create(ContentCollectionConfig config)
+    public Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
     {
         if (config.Settings == null)
             throw new ArgumentException("Settings are required for AzureBlob source type");
@@ -81,6 +81,6 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
         var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
         var blobServiceClient = factory.CreateClient(clientName);
 
-        return new AzureBlobStreamProvider(blobServiceClient, containerName);
+        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName));
     }
 }

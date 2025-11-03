@@ -52,6 +52,15 @@ public static class TestHubSetup
 
     public const string CashflowImportFormat = nameof(CashflowImportFormat);
 
+    public static MessageHubConfiguration ConfigureImportRouter(this MessageHubConfiguration config)
+        => config.WithRoutes(forward =>
+            forward
+                .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
+                .RouteAddressToHostedHub<TransactionalDataAddress>(c =>
+                    c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
+                .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
+                .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
+        );
     public static MessageHubConfiguration ConfigureImportHub(
         this MessageHubConfiguration config
     ) =>
@@ -60,9 +69,11 @@ public static class TestHubSetup
                 data.AddPartitionedHubSource<TransactionalDataAddress>(
                         c =>
                             c.WithType<TransactionalData>(td => new TransactionalDataAddress(td.Year, td.BusinessUnit))
+                                .InitializingPartitions(new TransactionalDataAddress(2024, "1"), new TransactionalDataAddress(2024, "2"))
                     )
                     .AddPartitionedHubSource<ComputedDataAddress>(
                         c => c.WithType<ComputedData>(cd => new(cd.Year, cd.BusinessUnit))
+                            .InitializingPartitions(new ComputedDataAddress(2024, "1"), new ComputedDataAddress(2024, "2"))
                     )
                     .AddHubSource(
                         new ReferenceDataAddress(),
@@ -79,7 +90,7 @@ public static class TestHubSetup
                     format => format.WithAutoMappings().WithImportFunction(ImportFunction)
                 )
             );
-        
+
 
     private static EntityStore ImportFunction(
         ImportRequest request,

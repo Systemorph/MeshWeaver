@@ -14,6 +14,8 @@ public static class InsuranceAIExtensions
     public static IServiceCollection AddInsuranceAI(this IServiceCollection services)
     {
         services.AddSingleton<IAgentDefinition, InsuranceAgent>();
+        services.AddSingleton<IAgentDefinition, RiskImportAgent>();
+        services.AddSingleton<IAgentDefinition, SlipImportAgent>();
 
         return services;
     }

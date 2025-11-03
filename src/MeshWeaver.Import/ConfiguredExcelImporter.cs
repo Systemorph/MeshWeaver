@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+﻿using ClosedXML.Excel;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Utils;
 
@@ -8,22 +8,16 @@ namespace MeshWeaver.Import;
 /// Imports entities from Excel files using declarative configuration.
 /// </summary>
 /// <typeparam name="T">The entity type to import</typeparam>
-public class ConfiguredExcelImporter<T> where T : class
+public class ConfiguredExcelImporter<T>(Func<Dictionary<string, object?>, T> entityBuilder)
+    where T : class
 {
-    private readonly Func<Dictionary<string, object?>, T> entityBuilder;
-
-    public ConfiguredExcelImporter(Func<Dictionary<string, object?>, T> entityBuilder)
-    {
-        this.entityBuilder = entityBuilder;
-    }
-
     public IEnumerable<T> Import(Stream stream, string sourceName, ExcelImportConfiguration config)
     {
         using var wb = new XLWorkbook(stream);
         var ws = string.IsNullOrWhiteSpace(config.WorksheetName) ? wb.Worksheets.First() : wb.Worksheet(config.WorksheetName);
 
         // Pre-read total cells for allocations (tolerate duplicates/invalid addresses)
-        var allocationTotals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var allocationTotals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var a in config.Allocations)
         {
             if (string.IsNullOrWhiteSpace(a.TotalCell))
@@ -31,7 +25,7 @@ public class ConfiguredExcelImporter<T> where T : class
             // Only accept simple A1-style addresses; skip anything suspicious
             if (!IsValidCellAddress(a.TotalCell))
                 continue;
-            var totalVal = GetCellDecimal(ws, a.TotalCell) ?? 0m;
+            var totalVal = GetCellDouble(ws, a.TotalCell) ?? 0;
             // Last write wins if duplicates exist; avoids ArgumentException
             allocationTotals[a.TotalCell] = totalVal;
         }
@@ -49,10 +43,10 @@ public class ConfiguredExcelImporter<T> where T : class
             rows = rows.Where(r => !IsIgnoredByExpressions(r, config));
 
         // Pre-calc denominators for each allocation (sum of weights over data rows)
-        var allocationDenominators = new Dictionary<AllocationMapping, decimal>();
+        var allocationDenominators = new Dictionary<AllocationMapping, double>();
         foreach (var alloc in config.Allocations)
         {
-            decimal denom = 0m;
+            var denom = 0.0;
             foreach (var row in rows)
             {
                 denom += SumWeightColumns(row, alloc.WeightColumns);
@@ -198,43 +192,43 @@ public class ConfiguredExcelImporter<T> where T : class
         return s;
     }
 
-    private static decimal SumColumns(IXLRow row, IEnumerable<string> columnLetters)
-        => columnLetters.Select(c => GetCellDecimal(row.Worksheet, c + row.RowNumber()) ?? 0m).Sum();
+    private static double SumColumns(IXLRow row, IEnumerable<string> columnLetters)
+        => columnLetters.Select(c => GetCellDouble(row.Worksheet, c + row.RowNumber()) ?? 0).Sum();
 
-    private static decimal SumWeightColumns(IXLRow row, IEnumerable<string> columnLetters)
+    private static double SumWeightColumns(IXLRow row, IEnumerable<string> columnLetters)
     {
-        decimal sum = 0m;
+        var sum = 0.0;
         foreach (var col in columnLetters)
         {
-            var val = GetCellDecimal(row.Worksheet, col + row.RowNumber());
+            var val = GetCellDouble(row.Worksheet, col + row.RowNumber());
             if (val.HasValue) sum += val.Value;
         }
         return sum;
     }
 
-    private static decimal DiffColumns(IXLRow row, IEnumerable<string> columnLetters)
+    private static double DiffColumns(IXLRow row, IEnumerable<string> columnLetters)
     {
         var cols = columnLetters.Take(2).ToArray();
-        var a = GetCellDecimal(row.Worksheet, cols.ElementAtOrDefault(0) + row.RowNumber()) ?? 0m;
-        var b = GetCellDecimal(row.Worksheet, cols.ElementAtOrDefault(1) + row.RowNumber()) ?? 0m;
+        var a = GetCellDouble(row.Worksheet, cols.ElementAtOrDefault(0) + row.RowNumber()) ?? 0;
+        var b = GetCellDouble(row.Worksheet, cols.ElementAtOrDefault(1) + row.RowNumber()) ?? 0;
         return b - a;
     }
 
-    private static decimal? GetCellDecimal(IXLWorksheet ws, string cellAddress)
+    private static double? GetCellDouble(IXLWorksheet ws, string cellAddress)
     {
         var cell = ws.Cell(cellAddress);
         cell = ResolveMergedAnchor(cell);
         if (cell.DataType == XLDataType.Number)
         {
-            if (cell.TryGetValue(out decimal dec)) return dec;
-            if (cell.TryGetValue(out double dbl)) return (decimal)dbl;
+            if (cell.TryGetValue(out double dec)) return dec;
+            if (cell.TryGetValue(out double dbl)) return (double)dbl;
             if (cell.TryGetValue(out int i)) return i;
         }
         var str = GetStringSafe(cell);
         // Try invariant culture first, then current culture, allow currency/thousands
-        if (decimal.TryParse(str, System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowCurrencySymbol, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        if (double.TryParse(str, System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowCurrencySymbol, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
             return parsed;
-        if (decimal.TryParse(str, System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowCurrencySymbol, System.Globalization.CultureInfo.CurrentCulture, out parsed))
+        if (double.TryParse(str, System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowCurrencySymbol, System.Globalization.CultureInfo.CurrentCulture, out parsed))
             return parsed;
         return null;
     }

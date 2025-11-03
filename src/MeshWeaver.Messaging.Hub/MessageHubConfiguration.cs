@@ -9,6 +9,8 @@ namespace MeshWeaver.Messaging;
 
 public record MessageHubConfiguration
 {
+    public const string InitializeGateName = "Initialize";
+
     public Address Address { get; }
     protected readonly IServiceProvider? ParentServiceProvider;
     public MessageHubConfiguration(IServiceProvider? parentServiceProvider, Address address)
@@ -20,10 +22,26 @@ public record MessageHubConfiguration
         DeliveryPipeline = [UserServiceDeliveryPipeline];
     }
 
-    internal Predicate<IMessageDelivery> StartupDeferral { get; init; } = x => x.Message is not InitializeHubRequest;
+    /// <summary>
+    /// Named initialization gates that are created during hub initialization and can be opened by name.
+    /// The key is the gate name, the value is the predicate that determines which messages are allowed during initialization.
+    /// All other messages are deferred until the gate is opened.
+    /// The Initialize gate doesn't allow any additional messages - it's just a marker for when BuildupActions complete.
+    /// </summary>
+    internal ImmutableDictionary<string, Predicate<IMessageDelivery>> InitializationGates { get; init; } = ImmutableDictionary<string, Predicate<IMessageDelivery>>.Empty
+        .Add(InitializeGateName, d => d.Message is InitializeHubRequest); // Initialize gate doesn't allow any messages - just marks completion of BuildupActions
 
-    public MessageHubConfiguration WithStartupDeferral(Predicate<IMessageDelivery> startupDeferral)
-        => this with { StartupDeferral = startupDeferral };
+    /// <summary>
+    /// Adds a named initialization gate that will be created during hub initialization.
+    /// This ensures the gate is in place before any messages are processed.
+    /// Only messages matching the predicate will be allowed through during initialization.
+    /// All other messages will be deferred until the gate is opened via OpenGate().
+    /// </summary>
+    /// <param name="name">Unique name for this initialization gate</param>
+    /// <param name="allowDuringInit">Predicate that determines which messages are allowed during initialization (e.g. InitializeHubRequest, SetCurrentRequest)</param>
+    /// <returns>Updated configuration</returns>
+    public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
+        => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
     public IMessageHub? ParentHub
     {
@@ -185,9 +203,37 @@ public record MessageHubConfiguration
         });
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
-    internal long StartupTimeout { get; init; }
+    internal TimeSpan? StartupTimeout { get; init; } //= new(0, 0, 30); // Default 10 seconds
+    internal TimeSpan RequestTimeout { get; init; } = new(0, 0, 30);
 
-    public MessageHubConfiguration WithStartupTimeout(long timeout) => this with { StartupTimeout = timeout };
+    /// <summary>
+    /// When true, the hub will not automatically post InitializeHubRequest during construction.
+    /// Manual initialization is required by posting InitializeHubRequest to the hub.
+    /// </summary>
+    internal bool DeferredInitialization { get; init; }
+
+    /// <summary>
+    /// Sets the timeout allowed for startup
+    /// </summary>
+    /// <param name="timeout"></param>
+    /// <returns></returns>
+    public MessageHubConfiguration WithStartupTimeout(TimeSpan timeout) => this with { StartupTimeout = timeout };
+
+    /// <summary>
+    /// Sets the timeout for callbacks (AwaitResponse)
+    /// </summary>
+    /// <param name="timeout"></param>
+    /// <returns></returns>
+    public MessageHubConfiguration WithRequestTimeout(TimeSpan timeout) => this with { RequestTimeout = timeout };
+
+    /// <summary>
+    /// Enables deferred initialization. When enabled, the hub will not automatically post InitializeHubRequest
+    /// during construction. Manual initialization is required by posting InitializeHubRequest to the hub.
+    /// This is useful when the hub needs to be fully constructed before initialization can proceed.
+    /// </summary>
+    /// <param name="deferred">Whether to defer initialization (default: true)</param>
+    /// <returns>Updated configuration</returns>
+    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) => this with { DeferredInitialization = deferred };
 
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)

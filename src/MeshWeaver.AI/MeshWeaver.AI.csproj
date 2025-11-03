@@ -6,10 +6,13 @@
     <ItemGroup>
         <PackageReference Include="Azure.AI.OpenAI" />
         <PackageReference Include="Azure.Core" />
+        <PackageReference Include="ClosedXML" />
+        <PackageReference Include="DocumentFormat.OpenXml" />
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
         <PackageReference Include="Microsoft.SemanticKernel.Agents.Core" />
         <PackageReference Include="OpenAI" />
+        <PackageReference Include="UglyToad.PdfPig" />
 
     </ItemGroup>
     <ItemGroup>

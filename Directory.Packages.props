@@ -36,6 +36,7 @@
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.3.0" />
     <PackageVersion Include="EPS.Extensions.YamlMarkdown" Version="8.0.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.3" />
+    <PackageVersion Include="itext7" Version="9.3.0" />
     <PackageVersion Include="JetBrains.Annotations" Version="2023.3.0" />
     <PackageVersion Include="JsonPatch.Net" Version="3.3.0" />
     <PackageVersion Include="JsonPath.Net" Version="2.1.1" />
@@ -142,6 +143,7 @@
     <PackageVersion Include="Aspire.Azure.Data.Tables" Version="9.5.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="9.0.9" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     <PackageVersion Include="xunit.v3" Version="3.1.0" />
     <PackageVersion Include="xunit.v3.assert" Version="3.1.0" />
     <PackageVersion Include="xunit.v3.extensibility.core" Version="3.1.0" />

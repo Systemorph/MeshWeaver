@@ -11,18 +11,19 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
 {
     public const string SourceType = "Hub";
 
-    public IStreamProvider Create(ContentCollectionConfig config)
+    public async Task<IStreamProvider> CreateAsync(ContentCollectionConfig config, CancellationToken cancellationToken = default)
     {
         if (config.Address == null)
             throw new ArgumentException("Address is required for Hub source type");
 
         var collectionName = config.Settings?.GetValueOrDefault("CollectionName") ?? config.Name;
 
-        // Query the remote hub for the collection configuration
-        var response = hub.AwaitResponse(
+        // Query the remote hub for the collection configuration (now properly async)
+        var response = await hub.AwaitResponse(
             new GetContentCollectionRequest([collectionName]),
-            o => o.WithTarget(config.Address)
-        ).GetAwaiter().GetResult();
+            o => o.WithTarget(config.Address),
+            cancellationToken
+        );
 
         var remoteConfig = response.Message.Collections.FirstOrDefault();
         if (remoteConfig == null)
@@ -33,7 +34,7 @@ public class HubStreamProviderFactory(IMessageHub hub) : IStreamProviderFactory
         if (factory == null)
             throw new InvalidOperationException($"Unknown provider type '{remoteConfig.SourceType}'");
 
-        // Create provider using the factory with the remote config
-        return factory.Create(remoteConfig);
+        // Create provider using the factory with the remote config (now properly async)
+        return await factory.CreateAsync(remoteConfig, cancellationToken);
     }
 }

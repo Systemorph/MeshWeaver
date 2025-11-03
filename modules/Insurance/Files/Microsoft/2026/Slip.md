@@ -14,9 +14,16 @@
 **Address:** One Microsoft Way, Redmond, WA 98052, United States
 
 ## Period of Insurance
-**From:** 1 January 2026  
-**To:** 31 December 2026  
+**From:** 1 January 2026
+**To:** 31 December 2026
 **Local Standard Time at the address of the Insured**
+
+---
+
+## Reinsurance Terms
+
+**Estimated Premium Income (EPI):** USD 200,000,000
+**Brokerage:** 10%
 
 ---
 
@@ -25,58 +32,60 @@
 ### 1. Fire Damage
 
 - **Layer 1:**
-  - Attachment Point: USD 0  
-  - Limit per Occurrence: USD 100,000,000  
-  - **Annual Aggregate Limit:** USD 300,000,000  
-  - **Annual Aggregate Deductible:** USD 25,000,000 (applies to Fire only)
+  - Deductible per Occurrence: USD 5,000,000
+  - Limit per Occurrence: USD 100,000,000
+  - **Annual Aggregate Deductible:** USD 25,000,000
+  - **Annual Aggregate Limit:** USD 300,000,000
 
 - **Layer 2:**
-  - Attachment Point: USD 100,000,000  
-  - Limit per Occurrence: USD 150,000,000  
-  - **Annual Aggregate Limit:** USD 450,000,000
+  - Attachment Point: USD 105,000,000
+  - Limit per Occurrence: USD 145,000,000
+  - **Annual Aggregate Limit:** USD 435,000,000
 
 - **Layer 3:**
-  - Attachment Point: USD 250,000,000  
-  - Limit per Occurrence: USD 250,000,000  
-  - **Annual Aggregate Limit:** USD 600,000,000
+  - Attachment Point: USD 250,000,000
+  - Limit per Occurrence: USD 250,000,000
+  - **Annual Aggregate Limit:** USD 750,000,000
 
 ---
 
-### 2. Natural Catastrophe (Earthquake, Flood, Storm)
+### 2. Natural Catastrophe (Windstorm, Earthquake)
 
 - **Layer 1:**
-  - Attachment Point: USD 0  
-  - Limit per Occurrence: USD 75,000,000  
-  - **Annual Aggregate Limit:** USD 225,000,000
+  - Deductible per Occurrence: USD 5,000,000
+  - Limit per Occurrence: USD 100,000,000
+  - **Annual Aggregate Deductible:** USD 25,000,000
+  - **Annual Aggregate Limit:** USD 300,000,000
 
 - **Layer 2:**
-  - Attachment Point: USD 75,000,000  
-  - Limit per Occurrence: USD 125,000,000  
-  - **Annual Aggregate Limit:** USD 375,000,000
+  - Attachment Point: USD 105,000,000
+  - Limit per Occurrence: USD 145,000,000
+  - **Annual Aggregate Limit:** USD 435,000,000
 
 - **Layer 3:**
-  - Attachment Point: USD 200,000,000  
-  - Limit per Occurrence: USD 200,000,000  
-  - **Annual Aggregate Limit:** USD 500,000,000
+  - Attachment Point: USD 250,000,000
+  - Limit per Occurrence: USD 250,000,000
+  - **Annual Aggregate Limit:** USD 750,000,000
 
 ---
 
 ### 3. Business Interruption
 
 - **Layer 1:**
-  - Attachment Point: USD 0  
-  - Limit per Occurrence: USD 50,000,000  
-  - **Annual Aggregate Limit:** USD 150,000,000
-
-- **Layer 2:**
-  - Attachment Point: USD 50,000,000  
-  - Limit per Occurrence: USD 100,000,000  
+  - Deductible per Occurrence: USD 5,000,000
+  - Limit per Occurrence: USD 100,000,000
+  - **Annual Aggregate Deductible:** USD 25,000,000
   - **Annual Aggregate Limit:** USD 300,000,000
 
+- **Layer 2:**
+  - Attachment Point: USD 105,000,000
+  - Limit per Occurrence: USD 145,000,000
+  - **Annual Aggregate Limit:** USD 435,000,000
+
 - **Layer 3:**
-  - Attachment Point: USD 150,000,000  
-  - Limit per Occurrence: USD 150,000,000  
-  - **Annual Aggregate Limit:** USD 450,000,000
+  - Attachment Point: USD 250,000,000
+  - Limit per Occurrence: USD 250,000,000
+  - **Annual Aggregate Limit:** USD 750,000,000
 
 ---
 

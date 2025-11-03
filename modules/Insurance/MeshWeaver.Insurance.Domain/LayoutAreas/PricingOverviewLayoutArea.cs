@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -56,12 +56,9 @@ public static class PricingOverviewLayoutArea
             $"- **Country:** {pricing.Country ?? "N/A"}",
             $"- **Legal Entity:** {pricing.LegalEntity ?? "N/A"}",
             "",
-            "### Financial",
-            $"- **Premium:** {(pricing.Premium.HasValue && pricing.Currency != null ? $"{pricing.Currency} {pricing.Premium:N2}" : "N/A")}",
-            $"- **Currency:** {pricing.Currency ?? "N/A"}",
-            "",
             "### Parties",
-            $"- **Broker:** {pricing.BrokerName ?? "N/A"}"
+            $"- **Broker:** {pricing.BrokerName ?? "N/A"}",
+            $"- **Primary Insurance:** {pricing.PrimaryInsurance ?? "N/A"}"
         };
 
         return string.Join("\n", lines);

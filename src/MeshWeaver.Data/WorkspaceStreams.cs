@@ -188,12 +188,14 @@ c => c
 
         var i = 0;
         var selectedInitial = stream
+            .Synchronize()
             .Select(change => reducer.Invoke(change, (TReference)reducedStream.Reference, i++ == 0));
 
         if (!reducedStream.Configuration.NullReturn)
         {
             selectedInitial = selectedInitial
-                .Where(x => x is { Value: not null });
+                .Where(x => x is { Value: not null })
+                .Synchronize();
         }
 
 

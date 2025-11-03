@@ -12,8 +12,8 @@ namespace MeshWeaver.Insurance.AI;
 /// <summary>
 /// Main Insurance agent that provides access to insurance pricing data and collections.
 /// </summary>
-[DefaultAgent]
-public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
+[ExposedInNavigator]
+public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext, IAgentWithDelegations
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
@@ -23,34 +23,65 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     public string Description =>
         "Handles all questions and actions related to insurance pricings, property risks, and dimensions. " +
         "Provides access to pricing data, allows creation and management of pricings and property risks. " +
-        "Also manages submission documents and files for each pricing.";
+        "Also manages submission documents and files for each pricing. " +
+        "Can delegate to specialized import agents for processing risk data files and slip documents.";
+
+    public IEnumerable<DelegationDescription> Delegations
+    {
+        get
+        {
+            yield return new DelegationDescription(
+                nameof(RiskImportAgent),
+                "Delegate to RiskImportAgent when the user wants to import property risks from Excel files, " +
+                "or when working with risk data files (.xlsx, .xls) that contain property information like " +
+                "location, TSI (Total Sum Insured), address, country, currency, building values, etc. " +
+                "Common file names include: risks.xlsx, exposure.xlsx, property schedule, location schedule, etc."
+            );
+
+            yield return new DelegationDescription(
+                nameof(SlipImportAgent),
+                "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF documents, " +
+                "or when working with slip files (.pdf) that contain insurance submission information like " +
+                "insured details, coverage terms, premium information, reinsurance structure layers, limits, rates, etc. " +
+                "Common file names include: slip.pdf, submission.pdf, placement.pdf, quote.pdf, etc."
+            );
+        }
+    }
 
     public string Instructions =>
         $$$"""
         The agent is the InsuranceAgent, specialized in managing insurance pricings:
+
+        ## Content Collection Context
+
+        IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
+        - The submission files collection is named "Submissions-{pricingId}"
+        - All file paths are relative to the root (/) of this collection
+        - Example: For pricing "AXA-2024", the collection is "Submissions-AXA-2024" and files are at paths like "/slip.pdf", "/risks.xlsx"
 
         ## Working with Submission Documents and Files
 
         CRITICAL: When users ask about submission files, documents, or content:
         - DO NOT call {{{nameof(DataPlugin.GetData)}}} for Pricing or any other data first
         - DO NOT try to verify the pricing exists before accessing files
-        - The SubmissionPlugin is already configured for the current pricing context
-        - Simply call the SubmissionPlugin functions directly
+        - The ContentPlugin is already configured for the current pricing context
+        - Simply call the ContentPlugin functions directly
+        - All file paths should start with "/" (e.g., "/slip.pdf", "/risks.xlsx")
 
-        Available SubmissionPlugin functions (all collectionName parameters are optional):
-        - {{{nameof(ContentCollectionPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
-        - {{{nameof(ContentCollectionPlugin.ListFolders)}}}() - List all folders
-        - {{{nameof(ContentCollectionPlugin.ListCollectionItems)}}}() - List both files and folders
-        - {{{nameof(ContentCollectionPlugin.GetDocument)}}}(documentPath) - Get document content
-        - {{{nameof(ContentCollectionPlugin.SaveDocument)}}}(documentPath, content) - Save a document
-        - {{{nameof(ContentCollectionPlugin.DeleteFile)}}}(filePath) - Delete a file
-        - {{{nameof(ContentCollectionPlugin.CreateFolder)}}}(folderPath) - Create a folder
-        - {{{nameof(ContentCollectionPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
+        Available ContentPlugin functions (all collectionName parameters are optional):
+        - {{{nameof(ContentPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
+        - {{{nameof(ContentPlugin.ListFolders)}}}() - List all folders
+        - {{{nameof(ContentPlugin.ListCollectionItems)}}}() - List both files and folders
+        - {{{nameof(ContentPlugin.GetDocument)}}}(documentPath) - Get document content (use path like "/Slip.md")
+        - {{{nameof(ContentPlugin.SaveFile)}}}(documentPath, content) - Save a document
+        - {{{nameof(ContentPlugin.DeleteFile)}}}(filePath) - Delete a file
+        - {{{nameof(ContentPlugin.CreateFolder)}}}(folderPath) - Create a folder
+        - {{{nameof(ContentPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
 
         Examples:
-        - User: "Show me the submission files" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
-        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentCollectionPlugin.ListFiles)}}}()
-        - User: "Read the slip document" → You: Call {{{nameof(ContentCollectionPlugin.GetDocument)}}}("Slip.md")
+        - User: "Show me the submission files" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
+        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
+        - User: "Read the slip document" → You: Call {{{nameof(ContentPlugin.GetDocument)}}}("/Slip.md")
 
         ## Working with Pricing Data
 
@@ -71,14 +102,14 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
         yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap).CreateKernelPlugin();
 
-        // Always provide ContentCollectionPlugin - it will use ContextToConfigMap to determine the collection
-        var submissionPluginConfig = CreateSubmissionPluginConfig(chat);
-        yield return new ContentCollectionPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
+        // Always provide ContentPlugin - it will use ContextToConfigMap to determine the collection
+        var submissionPluginConfig = CreateSubmissionPluginConfig();
+        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
     }
 
-    private static ContentCollectionPluginConfig CreateSubmissionPluginConfig(IAgentChat chat)
+    private static ContentPluginConfig CreateSubmissionPluginConfig()
     {
-        return new ContentCollectionPluginConfig
+        return new ContentPluginConfig
         {
             Collections = [],
             ContextToConfigMap = context =>
@@ -118,7 +149,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
             var typesResponse = await hub.AwaitResponse(
                 new GetDomainTypesRequest(),
                 o => o.WithTarget(new PricingAddress("default")));
-            typeDefinitionMap = typesResponse.Message.Types.Select(t => t with { Address = null }).ToDictionary(x => x.Name);
+            typeDefinitionMap = typesResponse?.Message?.Types?.Select(t => t with { Address = null }).ToDictionary(x => x.Name!);
         }
         catch
         {
@@ -130,7 +161,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
             var layoutAreaResponse = await hub.AwaitResponse(
                 new GetLayoutAreasRequest(),
                 o => o.WithTarget(new PricingAddress("default")));
-            layoutAreaMap = layoutAreaResponse.Message.Areas.ToDictionary(x => x.Area);
+            layoutAreaMap = layoutAreaResponse?.Message?.Areas?.ToDictionary(x => x.Area);
         }
         catch
         {

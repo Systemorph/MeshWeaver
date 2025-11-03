@@ -16,7 +16,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
     public Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
-        var fullPath = Path.IsPathRooted(reference) ? reference : Path.Combine(basePath, reference.TrimStart('/'));
+        var fullPath = Path.Combine(basePath, reference.TrimStart('/'));
         if (!File.Exists(fullPath))
         {
             return Task.FromResult<Stream?>(null);

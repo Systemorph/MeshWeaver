@@ -10,7 +10,7 @@ namespace MeshWeaver.Import.Implementation;
 
 public class ImportManager
 {
-    public ImportConfiguration Configuration { get; }
+    public ImportBuilder Configuration { get; }
 
     public IWorkspace Workspace { get; }
     public IMessageHub Hub { get; }
@@ -22,7 +22,7 @@ public class ImportManager
 
         Workspace = workspace;
         Hub = hub;
-        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportConfiguration(workspace), (c, l) => l.Invoke(c));
+        Configuration = hub.Configuration.GetListOfLambdas().Aggregate(new ImportBuilder(workspace, hub.ServiceProvider), (c, l) => l.Invoke(c));
 
         // Don't initialize the import hub in constructor - do it lazily to avoid timing issues
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
@@ -83,18 +83,17 @@ public class ImportManager
     private async Task ImportImpl(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
+        var importActivity = activity.StartSubActivity(ActivityCategory.Import);
         try
         {
 
             activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
-            var importActivity = activity.StartSubActivity(ActivityCategory.Import);
             var imported = await ImportInstancesAsync(request.Message, importActivity, cancellationToken);
             importActivity.Complete(log =>
             {
                 if (log.HasErrors())
                 {
-
                     Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                     return;
                 }
@@ -107,6 +106,7 @@ public class ImportManager
                     request
                 );
                 activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
 
             });
@@ -114,6 +114,9 @@ public class ImportManager
         }
         catch (Exception e)
         {
+            importActivity.LogError(e.Message);
+            importActivity.Complete();
+
             activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
             FinishWithException(request, e, activity);
         }
@@ -124,9 +127,114 @@ public class ImportManager
         Activity? activity,
         CancellationToken cancellationToken)
     {
+        // If ExcelImportConfiguration is provided, use ConfiguredExcelImporter directly
+        if (importRequest.Configuration is ExcelImportConfiguration excelConfig)
+        {
+            return await ImportWithConfiguredExcelImporter(importRequest, excelConfig, activity);
+        }
+
         var (dataSet, format) = await ReadDataSetAsync(importRequest, activity, cancellationToken);
         var imported = await format.Import(importRequest, dataSet, activity, cancellationToken);
         return imported!;
+    }
+
+    private async Task<EntityStore> ImportWithConfiguredExcelImporter(
+        ImportRequest importRequest,
+        ExcelImportConfiguration config,
+        Activity? activity)
+    {
+        activity?.LogInformation("Using ConfiguredExcelImporter with TypeName: {TypeName}", config.TypeName);
+
+        // Get the stream provider
+        var sourceType = importRequest.Source.GetType();
+        if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
+            throw new ImportException($"Unknown stream type: {sourceType.FullName}");
+
+        var stream = await streamProvider.Invoke(importRequest);
+        if (stream == null)
+            throw new ImportException($"Could not open stream: {importRequest.Source}");
+
+        // Get the source name for tracking
+        var sourceName = importRequest.Source switch
+        {
+            CollectionSource cs => cs.Path,
+            _ => "unknown"
+        };
+
+        // Resolve the entity type from TypeName
+        if (string.IsNullOrWhiteSpace(config.TypeName))
+            throw new ImportException("TypeName is required in ExcelImportConfiguration");
+
+        var entityType = ResolveType(config.TypeName);
+        if (entityType == null)
+            throw new ImportException($"Could not resolve type: {config.TypeName}");
+
+        activity?.LogInformation("Resolved entity type: {EntityType}", entityType.FullName);
+
+        // Create entity builder using AutoEntityBuilder.CreateBuilder<T>() generic method
+        var builderGenericMethod = typeof(AutoEntityBuilder).GetMethods()
+            .FirstOrDefault(m => m.Name == nameof(AutoEntityBuilder.CreateBuilder) && m.IsGenericMethod);
+        if (builderGenericMethod == null)
+            throw new ImportException("Could not find AutoEntityBuilder.CreateBuilder<T> method");
+
+        var builderMethod = builderGenericMethod.MakeGenericMethod(entityType);
+        var entityBuilder = builderMethod.Invoke(null, null);
+        if (entityBuilder == null)
+            throw new ImportException("Failed to create entity builder");
+
+        // Create ConfiguredExcelImporter using reflection (since it's generic)
+        var importerType = typeof(ConfiguredExcelImporter<>).MakeGenericType(entityType);
+        var importer = Activator.CreateInstance(importerType, entityBuilder);
+        if (importer == null)
+            throw new ImportException($"Failed to create ConfiguredExcelImporter<{entityType.Name}>");
+
+        // Call the Import method
+        var importMethod = importerType.GetMethod(nameof(ConfiguredExcelImporter<object>.Import), new[] { typeof(Stream), typeof(string), typeof(ExcelImportConfiguration) });
+        if (importMethod == null)
+            throw new ImportException("Could not find Import method on ConfiguredExcelImporter");
+
+        var importedEntities = importMethod.Invoke(importer, new object[] { stream, sourceName, config }) as System.Collections.IEnumerable;
+        if (importedEntities == null)
+            throw new ImportException("Import returned null");
+
+        // Convert to EntityStore
+        var entities = importedEntities.Cast<object>().ToArray();
+        activity?.LogInformation("Imported {Count} entities of type {TypeName}", entities.Length, config.TypeName);
+
+        var entityStore = new EntityStore();
+        var instanceDict = new Dictionary<object, object>();
+
+        foreach (var entity in entities)
+        {
+            var id = GetEntityId(entity, entityType);
+            instanceDict[id] = entity;
+        }
+
+        var collection = new InstanceCollection(instanceDict);
+        var collectionName = entityType.FullName ?? entityType.Name;
+
+        entityStore = entityStore.WithCollection(collectionName, collection);
+        return entityStore;
+    }
+
+    private string GetEntityId(object entity, Type entityType)
+    {
+        // Try to get Id property
+        var idProp = entityType.GetProperty("Id");
+        if (idProp != null)
+        {
+            var idValue = idProp.GetValue(entity);
+            if (idValue != null)
+                return idValue.ToString() ?? Guid.NewGuid().ToString();
+        }
+
+        // Fall back to hash code or GUID
+        return entity.GetHashCode().ToString();
+    }
+
+    private Type? ResolveType(string typeName)
+    {
+        return Hub.TypeRegistry.GetType(typeName);
     }
 
     private async Task<(IDataSet dataSet, ImportFormat format)> ReadDataSetAsync(ImportRequest importRequest,
@@ -137,7 +245,7 @@ public class ImportManager
         if (!Configuration.StreamProviders.TryGetValue(sourceType, out var streamProvider))
             throw new ImportException($"Unknown stream type: {sourceType.FullName}");
 
-        var stream = streamProvider.Invoke(importRequest);
+        var stream = await streamProvider.Invoke(importRequest);
         if (stream == null)
             throw new ImportException($"Could not open stream: {importRequest.Source}");
 
@@ -156,7 +264,9 @@ public class ImportManager
             cancellationToken
         );
         activity?.LogInformation("Read data set with {Tables} tables. Will import in format {Format}", dataSet.Tables.Count, format);
+
         format ??= importRequest.Format;
+
         if (format == null)
             throw new ImportException("Format not specified.");
 

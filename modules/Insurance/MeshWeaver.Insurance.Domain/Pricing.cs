@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
 
 namespace MeshWeaver.Insurance.Domain;
@@ -6,6 +6,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// <summary>
 /// Represents an insurance pricing entity with dimension-based classification.
 /// </summary>
+[Display(GroupName = "Structure")]
 public record Pricing
 {
     /// <summary>
@@ -58,9 +59,9 @@ public record Pricing
     public string? BrokerName { get; init; }
 
     /// <summary>
-    /// Premium amount in the pricing currency.
+    /// Name of the primary insurance company.
     /// </summary>
-    public decimal? Premium { get; init; }
+    public string? PrimaryInsurance { get; init; }
 
     /// <summary>
     /// Currency code for the premium.

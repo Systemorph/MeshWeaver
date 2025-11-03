@@ -23,14 +23,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureRouter(
         MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
-            .WithRoutes(forward =>
-                forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c => c.ConfigureReferenceDataModel())
-                    .RouteAddressToHostedHub<TransactionalDataAddress>(c => c.ConfigureTransactionalModel((TransactionalDataAddress)c.Address))
-                    .RouteAddressToHostedHub<ComputedDataAddress>(c => c.ConfigureComputedModel())
-                    .RouteAddressToHostedHub<ImportAddress>(c => c.ConfigureImportHub())
-            );
+        return base.ConfigureRouter(configuration).ConfigureImportRouter();
     }
 
 
@@ -53,7 +46,6 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
     {
         // arrange
         var client = GetClient();
-        var timeout = 20.Seconds();
         var importRequest = new ImportRequest(VanillaDistributedCsv)
         {
             Format = TestHubSetup.CashflowImportFormat,
@@ -80,11 +72,12 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
         Logger.LogInformation("DistributedImportTest {TestId}: Getting transactional workspace", testId);
-        var transactionalItems1 = await (GetWorkspace(
-                Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
-            ))
+        var workspace = GetWorkspace(
+            Router.GetHostedHub(new TransactionalDataAddress(2024, "1"))
+        );
+        var transactionalItems1 = await workspace
             .GetObservable<TransactionalData>()
-            .Timeout(timeout)
+            .Timeout(5.Seconds())
             .FirstAsync(x => x.Count > 1);
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} transactional items", testId, transactionalItems1.Count);
 
@@ -93,7 +86,7 @@ public class ImportTest(ITestOutputHelper output) : HubTestBase(output)
                 Router.GetHostedHub(new ComputedDataAddress(2024, "1"))
             ))
             .GetObservable<ComputedData>()
-            .Timeout(timeout)
+            .Timeout(5.Seconds())
             .FirstAsync(x => x is { Count: > 0 });
         Logger.LogInformation("DistributedImportTest {TestId}: Got {Count} computed items", testId, computedItems1.Count);
 

@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
@@ -28,23 +28,20 @@ public static class PricingCatalogLayoutArea
 
         var lines = new List<string>
         {
-            "# Insurance Pricing Catalog",
+            "# Insurance Pricing Catalog | [Data Model](/pricing/default/DataModel)",
             "",
-            "| Insured | Line of Business | Country | Legal Entity | Inception | Expiration | Premium | Status |",
-            "|---------|------------------|---------|--------------|-----------|------------|---------|--------|"
+            "| Insured | Line of Business | Country | Legal Entity | Inception | Expiration | Status |",
+            "|---------|------------------|---------|--------------|-----------|------------|--------|"
         };
 
         lines.AddRange(pricings
-            .OrderByDescending(p => p.InceptionDate)
+            .OrderByDescending(p => p.InceptionDate ?? DateTime.MaxValue)
             .Select(p =>
             {
                 var link = $"[{p.InsuredName}](/pricing/{p.Id}/Overview)";
                 var inception = p.InceptionDate?.ToString("yyyy-MM-dd") ?? "-";
                 var expiration = p.ExpirationDate?.ToString("yyyy-MM-dd") ?? "-";
-                var premium = p.Premium.HasValue && p.Currency != null
-                    ? $"{p.Currency} {p.Premium:N0}"
-                    : "-";
-                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {p.LegalEntity ?? "-"} | {inception} | {expiration} | {premium} | {p.Status ?? "-"} |";
+                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {p.LegalEntity ?? "-"} | {inception} | {expiration} |  {p.Status ?? "-"} |";
             }));
 
         return string.Join("\n", lines);

@@ -59,8 +59,8 @@ public class ContentService : IContentService
         if (factory is null)
             throw new ArgumentException($"Unknown source type {config.SourceType}");
 
-        // Create provider using the factory
-        var provider = factory.Create(config);
+        // Create provider using the factory (now properly async)
+        var provider = await factory.CreateAsync(config, cancellationToken);
 
         // Create and initialize the collection
         var collection = new ContentCollection(config, provider, hub);
@@ -104,18 +104,15 @@ public class ContentService : IContentService
             if (collections.TryGetValue(config.Name, out var existing))
                 return existing;
 
-            else
+            lock (initializeLock)
             {
-                lock (initializeLock)
-                {
-                    if (collections.TryGetValue(config.Name, out existing))
-                        return existing;
+                if (collections.TryGetValue(config.Name, out existing))
+                    return existing;
 
-                    // Create a new initialization task
-                    initTask = InstantiateCollectionAsync(config, cancellationToken);
-                    collections[config.Name] = initTask;
-                    return initTask;
-                }
+                // Create a new initialization task
+                initTask = InstantiateCollectionAsync(config, cancellationToken);
+                collections[config.Name] = initTask;
+                return initTask;
             }
         }
 

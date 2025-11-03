@@ -22,6 +22,8 @@ public sealed class MessageHub : IMessageHub
         Post(new ExecutionRequest(action, exceptionCallback));
 
     public IServiceProvider ServiceProvider { get; }
+
+
     private readonly Dictionary<string, List<AsyncDelivery>> callbacks = new();
     private readonly HashSet<CancellationTokenSource> pendingCallbackCancellations = new();
 
@@ -33,10 +35,18 @@ public sealed class MessageHub : IMessageHub
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
+    public void Start()
+    {
+        if (RunLevel < MessageHubRunLevel.Started)
+        {
+            RunLevel = MessageHubRunLevel.Started;
+            hasStarted.SetResult();
+        }
+    }
+
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
     private readonly Lock messageHandlerRegistrationLock = new();
     private readonly Lock typeRegistryLock = new();
-
     public MessageHub(
         IServiceProvider serviceProvider,
         HostedHubsCollection hostedHubs,
@@ -80,9 +90,10 @@ public sealed class MessageHub : IMessageHub
         }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
-
         messageService.Start();
-        Post(new InitializeHubRequest(Defer(Configuration.StartupDeferral)));
+        if (!configuration.DeferredInitialization)
+            Post(new InitializeHubRequest());
+
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
@@ -99,11 +110,11 @@ public sealed class MessageHub : IMessageHub
         foreach (var buildup in actions)
             await buildup(this, cancellationToken);
 
-        RunLevel = MessageHubRunLevel.Started;
-        hasStarted.SetResult();
+        logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 
-        logger.LogInformation("Message hub {address} fully initialized", Address);
-        request.Message.Deferral.Dispose();
+        // Open the Initialize gate - this will set RunLevel to Started if all other gates are also open
+        OpenGate(MessageHubConfiguration.InitializeGateName);
+
         return request.Processed();
     }
 
@@ -255,6 +266,13 @@ public sealed class MessageHub : IMessageHub
             delivery.Message.GetType().Name, Address, delivery.Id);
         return await HandleMessageAsync(delivery, node.Next, cancellationToken);
     }
+
+    public bool OpenGate(string name)
+    {
+        return messageService.OpenGate(name);
+    }
+
+
     async Task<IMessageDelivery> IMessageHub.HandleMessageAsync(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
@@ -339,110 +357,59 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
+
+
+
+
+    public Task<object?> AwaitResponse(object r, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default)
     {
-        var tcs = new TaskCompletionSource<IMessageDelivery<TResponse>>(cancellationToken);
-        var callbackTask = RegisterCallback(
-            request.Id,
-            d =>
+        // Check if r is already a delivery (in which case it's already posted)
+        if (r is IMessageDelivery existingDelivery)
+        {
+            var response = RegisterCallback(
+                existingDelivery.Id,
+                d => d,
+                cancellationToken
+            );
+            return response.ContinueWith(t =>
             {
-                tcs.SetResult((IMessageDelivery<TResponse>)d);
-                return d.Processed();
-            },
-            cancellationToken
-        );
-        return callbackTask.ContinueWith(_ => tcs.Task.Result, cancellationToken);
-    }
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        CancellationToken cancellationToken
-    ) => AwaitResponse(request, x => x, x => x, cancellationToken);
+                var ret = t.Result;
+                return InnerCallback(existingDelivery.Id, ret, selector);
+            }, cancellationToken);
+        }
 
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options
-    ) =>
-        AwaitResponse(
-            request,
-            options,
-            new CancellationTokenSource(IMessageHub.DefaultTimeout).Token
-        );
+        // For new messages, we need to generate the ID first, register callback, THEN post
+        // to avoid race condition where response arrives before callback is registered
+        var messageId = Guid.NewGuid().AsString();
+        var response2 = RegisterCallback(messageId, d => d, cancellationToken);
 
-    public Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options,
-        CancellationToken cancellationToken
-    ) => AwaitResponse(request, options, x => x, cancellationToken);
+        // Now post the message with the pre-generated ID
+        var request = Post(r, opts => {
+            var configured = options(opts);
+            return configured.WithMessageId(messageId);
+        })!;
 
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        IRequest<TResponse> request,
-        Func<PostOptions, PostOptions> options,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
-        var id = Guid.NewGuid().AsString();
-        var ret = AwaitResponse(
-            id,
-            selector,
-            cancellationToken
-        );
-
-        Post(request, o => options.Invoke(o).WithMessageId(id));
-        return ret;
-    }
-
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        IMessageDelivery request,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
-        var response = RegisterCallback(
-            request.Id,
-            d => d,
-            cancellationToken
-        );
-        var task = response
+        var task = response2
             .ContinueWith(t =>
-                    InnerCallback(request.Id, t.Result, selector),
+            {
+                var ret = t.Result;
+                return InnerCallback(request.Id, ret, selector);
+
+            },
                 cancellationToken
             );
         return task;
     }
-    public Task<TResult> AwaitResponse<TResponse, TResult>(
-        string id,
-        Func<IMessageDelivery<TResponse>, TResult> selector,
-        CancellationToken cancellationToken
-    )
-    {
-        var response = RegisterCallback(
-            id,
-            d => d,
-            cancellationToken
-        );
-        var task = response.ContinueWith(async t =>
-        {
-            // Await the task to propagate the original exception
-            var result = await t;
-            return InnerCallback(id, result, selector);
-        }, cancellationToken).Unwrap();
 
-        return task;
-    }
-
-    private TResult InnerCallback<TResponse, TResult>(
+    private object? InnerCallback(
         string id,
         IMessageDelivery response,
-        Func<IMessageDelivery<TResponse>, TResult> selector)
+        Func<IMessageDelivery, object?> selector)
     {
 
         try
         {
-            if (response is IMessageDelivery<TResponse> tResponse)
-                return selector.Invoke(tResponse);
-            throw new DeliveryFailureException($"Response for {id} was of unexpected type: {response}");
+            return selector.Invoke(response);
         }
         catch (DeliveryFailureException)
         {
@@ -569,8 +536,9 @@ public sealed class MessageHub : IMessageHub
         {
             if (!callbacks.Remove(requestIdString, out myCallbacks))
             {
-                logger.LogDebug("No callbacks found for {Id}", requestIdString);
-                return delivery;
+                logger.LogDebug("No callbacks found for response message {MessageType} (ID: {MessageId}) - treating as processed",
+                    delivery.Message.GetType().Name, delivery.Id);
+                return delivery.Processed();
             }
         }
 
@@ -587,7 +555,7 @@ public sealed class MessageHub : IMessageHub
 
         logger.LogTrace("MESSAGE_FLOW: HUB_CALLBACKS_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
             delivery.Message.GetType().Name, Address, delivery.Id);
-        return delivery;
+        return delivery.Processed();
     }
 
     Address IMessageHub.Address => Address;
@@ -700,6 +668,7 @@ public sealed class MessageHub : IMessageHub
 
     private void DisposeImpl()
     {
+
         while (disposeActions.TryTake(out var disposeAction))
             disposeAction.Invoke(this);
 
@@ -891,8 +860,7 @@ public sealed class MessageHub : IMessageHub
     private readonly ConcurrentBag<Func<IMessageHub, CancellationToken, Task>> asyncDisposeActions = new();
     private readonly ConcurrentBag<Action<IMessageHub>> disposeActions = new();
 
-    public IDisposable Defer(Predicate<IMessageDelivery> deferredFilter) =>
-        messageService.Defer(deferredFilter);
+
 
     private readonly ConcurrentDictionary<(string Conext, Type Type), object?> properties = new();
 
