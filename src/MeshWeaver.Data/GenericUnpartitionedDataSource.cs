@@ -287,8 +287,9 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
 
         var isFirst = true;
         stream.RegisterForDisposal(
-            stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+            stream
                 .Synchronize()
+                .Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
                 .Subscribe(change =>
                 {
                     if (isFirst)
@@ -370,17 +371,18 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
 
         var isFirst = true;
         stream.RegisterForDisposal(
-            stream.Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
-            .Synchronize()
-            .Subscribe(change =>
-            {
-                if (isFirst)
+            stream
+                .Synchronize()
+                .Where(x => isFirst || (x.ChangedBy is not null && !x.ChangedBy.Equals(Id)))
+                .Subscribe(change =>
                 {
-                    isFirst = false;
-                    return; // Skip processing on first emission (initialization)
-                }
-                Synchronize(change);
-            })
+                    if (isFirst)
+                    {
+                        isFirst = false;
+                        return; // Skip processing on first emission (initialization)
+                    }
+                    Synchronize(change);
+                })
         );
         return stream;
     }
