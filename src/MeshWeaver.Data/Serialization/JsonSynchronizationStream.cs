@@ -42,6 +42,7 @@ public static class JsonSynchronizationStream
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChanged<TReduced, PatchDataChangeRequest>(c => reduced.ClientId.Equals(c.ChangedBy))
+                    .Synchronize()
                     .Where(x => x is not null)
                     .Subscribe(e =>
                     {
@@ -55,6 +56,7 @@ public static class JsonSynchronizationStream
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
+                    .Synchronize()
                     .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Subscribe(e =>
                     {
@@ -126,6 +128,7 @@ public static class JsonSynchronizationStream
         reduced.RegisterForDisposal(
             reduced
                 .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
+                .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
                 .Subscribe(e =>

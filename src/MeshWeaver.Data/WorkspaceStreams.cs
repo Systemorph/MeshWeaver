@@ -194,7 +194,8 @@ c => c
         if (!reducedStream.Configuration.NullReturn)
         {
             selectedInitial = selectedInitial
-                .Where(x => x is { Value: not null });
+                .Where(x => x is { Value: not null })
+                .Synchronize();
         }
 
 
