@@ -78,7 +78,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Description.Should().NotBeNull();
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a => 
+            .Select(async a => 
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
             .ToArrayAsync(
                 CancellationTokenSource.CreateLinkedTokenSource(
@@ -123,7 +123,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Description.Should().NotBeNull();
             });
         var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a =>
+            .Select(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
             .ToArrayAsync(
                 CancellationTokenSource.CreateLinkedTokenSource(
@@ -319,7 +319,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
             Output.WriteLine("🔧 DEBUG: Starting to get controls for areas...");
             var controls = await editor.Areas.ToAsyncEnumerable()
-                .SelectAwait(async a =>
+                .Select(async a =>
                 {
                     Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
                     var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())

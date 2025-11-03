@@ -183,7 +183,7 @@ namespace MeshWeaver.Utils
             Check.NotNull(source, "source");
             Check.NotNull(keySelector, "keySelector");
 
-            return source.AsAsyncEnumerable().ToDictionaryAsync(keySelector, cancellationToken);
+            return source.AsAsyncEnumerable().ToDictionaryAsync(keySelector, comparer: null, cancellationToken);
         }
 
         /// <summary>
@@ -341,7 +341,7 @@ namespace MeshWeaver.Utils
             Check.NotNull(keySelector, "keySelector");
             Check.NotNull(elementSelector, "elementSelector");
 
-            return source.AsAsyncEnumerable().ToDictionaryAsync(keySelector, elementSelector, cancellationToken);
+            return source.AsAsyncEnumerable().ToDictionaryAsync(keySelector, elementSelector, comparer: null, cancellationToken);
         }
 
         /// <summary>

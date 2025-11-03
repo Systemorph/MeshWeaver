@@ -168,14 +168,15 @@ public class ContentService : IContentService
         CancellationToken ct)
     {
 
-        var allCollections = await (catalogOptions.Collections ?? [])
-            .ToAsyncEnumerable()
-            .SelectAwait(async x =>
-            {
-                var valueOrDefault = collections.GetValueOrDefault(x);
-                return valueOrDefault is null ? null : await valueOrDefault;
-            })
-            .ToArrayAsync(ct);
+        var allCollectionsList = new List<ContentCollection?>();
+        foreach (var x in catalogOptions.Collections ?? [])
+        {
+            var valueOrDefault = collections.GetValueOrDefault(x);
+            var result = valueOrDefault is null ? null : await valueOrDefault;
+            allCollectionsList.Add(result);
+        }
+        var allCollections = allCollectionsList.ToArray();
+
         return (await allCollections
                 .Where(x => x is not null)
                 .Select(c => c!.GetMarkdown(catalogOptions))
@@ -214,7 +215,7 @@ public class ContentService : IContentService
 
     public IAsyncEnumerable<ContentCollection> GetCollectionsAsync()
     {
-        return collections.Values.ToAsyncEnumerable().SelectAwait(async x => await x).OfType<ContentCollection>();
+        return collections.Values.ToAsyncEnumerable().Select(async x => await x).OfType<ContentCollection>();
     }
 
 }

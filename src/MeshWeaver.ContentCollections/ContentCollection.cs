@@ -113,12 +113,17 @@ public class ContentCollection : IDisposable
     {
         var loadedAuthors = await provider.LoadAuthorsAsync(ct);
         Authors = AdaptAuthorUrls(loadedAuthors);
-        var ret = new InstanceCollection(
-            await provider.GetStreamsAsync(MarkdownFilter, ct)
-                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
-                .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
-        );
+        var parsedArticles = new Dictionary<object, object>();
+        await foreach (var tuple in provider.GetStreamsAsync(MarkdownFilter, ct).WithCancellation(ct))
+        {
+            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+            if (article is not null)
+            {
+                var key = (object)(article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path);
+                parsedArticles[key] = article;
+            }
+        }
+        var ret = new InstanceCollection(parsedArticles);
         markdownStream.OnNext(new(ret, markdownStream.StreamId, Hub.Version));
         AttachMonitor();
         return ret;

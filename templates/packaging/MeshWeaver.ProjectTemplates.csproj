@@ -7,7 +7,7 @@
     <Authors>Systemorph</Authors>
     <Description>Starter project templates for MeshWeaver applications including Portal structure, Todo modules, AI agents, and testing infrastructure. Ready to be configured with MeshWeaver packages when available.</Description>
     <PackageTags>dotnet-new;templates;meshweaver;portal;todo;ai;web;blazor;starter</PackageTags>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <IncludeContentInPack>true</IncludeContentInPack>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <NoWarn>$(NoWarn);NU5128</NoWarn>
