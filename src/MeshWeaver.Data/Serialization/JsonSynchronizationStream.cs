@@ -41,7 +41,6 @@ public static class JsonSynchronizationStream
         if (typeof(TReduced) == typeof(JsonElement))
             reduced.RegisterForDisposal(
                 reduced
-                    .Synchronize()
                     .ToDataChanged<TReduced, PatchDataChangeRequest>(c => reduced.ClientId.Equals(c.ChangedBy))
                     .Where(x => x is not null)
                     .Subscribe(e =>
@@ -55,7 +54,6 @@ public static class JsonSynchronizationStream
         else
             reduced.RegisterForDisposal(
                 reduced
-                    .Synchronize()
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
                     .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Subscribe(e =>
@@ -127,7 +125,6 @@ public static class JsonSynchronizationStream
         var isFirst = true;
         reduced.RegisterForDisposal(
             reduced
-                .Synchronize()
                 .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -170,6 +167,7 @@ public static class JsonSynchronizationStream
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
         this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange =>
         stream
+            .Synchronize()
             .Where(predicate)
             .Select(x =>
             {
@@ -319,6 +317,7 @@ public static class JsonSynchronizationStream
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
         this ISynchronizationStream<TStream> stream, Func<ChangeItem<TStream>, bool> predicate)
         => stream
+            .Synchronize()
             .Where(predicate)
             .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId));
 
