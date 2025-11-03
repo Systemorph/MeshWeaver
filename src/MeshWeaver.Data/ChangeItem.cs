@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Data;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -12,7 +13,7 @@ public interface IChangeItem
 
 
 public record ChangeItem<TStream>(
-    TStream? Value,
+    [property: PreventLogging] TStream? Value,
     string? ChangedBy,
     string? StreamId,
     ChangeType ChangeType,

@@ -21,7 +21,7 @@ public static class SerilogExtensions
         builder.ConfigureHub(h =>
             h.WithInitialization(hub =>
             {
-                messageDeliveryPolicy.JsonOptions = hub.JsonSerializerOptions;
+                messageDeliveryPolicy.JsonOptions = hub.CreateLoggingSerializerOptions();
                 sink.Initialize(hub.ServiceProvider);
             }));
 
@@ -55,7 +55,7 @@ public static class SerilogExtensions
         builder.ConfigureHub(h =>
             h.WithInitialization(hub =>
             {
-                messageDeliveryPolicy.JsonOptions = hub.JsonSerializerOptions;
+                messageDeliveryPolicy.JsonOptions = hub.CreateLoggingSerializerOptions();
                 sink.Initialize(hub.ServiceProvider);
             }));
 

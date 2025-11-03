@@ -90,6 +90,7 @@ public static class DataExtensions
                 .WithType(typeof(ActivityAddress), ActivityAddress.TypeName)
                 .WithType(typeof(ActivityLog), nameof(ActivityLog))
                 .RegisterDataEvents()
+                .WithInitializationGate(DataContext.InitializationGateName)
             ;
 
     }
@@ -198,10 +199,10 @@ public static class DataExtensions
         IMessageDelivery<DataChangeRequest> request)
     {
         var activity = hub.Address is ActivityAddress ? null : new Activity(ActivityCategory.DataUpdate, hub);
-        hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
-            request);
         if (activity is not null)
         {
+            // Register completion action BEFORE starting work to avoid race condition
+            // where sub-activities complete and auto-dispose before the completion action is registered
             activity.Complete(log =>
             {
                 hub.Post(new DataChangeResponse(hub.Version, log),
@@ -209,7 +210,9 @@ public static class DataExtensions
 
             });
         }
-        else
+        hub.GetWorkspace().RequestChange(request.Message with { ChangedBy = request.Message.ChangedBy }, activity,
+            request);
+        if (activity is null)
             hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
                 o => o.ResponseFor(request));
         return request.Processed();

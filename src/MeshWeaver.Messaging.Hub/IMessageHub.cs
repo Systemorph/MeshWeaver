@@ -14,21 +14,32 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IServiceProvider ServiceProvider { get; }
 
     Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request) =>
-        AwaitResponse(request, new CancellationTokenSource(DefaultTimeout).Token);
+        AwaitResponse(request, new CancellationTokenSource(Configuration.RequestTimeout).Token);
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken);
+    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IMessageDelivery<IRequest<TResponse>> request, CancellationToken cancellationToken)
+        => (IMessageDelivery<TResponse>)(await AwaitResponse(request, o => o, o => o, cancellationToken))!;
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken);
+    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
+        CancellationToken cancellationToken)
+        => AwaitResponse(request, x => x, x => x, cancellationToken)!;
 
-    Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default);
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector)
+    async Task<IMessageDelivery<TResponse>> AwaitResponse<TResponse>(IRequest<TResponse> request,
+        Func<PostOptions, PostOptions> options, CancellationToken cancellationToken = default)
+        => (await AwaitResponse(request, options, o => o, cancellationToken))!;
+    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+        Func<IMessageDelivery<TResponse>, TResult> selector)
         => AwaitResponse(request, x => x, selector);
 
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
+    Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request,
+        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken)
         => AwaitResponse(request, x => x, selector, cancellationToken);
 
-    Task<TResult> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default);
+    async Task<TResult?> AwaitResponse<TResponse, TResult>(IRequest<TResponse> request, Func<PostOptions, PostOptions> options,
+        Func<IMessageDelivery<TResponse>, TResult> selector, CancellationToken cancellationToken = default)
+        => (TResult?)await AwaitResponse((object)request, options, o => selector((IMessageDelivery<TResponse>)o), cancellationToken);
 
+
+    Task<object?> AwaitResponse(object request, Func<PostOptions, PostOptions> options, Func<IMessageDelivery, object?> selector, CancellationToken cancellationToken = default);
     Task<IMessageDelivery> RegisterCallback<TResponse>(IMessageDelivery<IRequest<TResponse>> request,
         AsyncDelivery<TResponse> callback, CancellationToken cancellationToken = default)
         => RegisterCallback((IMessageDelivery)request, (r, c) => callback((IMessageDelivery<TResponse>)r, c),
@@ -97,7 +108,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     IMessageHub RegisterForDisposal(Func<IMessageHub, CancellationToken, Task> disposeAction);
     JsonSerializerOptions JsonSerializerOptions { get; }
     MessageHubRunLevel RunLevel { get; }
-    IDisposable Defer(Predicate<IMessageDelivery> deferredFilter);
+
+    /// <summary>
+    /// Opens a named initialization gate, allowing all deferred messages to be processed.
+    /// </summary>
+    /// <param name="name">The name of the gate to open</param>
+    /// <returns>True if the gate was found and opened, false if already opened or not found</returns>
+    bool OpenGate(string name);
 
 
     internal Task<IMessageDelivery> HandleMessageAsync(
@@ -107,12 +124,6 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     Task? Disposal { get; }
     ITypeRegistry TypeRegistry { get; }
 
-#if DEBUG
 
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(3000);
-#else
-    internal static TimeSpan DefaultTimeout => TimeSpan.FromSeconds(30);
-
-#endif
-
+    internal void Start();
 }

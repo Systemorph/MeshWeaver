@@ -1,19 +1,23 @@
 ﻿using System.Collections.Immutable;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
 public sealed record DataContext : IDisposable
 {
+    public const string InitializationGateName = "DataContextInit";
+
     public ITypeRegistry TypeRegistry { get; }
 
     public DataContext(IWorkspace workspace)
     {
         Hub = workspace.Hub;
+        logger = Hub.ServiceProvider.GetRequiredService<ILogger<DataContext>>();
         Workspace = workspace;
         ReduceManager = Hub.CreateReduceManager();
 
@@ -25,6 +29,8 @@ public sealed record DataContext : IDisposable
             ) ?? null
         );
     }
+
+    private readonly ILogger<DataContext> logger;
 
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
@@ -73,6 +79,7 @@ public sealed record DataContext : IDisposable
 
     public void Initialize()
     {
+        logger.LogDebug("Starting initialization of DataContext for {Address}", Hub.Address);
         DataSourcesById = DataSourceBuilders.Select(x => x.Invoke(Hub)).ToImmutableDictionary(x => x.Id);
 
         DataSourcesByType = DataSourcesById.Values
@@ -87,10 +94,36 @@ public sealed record DataContext : IDisposable
         foreach (var typeSource in TypeSources.Values)
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
 
+        // Initialize each data source
+        foreach (var dataSource in DataSourcesById.Values)
+        {
+            dataSource.Initialize();
+            tasks.Add(dataSource.Initialized);
+            initialized.Add(dataSource.Reference);
+        }
+
+        Task.WhenAll(tasks)
+            .ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    logger.LogError(task.Exception, "DataContext initialization failed for {Address}", Hub.Address);
+                }
+                else if (task.IsCanceled)
+                {
+                    logger.LogWarning("DataContext initialization was canceled for {Address}", Hub.Address);
+                }
+                else
+                {
+                    Hub.OpenGate(InitializationGateName);
+                    logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
+                }
+            }, TaskScheduler.Default);
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;
-
+    private readonly List<Task> tasks = new();
+    private readonly List<WorkspaceReference> initialized = new();
     public void Dispose()
     {
         foreach (var dataSource in DataSourcesById.Values)

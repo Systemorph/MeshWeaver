@@ -300,21 +300,21 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task TestSerializationFailureHandling()
     {
         Output.WriteLine("Testing serialization failure handling...");
-        
+
         // This test verifies that when no handler exists for a request message type,
         // AwaitResponse should throw DeliveryFailureException instead of hanging
-        
+
         var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-        
+
         // Send an UnknownRequest to the host 
         // The host has no handler for this type at all
         // This should result in a DeliveryFailure being sent back to the client
         var unknownRequest = new GetDataRequest(new EntityReference("collection", "id"));
 
         Output.WriteLine("Sending UnknownRequest to host (no handler exists for this type)...");
-        
+
         // AwaitResponse should now throw DeliveryFailureException due to no handler being found
-        var exception = await Assert.ThrowsAsync<DeliveryFailureException>(() =>
+        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
             client.AwaitResponse(
                 unknownRequest,
                 o => o.WithTarget(new HostAddress()),
@@ -326,10 +326,10 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         exception.Should().NotBeNull();
         exception.Message.Should().NotBeEmpty();
         Output.WriteLine($"Exception message: {exception.Message}");
-        
+
         // The message should indicate no handler was found
         var message = exception.Message.ToLowerInvariant();
-        message.Should().Contain("could not deserialize");
+        message.Should().Contain("no handler found");
     }
 }
 

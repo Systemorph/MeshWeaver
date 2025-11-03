@@ -1,4 +1,4 @@
-namespace MeshWeaver.Insurance.Domain;
+﻿namespace MeshWeaver.Insurance.Domain;
 
 /// <summary>
 /// Provides sample data for insurance dimensions and entities.
@@ -233,14 +233,12 @@ public static class SampleDataProvider
             {
                 Id = "PRC-2024-001",
                 InsuredName = "Global Manufacturing Corp",
-                BrokerName = "Marsh McLennan",
                 InceptionDate = new DateTime(2024, 1, 1),
                 ExpirationDate = new DateTime(2024, 12, 31),
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "US",
                 LegalEntity = "MW-US",
-                Premium = 125000m,
                 Currency = "USD",
                 Status = "Bound"
             },
@@ -248,14 +246,12 @@ public static class SampleDataProvider
             {
                 Id = "PRC-2024-002",
                 InsuredName = "European Logistics Ltd",
-                BrokerName = "Aon",
                 InceptionDate = new DateTime(2024, 3, 1),
                 ExpirationDate = new DateTime(2025, 2, 28),
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "GB",
                 LegalEntity = "MW-UK",
-                Premium = 85000m,
                 Currency = "GBP",
                 Status = "Quoted"
             },
@@ -263,14 +259,12 @@ public static class SampleDataProvider
             {
                 Id = "PRC-2024-003",
                 InsuredName = "Tech Industries GmbH",
-                BrokerName = "Willis Towers Watson",
                 InceptionDate = new DateTime(2024, 6, 1),
                 ExpirationDate = new DateTime(2025, 5, 31),
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "DE",
                 LegalEntity = "MW-EU",
-                Premium = 95000m,
                 Currency = "EUR",
                 Status = "Draft"
             },
@@ -278,14 +272,10 @@ public static class SampleDataProvider
             {
                 Id = "Microsoft-2026",
                 InsuredName = "Microsoft",
-                BrokerName = "Marsh McLennan",
-                InceptionDate = new DateTime(2026, 1, 1),
-                ExpirationDate = new DateTime(2026, 12, 31),
                 UnderwritingYear = 2026,
                 LineOfBusiness = "PROP",
                 Country = "US",
                 LegalEntity = "MW-US",
-                Premium = 2500000m,
                 Currency = "USD",
                 Status = "Bound"
             }

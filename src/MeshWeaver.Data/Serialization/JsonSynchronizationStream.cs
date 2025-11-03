@@ -42,8 +42,8 @@ public static class JsonSynchronizationStream
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChanged<TReduced, PatchDataChangeRequest>(c => reduced.ClientId.Equals(c.ChangedBy))
-                    .Where(x => x is not null)
                     .Synchronize()
+                    .Where(x => x is not null)
                     .Subscribe(e =>
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -56,8 +56,8 @@ public static class JsonSynchronizationStream
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
-                    .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Synchronize()
+                    .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Subscribe(e =>
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
@@ -128,9 +128,9 @@ public static class JsonSynchronizationStream
         reduced.RegisterForDisposal(
             reduced
                 .ToDataChanged<TReduced, DataChangedEvent>(c => isFirst || !reduced.ClientId.Equals(c.ChangedBy))
+                .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
-                .Synchronize()
                 .Subscribe(e =>
                 {
                     if (isFirst)
@@ -146,23 +146,31 @@ public static class JsonSynchronizationStream
                 })
         );
 
-        // outgoing data changed
-        reduced.RegisterForDisposal(
-            reduced
-                .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
-                .Synchronize()
-                .Subscribe(e =>
-                {
-                    logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
-                    reduced.Host.GetWorkspace().RequestChange(e, null, null);
-                })
-        );
+        // NOTE: The following subscription was causing an infinite feedback loop.
+        // When a client sends a DataChangeRequest, the workspace processes it and updates the stream.
+        // The stream emits with ChangedBy = ClientId, matching the predicate below, which calls
+        // RequestChange() again, creating an infinite loop.
+        // All changes should flow through DataChangeRequest messages, not through stream subscriptions.
+        // Removed to fix the feedback loop bug.
+
+        // // outgoing data changed
+        // reduced.RegisterForDisposal(
+        //     reduced
+        //         .ToDataChangeRequest(c => reduced.ClientId.Equals(c.ChangedBy))
+        //         .Synchronize()
+        //         .Subscribe(e =>
+        //         {
+        //             logger.LogDebug("Issuing change request from stream {subscriber} to owner {owner}", reduced.StreamId, reduced.Owner);
+        //             reduced.Host.GetWorkspace().RequestChange(e, null, null);
+        //         })
+        // );
 
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
         this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange =>
         stream
+            .Synchronize()
             .Where(predicate)
             .Select(x =>
             {
@@ -312,6 +320,7 @@ public static class JsonSynchronizationStream
     internal static IObservable<DataChangeRequest> ToDataChangeRequest<TStream>(
         this ISynchronizationStream<TStream> stream, Func<ChangeItem<TStream>, bool> predicate)
         => stream
+            .Synchronize()
             .Where(predicate)
             .Select(x => x.Updates.ToDataChangeRequest(stream.ClientId));
 

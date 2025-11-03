@@ -1,8 +1,11 @@
+﻿using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Import;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Domain;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,11 +19,22 @@ namespace MeshWeaver.Insurance.Domain;
 public static class InsuranceApplicationExtensions
 {
     /// <summary>
+    /// Adds Insurance domain services to the service collection.
+    /// </summary>
+    private static IServiceCollection AddInsuranceDomainServices(this IServiceCollection services)
+    {
+        // Register pricing service
+        services.AddSingleton<IGeocodingService, GoogleGeocodingService>();
+
+        return services;
+    }
+
+    /// <summary>
     /// Configures the root Insurance application hub with dimension data and pricing catalog.
     /// </summary>
     public static MessageHubConfiguration ConfigureInsuranceApplication(this MessageHubConfiguration configuration)
         => configuration
-            .WithTypes(typeof(PricingAddress))
+            .WithTypes(typeof(PricingAddress), typeof(ImportConfiguration), typeof(ExcelImportConfiguration), typeof(ReinsuranceAcceptance), typeof(ReinsuranceSection), typeof(ImportRequest), typeof(CollectionSource), typeof(GeocodingRequest), typeof(GeocodingResponse))
             .AddData(data =>
             {
                 var svc = data.Hub.ServiceProvider.GetRequiredService<IPricingService>();
@@ -43,17 +57,12 @@ public static class InsuranceApplicationExtensions
     public static MessageHubConfiguration ConfigureSinglePricingApplication(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(InsuranceApplicationExtensions))
+            .WithServices(AddInsuranceDomainServices)
             .AddContentCollection(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
                 var addressId = hub.Address.Id;
-                var configuration = sp.GetRequiredService<IConfiguration>();
-
-                // Get the global Submissions configuration from appsettings
-                var globalConfig = configuration.GetSection("Submissions").Get<ContentCollectionConfig>();
-                if (globalConfig == null)
-                    throw new InvalidOperationException("Submissions collection not found in configuration");
+                var conf = sp.GetRequiredService<IConfiguration>();
 
                 // Parse addressId in format {company}-{uwy}
                 var parts = addressId.Split('-');
@@ -64,11 +73,28 @@ public static class InsuranceApplicationExtensions
                 var uwy = parts[1];
                 var subPath = $"{company}/{uwy}";
 
+                // Get the global Submissions configuration from appsettings, or create a default one
+                var globalConfig = conf.GetSection("Submissions").Get<ContentCollectionConfig>();
+
+                // If no configuration exists, create a default FileSystem-based collection
+                if (globalConfig == null)
+                {
+                    // Default to a "Submissions" folder in the current directory
+                    var defaultBasePath = Path.Combine(Directory.GetCurrentDirectory(), "Submissions");
+                    globalConfig = new ContentCollectionConfig
+                    {
+                        SourceType = FileSystemStreamProvider.SourceType,
+                        Name = "Submissions",
+                        BasePath = defaultBasePath,
+                        DisplayName = "Submission Files"
+                    };
+                }
+
                 // Create localized config with modified name and basepath
                 var localizedName = GetLocalizedCollectionName("Submissions", addressId);
                 var fullPath = string.IsNullOrEmpty(subPath)
                     ? globalConfig.BasePath ?? ""
-                    : System.IO.Path.Combine(globalConfig.BasePath ?? "", subPath);
+                    : Path.Combine(globalConfig.BasePath ?? "", subPath);
 
                 return globalConfig with
                 {
@@ -89,6 +115,8 @@ public static class InsuranceApplicationExtensions
                     }))
                     .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
                         (IEnumerable<PropertyRisk>)await svc.GetRisksAsync(pricingId, ct)))
+                    .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
+                    .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
                     .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
                         await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
                 );
@@ -102,8 +130,85 @@ public static class InsuranceApplicationExtensions
                     LayoutAreas.PropertyRisksLayoutArea.PropertyRisks)
                 .WithView(nameof(LayoutAreas.RiskMapLayoutArea.RiskMap),
                     LayoutAreas.RiskMapLayoutArea.RiskMap)
+                .WithView(nameof(LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure),
+                    LayoutAreas.ReinsuranceAcceptanceLayoutArea.Structure)
                 .WithView(nameof(LayoutAreas.ImportConfigsLayoutArea.ImportConfigs),
                     LayoutAreas.ImportConfigsLayoutArea.ImportConfigs)
-            );
+                .AddDomainViews()
+            )
+            .AddImport()
+            .WithHandler<GeocodingRequest>(HandleGeocodingRequest);
+    }
+
+    private static async Task<IMessageDelivery> HandleGeocodingRequest(
+        IMessageHub hub,
+        IMessageDelivery<GeocodingRequest> request,
+        CancellationToken ct)
+    {
+        try
+        {
+            // Get the geocoding service
+            var geocodingService = hub.ServiceProvider.GetRequiredService<IGeocodingService>();
+
+            // Get the current property risks from the workspace
+            var workspace = hub.GetWorkspace();
+            var riskStream = workspace.GetStream<PropertyRisk>();
+            if (riskStream == null)
+            {
+                var errorResponse = new GeocodingResponse
+                {
+                    Success = false,
+                    GeocodedCount = 0,
+                    Error = "No property risks found in workspace"
+                };
+                hub.Post(errorResponse, o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            var risks = await riskStream.FirstAsync();
+            var riskList = risks?.ToList() ?? new List<PropertyRisk>();
+
+            if (!riskList.Any())
+            {
+                var errorResponse = new GeocodingResponse
+                {
+                    Success = false,
+                    GeocodedCount = 0,
+                    Error = "No property risks available to geocode"
+                };
+                hub.Post(errorResponse, o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // Geocode the risks
+            var geocodingResponse = await geocodingService.GeocodeRisksAsync(riskList, ct);
+
+            // If successful and we have updated risks, update the workspace
+            if (geocodingResponse.Success && geocodingResponse.UpdatedRisks != null && geocodingResponse.UpdatedRisks.Any())
+            {
+                // Update the workspace with the geocoded risks
+                var dataChangeRequest = new DataChangeRequest
+                {
+                    Updates = geocodingResponse.UpdatedRisks.ToList()
+                };
+
+                hub.Post(dataChangeRequest, o => o.WithTarget(hub.Address));
+            }
+
+            // Post the response
+            hub.Post(geocodingResponse, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            var errorResponse = new GeocodingResponse
+            {
+                Success = false,
+                GeocodedCount = 0,
+                Error = $"Geocoding failed: {ex.Message}"
+            };
+            hub.Post(errorResponse, o => o.ResponseFor(request));
+        }
+
+        return request.Processed();
     }
 }

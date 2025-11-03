@@ -77,10 +77,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         try
         {
-            return Store.Synchronize().Subscribe(observer);
+            var subscription = Store.Synchronize().Subscribe(observer);
+            logger.LogDebug("[SYNC_STREAM] Subscribe for {StreamId}, subscription created", StreamId);
+            return subscription;
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException e)
         {
+            logger.LogDebug("[SYNC_STREAM] Subscribe failed for {StreamId} - Store is disposed: {Exception}", StreamId, e.Message);
             return new AnonymousDisposable(() => { });
         }
     }
@@ -109,34 +112,39 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public ReduceManager<TStream> ReduceManager { get; init; }
 
-    private void SetCurrent(ChangeItem<TStream>? value)
+    private void SetCurrent(IMessageHub hub, ChangeItem<TStream>? value)
     {
-        if (startupDeferrable is not null)
-        {
-            logger.LogDebug("Disposing startup deferrable for Stream {StreamId}", StreamId);
-            startupDeferrable.Dispose();
-            startupDeferrable = null;
-        }
-
         if (isDisposed || value == null)
         {
-            logger.LogWarning("Not setting {StreamId} to {Value} because the stream is disposed or value is null.", StreamId, value);
+            logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} to {Value} because the stream is disposed or value is null. IsDisposed={IsDisposed}", StreamId, value, isDisposed);
             return;
         }
-        if (current is not null && Equals(current.Value, value.Value))
+
+        var valuesEqual = current is not null && Equals(current.Value, value.Value);
+
+
+        if (current is not null && valuesEqual)
+        {
+            logger.LogDebug("[SYNC_STREAM] Skipping SetCurrent for {StreamId} - same version and equal values", StreamId);
             return;
+        }
+
         current = value;
         try
         {
-            logger.LogDebug("Setting value for {StreamId} to {Value}", StreamId, JsonSerializer.Serialize(value, Host.JsonSerializerOptions));
+            logger.LogDebug("[SYNC_STREAM] Emitting OnNext for {StreamId}, Version={Version}, Store.IsDisposed={IsDisposed}, Store.HasObservers={HasObservers}",
+                StreamId, value.Version, Store.IsDisposed, Store.HasObservers);
             Store.OnNext(value);
+            logger.LogDebug("[SYNC_STREAM] OnNext completed for {StreamId}, opening gate", StreamId);
+            hub.OpenGate(SynchronizationGate);
         }
         catch (Exception e)
         {
-            logger.LogWarning("Exception setting current value for {Address}: {Exception}", Hub.Address, e);
+            logger.LogWarning(e, "[SYNC_STREAM] Exception setting current value for {Address}", Hub.Address);
         }
     }
 
+    private const string SynchronizationGate = nameof(SynchronizationGate);
     public void Update(Func<TStream?, ChangeItem<TStream>?> update, Func<Exception, Task> exceptionCallback) =>
         Hub.Post(new UpdateStreamRequest((stream, _) => Task.FromResult(update.Invoke(stream)), exceptionCallback));
 
@@ -194,22 +202,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Reference = Reference;
 
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
-        logger.LogInformation("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
+        logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), c => ConfigureSynchronizationHub(c));
-        if (Configuration.Initialization is null)
-            startupDeferrable = Hub.Defer(StartupDeferrable);
-
-
-
-
+        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
     }
-
-    private IDisposable? startupDeferrable;
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
     {
-        return config
+        config = config
             .WithTypes(
                 typeof(EntityStore),
                 typeof(JsonElement),
@@ -234,7 +234,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             {
                 hub.Dispose();
                 return delivery.Processed();
-            }).WithHandler<UpdateStreamRequest>(async (_, request, ct) =>
+            }).WithHandler<UpdateStreamRequest>(async (hub, request, ct) =>
             {
                 var update = request.Message.UpdateAsync;
                 var exceptionCallback = request.Message.ExceptionCallback;
@@ -249,56 +249,68 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     // SetCurrent will be called with the computed result
                     // The Message Hub serializes these messages, so only one UpdateStreamRequest
                     // is processed at a time per stream, preventing race conditions
-                    SetCurrent(newChangeItem);
+                    SetCurrent(hub, newChangeItem);
                 }
                 catch (Exception e)
                 {
                     await exceptionCallback.Invoke(e);
                 }
                 return request.Processed();
-            }).WithHandler<SetCurrentRequest>((_, request) =>
+            }).WithHandler<SetCurrentRequest>((hub, request) =>
             {
                 try
                 {
-                    SetCurrent(request.Message.Value);
+                    SetCurrent(hub, request.Message.Value);
                 }
                 catch (Exception ex)
                 {
                     throw new SynchronizationException("An error occurred during synchronization", ex);
                 }
                 return request.Processed();
-            }).WithStartupDeferral(StartupDeferrable)
-            .WithInitialization((_, ct) => InitializeAsync(ct));
+            })
+            .WithInitialization(InitializeAsync)
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent);
 
+        // Apply deferred initialization if configured
+        if (Configuration.DeferredInitialization)
+            config = config.WithDeferredInitialization();
+
+        return config;
     }
 
-    private static readonly Predicate<IMessageDelivery> StartupDeferrable = x =>
-        x.Message is not InitializeHubRequest
-        && x.Message is not SetCurrentRequest &&
-        x.Message is not DataChangedEvent { ChangeType: ChangeType.Full };
-
-    private async Task InitializeAsync(CancellationToken ct)
+    private async Task InitializeAsync(IMessageHub hub, CancellationToken ct)
     {
         if (Configuration.Initialization is null)
+        {
+            // No custom initialization
             return;
+        }
 
         var init = await Configuration.Initialization(this, ct);
-        SetCurrent(new ChangeItem<TStream>(init, StreamId, Host.Version));
+        SetCurrent(hub, new ChangeItem<TStream>(init, StreamId, Host.Version));
     }
 
 
     private void UpdateStream<TChange>(IMessageDelivery<TChange> delivery, IMessageHub hub)
         where TChange : JsonChange
     {
+        logger.LogDebug("[SYNC_STREAM] UpdateStream called for {StreamId}, ChangeType={ChangeType}, Version={Version}, MessageId={MessageId}",
+            StreamId, delivery.Message.ChangeType, delivery.Message.Version, delivery.Id);
+
         if (Hub.Disposal is not null)
+        {
+            logger.LogWarning("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
             return;
+        }
+
         var currentJson = Get<JsonElement?>();
         if (delivery.Message.ChangeType == ChangeType.Full)
         {
+            logger.LogDebug("[SYNC_STREAM] Processing Full change for {StreamId}", StreamId);
             currentJson = JsonSerializer.Deserialize<JsonElement>(delivery.Message.Change.Content);
             try
             {
-                SetCurrent(new ChangeItem<TStream>(
+                SetCurrent(hub, new ChangeItem<TStream>(
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
                     Host.Version));
@@ -306,16 +318,18 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             }
             catch (Exception ex)
             {
+                logger.LogWarning(ex, "[SYNC_STREAM] Failed to process Full change for {StreamId}", StreamId);
                 SyncFailed(delivery, ex);
             }
 
         }
         else
         {
+            logger.LogDebug("[SYNC_STREAM] Processing Patch change for {StreamId}", StreamId);
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
-                SetCurrent(this.ToChangeItem(Current!.Value!,
+                SetCurrent(hub, this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
                     delivery.Message.ChangedBy ?? ClientId));
@@ -323,11 +337,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             }
             catch (Exception ex)
             {
+                logger.LogError(ex, "[SYNC_STREAM] Failed to process Patch change for {StreamId}", StreamId);
                 SyncFailed(delivery, ex);
             }
 
         }
         Set(currentJson);
+        logger.LogDebug("[SYNC_STREAM] UpdateStream completed for {StreamId}", StreamId);
     }
 
     private void SyncFailed(IMessageDelivery delivery, Exception exception)
@@ -398,6 +414,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     internal Func<Exception, Task> ExceptionCallback { get; init; } = _ => Task.CompletedTask;
 
+    /// <summary>
+    /// When true, the stream's hosted hub will not automatically post InitializeHubRequest during construction.
+    /// Manual initialization is required by posting InitializeHubRequest to the stream's hub.
+    /// This is useful when the stream initialization depends on properties that are set after stream construction.
+    /// </summary>
+    internal bool DeferredInitialization { get; init; }
+
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
 
@@ -406,4 +429,14 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
 
     public StreamConfiguration<TStream> WithExceptionCallback(Action<Exception> exceptionCallback)
         => this with { ExceptionCallback = ex => { exceptionCallback(ex); return Task.CompletedTask; } };
+
+    /// <summary>
+    /// Enables deferred initialization for the stream's hosted hub. When enabled, the hub will not automatically
+    /// post InitializeHubRequest during construction. Manual initialization is required by posting InitializeHubRequest
+    /// to the stream's hub after the stream is fully constructed.
+    /// </summary>
+    /// <param name="deferred">Whether to defer initialization (default: true)</param>
+    /// <returns>Updated configuration</returns>
+    public StreamConfiguration<TStream> WithDeferredInitialization(bool deferred = true)
+        => this with { DeferredInitialization = deferred };
 }

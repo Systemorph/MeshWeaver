@@ -46,14 +46,14 @@ public class Workspace : IWorkspace
             .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
-    public ISynchronizationStream<TReduced>? GetRemoteStream<TReduced>(
+    public ISynchronizationStream<TReduced> GetRemoteStream<TReduced>(
         Address id,
         WorkspaceReference<TReduced> reference
     ) =>
-        (ISynchronizationStream<TReduced>?)
+        (ISynchronizationStream<TReduced>)
             GetSynchronizationStreamMethod
                 .MakeGenericMethod(typeof(TReduced), reference.GetType())
-                .Invoke(this, [id, reference]);
+                .Invoke(this, [id, reference])!;
 
 
     private static readonly MethodInfo GetSynchronizationStreamMethod =

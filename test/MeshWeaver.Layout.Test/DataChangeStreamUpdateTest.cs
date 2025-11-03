@@ -10,7 +10,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
-using Xunit;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -28,7 +27,7 @@ public record TestTaskItem(
     /// <summary>
     /// Initial test data for seeding
     /// </summary>
-    public static readonly TestTaskItem[] InitialData = 
+    public static readonly TestTaskItem[] InitialData =
     [
         new("task-1", "First Task", "Pending", DateTime.UtcNow.AddDays(-1), DateTime.UtcNow.AddDays(-1)),
         new("task-2", "Second Task", "InProgress", DateTime.UtcNow.AddHours(-2), DateTime.UtcNow.AddHours(-2)),
@@ -46,8 +45,6 @@ public record TestTaskItem(
 /// </summary>
 public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private const string TaskListArea = nameof(TaskListArea);
-    private const string TaskCountArea = nameof(TaskCountArea);
 
     /// <summary>
     /// Step 1: Configure host with TestTaskItem entity type and initial data
@@ -68,12 +65,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             .AddLayout(layout =>
                 layout
                     // Step 2: Create layout area that subscribes to stream and shows property we'll change
-                    .WithView(TaskListArea, TaskListView)
-                    .WithView(TaskCountArea, TaskCountView)
+                    .WithView(nameof(TaskListView), TaskListView)
+                    .WithView(nameof(TaskCountView), TaskCountView)
             );
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient(d => d);
 
     /// <summary>
@@ -109,7 +106,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     private static UiControl CreateTaskListMarkdown(IReadOnlyCollection<TestTaskItem> taskItems)
     {
         var markdown = "# Task List\n\n";
-        
+
         if (!taskItems.Any())
         {
             markdown += "*No tasks found.*";
@@ -121,7 +118,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             var statusIcon = task.Status switch
             {
                 "Pending" => "⏳",
-                "InProgress" => "🔄", 
+                "InProgress" => "🔄",
                 "Completed" => "✅",
                 _ => "❓"
             };
@@ -141,7 +138,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
     private static UiControl CreateTaskCountMarkdown(IReadOnlyCollection<TestTaskItem> taskItems)
     {
         var markdown = "# Task Count\n\n";
-        
+
         if (!taskItems.Any())
         {
             markdown += "*No tasks found.*";
@@ -154,7 +151,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         markdown += $"**Total Tasks:** {taskItems.Count}\n\n";
         markdown += "## By Status\n";
-        
+
         foreach (var status in new[] { "Pending", "InProgress", "Completed" })
         {
             var count = statusCounts.GetValueOrDefault(status, 0);
@@ -184,12 +181,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Step 2: Subscribe to layout area (simulating layout area rendering)
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             new HostAddress(),
-            new LayoutAreaReference(TaskListArea)
+            new LayoutAreaReference(nameof(TaskListView))
         );
 
         // Verify initial data is loaded in layout area
         var initialControl = await stream
-            .GetControlStream(TaskListArea)
+            .GetControlStream(nameof(TaskListView))
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
 
@@ -213,18 +210,18 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         Output.WriteLine($"🎯 Target task found: '{taskToUpdate.Title}' with status '{taskToUpdate.Status}'");
 
         // Step 4: Emit DataChangeRequest to change the status
-        var updatedTask = taskToUpdate with 
-        { 
-            Status = "InProgress", 
-            UpdatedAt = DateTime.UtcNow 
+        var updatedTask = taskToUpdate with
+        {
+            Status = "InProgress",
+            UpdatedAt = DateTime.UtcNow
         };
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTask);
-        
+
         Output.WriteLine($"📤 Sending DataChangeRequest to change status: {taskToUpdate.Status} → {updatedTask.Status}");
 
         var updatedControlTask = stream
-            .GetControlStream(TaskListArea)
+            .GetControlStream(nameof(TaskListView))
             .Skip(1)
             .Where(x => x != null && x.ToString().Contains("Status:** InProgress"))
             .Timeout(10.Seconds())
@@ -245,11 +242,11 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         // Additional verification: Check that task count view also updates
         var countStream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             new HostAddress(),
-            new LayoutAreaReference(TaskCountArea)
+            new LayoutAreaReference(nameof(TaskCountView))
         );
 
         var updatedCountControl = await countStream
-            .GetControlStream(TaskCountArea)
+            .GetControlStream(nameof(TaskCountView))
             .Where(x => x != null && x.ToString().Contains("🔄 **InProgress:** 2")) // Should now have 2 InProgress tasks
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -274,12 +271,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             new HostAddress(),
-            new LayoutAreaReference(TaskCountArea)
+            new LayoutAreaReference(nameof(TaskCountView))
         );
 
         // Wait for initial data
         await stream
-            .GetControlStream(TaskCountArea)
+            .GetControlStream(nameof(TaskCountView))
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks"));
 
@@ -290,23 +287,27 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
             .FirstAsync();
 
         // Update multiple tasks simultaneously
-        var updatedTasks = tasksData.Select(task => task with 
-        { 
-            Status = "Completed", 
-            UpdatedAt = DateTime.UtcNow 
+        var updatedTasks = tasksData.Select(task => task with
+        {
+            Status = "Completed",
+            UpdatedAt = DateTime.UtcNow
         }).Cast<object>().ToArray();
 
         var changeRequest = new DataChangeRequest().WithUpdates(updatedTasks);
-        
-        Output.WriteLine($"📤 Sending DataChangeRequest to complete all {updatedTasks.Length} tasks");
-        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
 
-        // Verify all tasks are now completed
-        var allCompletedControl = await stream
-            .GetControlStream(TaskCountArea)
+        Output.WriteLine($"📤 Sending DataChangeRequest to complete all {updatedTasks.Length} tasks");
+
+        // Set up the completion watch BEFORE posting the change to avoid race condition
+        var allCompletedTask = stream
+            .GetControlStream(nameof(TaskCountView))
             .Where(x => x != null && x.ToString().Contains("✅ **Completed:** 3"))
             .Timeout(10.Seconds())
             .FirstAsync();
+
+        client.Post(changeRequest, o => o.WithTarget(new HostAddress()));
+
+        // Verify all tasks are now completed
+        var allCompletedControl = await allCompletedTask;
 
         allCompletedControl.Should().NotBeNull();
         var content = allCompletedControl.ToString();
@@ -328,12 +329,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             new HostAddress(),
-            new LayoutAreaReference(TaskCountArea)
+            new LayoutAreaReference(nameof(TaskCountView))
         );
 
         // Wait for initial data (should show 3 tasks)
         await stream
-            .GetControlStream(TaskCountArea)
+            .GetControlStream(nameof(TaskCountView))
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("Total Tasks:** 3"));
 
@@ -347,13 +348,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         );
 
         var createRequest = new DataChangeRequest().WithCreations(newTask);
-        
+
         Output.WriteLine($"📤 Creating new task: '{newTask.Title}'");
         client.Post(createRequest, o => o.WithTarget(new HostAddress()));
 
         // Verify task count increased
         var updatedControl = await stream
-            .GetControlStream(TaskCountArea)
+            .GetControlStream(nameof(TaskCountView))
             .Where(x => x != null && x.ToString().Contains("Total Tasks:** 4"))
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -361,7 +362,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         updatedControl.Should().NotBeNull();
         var content = updatedControl.ToString();
         content.Should().Contain("Total Tasks:** 4");
-        
+
         Output.WriteLine("✅ New task creation updated layout area correctly");
     }
 
@@ -376,12 +377,12 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
             new HostAddress(),
-            new LayoutAreaReference(TaskListArea)
+            new LayoutAreaReference(nameof(TaskListView))
         );
 
         // Wait for initial data
         await stream
-            .GetControlStream(TaskListArea)
+            .GetControlStream(nameof(TaskListView))
             .Timeout(5.Seconds())
             .FirstAsync(x => x != null && x.ToString().Contains("First Task"));
 
@@ -393,13 +394,13 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
 
         var taskToDelete = tasksData.First(t => t.Id == "task-1");
         var deleteRequest = new DataChangeRequest().WithDeletions(taskToDelete);
-        
+
         Output.WriteLine($"📤 Deleting task: '{taskToDelete.Title}'");
         client.Post(deleteRequest, o => o.WithTarget(new HostAddress()));
 
         // Verify task is no longer in the list
         var updatedControl = await stream
-            .GetControlStream(TaskListArea)
+            .GetControlStream(nameof(TaskListView))
             .Where(x => x != null && !x.ToString().Contains("First Task"))
             .Timeout(10.Seconds())
             .FirstAsync();
@@ -408,7 +409,7 @@ public class DataChangeStreamUpdateTest(ITestOutputHelper output) : HubTestBase(
         var content = updatedControl.ToString();
         content.Should().NotContain("First Task");
         content.Should().Contain("Second Task"); // Other tasks should still be there
-        
+
         Output.WriteLine("✅ Task deletion updated layout area correctly");
     }
 }
