@@ -55,17 +55,44 @@
         text-decoration: none;
     }
 
-    .info-link svg {
+    .info-link svg,
+    .info-link fluent-icon {
         flex-shrink: 0;
     }
 
-    /* Prevent FluentIcon from overriding branded icon colors */
-    .info-link fluent-icon {
-        color: currentColor;
+    /* Force FluentIcon to not override SVG colors */
+    .info-link fluent-icon svg * {
+        fill: inherit;
     }
 
-    .info-link fluent-icon svg {
-        color: initial;
+    /* YouTube icon - red background and white triangle */
+    .youtube-link fluent-icon svg g path:nth-child(1) {
+        fill: #F61C0D !important;
+    }
+
+    .youtube-link fluent-icon svg g path:nth-child(2) {
+        fill: #FFF !important;
+    }
+
+    /* Discord icon - purple */
+    .discord-link fluent-icon svg path {
+        fill: #5865F2 !important;
+    }
+
+    /* LinkedIn icon - blue */
+    .linkedin-link fluent-icon svg g path {
+        fill: #0077B5 !important;
+    }
+
+    /* Bluesky icon - blue */
+    .bluesky-link fluent-icon svg path {
+        fill: #0084FF !important;
+    }
+
+    /* GitHub and X icons - adapt to theme */
+    .github-link fluent-icon svg path,
+    .x-link fluent-icon svg path {
+        fill: var(--neutral-foreground-rest) !important;
     }
 
 /* Dark mode adjustments for info links */

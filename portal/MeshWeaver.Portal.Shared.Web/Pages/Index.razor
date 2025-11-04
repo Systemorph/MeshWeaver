@@ -23,13 +23,13 @@
 
         For more information, have a look at our resources
     </div>
-    <div class="info-links">
+    <div class="info-links @DarkModeClass">
         <a href="/articles" class="info-link" title="Read our Blog">
             <FluentIcon Color="Color.FillInverse" Icon="@Icons.Regular.Size24.Book"></FluentIcon>
             <span>Blog</span>
         </a>
-        <a href="https://www.youtube.com/@@meshweaver" class="info-link" title="Visit our YouTube Channel" target="_blank">
-            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.YouTube"></FluentIcon>
+        <a href="https://www.youtube.com/@@meshweaver" class="info-link youtube-link" title="Visit our YouTube Channel" target="_blank">
+            <FluentIcon Icon="@PortalIcons.Size24.YouTube"></FluentIcon>
             <span>YouTube</span>
         </a>
         <a href="https://meshweaver.cloud" class="info-link" title="Visit our Landing Page" target="_blank">
@@ -49,19 +49,24 @@
         or follow us on Social Media
     </div>
     <h4>Roland Bürgi</h4>
-    <div class="info-links">
-        <a href="https://www.linkedin.com/in/rolandb" class="info-link" title="Follow Roland Bürgi on LinkedIn" target="_blank">
-            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
+    <div class="info-links @DarkModeClass">
+        <a href="https://www.linkedin.com/in/rolandb" class="info-link linkedin-link" title="Follow Roland Bürgi on LinkedIn" target="_blank">
+            <FluentIcon Icon="@PortalIcons.Size24.LinkedIn"></FluentIcon>
             <span>LinkedIn</span>
         </a>
         <a href="https://x.com/@@swissionary" class="info-link" title="Follow Roland Bürgi on X" target="_blank">
             <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.X"></FluentIcon>
             <span>X</span>
         </a>
-        <a href="https://bsky.app/profile/swissionary.bsky.social" class="info-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
-            <FluentIcon Color="Color.FillInverse" Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
+        <a href="https://bsky.app/profile/swissionary.bsky.social" class="info-link bluesky-link" title="Follow Roland Bürgi on Bluesky" target="_blank">
+            <FluentIcon Icon="@PortalIcons.Size24.Bluesky"></FluentIcon>
             <span>Bluesky</span>
         </a>
     </div>
 </div>
+
+@code {
+    private DesignThemeModes Mode;
+    private string DarkModeClass => Mode == DesignThemeModes.Dark ? "fluent-dark-theme" : string.Empty;
+}
 
