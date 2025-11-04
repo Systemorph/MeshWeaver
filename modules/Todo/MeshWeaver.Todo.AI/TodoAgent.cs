@@ -1,7 +1,7 @@
 ﻿using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -37,10 +37,16 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
         Furthermore, you can get a list of TodoItem from the {nameof(DataPlugin.GetData)} function with the type 'TodoItem' or retrieve a specific TodoItem by its ID using the same function with the entityId parameter.
         """;
 
-    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
     {
-        yield return new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress).CreateKernelPlugin();
-        yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap, _ => TodoApplicationAddress).CreateKernelPlugin();
+        var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress);
+        var layoutAreaPlugin = new LayoutAreaPlugin(hub, chat, layoutAreaMap, _ => TodoApplicationAddress);
+
+        foreach (var tool in dataPlugin.CreateTools())
+            yield return tool;
+
+        foreach (var tool in layoutAreaPlugin.CreateTools())
+            yield return tool;
     }
 
     async Task IInitializableAgent.InitializeAsync()

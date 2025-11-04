@@ -4,7 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Northwind.AI;
 
@@ -44,13 +44,15 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
 
-    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
     {
         var data = new DataPlugin(hub, chat, typeDefinitionMap);
-        yield return data.CreateKernelPlugin();
+        foreach (var tool in data.CreateTools())
+            yield return tool;
 
         var layout = new LayoutAreaPlugin(hub, chat, layoutDefinitionMap);
-        yield return layout.CreateKernelPlugin();
+        foreach (var tool in layout.CreateTools())
+            yield return tool;
     }
 
     private static readonly Address NorthwindAddress = new ApplicationAddress("Northwind");

@@ -28,28 +28,35 @@
     transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
-/* Light theme adjustments */
+/* Light theme adjustments - use Fluent UI CSS variables for dynamic theming */
 .ag-grid-container.ag-theme-alpine {
-    /* Default theme, no overrides needed */
+    --ag-foreground-color: var(--neutral-foreground-rest, #181818);
+    --ag-background-color: var(--neutral-layer-1, #ffffff);
+    --ag-header-background-color: var(--neutral-layer-2, #f5f5f5);
+    --ag-odd-row-background-color: var(--neutral-layer-3, #fafafa);
+    --ag-border-color: var(--neutral-stroke-rest, #d9d9d9);
+    --ag-row-border-color: var(--neutral-stroke-rest, #d9d9d9);
+    --ag-row-hover-color: rgba(0, 0, 0, 0.05);
+    --ag-selected-row-background-color: rgba(0, 113, 255, 0.1);
 }
 
-/* Dark mode specific adjustments */
+/* Dark mode specific adjustments - use Fluent UI CSS variables for dynamic theming */
 .ag-grid-container.ag-theme-alpine-dark {
-    --ag-foreground-color: #e5e5e5;
-    --ag-background-color: #1f1f1f;
-    --ag-header-background-color: #2d2d2d;
-    --ag-odd-row-background-color: #292929;
-    --ag-control-panel-background-color: #292929;
-    --ag-border-color: #444444;
-    --ag-row-border-color: #444444;
+    --ag-foreground-color: var(--neutral-foreground-rest, #e5e5e5);
+    --ag-background-color: var(--neutral-layer-1, #1f1f1f);
+    --ag-header-background-color: var(--neutral-layer-2, #2d2d2d);
+    --ag-odd-row-background-color: var(--neutral-layer-3, #292929);
+    --ag-control-panel-background-color: var(--neutral-layer-3, #292929);
+    --ag-border-color: var(--neutral-stroke-rest, #444444);
+    --ag-row-border-color: var(--neutral-stroke-rest, #444444);
     --ag-row-hover-color: rgba(255, 255, 255, 0.1);
     --ag-selected-row-background-color: rgba(0, 113, 255, 0.2);
 
     /* Additional dark mode styles */
-    --ag-input-focus-border-color: #0171ff;
-    --ag-range-selection-border-color: #0171ff;
+    --ag-input-focus-border-color: var(--accent-fill-rest, #0171ff);
+    --ag-range-selection-border-color: var(--accent-fill-rest, #0171ff);
     --ag-range-selection-background-color: rgba(0, 113, 255, 0.2);
-    --ag-checkbox-checked-color: #0171ff;
+    --ag-checkbox-checked-color: var(--accent-fill-rest, #0171ff);
     --ag-checkbox-unchecked-color: #c6c6c6;
     --ag-input-disabled-background-color: #3a3a3a;
     --ag-input-disabled-border-color: #555555;

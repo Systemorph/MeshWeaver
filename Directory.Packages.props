@@ -60,6 +60,8 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.9" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="9.9.1" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="9.9.1" />
+    <PackageVersion Include="Microsoft.Extensions.AI.AzureAIInference" Version="9.10.0-preview.1.25513.3" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="9.10.0-preview.1.25513.3" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.13.0" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="9.0.0-preview.9.24556.5" />
     <PackageVersion Include="Microsoft.Extensions.Configuration" Version="9.0.2" />
@@ -78,9 +80,10 @@
     <PackageVersion Include="Microsoft.Orleans.Core.Abstractions" Version="9.2.1" />
     <PackageVersion Include="Microsoft.Orleans.Runtime" Version="9.2.1" />
     <PackageVersion Include="Microsoft.Orleans.Serialization.Abstractions" Version="9.0.1" />
-    <PackageVersion Include="Microsoft.SemanticKernel" Version="1.65.0" />
-    <PackageVersion Include="Microsoft.SemanticKernel.Agents.Core" Version="1.65.0" />
-    <PackageVersion Include="Microsoft.SemanticKernel.Connectors.AzureAIInference" Version="1.65.0-beta" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.0.0-preview.251001.3" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-preview.251001.3" />
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.0.0-preview.251001.3" />
+    <PackageVersion Include="Microsoft.Agents.AI.AzureAI" Version="1.0.0-preview.251001.3" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="OpenTelemetry" Version="1.9.0" />
     <PackageVersion Include="Serilog.AspNetCore" Version="9.0.0" />
@@ -118,7 +121,7 @@
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="9.2.1" />
     <PackageVersion Include="Microsoft.Playwright" Version="1.55.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageVersion Include="OpenAI" Version="2.4.0" />
+    <PackageVersion Include="OpenAI" Version="2.5.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.13.1" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.13.1" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.13.0" />
