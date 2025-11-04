@@ -1,12 +1,12 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Agents.AI;
 
 namespace MeshWeaver.AI;
 
@@ -19,7 +19,7 @@ public class AgentChatClient(
     private readonly List<ChatMessage> conversationHistory = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string? currentAgentName;
-    private string? lastContextAddress;
+    private Address? lastContextAddress;
 
     public AgentContext? Context { get; private set; }
 
