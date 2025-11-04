@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using TextContent = Microsoft.Extensions.AI.TextContent;
 
@@ -18,6 +19,8 @@ public enum ChatPosition
 
 public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 {
+    [Inject] private ILogger<AgentChatView> Logger { get; set; } = null!;
+
     private Lazy<Task<IAgentChat>> lazyChat;
     private CancellationTokenSource currentResponseCancellation = new();
     private ChatMessage? currentResponseMessage;
@@ -435,19 +438,65 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
     private void SetAgentContext(IAgentChat chat)
     {
-        // Use the bound context from the control
-        if (boundContext != null)
-        {
-            chat.SetContext(boundContext);
-        }
+        // Get the current context (either from control binding or URL)
+        var context = GetCurrentAgentContext();
+
+        // Always set the context (even if null) to ensure it's updated
+        chat.SetContext(context);
     }
 
     private AgentContext? GetCurrentAgentContext()
     {
-        // Return the bound context from the control
-        return boundContext;
+        // If boundContext is set (via control binding), use it
+        // Otherwise, get it from the current URL
+        return boundContext ?? GetContextFromCurrentUrl();
     }
 
+    private AgentContext? GetContextFromCurrentUrl()
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+        Logger.LogDebug("Current URL path: '{Path}'", path);
+
+        // Skip if path is empty or just "chat"
+        if (string.IsNullOrEmpty(path) || path == "chat")
+        {
+            Logger.LogDebug("Path is empty or 'chat', returning null context");
+            return null;
+        }
+
+        // Split the path into segments
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        Logger.LogDebug("Path segments: {Segments} (count: {Count})", string.Join(", ", segments), segments.Length);
+
+        // Need at least addressType and addressId
+        if (segments.Length < 2)
+        {
+            Logger.LogDebug("Not enough segments for context, returning null");
+            return null;
+        }
+
+        var addressType = segments[0];
+        var addressId = segments[1];
+
+        // Create the Address with the extracted values
+        var address = new Address(addressType, addressId);
+
+        var layoutArea = segments.Length == 2 ? null : new LayoutAreaReference(segments[2])
+        {
+            Id = string.Join('/', segments.Skip(3))
+        };
+
+        var context = new AgentContext
+        {
+            Address = address,
+            LayoutArea = layoutArea
+        };
+
+        Logger.LogDebug("Created context - Address: {Address}, LayoutArea: {LayoutArea}", address, layoutArea?.Area);
+
+        return context;
+    }
 
     private void CancelAnyCurrentResponse()
     {
