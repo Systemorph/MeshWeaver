@@ -8,11 +8,11 @@
     <PackageReference Include="Azure.AI.Inference" />
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Azure.Core" />
-    <PackageReference Include="Microsoft.SemanticKernel" />
+    <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
+    <PackageReference Include="Microsoft.Extensions.AI.AzureAIInference" />
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="Microsoft.SemanticKernel.Connectors.AzureAIInference" />
   </ItemGroup>
 
   <ItemGroup>

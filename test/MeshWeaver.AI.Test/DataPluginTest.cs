@@ -21,10 +21,10 @@ namespace MeshWeaver.AI.Test;
 public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
 {
     /// <summary>
-    /// Tests that the DataPlugin can create a valid Semantic Kernel plugin instance.
+    /// Tests that the DataPlugin can create a valid set of AI tools.
     /// </summary>
     [Fact]
-    public void CreateKernelPlugin_ShouldReturnValidPlugin()
+    public void CreateTools_ShouldReturnValidTools()
     {
         // arrange
         var client = GetClient();
@@ -32,11 +32,12 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         var plugin = new DataPlugin(client, mockChat);
 
         // act
-        var kernelPlugin = plugin.CreateKernelPlugin();
+        var tools = plugin.CreateTools();
 
         // assert
-        kernelPlugin.Should().NotBeNull();
-        kernelPlugin.Name.Should().Be(nameof(DataPlugin));
+        tools.Should().NotBeNull();
+        tools.Should().NotBeEmpty();
+        tools.Should().HaveCountGreaterThan(0);
     }
 
     /// <summary>

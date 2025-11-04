@@ -3,9 +3,8 @@ using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Agents;
-using Microsoft.SemanticKernel.Agents.Chat;
+using Microsoft.Extensions.AI;
+using Microsoft.Agents.AI;
 
 namespace MeshWeaver.AI;
 
@@ -29,7 +28,7 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         IEnumerable<IAgentDefinition> agentDefinitions)
     {
         var dict = new Dictionary<string, IAgentDefinition>();
-        await foreach (var x in agentDefinitions.ToAsyncEnumerable())
+        foreach (var x in agentDefinitions)
         {
             if (x is IInitializableAgent initializable)
                 await initializable.InitializeAsync();
@@ -45,60 +44,31 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         var existingAgents = await GetExistingAgentsAsync();
 
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
-        var agents = new Dictionary<string, Agent>();
+        var agents = new Dictionary<string, AIAgent>();
+
         foreach (var agentDefinition in agentDefinitions.Values)
         {
-
-
             var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
             var agent = await CreateOrUpdateAgentAsync(
                 agentDefinition,
                 existingAgent);
-
-
 
             // Handle file uploads for agents that implement IAgentDefinitionWithFiles
             if (agentDefinition is IAgentDefinitionWithFiles fileProvider)
                 await foreach (var file in fileProvider.GetFilesAsync())
                     await UploadFileAsync(agent, file);
 
-
             agents[agentDefinition.Name] = agent;
         }
 
-        var agentChat = new AgentGroupChat(agents.Values.ToArray())
-        {
-            ExecutionSettings = new AgentGroupChatSettings()
-            {
-                SelectionStrategy = CreateSelectionStrategy(agentDefinitions, agents)
-            }
-        };
-
-        var ret = new AgentChatClient(agentChat, agentDefinitions, Hub.ServiceProvider);
-
-        // Add ChatPlugin to agents that implement IAgentWithDelegations or are marked as default
-        var delegationPlugin = KernelPluginFactory.CreateFromObject(new ChatPlugin(ret), "ChatPlugin");
-
-
-        foreach (var agentDefinition in agentDefinitions.Values)
-        {
-            var agent = agents[agentDefinition.Name];
-            agent.Kernel.Plugins.Add(delegationPlugin);
-        }
-
-        // Configure plugins for this agent
-        foreach (var pluginAgent in agentDefinitions.Values.OfType<IAgentWithPlugins>())
-        {
-            var agent = agents[pluginAgent.Name];
-            foreach (var plugin in pluginAgent.GetPlugins(ret))
-                agent.Kernel.Plugins.Add(plugin);
-        }
+        // Create AgentChatClient which will manage the workflow
+        var ret = new AgentChatClient(agents, agentDefinitions, Hub.ServiceProvider);
 
         return ret;
     }
 
-    protected abstract Task<Agent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent);
-    protected abstract Task UploadFileAsync(Agent assistant, AgentFileInfo file);
+    protected abstract Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent);
+    protected abstract Task UploadFileAsync(AIAgent assistant, AgentFileInfo file);
 
 
     protected abstract Task<IEnumerable<TAgent>> GetExistingAgentsAsync();
@@ -106,35 +76,22 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
 
     /// <summary>
-    /// Creates a Kernel instance for the specified agent definition.
-    /// Implementations should configure the kernel with their specific chat completion provider.
+    /// Creates a ChatClient instance for the specified agent definition.
+    /// Implementations should configure the chat client with their specific chat completion provider.
     /// </summary>
-    /// <param name="agentDefinition">The agent definition for which to create the kernel</param>
-    /// <returns>A configured Kernel instance</returns>
-    protected abstract Microsoft.SemanticKernel.Kernel CreateKernel(IAgentDefinition agentDefinition);
+    /// <param name="agentDefinition">The agent definition for which to create the chat client</param>
+    /// <returns>A configured IChatClient instance</returns>
+    protected abstract IChatClient CreateChatClient(IAgentDefinition agentDefinition);
 
-    protected virtual SelectionStrategy CreateSelectionStrategy(IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions, IReadOnlyDictionary<string, Agent> agents)
+    /// <summary>
+    /// Gets tools for the specified agent definition including both plugins and delegation functions.
+    /// </summary>
+    protected virtual IList<AITool> GetToolsForAgent(IAgentDefinition agentDefinition)
     {
-        // Find the agent marked with [DefaultAgent] attribute
-        var defaultAgentDefinition = agentDefinitions.Values
-            .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
-
-        if (defaultAgentDefinition != null && agents.TryGetValue(defaultAgentDefinition.Name, out var defaultAgent))
-        {
-            // Return a simple strategy that handles explicit mentions and delegation patterns
-            return new DefaultAgentSelectionStrategy(defaultAgent, Logger);
-        }
-
-        // Fallback to sequential selection if no default agent is found
-        return new SequentialSelectionStrategy();
+        var tools = new List<AITool>();
+        return tools;
     }
 
-
-
-    protected virtual Agent[] GetAgentArray(IReadOnlyDictionary<string, Agent> allAgents)
-    {
-        return allAgents.Values.ToArray();
-    }
     public abstract Task DeleteThreadAsync(string threadId);
     public virtual async Task<IAgentChat> ResumeAsync(ChatConversation messages)
     {
@@ -164,29 +121,29 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                    **When to delegate:**
                    {{{delegationInstructions}}}
                    
-                   **DELEGATION METHOD - USE KERNEL FUNCTION:**
-                   
-                   When you need to delegate to another agent, use the {{{nameof(Delegate)}}} tool from the {{{nameof(ChatPlugin)}}}:
+                   **DELEGATION METHOD - USE TOOL:**
+
+                   When you need to delegate to another agent, use the Delegate tool:
                    - agentName: The exact name of the agent to delegate to (use the names from the list above)
                    - message: Your message or task for the agent
                    - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)
-                   
-                   **Important:** 
+
+                   **Important:**
                    - The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
                    - it is not necessary to repeat the message you put into the delegation ==> we will see it after you finish.
-                   
+
                    **Examples:**
-                   
+
                    For immediate delegation:
-                   Use the Delegate function with agentName="ReportingSpecialist" and message="Please create a comprehensive report on the current portfolio performance."
-                   
+                   Use the Delegate tool with agentName="ReportingSpecialist" and message="Please create a comprehensive report on the current portfolio performance."
+
                    For delegation with user feedback:
-                   Use the Delegate function with agentName="DataAnalyst", message="Please analyze the data the user will provide next.", and askUserFeedback=true
-                   
+                   Use the Delegate tool with agentName="DataAnalyst", message="Please analyze the data the user will provide next.", and askUserFeedback=true
+
                    **Step-by-step delegation process:**
                    1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
                    2. Copy it EXACTLY as written (including all letters)
-                   3. Use the Delegate function with the appropriate parameters
+                   3. Use the Delegate tool with the appropriate parameters
                    4. DO NOT INCLUDE THE CONTEXT in your message
                    
                    """;
@@ -216,9 +173,9 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
                        **Available Agents:**
                        {{{delegationInstructions}}}
                        
-                       **DELEGATION METHOD - USE KERNEL FUNCTION:**
-                       
-                       When you need to delegate to another agent, use the Delegate function:
+                       **DELEGATION METHOD - USE TOOL:**
+
+                       When you need to delegate to another agent, use the Delegate tool:
                        - agentName: The exact name of the agent to delegate to (use the names from the list above)
                        - message: Your message or task for the agent
                        - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)

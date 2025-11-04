@@ -1,6 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup>
-    <NoWarn>$(NoWarn);SKEXP0080;SKEXP0110;SKEXP0001</NoWarn>
     <Nullable>enable</Nullable>
 </PropertyGroup>
     <ItemGroup>
@@ -10,7 +9,10 @@
         <PackageReference Include="DocumentFormat.OpenXml" />
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
-        <PackageReference Include="Microsoft.SemanticKernel.Agents.Core" />
+        <PackageReference Include="Microsoft.Agents.AI" />
+        <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
+        <PackageReference Include="Microsoft.Agents.AI.Workflows" />
+        <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
         <PackageReference Include="OpenAI" />
         <PackageReference Include="UglyToad.PdfPig" />
 

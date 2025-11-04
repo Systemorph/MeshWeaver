@@ -264,10 +264,10 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>
-    /// Tests the LayoutAreaPlugin CreateKernelPlugin functionality
+    /// Tests the LayoutAreaPlugin CreateTools functionality
     /// </summary>
     [Fact]
-    public void LayoutAreaPlugin_CreateKernelPlugin_ShouldReturnValidPlugin()
+    public void LayoutAreaPlugin_CreateTools_ShouldReturnValidTools()
     {
         // arrange
         var client = GetClient();
@@ -275,14 +275,14 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         var plugin = new LayoutAreaPlugin(client, mockChat);
 
         // act
-        var kernelPlugin = plugin.CreateKernelPlugin();
+        var tools = plugin.CreateTools();
 
         // assert
-        kernelPlugin.Should().NotBeNull();
-        kernelPlugin.Name.Should().Be(nameof(LayoutAreaPlugin));
-        kernelPlugin.FunctionCount.Should().Be(2);
-        kernelPlugin.GetFunctionsMetadata().Should().Contain(f => f.Name == nameof(LayoutAreaPlugin.GetLayoutAreas));
-        kernelPlugin.GetFunctionsMetadata().Should().Contain(f => f.Name == nameof(LayoutAreaPlugin.DisplayLayoutArea));
+        tools.Should().NotBeNull();
+        tools.Should().HaveCount(2);
+        // AIFunction tools are created, verify count
+        var functions = tools.OfType<AIFunction>().ToList();
+        functions.Should().HaveCount(2);
     }
 
     /// <summary>

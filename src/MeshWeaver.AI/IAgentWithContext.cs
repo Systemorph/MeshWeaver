@@ -1,6 +1,4 @@
-﻿using Microsoft.SemanticKernel.Agents;
-
-namespace MeshWeaver.AI;
+﻿namespace MeshWeaver.AI;
 
 /// <summary>
 /// Interface for agents that can determine if they should handle messages based on chat context.

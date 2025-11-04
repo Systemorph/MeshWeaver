@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel;
 using MeshWeaver.Data;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -17,7 +17,6 @@ public class ChatPlugin(IAgentChat agentChat)
     /// <param name="message"></param>
     /// <param name="askUserFeedback"></param>
     /// <returns></returns>
-    [KernelFunction]
     [Description("Delegate a task to another agent. Use this when you need to hand off a task to a specialized agent. If the message does not fall within your responsibility, delegate to the default agent.")]
     public string Delegate(
         [Description("The exact name of the agent to delegate to (use 'default' for the default agent)")] string agentName,
@@ -35,7 +34,6 @@ public class ChatPlugin(IAgentChat agentChat)
     /// <param name="areaId"></param>
     /// <returns></returns>
 
-    [KernelFunction]
     [Description("Sets the chat context to a particular address, layout area or layout area id.")]
     public string SetContext([Description("Address to be set")] string? address = null,
         [Description("Name of the layout are to be set")] string? areaName = null,
@@ -51,5 +49,14 @@ public class ChatPlugin(IAgentChat agentChat)
 
         agentChat.SetContext(currentContext);
         return "Context set successfully.";
+    }
+
+    public IList<AITool> CreateTools()
+    {
+        return
+        [
+            AIFunctionFactory.Create(Delegate),
+            AIFunctionFactory.Create(SetContext)
+        ];
     }
 }

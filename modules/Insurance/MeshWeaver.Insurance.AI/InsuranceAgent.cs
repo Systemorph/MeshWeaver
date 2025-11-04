@@ -5,7 +5,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
@@ -97,14 +97,21 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Available layout areas can be listed using {{{nameof(LayoutAreaPlugin.GetLayoutAreas)}}} function.
         """;
 
-    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
     {
-        yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
-        yield return new LayoutAreaPlugin(hub, chat, layoutAreaMap).CreateKernelPlugin();
+        var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap);
+        foreach (var tool in dataPlugin.CreateTools())
+            yield return tool;
+
+        var layoutPlugin = new LayoutAreaPlugin(hub, chat, layoutAreaMap);
+        foreach (var tool in layoutPlugin.CreateTools())
+            yield return tool;
 
         // Always provide ContentPlugin - it will use ContextToConfigMap to determine the collection
         var submissionPluginConfig = CreateSubmissionPluginConfig();
-        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
+        var contentPlugin = new ContentPlugin(hub, submissionPluginConfig, chat);
+        foreach (var tool in contentPlugin.CreateTools())
+            yield return tool;
     }
 
     private static ContentPluginConfig CreateSubmissionPluginConfig()

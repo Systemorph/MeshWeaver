@@ -5,7 +5,7 @@ using Humanizer;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -20,7 +20,7 @@ public class DataPlugin(
     Func<string, Address?>? addressMap = null)
 {
 
-    [KernelFunction, Description($"Get data by type name from a specific address. Valid types can be found using the {nameof(GetDataTypes)} function.")]
+    [Description($"Get data by type name from a specific address. Valid types can be found using the {nameof(GetDataTypes)} function.")]
     public async Task<string> GetData(
         [Description($"Type for which the data should be retrieved. A list of valid data types can be found with the {nameof(GetDataTypes)} function")] string type,
         [Description("Optional entity ID. If specified, retrieves a specific entity; otherwise retrieves the entire collection")] string? entityId = null)
@@ -39,7 +39,7 @@ public class DataPlugin(
         return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
     }
 
-    [KernelFunction, Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
+    [Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
     public async Task<string> GetDataTypes()
     {
 
@@ -55,8 +55,7 @@ public class DataPlugin(
         return JsonSerializer.Serialize(ret.Message.Types, hub.JsonSerializerOptions);
     }
 
-    [KernelFunction,
-     Description(
+    [Description(
          $"Updates the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
     public async Task<string> UpdateData(
         [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json,
@@ -74,8 +73,7 @@ public class DataPlugin(
             return $"Data of type '{type}' updated successfully.";
         return $"Failed to update data of type '{type}': {response.Message}";
     }
-    [KernelFunction,
-     Description(
+    [Description(
          $"Deletes the data submitted in {nameof(json)} of type {nameof(type)}. The JSON schema as provided in GetSchema with this type has to be fulfilled.")]
     public async Task<string> DeleteData(
         [Description("Json representation of the entity, has to conform to the schema as found in the GetSchema tool.")] string json,
@@ -100,7 +98,7 @@ public class DataPlugin(
                 .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public).Select(m => m.Name).Where(x => x != nameof(GetTools))
         );
 
-    [KernelFunction, Description($"Gets the JSON schema for a particular type. Use these schemas to map data to JSON or to validate edited JSON data.")]
+    [Description($"Gets the JSON schema for a particular type. Use these schemas to map data to JSON or to validate edited JSON data.")]
     public async Task<string> GetSchema([Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type)
     {
         var address = GetAddress(type);
@@ -126,24 +124,17 @@ public class DataPlugin(
         return addressMap?.Invoke(type) ?? chat.Context?.Address;
     }
 
-    public KernelPlugin CreateKernelPlugin()
+    public IList<AITool> CreateTools()
     {
-        var plugin = KernelPluginFactory.CreateFromFunctions(nameof(DataPlugin),
-            GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                .Where(m => m.HasAttribute<KernelFunctionAttribute>())
-                .Select(m =>
-                {
-                    var ret = KernelFunctionFactory.CreateFromMethod(m, hub.JsonSerializerOptions, this);
-                    if (ret.Name == nameof(GetData))
-                    {
-                        var typeParameter = ret.Metadata.Parameters.First();
-                        typeParameter.Description = EnrichDescriptionByTypes(typeParameter.Description);
-                    }
-                    return ret;
-                })
-                .ToList()
-            );
-       return plugin;
+        var tools = new List<AITool>
+        {
+            AIFunctionFactory.Create(GetData),
+            AIFunctionFactory.Create(GetDataTypes),
+            AIFunctionFactory.Create(UpdateData),
+            AIFunctionFactory.Create(DeleteData),
+            AIFunctionFactory.Create(GetSchema)
+        };
+        return tools;
     }
 
     private string EnrichDescriptionByTypes(string description)

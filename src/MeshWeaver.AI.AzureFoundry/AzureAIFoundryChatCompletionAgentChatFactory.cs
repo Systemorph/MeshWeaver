@@ -3,7 +3,7 @@ using Azure.AI.Inference;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI.AzureFoundry;
 
@@ -21,7 +21,8 @@ public class AzureAIFoundryChatCompletionAgentChatFactory(
     : ChatCompletionAgentChatFactory(hub, agentDefinitions)
 {
     private readonly AzureAIFoundryConfiguration configuration = options.Value ?? throw new ArgumentNullException(nameof(options));
-    protected override Microsoft.SemanticKernel.Kernel CreateKernel(IAgentDefinition agentDefinition)
+
+    protected override IChatClient CreateChatClient(IAgentDefinition agentDefinition)
     {
         // Validate configuration
         if (string.IsNullOrEmpty(configuration.Endpoint))
@@ -32,33 +33,26 @@ public class AzureAIFoundryChatCompletionAgentChatFactory(
         if (string.IsNullOrEmpty(modelName))
             throw new InvalidOperationException("At least one model must be configured in AzureAIFoundryConfiguration.Models");
 
-        logger.LogInformation("Creating Azure AI Foundry kernel for agent {AgentName} using model {ModelName}",
+        logger.LogInformation("Creating Azure AI Foundry chat client for agent {AgentName} using model {ModelName}",
             agentDefinition.Name, modelName);
 
         try
         {
             var client = new ChatCompletionsClient(new Uri(configuration.Endpoint), new AzureKeyCredential(configuration.ApiKey!));
 
-            // Create a kernel builder with Azure AI Foundry integration
-#pragma warning disable SKEXP0070
-            var kernelBuilder = Microsoft.SemanticKernel.Kernel
-                .CreateBuilder()
-                .AddAzureAIInferenceChatCompletion(
-                    modelId: modelName,
-                    client)
-#pragma warning restore SKEXP0070
-                ;
+            // Use the AsChatClient extension method to convert ChatCompletionsClient to Microsoft.Extensions.AI.IChatClient
+            IChatClient chatClient = client.AsIChatClient(modelName);
 
-            logger.LogInformation("Successfully configured Azure AI Foundry kernel for agent {AgentName} with endpoint {Endpoint} and model {ModelName}",
+            logger.LogInformation("Successfully configured Azure AI Foundry chat client for agent {AgentName} with endpoint {Endpoint} and model {ModelName}",
                 agentDefinition.Name, configuration.Endpoint, modelName);
 
-            return kernelBuilder.Build();
+            return chatClient;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to create Azure AI Foundry kernel for agent {AgentName}", agentDefinition.Name);
+            logger.LogError(ex, "Failed to create Azure AI Foundry chat client for agent {AgentName}", agentDefinition.Name);
             throw new InvalidOperationException(
-                $"Failed to create Azure AI Foundry kernel for agent {agentDefinition.Name}: {ex.Message}", ex);
+                $"Failed to create Azure AI Foundry chat client for agent {agentDefinition.Name}: {ex.Message}", ex);
         }
     }
 }

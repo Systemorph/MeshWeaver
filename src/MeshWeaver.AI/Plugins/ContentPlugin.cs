@@ -10,7 +10,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 using UglyToad.PdfPig;
 
 namespace MeshWeaver.AI.Plugins;
@@ -145,7 +145,6 @@ public class ContentPlugin
         return null;
     }
 
-    [KernelFunction]
     [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetContent(
         [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")]
@@ -396,7 +395,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Saves content as a file to a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> SaveFile(
         [Description("The path where the file should be saved within the collection")] string filePath,
@@ -438,7 +436,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Lists all files in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListFiles(
         [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
@@ -469,7 +466,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Lists all available collections with their configurations.")]
     public Task<string> GetCollections()
     {
@@ -498,7 +494,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Lists all folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListFolders(
         [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
@@ -529,7 +524,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Lists all files and folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> ListCollectionItems(
         [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
@@ -564,7 +558,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Gets the content of a specific document from a collection (simple text reading). If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetDocument(
         [Description("Document path in collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/', e.g., 'Slip.md' from 'Submissions-Microsoft-2026/Slip.md'); else null.")] string? documentPath = null,
@@ -602,7 +595,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Deletes a file from a specified collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> DeleteFile(
         [Description("File path to delete. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
@@ -636,7 +628,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Creates a new folder in a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> CreateFolder(
         [Description("The path of the folder to create within the collection")] string folderPath,
@@ -662,7 +653,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Deletes a folder from a specified collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> DeleteFolder(
         [Description("Folder path to delete. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? folderPath = null,
@@ -696,7 +686,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Gets the article catalog for a collection with filtering options. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetArticleCatalog(
         [Description("Optional: Maximum number of articles to return")] int? maxResults = null,
@@ -732,7 +721,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Gets a specific article with its metadata and content from a collection. If collection/articleId not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetArticle(
         [Description("Article identifier (path without .md). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? articleId = null,
@@ -779,7 +767,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Gets the MIME content type for a file based on its extension. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetContentType(
         [Description("File path. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
@@ -809,7 +796,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Checks if a specific file exists in a collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> FileExists(
         [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? filePath = null,
@@ -846,7 +832,6 @@ public class ContentPlugin
         }
     }
 
-    [KernelFunction]
     [Description("Generates a unique filename with timestamp for saving temporary files.")]
     public string GenerateUniqueFileName(
         [Description("The base name for the file (without extension)")] string baseName,
@@ -856,7 +841,6 @@ public class ContentPlugin
         return $"{baseName}_{timestamp}.{extension.TrimStart('.')}";
     }
 
-    [KernelFunction]
     [Description("Imports data from a file in a collection to a specified address.")]
     public async Task<string> Import(
         [Description("The path to the file to import")] string path,
@@ -955,17 +939,28 @@ public class ContentPlugin
     }
 
     /// <summary>
-    /// Creates a KernelPlugin from this instance using reflection.
+    /// Creates AITools from this instance.
     /// </summary>
-    public KernelPlugin CreateKernelPlugin()
+    public IList<AITool> CreateTools()
     {
-        var plugin = KernelPluginFactory.CreateFromFunctions(
-            nameof(ContentPlugin),
-            GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                .Where(m => m.GetCustomAttribute<KernelFunctionAttribute>() != null)
-                .Select(m => KernelFunctionFactory.CreateFromMethod(m, this))
-        );
-        return plugin;
+        return
+        [
+            AIFunctionFactory.Create(GetContent),
+            AIFunctionFactory.Create(SaveFile),
+            AIFunctionFactory.Create(ListFiles),
+            AIFunctionFactory.Create(ListFolders),
+            AIFunctionFactory.Create(ListCollectionItems),
+            AIFunctionFactory.Create(GetDocument),
+            AIFunctionFactory.Create(DeleteFile),
+            AIFunctionFactory.Create(CreateFolder),
+            AIFunctionFactory.Create(DeleteFolder),
+            AIFunctionFactory.Create(GetArticleCatalog),
+            AIFunctionFactory.Create(GetArticle),
+            AIFunctionFactory.Create(GetContentType),
+            AIFunctionFactory.Create(FileExists),
+            AIFunctionFactory.Create(GenerateUniqueFileName),
+            AIFunctionFactory.Create(Import)
+        ];
     }
 
     /// <summary>

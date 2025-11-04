@@ -59,6 +59,21 @@
         flex-shrink: 0;
     }
 
+    /* Prevent FluentIcon from overriding branded icon colors */
+    .info-link fluent-icon {
+        color: currentColor;
+    }
+
+    .info-link fluent-icon svg {
+        color: initial;
+    }
+
+/* Dark mode adjustments for info links */
+.info-links.fluent-dark-theme .info-link {
+    background-color: var(--neutral-layer-2, #2d2d2d);
+    border-color: var(--neutral-stroke-strong, #444444);
+}
+
     .info-link span {
         font-weight: 500;
     }

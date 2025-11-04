@@ -4,7 +4,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Insurance.Domain;
 using MeshWeaver.Messaging;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
@@ -133,13 +133,17 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         }
     }
 
-    IEnumerable<KernelPlugin> IAgentWithPlugins.GetPlugins(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
     {
-        yield return new DataPlugin(hub, chat, typeDefinitionMap).CreateKernelPlugin();
+        var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap);
+        foreach (var tool in dataPlugin.CreateTools())
+            yield return tool;
 
         // Add ContentPlugin for submissions and file reading functionality
         var submissionPluginConfig = CreateSubmissionPluginConfig();
-        yield return new ContentPlugin(hub, submissionPluginConfig, chat).CreateKernelPlugin();
+        var contentPlugin = new ContentPlugin(hub, submissionPluginConfig, chat);
+        foreach (var tool in contentPlugin.CreateTools())
+            yield return tool;
     }
 
     private static ContentPluginConfig CreateSubmissionPluginConfig()

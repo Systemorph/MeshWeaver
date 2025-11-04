@@ -6,7 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
-using Microsoft.SemanticKernel;
+using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -22,8 +22,7 @@ public class LayoutAreaPlugin(
     )
 {
 
-    [KernelFunction, 
-     Description($"Displays a layout area as a visual component in the chat.")]
+    [Description($"Displays a layout area as a visual component in the chat.")]
     public string DisplayLayoutArea(
         [Description($"Name of the layout area to retrieve. A list of valid layout areas can be found with the {nameof(GetLayoutAreas)} function")] string areaName,
         [Description($"Id of the layout area requested. Could be paramters steering the layout areas. See Layout Area Definition for details.")] string? id = null)
@@ -67,8 +66,7 @@ public class LayoutAreaPlugin(
         return ret; 
     }
 
-    [KernelFunction, 
-     Description($"List all layout areas and their definitions available as a json structure. The area property should be used in the {nameof(DisplayLayoutArea)} tool.")]
+    [Description($"List all layout areas and their definitions available as a json structure. The area property should be used in the {nameof(DisplayLayoutArea)} tool.")]
     public async Task<string> GetLayoutAreas()
     {
 
@@ -99,24 +97,13 @@ public class LayoutAreaPlugin(
         return addressMap?.Invoke(areaName) ?? chat.Context?.Address;
     }
 
-    public KernelPlugin CreateKernelPlugin()
+    public IList<AITool> CreateTools()
     {
-        var plugin = KernelPluginFactory.CreateFromFunctions(nameof(LayoutAreaPlugin),
-            GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                .Where(m => m.HasAttribute<KernelFunctionAttribute>())
-                .Select(m =>
-                {
-                    var ret = KernelFunctionFactory.CreateFromMethod(m, hub.JsonSerializerOptions, this);
-                    if (ret.Name == nameof(DisplayLayoutArea))
-                    {
-                        var areaParameter = ret.Metadata.Parameters.First();
-                        areaParameter.Description = EnrichDescriptionByAreas(areaParameter.Description);
-                    }
-                    return ret;
-                })
-                .ToList()
-            );
-       return plugin;
+        return
+        [
+            AIFunctionFactory.Create(DisplayLayoutArea),
+            AIFunctionFactory.Create(GetLayoutAreas)
+        ];
     }
 
     private string EnrichDescriptionByAreas(string description)
