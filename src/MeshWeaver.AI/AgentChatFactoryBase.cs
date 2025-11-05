@@ -93,8 +93,15 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         // Get tools from IAgentWithPlugins
         if (agentDefinition is IAgentWithPlugins pluginAgent)
         {
-            tools.AddRange(pluginAgent.GetTools(chat));
-            Logger.LogDebug("Added {Count} tools for agent {AgentName}", tools.Count, agentDefinition.Name);
+            var pluginTools = pluginAgent.GetTools(chat).ToList();
+            tools.AddRange(pluginTools);
+            Logger.LogInformation("Agent {AgentName}: Added {Count} tools from plugins",
+                agentDefinition.Name,
+                tools.Count);
+        }
+        else
+        {
+            Logger.LogWarning("Agent {AgentName} does not implement IAgentWithPlugins - no tools added", agentDefinition.Name);
         }
 
         return tools;
