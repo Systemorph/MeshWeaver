@@ -48,11 +48,11 @@ public class AgentChatClient : IAgentChat
             conversationHistory.Add(message);
         }
 
-        // Process messages and get responses
-        var processedMessages = messages.Select(ProcessMessageWithContext).ToList();
+        // Add context as system message if we have context
+        var historyWithContext = PrepareHistoryWithContext();
 
         // Select which agent to use
-        var agent = SelectAgent(processedMessages.LastOrDefault());
+        var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
             yield return new ChatMessage(ChatRole.Assistant, "No suitable agent found to handle the request.");
@@ -61,8 +61,8 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
-        // Get response from the agent
-        var response = await agent.RunAsync(conversationHistory, cancellationToken: cancellationToken);
+        // Get response from the agent with context included
+        var response = await agent.RunAsync(historyWithContext, cancellationToken: cancellationToken);
 
         if (response.Messages != null)
         {
@@ -95,11 +95,11 @@ public class AgentChatClient : IAgentChat
             conversationHistory.Add(message);
         }
 
-        // Process messages and get responses
-        var processedMessages = messages.Select(ProcessMessageWithContext).ToList();
+        // Add context as system message if we have context
+        var historyWithContext = PrepareHistoryWithContext();
 
         // Select which agent to use
-        var agent = SelectAgent(processedMessages.LastOrDefault());
+        var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
         {
             yield return new ChatResponseUpdate(ChatRole.Assistant, "No suitable agent found to handle the request.");
@@ -108,8 +108,8 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
-        // Get streaming response from the agent
-        await foreach (var update in agent.RunStreamingAsync(conversationHistory, cancellationToken: cancellationToken))
+        // Get streaming response from the agent with context included
+        await foreach (var update in agent.RunStreamingAsync(historyWithContext, cancellationToken: cancellationToken))
         {
             // Convert from agent updates to chat response updates
             if (update.Text != null)
@@ -132,33 +132,44 @@ public class AgentChatClient : IAgentChat
         }
     }
 
-    private ChatMessage ProcessMessageWithContext(ChatMessage message)
+    private List<ChatMessage> PrepareHistoryWithContext()
     {
-        if (message.Role != ChatRole.User)
-            return message;
+        var history = new List<ChatMessage>();
 
-        // Extract original text content
-        var originalText = ExtractTextFromMessage(message);
+        // Add context as a system message at the start if we have context
+        if (Context != null)
+        {
+            var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
+            var contextMessage = $"""
+                # Current Application Context
 
-        // Format the final message with context
-        var messageWithContext = FormatMessageWithContext(originalText);
+                The user is currently viewing the following page/entity in the application:
 
-        // Always update the last context address after processing
+                ```json
+                {contextJson}
+                ```
+
+                Key information:
+                - Address Type: {Context.Address?.Type ?? "N/A"}
+                - Address ID: {Context.Address?.Id ?? "N/A"}
+                - Layout Area: {Context.LayoutArea?.Area ?? "N/A"}
+
+                Use this context information when answering the user's questions or performing actions.
+                For example, if the user asks about "this pricing" or "current files", they are referring to the entity specified in the context above.
+                """;
+
+            history.Add(new ChatMessage(ChatRole.System, contextMessage));
+            logger.LogDebug("Added context system message: Address={Address}, LayoutArea={LayoutArea}",
+                Context.Address, Context.LayoutArea?.Area);
+        }
+
+        // Add all conversation history
+        history.AddRange(conversationHistory);
+
+        // Update last context address for change detection
         lastContextAddress = Context?.Address;
 
-        return new ChatMessage(ChatRole.User, [new TextContent(messageWithContext)])
-        {
-            AuthorName = message.AuthorName
-        };
-    }
-
-    private string FormatMessageWithContext(string originalText)
-    {
-        if (Context == null)
-            return originalText;
-
-        var contextJson = JsonSerializer.Serialize(Context!, hub.JsonSerializerOptions);
-        return $"{originalText}\n<Context>\n{contextJson}\n</Context>";
+        return history;
     }
 
     private AIAgent? SelectAgent(ChatMessage? lastMessage)

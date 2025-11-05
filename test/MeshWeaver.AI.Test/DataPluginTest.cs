@@ -119,18 +119,18 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
     {
 
         public AgentContext? Context { get; set; }
-        
-        public void SetContext(AgentContext applicationContext) => Context = applicationContext;
-        
+
+        public void SetContext(AgentContext? applicationContext) => Context = applicationContext;
+
         public Task ResumeAsync(ChatConversation conversation) => Task.CompletedTask;
-        
-        public IAsyncEnumerable<ChatMessage> GetResponseAsync(IReadOnlyCollection<ChatMessage> messages, CancellationToken cancellationToken = default) 
+
+        public IAsyncEnumerable<ChatMessage> GetResponseAsync(IReadOnlyCollection<ChatMessage> messages, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
-        
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IReadOnlyCollection<ChatMessage> messages, CancellationToken cancellationToken = default) 
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IReadOnlyCollection<ChatMessage> messages, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
-        
-        public string Delegate(string agentName, string message, bool askUserFeedback = false) 
+
+        public string Delegate(string agentName, string message, bool askUserFeedback = false)
             => throw new NotImplementedException();
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
         {
