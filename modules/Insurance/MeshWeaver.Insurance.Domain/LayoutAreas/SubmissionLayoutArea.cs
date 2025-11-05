@@ -21,19 +21,19 @@ public static class SubmissionLayoutArea
     {
         var pricingId = host.Hub.Address.Id;
 
-        // Get the collection configuration, creating a localized version if needed
-        var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
-        var contentService = host.Hub.ServiceProvider.GetRequiredService<IContentService>();
-
-        // Get the collection configuration
-        var collectionConfig = contentService.GetCollectionConfig(localizedCollectionName);
-
         return host.Workspace.GetStream<Pricing>()!
             .Select(pricings =>
             {
                 var pricing = pricings?.FirstOrDefault();
                 if (pricing != null)
                 {
+                    // Get the collection configuration, creating a localized version if needed
+                    var localizedCollectionName = GetLocalizedCollectionName("Submissions", pricingId);
+                    var contentService = host.Hub.ServiceProvider.GetRequiredService<IContentService>();
+
+                    // Get the collection configuration
+                    var collectionConfig = contentService.GetCollectionConfig(localizedCollectionName);
+
                     var fileBrowser = new FileBrowserControl(localizedCollectionName);
                     if (collectionConfig != null)
                         fileBrowser = fileBrowser
