@@ -3,7 +3,7 @@ using Microsoft.JSInterop;
 
 namespace MeshWeaverApp1.Portal.Infrastructure
 {
-    public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/MeshWeaverApp1.Portal.Infrastructure/js/CacheStorageAccessor.js")
+    public class CacheStorageAccessor(IJSRuntime js, IAppVersionService vs) : JSModule(js, "./_content/MeshWeaverApp1.Portal/js/CacheStorageAccessor.js")
     {
         private string? currentCacheVersion;
 
