@@ -19,8 +19,6 @@ public enum ChatPosition
 
 public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 {
-    [Inject] private ILogger<AgentChatView> Logger { get; set; } = null!;
-
     private Lazy<Task<IAgentChat>> lazyChat;
     private CancellationTokenSource currentResponseCancellation = new();
     private ChatMessage? currentResponseMessage;
