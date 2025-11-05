@@ -44,7 +44,7 @@ public abstract class ChatCompletionAgentChatFactory(
         Logger.LogInformation("Thread deletion not applicable for ChatCompletionAgent: {ThreadId}", threadId);
     }
 
-    protected override Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, AIAgent? existingAgent)
+    protected override Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, AIAgent? existingAgent, IAgentChat chat)
     {
         // Since ChatClientAgent doesn't persist, we always create new agents
         var name = agentDefinition.Name;
@@ -54,8 +54,8 @@ public abstract class ChatCompletionAgentChatFactory(
         // Create a chat client for this agent using the derived class implementation
         var chatClient = CreateChatClient(agentDefinition);
 
-        // Get tools for this agent
-        var tools = GetToolsForAgent(agentDefinition);
+        // Get tools for this agent, passing the chat instance so plugins can access context
+        var tools = GetToolsForAgent(agentDefinition, chat);
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(

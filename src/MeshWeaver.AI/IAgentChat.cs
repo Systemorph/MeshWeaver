@@ -6,7 +6,7 @@ namespace MeshWeaver.AI;
 
 public interface IAgentChat
 {
-    void SetContext(AgentContext applicationContext);
+    void SetContext(AgentContext? applicationContext);
     Task ResumeAsync(ChatConversation conversation);
 
     /// <summary>Sends chat messages and returns the response.</summary>

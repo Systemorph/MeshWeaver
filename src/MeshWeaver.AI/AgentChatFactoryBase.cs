@@ -43,31 +43,31 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         var agentDefinitions = await AgentDefinitions;
         var existingAgents = await GetExistingAgentsAsync();
 
+        // Create AgentChatClient first so it can be passed to GetTools()
+        var chatClient = new AgentChatClient(agentDefinitions, Hub.ServiceProvider);
+
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
-        var agents = new Dictionary<string, AIAgent>();
 
         foreach (var agentDefinition in agentDefinitions.Values)
         {
             var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
             var agent = await CreateOrUpdateAgentAsync(
                 agentDefinition,
-                existingAgent);
+                existingAgent,
+                chatClient);
 
             // Handle file uploads for agents that implement IAgentDefinitionWithFiles
             if (agentDefinition is IAgentDefinitionWithFiles fileProvider)
                 await foreach (var file in fileProvider.GetFilesAsync())
                     await UploadFileAsync(agent, file);
 
-            agents[agentDefinition.Name] = agent;
+            chatClient.AddAgent(agentDefinition.Name, agent);
         }
 
-        // Create AgentChatClient which will manage the workflow
-        var ret = new AgentChatClient(agents, agentDefinitions, Hub.ServiceProvider);
-
-        return ret;
+        return chatClient;
     }
 
-    protected abstract Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent);
+    protected abstract Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent, IAgentChat chat);
     protected abstract Task UploadFileAsync(AIAgent assistant, AgentFileInfo file);
 
 
@@ -86,9 +86,17 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
     /// <summary>
     /// Gets tools for the specified agent definition including both plugins and delegation functions.
     /// </summary>
-    protected virtual IList<AITool> GetToolsForAgent(IAgentDefinition agentDefinition)
+    protected virtual IList<AITool> GetToolsForAgent(IAgentDefinition agentDefinition, IAgentChat chat)
     {
         var tools = new List<AITool>();
+
+        // Get tools from IAgentWithPlugins
+        if (agentDefinition is IAgentWithPlugins pluginAgent)
+        {
+            tools.AddRange(pluginAgent.GetTools(chat));
+            Logger.LogDebug("Added {Count} tools for agent {AgentName}", tools.Count, agentDefinition.Name);
+        }
+
         return tools;
     }
 
