@@ -341,7 +341,7 @@ public class MessageService : IMessageService
                 {
 
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
-                    if (delivery.State == MessageDeliveryState.Ignored)
+                    if (delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure })
                         ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
                 }
                 else
