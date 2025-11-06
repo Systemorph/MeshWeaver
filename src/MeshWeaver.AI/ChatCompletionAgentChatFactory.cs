@@ -59,7 +59,7 @@ public abstract class ChatCompletionAgentChatFactory(
 
         // Get tools for this agent, passing the chat instance so plugins can access context
         // Method will filter delegation tools based on [DefaultAgent] attribute
-        var tools = await GetToolsForAgentAsync(agentDefinition, chat, allAgents);
+        var tools = GetToolsForAgent(agentDefinition, chat, allAgents).ToArray();
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(

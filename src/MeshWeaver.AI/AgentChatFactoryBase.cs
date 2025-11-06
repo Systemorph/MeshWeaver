@@ -1,6 +1,8 @@
 ﻿using MeshWeaver.AI.Persistence;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,23 +43,24 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         var agentDefinitions = await AgentDefinitions;
         var existingAgents = await GetExistingAgentsAsync();
 
-        // Create AgentChatClient first so it can be passed to GetTools()
-        var chatClient = new AgentChatClient(agentDefinitions, Hub.ServiceProvider);
-
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
         var createdAgents = new Dictionary<string, ChatClientAgent>();
 
         // Order agents: non-delegating agents first, then delegating agents, then default agent last
         var orderedAgents = OrderAgentsForCreation(agentDefinitions.Values);
 
-        // First pass: Create all agents in order without delegation tools
+        // Create a simple context holder that will be used temporarily during agent creation
+        // This allows agents to get tools without needing the full orchestration
+        var tempContext = new SimpleAgentContext();
+
+        // First pass: Create all agents in order
         foreach (var agentDefinition in orderedAgents)
         {
             var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
             var agent = await CreateOrUpdateAgentAsync(
                 agentDefinition,
                 existingAgent,
-                chatClient,
+                tempContext,
                 createdAgents); // Pass current dictionary - delegating agents get tools for agents created before them
 
             // Handle file uploads for agents that implement IAgentDefinitionWithFiles
@@ -66,7 +69,6 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
                     await UploadFileAsync(agent, file);
 
             createdAgents[agentDefinition.Name] = agent;
-            chatClient.AddAgent(agentDefinition.Name, agent);
         }
 
         // Second pass: Update agents that have cyclic dependencies
@@ -79,18 +81,93 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             var updatedAgent = await CreateOrUpdateAgentAsync(
                 agentDefinition,
                 existingAgent,
-                chatClient,
+                tempContext,
                 createdAgents); // Now all agents exist, so cyclic dependencies can be resolved
 
-            // Replace the agent in the chat client
+            // Replace the agent
             createdAgents[agentDefinition.Name] = updatedAgent;
-            chatClient.AddAgent(agentDefinition.Name, updatedAgent);
 
             Logger.LogInformation("Updated agent {AgentName} with cyclic delegation tools",
                 agentDefinition.Name);
         }
 
+        // Build the workflow based on agent delegation relationships
+        var workflow = BuildWorkflow(agentDefinitions, createdAgents);
+
+        // Create the AgentChatClient with the workflow
+        var chatClient = new AgentChatClient(
+            agentDefinitions,
+            workflow,
+            Hub.ServiceProvider);
+
         return chatClient;
+    }
+
+    /// <summary>
+    /// Builds a workflow based on agent delegation relationships.
+    /// Uses WorkflowBuilder to connect agents with edges based on IAgentWithDelegations.
+    /// </summary>
+    private Workflow BuildWorkflow(
+        IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
+        Dictionary<string, ChatClientAgent> createdAgents)
+    {
+        // Find the default agent (entry point)
+        var defaultAgentDef = agentDefinitions.Values
+            .FirstOrDefault(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+
+        if (defaultAgentDef == null)
+            throw new InvalidOperationException("No default agent found. At least one agent must have [DefaultAgent] attribute.");
+
+        var defaultAgent = createdAgents[defaultAgentDef.Name];
+
+        // Start building workflow with the default agent as entry point
+        var workflowBuilder = new WorkflowBuilder(defaultAgent);
+
+        // Build workflow edges based on IAgentWithDelegations
+        foreach (var agentDef in agentDefinitions.Values)
+        {
+            if (agentDef is IAgentWithDelegations delegatingAgent)
+            {
+                var sourceAgent = createdAgents[agentDef.Name];
+
+                foreach (var delegation in delegatingAgent.Delegations)
+                {
+                    if (createdAgents.TryGetValue(delegation.AgentName, out var targetAgent))
+                    {
+                        // Add edge from source agent to target agent
+                        workflowBuilder = workflowBuilder.AddEdge(sourceAgent, targetAgent);
+
+                        Logger.LogInformation(
+                            "Added workflow edge: {SourceAgent} -> {TargetAgent} ({Instructions})",
+                            agentDef.Name,
+                            delegation.AgentName,
+                            delegation.Instructions);
+                    }
+                    else
+                    {
+                        Logger.LogWarning(
+                            "Agent {SourceAgent} delegates to {TargetAgent}, but {TargetAgent} was not found",
+                            agentDef.Name,
+                            delegation.AgentName,
+                            delegation.AgentName);
+                    }
+                }
+            }
+            // For agents marked with [ExposedInDefaultAgent], add edges from the default agent
+            else if (agentDef.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any()
+                     && agentDef.Name != defaultAgentDef.Name)
+            {
+                var targetAgent = createdAgents[agentDef.Name];
+                workflowBuilder = workflowBuilder.AddEdge(defaultAgent, targetAgent);
+
+                Logger.LogInformation(
+                    "Added workflow edge from default agent to exposed agent: {DefaultAgent} -> {TargetAgent}",
+                    defaultAgentDef.Name,
+                    agentDef.Name);
+            }
+        }
+
+        return workflowBuilder.Build();
     }
 
     /// <summary>
@@ -171,96 +248,49 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     protected abstract IChatClient CreateChatClient(IAgentDefinition agentDefinition);
 
     /// <summary>
-    /// Gets tools for the specified agent definition including both plugins and delegation functions.
+    /// Gets tools for the specified agent definition including both plugins and context management functions.
     /// </summary>
-    protected virtual async Task<IList<AITool>> GetToolsForAgentAsync(
+    protected IEnumerable<AITool> GetToolsForAgent(
         IAgentDefinition agentDefinition,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
-        var tools = new List<AITool>();
+        foreach (var tool in GetContextToolsAsync(agentDefinition, chat, allAgents))
+            yield return tool;
 
         // Get tools from IAgentWithTools
         if (agentDefinition is IAgentWithTools pluginAgent)
         {
-            var pluginTools = pluginAgent.GetTools(chat).ToList();
-            tools.AddRange(pluginTools);
+            var nTool = 0;
+            foreach (var tool in pluginAgent.GetTools(chat))
+            {
+                ++nTool;
+                yield return tool;
+            }
             Logger.LogInformation("Agent {AgentName}: Added {Count} plugin tools",
-                agentDefinition.Name,
-                pluginTools.Count);
+                agentDefinition.Name, nTool);
+
         }
 
-        // Add delegation tools - method will filter based on [DefaultAgent] attribute or IAgentWithDelegations
-        var delegationTools = GetDelegationToolsAsync(agentDefinition, chat, allAgents).ToList();
-        tools.AddRange(delegationTools);
-
-        if (delegationTools.Any())
-        {
-            Logger.LogInformation("Agent {AgentName}: Added {Count} delegation tools",
-                agentDefinition.Name,
-                delegationTools.Count);
-        }
-
-        Logger.LogInformation("Agent {AgentName}: Total {Count} tools",
-            agentDefinition.Name,
-            tools.Count);
-
-        return tools;
     }
 
     /// <summary>
-    /// Creates delegation tools for agents that can delegate to other agents.
-    /// Creates AIFunction tools that wrap the agent's RunAsync method with proper parameters.
-    /// For [DefaultAgent]: adds all agents marked with [ExposedInDefaultAgent]
-    /// For IAgentWithDelegations: adds agents specified in their Delegations property
+    /// Creates context management tools for all agents.
+    /// Returns the ChatPlugin SetContext function.
     /// </summary>
-    protected virtual IEnumerable<AITool> GetDelegationToolsAsync(
+    protected virtual IEnumerable<AITool> GetContextToolsAsync(
         IAgentDefinition agentDefinition,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
-        // Check if this is the default agent
-        var isDefaultAgent = agentDefinition.GetType()
-            .GetCustomAttributes(typeof(DefaultAgentAttribute), false)
-            .Any();
+        // All agents get the SetContext tool
+        var chatPlugin = new Plugins.ChatPlugin(chat);
 
-        IEnumerable<string> targetAgentNames;
+        // Create tool directly from the plugin method
+        yield return AIFunctionFactory.Create(chatPlugin.SetContext);
 
-        if (isDefaultAgent)
-        {
-            // Default agent gets all exposed agents
-            targetAgentNames = AgentDefinitions.Result.Values
-                .Where(a => a.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
-                .Where(a => a.Name != agentDefinition.Name)
-                .Select(a => a.Name);
-        }
-        else if (agentDefinition is IAgentWithDelegations delegatingAgent)
-        {
-            // Non-default agent with delegations gets only the agents they specify
-            targetAgentNames = delegatingAgent.Delegations
-                .Select(d => d.AgentName);
-        }
-        else
-        {
-            // Agent has no delegations
-            yield break;
-        }
-
-        // Create an AIFunction tool for each target agent
-        foreach (var targetAgentName in targetAgentNames)
-        {
-            // Get the agent definition
-            var targetAgentDef = allAgents
-                .GetValueOrDefault(targetAgentName);
-
-            if (targetAgentDef == null)
-                continue;
-
-            yield return targetAgentDef.AsAIFunction();
-
-            Logger.LogDebug("Created delegation tool {ToolName} for agent {AgentName}",
-                targetAgentDef.Name, agentDefinition.Name);
-        }
+        Logger.LogDebug("Added SetContext tool for agent {AgentName}",
+            agentDefinition.Name);
     }
 
     public abstract Task DeleteThreadAsync(string threadId);
@@ -276,44 +306,46 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
     protected string GetAgentInstructions(IAgentDefinition agentDefinition)
     {
-        var baseInstructions = agentDefinition.Instructions;
+        // With HandoffOrchestration, delegation is handled natively by the framework
+        // So we just return the base instructions without custom delegation prompts
+        return agentDefinition.Instructions;
+    }
 
-        // Check if this agent supports delegations
-        if (agentDefinition is IAgentWithDelegations delegatingAgent)
+    /// <summary>
+    /// Simple context holder used temporarily during agent creation.
+    /// This allows agents to get tools without needing the full AgentChatClient.
+    /// </summary>
+    private class SimpleAgentContext : IAgentChat
+    {
+        public AgentContext? Context { get; private set; }
+
+        public void SetContext(AgentContext? context)
         {
-            var delegationAgents = delegatingAgent.Delegations.ToList();
-
-            if (delegationAgents.Any())
-            {
-                var agentList = string.Join('\n', delegationAgents.Select(d => $"- {d.AgentName}: {d.Instructions}"));
-
-                var delegationGuidelines =
-                    $$$"""
-
-                       **Agent Delegation:**
-                       You have access to specialized agents as tools. Each agent appears as a tool with their name.
-                       When you need specialized help, simply call the appropriate agent tool with your message.
-
-                       **Available Agents:**
-                       {{{agentList}}}
-
-                       **How to delegate:**
-                       1. Identify which specialized agent can best handle the user's request
-                       2. Call that agent's tool with the message parameter containing what you need them to do
-                       3. The agent will handle the request and return their response
-
-                       **Important:**
-                       - The context from the user's message is automatically included - don't duplicate it
-                       - Each agent is a tool you can call directly by their name
-                       - Choose the most appropriate agent based on their specialization
-
-                       """;
-
-                // Append delegation guidelines to the base instructions
-                return baseInstructions + delegationGuidelines;
-            }
+            Context = context;
         }
 
-        return baseInstructions;
+        public Task ResumeAsync(ChatConversation conversation)
+        {
+            throw new NotImplementedException("SimpleAgentContext is only for context storage during agent creation");
+        }
+
+        public IAsyncEnumerable<ChatMessage> GetResponseAsync(
+            IReadOnlyCollection<ChatMessage> messages,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotImplementedException("SimpleAgentContext is only for context storage during agent creation");
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IReadOnlyCollection<ChatMessage> messages,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotImplementedException("SimpleAgentContext is only for context storage during agent creation");
+        }
+
+        public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
+        {
+            // No-op during agent creation
+        }
     }
 }

@@ -29,13 +29,6 @@ public interface IAgentChat
         IReadOnlyCollection<ChatMessage> messages,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Delegates a task to another agent.</summary>
-    /// <param name="agentName">The name of the agent to delegate to</param>
-    /// <param name="message">The message or task to send to the agent</param>
-    /// <param name="askUserFeedback">Whether to ask for user feedback before proceeding</param>
-    /// <returns>A confirmation message about the delegation</returns>
-    string Delegate(string agentName, string message, bool askUserFeedback = false);
-
     /// <summary>Displays a layout area in the chat as a visual component.</summary>
     /// <param name="layoutAreaControl">The layout area control</param>
     void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);

@@ -5,27 +5,10 @@ using Microsoft.Extensions.AI;
 namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
-/// Plugin that provides delegation and context management functionality for agents.
+/// Plugin that provides context management functionality for agents.
 /// </summary>
 public class ChatPlugin(IAgentChat agentChat)
 {
-    /// <summary>
-    /// Delegates a task to another agent. This is useful when you need to hand off a task to a specialized agent that can handle it better.
-    /// If you feel a message does not fall within your responsibility or expertise, delegate to the default agent.
-    /// </summary>
-    /// <param name="agentName"></param>
-    /// <param name="message"></param>
-    /// <param name="askUserFeedback"></param>
-    /// <returns></returns>
-    [Description("Delegate a task to another agent. Use this when you need to hand off a task to a specialized agent. If the message does not fall within your responsibility, delegate to the default agent.")]
-    public string Delegate(
-        [Description("The exact name of the agent to delegate to (use 'default' for the default agent)")] string agentName,
-        [Description("The message or task to send to the agent")] string message,
-        [Description("Whether to ask for user feedback before proceeding (default: false)")] bool askUserFeedback = false)
-    {
-        return agentChat.Delegate(agentName, message, askUserFeedback);
-    }
-
     /// <summary>
     /// Sets the chat context to a particular address, layout area or layout area id.
     /// </summary>
@@ -44,7 +27,7 @@ public class ChatPlugin(IAgentChat agentChat)
         if (areaName is not null && areaName != "null")
             currentContext = currentContext with { LayoutArea = new LayoutAreaReference(areaName) };
         if (areaId is not null && areaId != "null")
-            currentContext = currentContext with { LayoutArea = (currentContext.LayoutArea ?? new(areaName ?? "null"))with{Id = areaId} };
+            currentContext = currentContext with { LayoutArea = (currentContext.LayoutArea ?? new(areaName ?? "null")) with { Id = areaId } };
 
         agentChat.SetContext(currentContext);
         return "Context set successfully.";
@@ -54,7 +37,6 @@ public class ChatPlugin(IAgentChat agentChat)
     {
         return
         [
-            AIFunctionFactory.Create(Delegate),
             AIFunctionFactory.Create(SetContext)
         ];
     }
