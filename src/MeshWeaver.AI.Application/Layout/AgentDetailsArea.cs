@@ -94,7 +94,7 @@ public static class AgentDetailsArea
         if (type.GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(40, 167, 69, 0.2); color: #28a745; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟢 Default Agent</span>");
 
-        if (type.GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
+        if (type.GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
         if (agent is IAgentWithDelegations)
@@ -107,9 +107,9 @@ public static class AgentDetailsArea
 
     private static string GetPluginsMarkdown(IAgentDefinition agent)
     {
-        // Try to get tools from IAgentWithPlugins interface
+        // Try to get tools from IAgentWithTools interface
         var aiTools = new List<AITool>();
-        if (agent is IAgentWithPlugins agentWithPlugins)
+        if (agent is IAgentWithTools agentWithPlugins)
         {
             try
             {
@@ -192,7 +192,7 @@ public static class AgentDetailsArea
         if (type.GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(40, 167, 69, 0.2); color: #28a745; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟢 Default Agent</span>");
 
-        if (type.GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
+        if (type.GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
         if (agent is IAgentWithDelegations)

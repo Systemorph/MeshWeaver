@@ -1,6 +1,5 @@
 ﻿using System.ComponentModel;
 using System.Reactive.Linq;
-using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -9,8 +8,8 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using UglyToad.PdfPig;
 
 namespace MeshWeaver.AI.Plugins;

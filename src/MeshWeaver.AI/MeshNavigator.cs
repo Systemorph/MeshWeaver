@@ -26,7 +26,7 @@ public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
 
     public IEnumerable<DelegationDescription> Delegations =>
         agentDefinitions.Value
-            .Where(agent => agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any())
+            .Where(agent => agent.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
             .Where(agent => agent != this) // Exclude self
             .Select(agent => new DelegationDescription(agent.Name, agent.Description));
 }

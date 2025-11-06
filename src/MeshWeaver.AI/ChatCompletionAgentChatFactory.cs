@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.Messaging;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.AI;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -12,22 +11,22 @@ namespace MeshWeaver.AI;
 public abstract class ChatCompletionAgentChatFactory(
     IMessageHub hub,
     IEnumerable<IAgentDefinition> agentDefinitions)
-    : AgentChatFactoryBase<AIAgent>(hub, agentDefinitions)
+    : AgentChatFactoryBase(hub, agentDefinitions)
 {
-    protected override Task<IEnumerable<AIAgent>> GetExistingAgentsAsync()
+    protected override Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync()
     {
         // ChatClientAgent doesn't have persistent storage, so we return empty collection
         // All agents will be created fresh each time
-        return Task.FromResult(Enumerable.Empty<AIAgent>());
+        return Task.FromResult(Enumerable.Empty<ChatClientAgent>());
     }
 
-    protected override string GetAgentName(AIAgent agent)
+    protected override string GetAgentName(ChatClientAgent agent)
     {
         return agent.Name!;
     }
 
 
-    protected override async Task UploadFileAsync(AIAgent assistant, AgentFileInfo file)
+    protected override async Task UploadFileAsync(ChatClientAgent assistant, AgentFileInfo file)
     {
         // ChatClientAgent doesn't support file uploads in the same way as persistent assistants
         // Files would need to be handled differently, potentially through the conversation context
@@ -44,7 +43,11 @@ public abstract class ChatCompletionAgentChatFactory(
         Logger.LogInformation("Thread deletion not applicable for ChatCompletionAgent: {ThreadId}", threadId);
     }
 
-    protected override Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, AIAgent? existingAgent, IAgentChat chat)
+    protected override async Task<ChatClientAgent> CreateOrUpdateAgentAsync(
+        IAgentDefinition agentDefinition,
+        ChatClientAgent? existingAgent,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
         // Since ChatClientAgent doesn't persist, we always create new agents
         var name = agentDefinition.Name;
@@ -55,7 +58,8 @@ public abstract class ChatCompletionAgentChatFactory(
         var chatClient = CreateChatClient(agentDefinition);
 
         // Get tools for this agent, passing the chat instance so plugins can access context
-        var tools = GetToolsForAgent(agentDefinition, chat);
+        // Method will filter delegation tools based on [DefaultAgent] attribute
+        var tools = await GetToolsForAgentAsync(agentDefinition, chat, allAgents);
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
@@ -68,7 +72,7 @@ public abstract class ChatCompletionAgentChatFactory(
             services: null        // Optional: could be injected if needed
         );
 
-        return Task.FromResult<AIAgent>(agent);
+        return agent;
     }
 
 }

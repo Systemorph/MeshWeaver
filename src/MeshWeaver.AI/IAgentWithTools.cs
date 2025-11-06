@@ -2,7 +2,7 @@
 
 namespace MeshWeaver.AI;
 
-public interface IAgentWithPlugins : IAgentDefinition
+public interface IAgentWithTools : IAgentDefinition
 {
     /// <summary>
     /// Gets the tools for the agent

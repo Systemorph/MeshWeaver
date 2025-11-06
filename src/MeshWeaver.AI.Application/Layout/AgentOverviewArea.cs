@@ -104,7 +104,7 @@ public class AgentOverviewViewModel
                 }
             }
 
-            // Add delegations from default agent to agents with ExposedInNavigatorAttribute
+            // Add delegations from default agent to agents with ExposedInDefaultAgentAttribute
             foreach (var agent in agents)
             {
                 if (agent != defaultAgent && IsExposedInNavigator(agent))
@@ -215,7 +215,7 @@ public class AgentOverviewViewModel
 
     private static bool IsExposedInNavigator(IAgentDefinition agent)
     {
-        return agent.GetType().GetCustomAttributes(typeof(ExposedInNavigatorAttribute), false).Any();
+        return agent.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any();
     }
 
     private static bool IsDirectlyReachableFromDefault(IAgentDefinition agent, IAgentDefinition? defaultAgent)

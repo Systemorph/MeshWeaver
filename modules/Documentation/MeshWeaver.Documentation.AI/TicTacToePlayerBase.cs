@@ -1,5 +1,4 @@
 ﻿using MeshWeaver.AI;
-using MeshWeaver.AI.Plugins;
 
 namespace MeshWeaver.Documentation.AI
 {
@@ -81,7 +80,7 @@ namespace MeshWeaver.Documentation.AI
              **IMPORTANT**: You must make a move, you cannot forward the board from the previous move.
              4. You win when three of your characters ({PlayerSymbol}) are in a row, in a column or in a diagonal of the table.
              5. Determine if you have won, output the board and say that you won.
-             6. If game is not finished, delegate to {OtherPlayer} using the {nameof(ChatPlugin.Delegate)} kernel function of the {nameof(ChatPlugin)}. 
+             6. If game is not finished, delegate to {OtherPlayer}. 
              issuing the following message to agent {OtherPlayer}: "Your turn".
              
              

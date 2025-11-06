@@ -11,8 +11,8 @@ namespace MeshWeaver.Todo.AI;
 /// <summary>
 /// Todo data agent that provides access to Todo domain data and collections
 /// </summary>
-[ExposedInNavigator]
-public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
+[ExposedInDefaultAgent]
+public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
 {
     private static readonly ApplicationAddress TodoApplicationAddress = new("Todo");
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
@@ -37,7 +37,7 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins
         Furthermore, you can get a list of TodoItem from the {nameof(DataPlugin.GetData)} function with the type 'TodoItem' or retrieve a specific TodoItem by its ID using the same function with the entityId parameter.
         """;
 
-    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
         var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap, _ => TodoApplicationAddress);
         var layoutAreaPlugin = new LayoutAreaPlugin(hub, chat, layoutAreaMap, _ => TodoApplicationAddress);

@@ -8,6 +8,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
@@ -69,6 +70,23 @@ public class AgentChatClient : IAgentChat
             foreach (var responseMsg in response.Messages)
             {
                 conversationHistory.Add(responseMsg);
+
+                // Log function calls and results
+                foreach (var content in responseMsg.Contents)
+                {
+                    if (content is FunctionCallContent functionCall)
+                    {
+                        logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
+                            currentAgentName, functionCall.Name);
+                    }
+                    else if (content is FunctionResultContent functionResult)
+                    {
+                        logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
+                            currentAgentName, functionResult.CallId);
+                    }
+                }
+
+                // Yield the complete message with all contents (including FunctionCallContent)
                 yield return responseMsg;
             }
         }
@@ -111,6 +129,31 @@ public class AgentChatClient : IAgentChat
         // Get streaming response from the agent with context included
         await foreach (var update in agent.RunStreamingAsync(historyWithContext, cancellationToken: cancellationToken))
         {
+            // Forward the complete update with all contents (including FunctionCallContent)
+            if (update.Contents != null && update.Contents.Count > 0)
+            {
+                foreach (var content in update.Contents)
+                {
+                    if (content is FunctionCallContent functionCall)
+                    {
+                        logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
+                            currentAgentName, functionCall.Name);
+
+                        // Yield the function call content so the UI can display it properly
+                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        {
+                            AuthorName = currentAgentName ?? "Assistant"
+                        };
+                    }
+                    else if (content is FunctionResultContent functionResult)
+                    {
+                        logger.LogInformation("Agent {AgentName} received result from tool",
+                            currentAgentName);
+                        // Don't yield function results to the UI
+                    }
+                }
+            }
+
             // Convert from agent updates to chat response updates
             if (update.Text != null)
             {
@@ -129,6 +172,68 @@ public class AgentChatClient : IAgentChat
             {
                 AuthorName = currentAgentName ?? "Assistant"
             };
+        }
+
+        // Handle pending delegation
+        if (pendingDelegationAgent != null && pendingDelegationMessage != null)
+        {
+            var delegateToAgent = pendingDelegationAgent;
+            var delegateMessage = pendingDelegationMessage;
+
+            // Clear pending delegation
+            pendingDelegationAgent = null;
+            pendingDelegationMessage = null;
+
+            // Switch to the delegated agent
+            if (agents.TryGetValue(delegateToAgent, out var delegatedAgent))
+            {
+                currentAgentName = delegateToAgent;
+                logger.LogInformation("Executing delegation to {AgentName}", delegateToAgent);
+
+                // Add the delegation message to history
+                var delegationUserMessage = new ChatMessage(ChatRole.User, delegateMessage);
+                conversationHistory.Add(delegationUserMessage);
+
+                // Get context and run the delegated agent
+                var delegationHistory = PrepareHistoryWithContext();
+
+                // Stream response from delegated agent
+                await foreach (var delegateUpdate in delegatedAgent.RunStreamingAsync(delegationHistory, cancellationToken: cancellationToken))
+                {
+                    // Forward the complete update with all contents (including FunctionCallContent)
+                    if (delegateUpdate.Contents != null && delegateUpdate.Contents.Count > 0)
+                    {
+                        foreach (var content in delegateUpdate.Contents)
+                        {
+                            if (content is FunctionCallContent functionCall)
+                            {
+                                logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
+                                    currentAgentName, functionCall.Name);
+
+                                // Yield the function call content so the UI can display it properly
+                                yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                                {
+                                    AuthorName = currentAgentName ?? "Assistant"
+                                };
+                            }
+                            else if (content is FunctionResultContent functionResult)
+                            {
+                                logger.LogInformation("Agent {AgentName} received result from tool",
+                                    currentAgentName);
+                                // Don't yield function results to the UI
+                            }
+                        }
+                    }
+
+                    if (delegateUpdate.Text != null)
+                    {
+                        yield return new ChatResponseUpdate(ChatRole.Assistant, delegateUpdate.Text)
+                        {
+                            AuthorName = currentAgentName ?? "Assistant"
+                        };
+                    }
+                }
+            }
         }
     }
 
@@ -275,6 +380,9 @@ public class AgentChatClient : IAgentChat
         return Task.CompletedTask;
     }
 
+    private string? pendingDelegationAgent;
+    private string? pendingDelegationMessage;
+
     public string Delegate(string agentName, string message, bool askUserFeedback = false)
     {
         agentName = agentName.TrimStart('@');
@@ -285,9 +393,14 @@ public class AgentChatClient : IAgentChat
             return $"Agent '{agentName}' not found. Available agents: {string.Join(", ", agents.Keys)}";
         }
 
-        // For now, simple delegation - just switch to the agent
-        currentAgentName = agentName;
-        return $"Delegated to {agentName}. You can now interact with this agent.";
+        // Schedule the delegation for after current agent completes
+        pendingDelegationAgent = agentName;
+        pendingDelegationMessage = message;
+
+        logger.LogInformation("Delegation scheduled to {AgentName} with message: {Message}",
+            agentName, message);
+
+        return $"Delegating to {agentName}...";
     }
 
     public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)

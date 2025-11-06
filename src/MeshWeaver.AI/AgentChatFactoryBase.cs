@@ -1,15 +1,13 @@
 ﻿using MeshWeaver.AI.Persistence;
-using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.AI;
-using Microsoft.Agents.AI;
 
 namespace MeshWeaver.AI;
 
-public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
-    where TAgent : class
+public abstract class AgentChatFactoryBase : IAgentChatFactory
 {
     protected readonly IMessageHub Hub;
     protected readonly Task<IReadOnlyDictionary<string, IAgentDefinition>> AgentDefinitions;
@@ -47,32 +45,121 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
         var chatClient = new AgentChatClient(agentDefinitions, Hub.ServiceProvider);
 
         var agentsByName = existingAgents.ToDictionary(GetAgentName);
+        var createdAgents = new Dictionary<string, ChatClientAgent>();
 
-        foreach (var agentDefinition in agentDefinitions.Values)
+        // Order agents: non-delegating agents first, then delegating agents, then default agent last
+        var orderedAgents = OrderAgentsForCreation(agentDefinitions.Values);
+
+        // First pass: Create all agents in order without delegation tools
+        foreach (var agentDefinition in orderedAgents)
         {
             var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
             var agent = await CreateOrUpdateAgentAsync(
                 agentDefinition,
                 existingAgent,
-                chatClient);
+                chatClient,
+                createdAgents); // Pass current dictionary - delegating agents get tools for agents created before them
 
             // Handle file uploads for agents that implement IAgentDefinitionWithFiles
             if (agentDefinition is IAgentDefinitionWithFiles fileProvider)
                 await foreach (var file in fileProvider.GetFilesAsync())
                     await UploadFileAsync(agent, file);
 
+            createdAgents[agentDefinition.Name] = agent;
             chatClient.AddAgent(agentDefinition.Name, agent);
+        }
+
+        // Second pass: Update agents that have cyclic dependencies
+        // Find agents that delegate to each other
+        var cyclicAgents = FindCyclicDelegations(agentDefinitions.Values);
+
+        foreach (var agentDefinition in cyclicAgents)
+        {
+            var existingAgent = agentsByName.GetValueOrDefault(agentDefinition.Name);
+            var updatedAgent = await CreateOrUpdateAgentAsync(
+                agentDefinition,
+                existingAgent,
+                chatClient,
+                createdAgents); // Now all agents exist, so cyclic dependencies can be resolved
+
+            // Replace the agent in the chat client
+            createdAgents[agentDefinition.Name] = updatedAgent;
+            chatClient.AddAgent(agentDefinition.Name, updatedAgent);
+
+            Logger.LogInformation("Updated agent {AgentName} with cyclic delegation tools",
+                agentDefinition.Name);
         }
 
         return chatClient;
     }
 
-    protected abstract Task<AIAgent> CreateOrUpdateAgentAsync(IAgentDefinition agentDefinition, TAgent? existingAgent, IAgentChat chat);
-    protected abstract Task UploadFileAsync(AIAgent assistant, AgentFileInfo file);
+    /// <summary>
+    /// Orders agents for creation: non-delegating first, delegating second, default agent last
+    /// </summary>
+    private IEnumerable<IAgentDefinition> OrderAgentsForCreation(IEnumerable<IAgentDefinition> agents)
+    {
+        var agentList = agents.ToList();
+
+        // 1. Non-delegating agents (no IAgentWithDelegations, no [DefaultAgent])
+        var nonDelegating = agentList
+            .Where(a => a is not IAgentWithDelegations
+                     && !a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+
+        // 2. Delegating agents (IAgentWithDelegations but not [DefaultAgent])
+        var delegating = agentList
+            .Where(a => a is IAgentWithDelegations
+                     && !a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+
+        // 3. Default agent (has [DefaultAgent])
+        var defaultAgent = agentList
+            .Where(a => a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
+
+        return nonDelegating.Concat(delegating).Concat(defaultAgent);
+    }
+
+    /// <summary>
+    /// Finds agents that have cyclic delegations (agents that delegate to each other)
+    /// </summary>
+    private IEnumerable<IAgentDefinition> FindCyclicDelegations(IEnumerable<IAgentDefinition> agents)
+    {
+        var delegatingAgents = agents.OfType<IAgentWithDelegations>().ToList();
+        var cyclicAgents = new HashSet<string>();
+
+        foreach (var agent in delegatingAgents)
+        {
+            var delegatedAgentNames = agent.Delegations.Select(d => d.AgentName).ToHashSet();
+
+            // Check if any of the delegated agents also delegate back to this agent
+            foreach (var delegatedName in delegatedAgentNames)
+            {
+                var delegatedAgent = delegatingAgents.FirstOrDefault(a => a.Name == delegatedName);
+                if (delegatedAgent != null)
+                {
+                    var backDelegations = delegatedAgent.Delegations.Select(d => d.AgentName).ToHashSet();
+                    if (backDelegations.Contains(agent.Name))
+                    {
+                        // Cyclic dependency found
+                        cyclicAgents.Add(agent.Name);
+                        cyclicAgents.Add(delegatedName);
+                    }
+                }
+            }
+        }
+
+        return agents.Where(a => cyclicAgents.Contains(a.Name));
+    }
+
+    protected abstract Task<ChatClientAgent> CreateOrUpdateAgentAsync(
+        IAgentDefinition agentDefinition,
+        ChatClientAgent? existingAgent,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents);
+
+    protected abstract Task UploadFileAsync(ChatClientAgent assistant, AgentFileInfo file);
 
 
-    protected abstract Task<IEnumerable<TAgent>> GetExistingAgentsAsync();
-    protected abstract string GetAgentName(TAgent agent);
+    protected abstract Task<IEnumerable<ChatClientAgent>> GetExistingAgentsAsync();
+    protected abstract string GetAgentName(ChatClientAgent agent);
 
 
     /// <summary>
@@ -86,25 +173,97 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
     /// <summary>
     /// Gets tools for the specified agent definition including both plugins and delegation functions.
     /// </summary>
-    protected virtual IList<AITool> GetToolsForAgent(IAgentDefinition agentDefinition, IAgentChat chat)
+    protected virtual async Task<IList<AITool>> GetToolsForAgentAsync(
+        IAgentDefinition agentDefinition,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
         var tools = new List<AITool>();
 
-        // Get tools from IAgentWithPlugins
-        if (agentDefinition is IAgentWithPlugins pluginAgent)
+        // Get tools from IAgentWithTools
+        if (agentDefinition is IAgentWithTools pluginAgent)
         {
             var pluginTools = pluginAgent.GetTools(chat).ToList();
             tools.AddRange(pluginTools);
-            Logger.LogInformation("Agent {AgentName}: Added {Count} tools from plugins",
+            Logger.LogInformation("Agent {AgentName}: Added {Count} plugin tools",
                 agentDefinition.Name,
-                tools.Count);
+                pluginTools.Count);
+        }
+
+        // Add delegation tools - method will filter based on [DefaultAgent] attribute or IAgentWithDelegations
+        var delegationTools = GetDelegationToolsAsync(agentDefinition, chat, allAgents).ToList();
+        tools.AddRange(delegationTools);
+
+        if (delegationTools.Any())
+        {
+            Logger.LogInformation("Agent {AgentName}: Added {Count} delegation tools",
+                agentDefinition.Name,
+                delegationTools.Count);
+        }
+
+        Logger.LogInformation("Agent {AgentName}: Total {Count} tools",
+            agentDefinition.Name,
+            tools.Count);
+
+        return tools;
+    }
+
+    /// <summary>
+    /// Creates delegation tools for agents that can delegate to other agents.
+    /// Creates AIFunction tools that wrap the agent's RunAsync method with proper parameters.
+    /// For [DefaultAgent]: adds all agents marked with [ExposedInDefaultAgent]
+    /// For IAgentWithDelegations: adds agents specified in their Delegations property
+    /// </summary>
+    protected virtual IEnumerable<AITool> GetDelegationToolsAsync(
+        IAgentDefinition agentDefinition,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> allAgents)
+    {
+        // Check if this is the default agent
+        var isDefaultAgent = agentDefinition.GetType()
+            .GetCustomAttributes(typeof(DefaultAgentAttribute), false)
+            .Any();
+
+        IEnumerable<string> targetAgentNames;
+
+        if (isDefaultAgent)
+        {
+            // Default agent gets all exposed agents
+            targetAgentNames = AgentDefinitions.Result.Values
+                .Where(a => a.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
+                .Where(a => a.Name != agentDefinition.Name)
+                .Select(a => a.Name);
+        }
+        else if (agentDefinition is IAgentWithDelegations delegatingAgent)
+        {
+            // Non-default agent with delegations gets only the agents they specify
+            targetAgentNames = delegatingAgent.Delegations
+                .Select(d => d.AgentName);
         }
         else
         {
-            Logger.LogWarning("Agent {AgentName} does not implement IAgentWithPlugins - no tools added", agentDefinition.Name);
+            // Agent has no delegations
+            yield break;
         }
 
-        return tools;
+
+        // Create an AIFunction tool for each target agent
+        foreach (var targetAgentName in targetAgentNames)
+        {
+            // Get the agent definition for description
+            var targetAgentDef = allAgents
+                .GetValueOrDefault(targetAgentName);
+
+            if (targetAgentDef == null)
+                continue;
+
+            // Create a wrapper function that calls the agent's RunAsync method with context
+
+            yield return targetAgentDef.AsAIFunction();
+
+            Logger.LogDebug("Created delegation tool {ToolName} for agent {AgentName}",
+                targetAgentDef.Name, agentDefinition.Name);
+        }
     }
 
     public abstract Task DeleteThreadAsync(string threadId);
@@ -117,97 +276,40 @@ public abstract class AgentChatFactoryBase<TAgent> : IAgentChatFactory
 
     public Task<IReadOnlyDictionary<string, IAgentDefinition>> GetAgentsAsync()
         => AgentDefinitions;
+
     protected string GetAgentInstructions(IAgentDefinition agentDefinition)
     {
-        var baseInstructions = agentDefinition.Instructions;        // Check if this agent supports delegation
+        var baseInstructions = agentDefinition.Instructions;
+
+        // Check if this agent supports delegations
         if (agentDefinition is IAgentWithDelegations delegatingAgent)
         {
-            var delegationInstructions = string.Join('\n', delegatingAgent.Delegations.Select(d => $"{d.AgentName}: {d.Instructions}"));
-
-            // Create multiple formats to ensure o3 mini understands exact agent names
-            var agentList = string.Join('\n', delegatingAgent.Delegations.Select(d => $"@{d.AgentName}")); var delegationGuidelines =
-                $$$"""
-                   **Delegation Guidelines:**
-                   When users need specialized help, delegate to the appropriate agent based on their needs.
-                   
-                   **AVAILABLE AGENT NAMES (use these EXACTLY):**
-                   {{{agentList}}}
-                   
-                   **When to delegate:**
-                   {{{delegationInstructions}}}
-                   
-                   **DELEGATION METHOD - USE TOOL:**
-
-                   When you need to delegate to another agent, use the Delegate tool:
-                   - agentName: The exact name of the agent to delegate to (use the names from the list above)
-                   - message: Your message or task for the agent
-                   - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)
-
-                   **Important:**
-                   - The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
-                   - it is not necessary to repeat the message you put into the delegation ==> we will see it after you finish.
-
-                   **Examples:**
-
-                   For immediate delegation:
-                   Use the Delegate tool with agentName="ReportingSpecialist" and message="Please create a comprehensive report on the current portfolio performance."
-
-                   For delegation with user feedback:
-                   Use the Delegate tool with agentName="DataAnalyst", message="Please analyze the data the user will provide next.", and askUserFeedback=true
-
-                   **Step-by-step delegation process:**
-                   1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
-                   2. Copy it EXACTLY as written (including all letters)
-                   3. Use the Delegate tool with the appropriate parameters
-                   4. DO NOT INCLUDE THE CONTEXT in your message
-                   
-                   """;
-
-            // Append delegation guidelines to the base instructions
-            return baseInstructions + delegationGuidelines;
-        }
-
-        // Check if this agent supports delegations (new interface)
-        if (agentDefinition is IAgentWithDelegations delegationsAgent)
-        {
-            var delegationAgents = delegationsAgent.Delegations.ToList();
+            var delegationAgents = delegatingAgent.Delegations.ToList();
 
             if (delegationAgents.Any())
             {
-                var agentList = string.Join('\n', delegationAgents.Select(d => $"@{d.AgentName}"));
-                var delegationInstructions = string.Join('\n', delegationAgents.Select(d => $"{d.AgentName}: {d.Instructions}"));
+                var agentList = string.Join('\n', delegationAgents.Select(d => $"- {d.AgentName}: {d.Instructions}"));
 
                 var delegationGuidelines =
                     $$$"""
-                       **Delegation Guidelines:**
-                       When users need specialized help, delegate to the appropriate agent based on their needs.
-                       
-                       **AVAILABLE AGENT NAMES (use these EXACTLY):**
-                       {{{agentList}}}
-                       
-                       **Available Agents:**
-                       {{{delegationInstructions}}}
-                       
-                       **DELEGATION METHOD - USE TOOL:**
 
-                       When you need to delegate to another agent, use the Delegate tool:
-                       - agentName: The exact name of the agent to delegate to (use the names from the list above)
-                       - message: Your message or task for the agent
-                       - askUserFeedback: Set to true if you want to ask for user feedback before proceeding (default: false)
-                       
-                       **Important:** The context from the user's message will automatically be included when delegating to other agents. DO NOT INCLUDE THE CONTEXT.
-                       
-                       **Examples:**
-                       
-                       For immediate delegation:
-                       Use the Delegate function with agentName="NorthwindDataAgent" and message="Please analyze the customer data and provide insights."
-                       
-                       **Step-by-step delegation process:**
-                       1. Find the exact agent name from the "AVAILABLE AGENT NAMES" list above
-                       2. Copy it EXACTLY as written (including all letters)
-                       3. Use the Delegate function with the appropriate parameters
-                       4. DO NOT INCLUDE THE CONTEXT in your message
-                       
+                       **Agent Delegation:**
+                       You have access to specialized agents as tools. Each agent appears as a tool with their name.
+                       When you need specialized help, simply call the appropriate agent tool with your message.
+
+                       **Available Agents:**
+                       {{{agentList}}}
+
+                       **How to delegate:**
+                       1. Identify which specialized agent can best handle the user's request
+                       2. Call that agent's tool with the message parameter containing what you need them to do
+                       3. The agent will handle the request and return their response
+
+                       **Important:**
+                       - The context from the user's message is automatically included - don't duplicate it
+                       - Each agent is a tool you can call directly by their name
+                       - Choose the most appropriate agent based on their specialization
+
                        """;
 
                 // Append delegation guidelines to the base instructions

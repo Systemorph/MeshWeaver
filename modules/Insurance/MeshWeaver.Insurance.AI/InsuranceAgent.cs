@@ -12,8 +12,8 @@ namespace MeshWeaver.Insurance.AI;
 /// <summary>
 /// Main Insurance agent that provides access to insurance pricing data and collections.
 /// </summary>
-[ExposedInNavigator]
-public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext, IAgentWithDelegations
+[ExposedInDefaultAgent]
+public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithDelegations
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
@@ -23,8 +23,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
     public string Description =>
         "Handles all questions and actions related to insurance pricings, property risks, and dimensions. " +
         "Provides access to pricing data, allows creation and management of pricings and property risks. " +
-        "Also manages submission documents and files for each pricing. " +
-        "Can delegate to specialized import agents for processing risk data files and slip documents.";
+        "Also manages submission documents and files for each pricing.";
 
     public IEnumerable<DelegationDescription> Delegations
     {
@@ -83,6 +82,24 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         - User: "What files are in the submissions?" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
         - User: "Read the slip document" → You: Call {{{nameof(ContentPlugin.GetDocument)}}}("/Slip.md")
 
+        ## Importing Risk Data from Excel Files
+
+        IMPORTANT: When users want to import risk data from Excel files (.xlsx, .xls):
+        - You have a specialized RiskImportAgent tool available
+        - Call the RiskImportAgent tool with a clear message describing what needs to be imported
+        - Example: RiskImportAgent("Import property risks from Microsoft.xlsx")
+        - The RiskImportAgent will handle all the mapping configuration and import process
+        - DO NOT try to handle Excel imports yourself - always use the RiskImportAgent tool
+
+        ## Importing Slip Documents from PDFs
+
+        IMPORTANT: When users want to import slip documents from PDF files:
+        - You have a specialized SlipImportAgent tool available
+        - Call the SlipImportAgent tool with a clear message describing what needs to be imported
+        - Example: SlipImportAgent("Import slip data from submission.pdf")
+        - The SlipImportAgent will handle all the extraction and import process
+        - DO NOT try to handle PDF imports yourself - always use the SlipImportAgent tool
+
         ## Working with Pricing Data
 
         When users ask about pricing entities, risks, or dimensions (NOT files):
@@ -97,7 +114,7 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Available layout areas can be listed using {{{nameof(LayoutAreaPlugin.GetLayoutAreas)}}} function.
         """;
 
-    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
         var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap);
         foreach (var tool in dataPlugin.CreateTools())

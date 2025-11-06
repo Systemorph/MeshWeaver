@@ -5,7 +5,7 @@ using Microsoft.Extensions.AI;
 namespace MeshWeaver.AI.Plugins;
 
 /// <summary>
-/// Plugin that provides delegation functionality for agents to delegate tasks to other agents.
+/// Plugin that provides delegation and context management functionality for agents.
 /// </summary>
 public class ChatPlugin(IAgentChat agentChat)
 {
@@ -27,13 +27,12 @@ public class ChatPlugin(IAgentChat agentChat)
     }
 
     /// <summary>
-    /// 
+    /// Sets the chat context to a particular address, layout area or layout area id.
     /// </summary>
     /// <param name="address"></param>
     /// <param name="areaName"></param>
     /// <param name="areaId"></param>
     /// <returns></returns>
-
     [Description("Sets the chat context to a particular address, layout area or layout area id.")]
     public string SetContext([Description("Address to be set")] string? address = null,
         [Description("Name of the layout are to be set")] string? areaName = null,

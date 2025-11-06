@@ -122,7 +122,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        
+
         // Verify it's valid JSON
         var jsonDoc = JsonDocument.Parse(result);
         jsonDoc.Should().NotBeNull();
@@ -132,8 +132,8 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         areas.Should().NotBeEmpty();
 
         // Should contain our test areas
-        var testAreas = areas.Where(a => 
-            a.TryGetProperty("area", out var areaProp) && 
+        var testAreas = areas.Where(a =>
+            a.TryGetProperty("area", out var areaProp) &&
             areaProp.GetString()?.StartsWith("TestArea") == true).ToArray();
         testAreas.Should().HaveCount(3);
     }
@@ -213,7 +213,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         var getAreasResponse = await client
             .AwaitResponse(
-                new GetLayoutAreasRequest(), 
+                new GetLayoutAreasRequest(),
                 o => o.WithTarget(new HostAddress())
                 , CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, new CancellationTokenSource(3.Seconds()).Token).Token
                 );
@@ -230,7 +230,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         // assert
         result.Should().NotBeNullOrEmpty();
-        
+
         // Verify it's valid JSON
         var jsonDoc = JsonDocument.Parse(result);
         jsonDoc.Should().NotBeNull();
@@ -238,7 +238,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
         // Verify it contains exactly the predefined areas
         var areas = jsonDoc.RootElement.EnumerateArray().ToArray();
         areas.Should().HaveCount(3);
-        
+
         var areaNames = areas.Select(a => a.GetProperty("area").GetString()).ToArray();
         areaNames.Should().Contain("TestArea1");
         areaNames.Should().Contain("TestArea2");
@@ -290,7 +290,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
     /// </summary>
     private class MockAgentChat : IAgentChat
     {
-        public void SetContext(AgentContext applicationContext)
+        public void SetContext(AgentContext? applicationContext)
         {
             throw new NotImplementedException();
         }
