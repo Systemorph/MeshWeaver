@@ -193,9 +193,11 @@ public class ContentPlugin
             {
                 var sb = new StringBuilder();
                 var linesRead = 0;
-                while (!reader.EndOfStream && linesRead < numberOfRows.Value)
+                while (linesRead < numberOfRows.Value)
                 {
                     var line = await reader.ReadLineAsync(cancellationToken);
+                    if (line is null)
+                        break;
                     sb.AppendLine(line);
                     linesRead++;
                 }

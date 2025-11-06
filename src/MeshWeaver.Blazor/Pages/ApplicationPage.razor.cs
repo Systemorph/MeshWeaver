@@ -10,7 +10,7 @@ namespace MeshWeaver.Blazor.Pages;
 
 public partial class ApplicationPage : ComponentBase
 {
-    private DesignThemeModes Mode;
+    private DesignThemeModes Mode { get; set; }
     private LayoutAreaControl ViewModel { get; set; } = null!;
 
     [Inject]
