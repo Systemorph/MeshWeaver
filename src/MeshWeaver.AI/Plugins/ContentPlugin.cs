@@ -146,9 +146,9 @@ public class ContentPlugin
 
     [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetContent(
-        [Description("The path to the file within the collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")]
+        [Description("The path to the file within the collection. The collection name is not part of the path.")]
         string? filePath = null,
-        [Description("The name of the collection to read from. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")]
+        [Description("The name of the collection to read from. Pass null if  unsure, then it will be inferred.")]
         string? collectionName = null,
         [Description("Optional: number of rows to read. If null, reads entire file. For Excel files, reads first N rows from each worksheet.")]
         int? numberOfRows = null,
@@ -846,7 +846,7 @@ public class ContentPlugin
     public async Task<string> Import(
         [Description("The path to the file to import")] string path,
         [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
-        [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] object? address = null,
+        [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
         CancellationToken cancellationToken = default)
@@ -860,19 +860,7 @@ public class ContentPlugin
                 return "Target address is required.";
 
             // Parse the address - handle both string and Address types
-            Address targetAddress;
-            if (address is string addressString)
-            {
-                targetAddress = hub.GetAddress(addressString);
-            }
-            else if (address is Address addr)
-            {
-                targetAddress = addr;
-            }
-            else
-            {
-                return $"Invalid address type: {address.GetType().Name}. Expected string or Address.";
-            }
+            var targetAddress = hub.GetAddress(address);
 
             // Build ImportRequest JSON structure
             var importRequestJson = new JsonObject
