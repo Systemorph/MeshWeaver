@@ -246,18 +246,15 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             yield break;
         }
 
-
         // Create an AIFunction tool for each target agent
         foreach (var targetAgentName in targetAgentNames)
         {
-            // Get the agent definition for description
+            // Get the agent definition
             var targetAgentDef = allAgents
                 .GetValueOrDefault(targetAgentName);
 
             if (targetAgentDef == null)
                 continue;
-
-            // Create a wrapper function that calls the agent's RunAsync method with context
 
             yield return targetAgentDef.AsAIFunction();
 

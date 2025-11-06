@@ -142,7 +142,7 @@ public static class AgentDetailsArea
             {
                 var function = tool;
                 // AIFunction has Metadata property with Parameters
-                var metadata = (dynamic)function.GetType().GetProperty("Metadata")?.GetValue(function);
+                var metadata = (dynamic?)function.GetType().GetProperty("Metadata")?.GetValue(function);
                 var parameters = (metadata?.Parameters as IEnumerable<dynamic>) ?? Enumerable.Empty<dynamic>();
                 var parametersHtml = parameters.Any()
                     ? string.Join("", parameters.Select(p =>
