@@ -8,7 +8,7 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
-public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
+public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? pricingSchema;
@@ -133,7 +133,7 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithP
         }
     }
 
-    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
         var dataPlugin = new DataPlugin(hub, chat, typeDefinitionMap);
         foreach (var tool in dataPlugin.CreateTools())

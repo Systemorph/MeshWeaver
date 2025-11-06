@@ -5,7 +5,7 @@ namespace MeshWeaver.Documentation.AI;
 /// <summary>
 /// TicTacToe Player 1 (X) - Exposed in navigator for delegation
 /// </summary>
-[ExposedInNavigator]
+[ExposedInDefaultAgent]
 public class TicTacToePlayer1 : TicTacToePlayerBase
 {
     /// <inheritdoc />

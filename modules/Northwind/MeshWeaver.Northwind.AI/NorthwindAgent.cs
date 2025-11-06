@@ -11,8 +11,8 @@ namespace MeshWeaver.Northwind.AI;
 /// <summary>
 /// Northwind data agent that provides access to Northwind domain data and collections
 /// </summary>
-[ExposedInNavigator]
-public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPlugins, IAgentWithContext
+[ExposedInDefaultAgent]
+public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutDefinitionMap;
@@ -44,7 +44,7 @@ public class NorthwindAgent(IMessageHub hub) : IInitializableAgent, IAgentWithPl
         Always provide accurate, data-driven responses based on the available Northwind data.
         """;
 
-    IEnumerable<AITool> IAgentWithPlugins.GetTools(IAgentChat chat)
+    IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
         var data = new DataPlugin(hub, chat, typeDefinitionMap);
         foreach (var tool in data.CreateTools())
