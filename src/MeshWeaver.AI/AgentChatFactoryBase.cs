@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -173,39 +174,31 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// <summary>
     /// Gets tools for the specified agent definition including both plugins and delegation functions.
     /// </summary>
-    protected virtual async Task<IList<AITool>> GetToolsForAgentAsync(
+    protected virtual IEnumerable<AITool> GetToolsForAgent(
         IAgentDefinition agentDefinition,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)
     {
-        var tools = new List<AITool>();
 
-        // Get tools from IAgentWithTools
-        if (agentDefinition is IAgentWithTools pluginAgent)
+        var nTools = 0;
+        var tools = GetStandardTools(chat).Concat(GetAgentTools(agentDefinition, chat, allAgents));
+        if (agentDefinition is IAgentWithTools agentWithTools)
+            tools = tools.Concat(agentWithTools.GetTools(chat));
+
+        foreach (var tool in tools)
         {
-            var pluginTools = pluginAgent.GetTools(chat).ToList();
-            tools.AddRange(pluginTools);
-            Logger.LogInformation("Agent {AgentName}: Added {Count} plugin tools",
-                agentDefinition.Name,
-                pluginTools.Count);
+            yield return tool;
+            nTools++;
         }
 
-        // Add delegation tools - method will filter based on [DefaultAgent] attribute or IAgentWithDelegations
-        var delegationTools = GetDelegationToolsAsync(agentDefinition, chat, allAgents).ToList();
-        tools.AddRange(delegationTools);
-
-        if (delegationTools.Any())
-        {
-            Logger.LogInformation("Agent {AgentName}: Added {Count} delegation tools",
-                agentDefinition.Name,
-                delegationTools.Count);
-        }
-
-        Logger.LogInformation("Agent {AgentName}: Total {Count} tools",
+        Logger.LogInformation("Agent {AgentName}: Added {Count} plugin tools",
             agentDefinition.Name,
-            tools.Count);
+            nTools);
+    }
 
-        return tools;
+    protected virtual IEnumerable<AITool> GetStandardTools(IAgentChat chat)
+    {
+        return new ChatPlugin(chat).CreateTools();
     }
 
     /// <summary>
@@ -214,7 +207,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// For [DefaultAgent]: adds all agents marked with [ExposedInDefaultAgent]
     /// For IAgentWithDelegations: adds agents specified in their Delegations property
     /// </summary>
-    protected virtual IEnumerable<AITool> GetDelegationToolsAsync(
+    protected virtual IEnumerable<AITool> GetAgentTools(
         IAgentDefinition agentDefinition,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> allAgents)

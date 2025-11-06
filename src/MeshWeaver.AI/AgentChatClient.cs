@@ -65,30 +65,27 @@ public class AgentChatClient : IAgentChat
         // Get response from the agent with context included
         var response = await agent.RunAsync(historyWithContext, cancellationToken: cancellationToken);
 
-        if (response.Messages != null)
+        foreach (var responseMsg in response.Messages)
         {
-            foreach (var responseMsg in response.Messages)
+            conversationHistory.Add(responseMsg);
+
+            // Log function calls and results
+            foreach (var content in responseMsg.Contents)
             {
-                conversationHistory.Add(responseMsg);
-
-                // Log function calls and results
-                foreach (var content in responseMsg.Contents)
+                if (content is FunctionCallContent functionCall)
                 {
-                    if (content is FunctionCallContent functionCall)
-                    {
-                        logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
-                            currentAgentName, functionCall.Name);
-                    }
-                    else if (content is FunctionResultContent functionResult)
-                    {
-                        logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
-                            currentAgentName, functionResult.CallId);
-                    }
+                    logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
+                        currentAgentName, functionCall.Name);
                 }
-
-                // Yield the complete message with all contents (including FunctionCallContent)
-                yield return responseMsg;
+                else if (content is FunctionResultContent functionResult)
+                {
+                    logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
+                        currentAgentName, functionResult.CallId);
+                }
             }
+
+            // Yield the complete message with all contents (including FunctionCallContent)
+            yield return responseMsg;
         }
 
         // Check for any queued layout area content
@@ -130,7 +127,7 @@ public class AgentChatClient : IAgentChat
         await foreach (var update in agent.RunStreamingAsync(historyWithContext, cancellationToken: cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
-            if (update.Contents != null && update.Contents.Count > 0)
+            if (update.Contents.Count > 0)
             {
                 foreach (var content in update.Contents)
                 {
@@ -155,13 +152,10 @@ public class AgentChatClient : IAgentChat
             }
 
             // Convert from agent updates to chat response updates
-            if (update.Text != null)
+            yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
             {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
-                {
-                    AuthorName = currentAgentName ?? "Assistant"
-                };
-            }
+                AuthorName = currentAgentName ?? "Assistant"
+            };
         }
 
         // Check for any queued layout area content
@@ -201,7 +195,7 @@ public class AgentChatClient : IAgentChat
                 await foreach (var delegateUpdate in delegatedAgent.RunStreamingAsync(delegationHistory, cancellationToken: cancellationToken))
                 {
                     // Forward the complete update with all contents (including FunctionCallContent)
-                    if (delegateUpdate.Contents != null && delegateUpdate.Contents.Count > 0)
+                    if (delegateUpdate.Contents.Count > 0)
                     {
                         foreach (var content in delegateUpdate.Contents)
                         {
@@ -225,13 +219,10 @@ public class AgentChatClient : IAgentChat
                         }
                     }
 
-                    if (delegateUpdate.Text != null)
+                    yield return new ChatResponseUpdate(ChatRole.Assistant, delegateUpdate.Text)
                     {
-                        yield return new ChatResponseUpdate(ChatRole.Assistant, delegateUpdate.Text)
-                        {
-                            AuthorName = currentAgentName ?? "Assistant"
-                        };
-                    }
+                        AuthorName = currentAgentName ?? "Assistant"
+                    };
                 }
             }
         }
