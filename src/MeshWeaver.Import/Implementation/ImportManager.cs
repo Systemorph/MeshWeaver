@@ -97,9 +97,24 @@ public class ImportManager
                     Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
                     return;
                 }
+
+                // Collect all objects to save
+                var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
+
+                // Check if ImportConfiguration should be saved
+                if (request.Message.Configuration != null)
+                {
+                    var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
+                    if (configToSave != null)
+                    {
+                        objectsToSave.Add(configToSave);
+                        activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
+                    }
+                }
+
                 Configuration.Workspace.RequestChange(
                     DataChangeRequest.Update(
-                        imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
+                        objectsToSave.ToArray(),
                         null,
                         request.Message.UpdateOptions),
                     activity,
@@ -120,6 +135,34 @@ public class ImportManager
             activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
             FinishWithException(request, e, activity);
         }
+    }
+
+    private ImportConfiguration? TryGetSaveableConfiguration(ImportConfiguration configuration, Activity activity)
+    {
+        // Check if the exact type is mapped to the data context
+        var configType = configuration.GetType();
+        var typeSource = Workspace.DataContext.GetTypeSource(configType);
+
+        if (typeSource != null)
+        {
+            activity.LogInformation("ImportConfiguration type {ConfigType} is mapped to data context", configType.Name);
+            return configuration;
+        }
+
+        // Check if the base type (ImportConfiguration) is mapped
+        var baseType = typeof(ImportConfiguration);
+        if (configType != baseType)
+        {
+            typeSource = Workspace.DataContext.GetTypeSource(baseType);
+            if (typeSource != null)
+            {
+                activity.LogInformation("Base type ImportConfiguration is mapped to data context, saving as base type");
+                return configuration;
+            }
+        }
+
+        activity.LogDebug("ImportConfiguration type {ConfigType} is not mapped to data context, skipping save", configType.Name);
+        return null;
     }
 
     public async Task<EntityStore> ImportInstancesAsync(

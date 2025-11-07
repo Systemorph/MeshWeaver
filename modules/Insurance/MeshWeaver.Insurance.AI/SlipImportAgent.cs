@@ -37,19 +37,18 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - When accessing files with ExtractCompleteText, use just the filename (e.g., "Slip.pdf" or "Slip.md")
 
                 # Importing Slips
+
+                IMPORTANT: The slip document content is already visible in the chat history from the parent InsuranceAgent. You do NOT need to call GetContent or ListFiles.
+
                 When the user asks you to import a slip:
-                1) First, use ContentCollectionPlugin's ListFiles() to see available files in the submissions collection
-                2) Use ContentPlugin's GetContent function to extract the document content from PDF or Markdown files
-                   - Pass collectionName="Submissions-{pricingId}" and filePath=filename (e.g., "Slip.pdf" or "Slip.md")
-                   - For PDFs, this will extract all pages of text
-                3) Review the extracted text and identify data that matches the domain schemas
-                4) Create JSON objects for each entity type following the schemas below
-                5) Import the data using DataPlugin's UpdateData function:
+                1) Review the extracted document text from the chat history and identify data that matches the domain schemas
+                2) Create JSON objects for each entity type following the schemas below
+                3) Import the data using DataPlugin's UpdateData function:
                    - First, retrieve existing Pricing data using DataPlugin's GetData with type="Pricing" and entityId=pricingId
                    - Merge new pricing fields with existing data and call DataPlugin's UpdateData with type="Pricing"
                    - For each ReinsuranceAcceptance (layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceAcceptance"
                    - For each ReinsuranceSection (coverage within layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceSection"
-                6) Provide feedback on what data was successfully imported or if any issues were encountered
+                4) Provide feedback on what data was successfully imported or if any issues were encountered
 
                 # Data Mapping Guidelines
                 Based on the extracted document text, create JSON objects that match the schemas provided below:
@@ -115,9 +114,8 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - **Coverage types within layers**: Fire Damage, Natural Catastrophe, Business Interruption, etc.
 
                 Notes:
-                - When listing files, you may see paths with "/" prefix (e.g., "/Slip.pdf", "/Slip.md")
-                - When calling ContentPlugin's GetContent, use collectionName="Submissions-{pricingId}" and provide the filename
-                - Both PDF and Markdown (.md) files are supported
+                - The document content has already been extracted by the parent InsuranceAgent and is visible in the chat history
+                - Both PDF and Markdown (.md) file content are supported
                 - When updating data, ensure each JSON object has the correct $type field and required ID fields (id, pricingId, acceptanceId, etc.)
                 - Remove null-valued properties from JSON before calling UpdateData
                 """;

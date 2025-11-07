@@ -54,51 +54,57 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         ## Content Collection Context
 
         IMPORTANT: The current context is set to pricing/{pricingId} where pricingId follows the format {company}-{uwy}.
+        - The ContentPlugin is already configured to use the current pricing context automatically
         - The submission files collection is named "Submissions-{pricingId}"
-        - All file paths are relative to the root (/) of this collection
-        - Example: For pricing "AXA-2024", the collection is "Submissions-AXA-2024" and files are at paths like "/slip.pdf", "/risks.xlsx"
+        - All file paths are relative to the root (/) of this collection (e.g., "/slip.pdf", "/risks.xlsx")
 
         ## Working with Submission Documents and Files
 
         CRITICAL: When users ask about submission files, documents, or content:
-        - DO NOT call {{{nameof(DataPlugin.GetData)}}} for Pricing or any other data first
-        - DO NOT try to verify the pricing exists before accessing files
         - The ContentPlugin is already configured for the current pricing context
-        - Simply call the ContentPlugin functions directly
-        - All file paths should start with "/" (e.g., "/slip.pdf", "/risks.xlsx")
+        - ALWAYS pass collectionName=null (or omit it entirely) - it will be inferred automatically from context
+        - Simply call the ContentPlugin functions with just the file path
+        - All file paths should start with "/" (e.g., "/slip.pdf", "/risks.xlsx" not just "slip.pdf")
 
-        Available ContentPlugin functions (all collectionName parameters are optional):
-        - {{{nameof(ContentPlugin.ListFiles)}}}() - List all files in the current pricing's submissions
-        - {{{nameof(ContentPlugin.ListFolders)}}}() - List all folders
-        - {{{nameof(ContentPlugin.ListCollectionItems)}}}() - List both files and folders
-        - {{{nameof(ContentPlugin.GetDocument)}}}(documentPath) - Get document content (use path like "/Slip.md")
-        - {{{nameof(ContentPlugin.SaveFile)}}}(documentPath, content) - Save a document
-        - {{{nameof(ContentPlugin.DeleteFile)}}}(filePath) - Delete a file
-        - {{{nameof(ContentPlugin.CreateFolder)}}}(folderPath) - Create a folder
-        - {{{nameof(ContentPlugin.DeleteFolder)}}}(folderPath) - Delete a folder
+        Available ContentPlugin functions (always pass collectionName=null):
+        - {{{nameof(ContentPlugin.ListFiles)}}}(collectionName=null) - List all files in the current pricing's submissions
+        - {{{nameof(ContentPlugin.GetContent)}}}(filePath, collectionName=null, numberOfRows) - Get file content preview
+        - {{{nameof(ContentPlugin.SaveFile)}}}(filePath, content, collectionName=null) - Save a document
+        - {{{nameof(ContentPlugin.DeleteFile)}}}(filePath, collectionName=null) - Delete a file
 
         Examples:
-        - User: "Show me the submission files" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
-        - User: "What files are in the submissions?" → You: Call {{{nameof(ContentPlugin.ListFiles)}}}()
-        - User: "Read the slip document" → You: Call {{{nameof(ContentPlugin.GetDocument)}}}("/Slip.md")
+        - User: "Show me the submission files" → Call {{{nameof(ContentPlugin.ListFiles)}}}(collectionName=null)
+        - User: "Preview Microsoft.xlsx" → Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="/Microsoft.xlsx", collectionName=null, numberOfRows=20)
 
-        ## Importing Risk Data from Excel Files
+        ## Importing Files (Excel, PDF, Word)
 
-        IMPORTANT: When users want to import risk data from Excel files (.xlsx, .xls):
-        - You have a specialized RiskImportAgent tool available
-        - Call the RiskImportAgent tool with a clear message describing what needs to be imported
-        - Example: RiskImportAgent("Import property risks from Microsoft.xlsx")
-        - The RiskImportAgent will handle all the mapping configuration and import process
-        - DO NOT try to handle Excel imports yourself - always use the RiskImportAgent tool
+        When users want to import data from files (e.g., "import Microsoft.xlsx" or "import slip.pdf"):
 
-        ## Importing Slip Documents from PDFs
+        **Step 1: Preview the file**
+        - Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="/filename", collectionName=null, numberOfRows=20)
+        - For Excel files: numberOfRows=20 gives you the first 20 rows to see column structure
+        - For PDF/Word files: Omit numberOfRows to get the full content
+        - Example: {{{nameof(ContentPlugin.GetContent)}}}(filePath="/Microsoft.xlsx", collectionName=null, numberOfRows=20)
+        - If the file doesn't exist, the tool will return an error - tell the user
 
-        IMPORTANT: When users want to import slip documents from PDF files:
-        - You have a specialized SlipImportAgent tool available
-        - Call the SlipImportAgent tool with a clear message describing what needs to be imported
-        - Example: SlipImportAgent("Import slip data from submission.pdf")
-        - The SlipImportAgent will handle all the extraction and import process
-        - DO NOT try to handle PDF imports yourself - always use the SlipImportAgent tool
+        **Step 2: Analyze the content to determine file type**
+        Look at the preview content:
+        - **Risk data (Excel)**: Has columns like Location, Address, TSI, Country, Currency, Building Value, Property Damage
+          → Delegate to RiskImportAgent
+        - **Slip document (PDF/Word)**: Has content about Insured, Coverage, Premium, Reinsurance Layers, Limits
+          → Delegate to SlipImportAgent
+
+        **Step 3: Delegate to the appropriate agent**
+        - The file content preview is already in the chat history
+        - The specialized agent will see it automatically - no need to reload
+        - Examples:
+          - {{{nameof(RiskImportAgent)}}}("Import property risks from /Microsoft.xlsx")
+          - {{{nameof(SlipImportAgent)}}}("Import slip data from /submission.pdf")
+
+        CRITICAL Rules:
+        - Always use file paths with "/" prefix (e.g., "/Microsoft.xlsx" not "Microsoft.xlsx")
+        - Always pass collectionName=null in all ContentPlugin calls
+        - Always preview BEFORE delegating (so the import agent sees the file structure)
 
         ## Working with Pricing Data
 
