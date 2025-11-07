@@ -395,6 +395,22 @@ public class MessageService : IMessageService
 
 
     private static readonly HashSet<Type> ExcludedFromLogging = [typeof(ShutdownRequest)];
+
+    private static bool ShouldLogMessage(object message)
+    {
+        var messageType = message.GetType();
+
+        // Check static exclusion list
+        if (ExcludedFromLogging.Contains(messageType))
+            return false;
+
+        // Check for [PreventLogging] attribute on the message type
+        if (messageType.GetCustomAttribute<PreventLoggingAttribute>(inherit: true) != null)
+            return false;
+
+        return true;
+    }
+
     public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
@@ -402,7 +418,7 @@ public class MessageService : IMessageService
             if (message == null)
                 return null;
             var ret = PostImpl(message, opt);
-            if (!ExcludedFromLogging.Contains(message.GetType()))
+            if (ShouldLogMessage(message))
                 logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
