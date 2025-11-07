@@ -130,8 +130,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IReadOnlyCollection<ChatMessage> messages, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
 
-        public string Delegate(string agentName, string message, bool askUserFeedback = false)
+        public void SetThreadId(string threadId)
             => throw new NotImplementedException();
+
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
         {
             throw new NotImplementedException();

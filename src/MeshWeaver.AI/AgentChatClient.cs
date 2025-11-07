@@ -18,8 +18,8 @@ public class AgentChatClient : IAgentChat
     private readonly ILogger<AgentChatClient> logger;
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions;
-    private readonly List<ChatMessage> conversationHistory = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
+    private string currentThreadId = "default";
     private string? currentAgentName;
     private Address? lastContextAddress;
 
@@ -39,19 +39,53 @@ public class AgentChatClient : IAgentChat
 
     public AgentContext? Context { get; private set; }
 
+    private string BuildMessageWithContext(IReadOnlyCollection<ChatMessage> messages)
+    {
+        var messageText = new StringBuilder();
+
+        // Add context if available
+        if (Context != null)
+        {
+            var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
+            messageText.AppendLine("# Current Application Context");
+            messageText.AppendLine();
+            messageText.AppendLine("The user is currently viewing the following page/entity in the application:");
+            messageText.AppendLine();
+            messageText.AppendLine("```json");
+            messageText.AppendLine(contextJson);
+            messageText.AppendLine("```");
+            messageText.AppendLine();
+            messageText.AppendLine("Key information:");
+            messageText.AppendLine($"- Address Type: {Context.Address?.Type ?? "N/A"}");
+            messageText.AppendLine($"- Address ID: {Context.Address?.Id ?? "N/A"}");
+            messageText.AppendLine($"- Layout Area: {Context.LayoutArea?.Area ?? "N/A"}");
+            messageText.AppendLine();
+            messageText.AppendLine("Use this context information when answering the user's questions or performing actions.");
+            messageText.AppendLine();
+        }
+
+        // Add user messages
+        foreach (var message in messages)
+        {
+            messageText.Append(ExtractTextFromMessage(message));
+        }
+
+        return messageText.ToString();
+    }
+
+    public void SetThreadId(string threadId)
+    {
+        if (string.IsNullOrEmpty(threadId))
+            throw new ArgumentException("Thread ID cannot be null or empty", nameof(threadId));
+
+        currentThreadId = threadId;
+        logger.LogInformation("Switched to thread: {ThreadId}", threadId);
+    }
+
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Add user messages to history
-        foreach (var message in messages)
-        {
-            conversationHistory.Add(message);
-        }
-
-        // Add context as system message if we have context
-        var historyWithContext = PrepareHistoryWithContext();
-
         // Select which agent to use
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
@@ -62,13 +96,14 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
-        // Get response from the agent with context included
-        var response = await agent.RunAsync(historyWithContext, cancellationToken: cancellationToken);
+        // Build the user message with context
+        var userMessage = BuildMessageWithContext(messages);
+
+        // Get response from the agent
+        var response = await agent.RunAsync(userMessage, cancellationToken: cancellationToken);
 
         foreach (var responseMsg in response.Messages)
         {
-            conversationHistory.Add(responseMsg);
-
             // Log function calls and results
             foreach (var content in responseMsg.Contents)
             {
@@ -104,15 +139,6 @@ public class AgentChatClient : IAgentChat
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Add user messages to history
-        foreach (var message in messages)
-        {
-            conversationHistory.Add(message);
-        }
-
-        // Add context as system message if we have context
-        var historyWithContext = PrepareHistoryWithContext();
-
         // Select which agent to use
         var agent = SelectAgent(messages.LastOrDefault());
         if (agent == null)
@@ -123,8 +149,11 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
-        // Get streaming response from the agent with context included
-        await foreach (var update in agent.RunStreamingAsync(historyWithContext, cancellationToken: cancellationToken))
+        // Build the user message with context
+        var userMessage = BuildMessageWithContext(messages);
+
+        // Get streaming response from the agent
+        await foreach (var update in agent.RunStreamingAsync(userMessage, cancellationToken: cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
@@ -167,68 +196,9 @@ public class AgentChatClient : IAgentChat
                 AuthorName = currentAgentName ?? "Assistant"
             };
         }
-
-        // Handle pending delegation
-        if (pendingDelegationAgent != null && pendingDelegationMessage != null)
-        {
-            var delegateToAgent = pendingDelegationAgent;
-            var delegateMessage = pendingDelegationMessage;
-
-            // Clear pending delegation
-            pendingDelegationAgent = null;
-            pendingDelegationMessage = null;
-
-            // Switch to the delegated agent
-            if (agents.TryGetValue(delegateToAgent, out var delegatedAgent))
-            {
-                currentAgentName = delegateToAgent;
-                logger.LogInformation("Executing delegation to {AgentName}", delegateToAgent);
-
-                // Add the delegation message to history
-                var delegationUserMessage = new ChatMessage(ChatRole.User, delegateMessage);
-                conversationHistory.Add(delegationUserMessage);
-
-                // Get context and run the delegated agent
-                var delegationHistory = PrepareHistoryWithContext();
-
-                // Stream response from delegated agent
-                await foreach (var delegateUpdate in delegatedAgent.RunStreamingAsync(delegationHistory, cancellationToken: cancellationToken))
-                {
-                    // Forward the complete update with all contents (including FunctionCallContent)
-                    if (delegateUpdate.Contents.Count > 0)
-                    {
-                        foreach (var content in delegateUpdate.Contents)
-                        {
-                            if (content is FunctionCallContent functionCall)
-                            {
-                                logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
-                                    currentAgentName, functionCall.Name);
-
-                                // Yield the function call content so the UI can display it properly
-                                yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
-                                {
-                                    AuthorName = currentAgentName ?? "Assistant"
-                                };
-                            }
-                            else if (content is FunctionResultContent functionResult)
-                            {
-                                logger.LogInformation("Agent {AgentName} received result from tool",
-                                    currentAgentName);
-                                // Don't yield function results to the UI
-                            }
-                        }
-                    }
-
-                    yield return new ChatResponseUpdate(ChatRole.Assistant, delegateUpdate.Text)
-                    {
-                        AuthorName = currentAgentName ?? "Assistant"
-                    };
-                }
-            }
-        }
     }
 
-    private List<ChatMessage> PrepareHistoryWithContext()
+    private List<ChatMessage> PrepareHistoryWithContext(List<ChatMessage> conversationHistory)
     {
         var history = new List<ChatMessage>();
 
@@ -362,36 +332,9 @@ public class AgentChatClient : IAgentChat
 
     public Task ResumeAsync(ChatConversation conversation)
     {
-        // Filter out UI-specific content that should not be passed to agents
-        var messagesToResume = conversation.Messages
-            .Where(m => !m.Contents.Any(c => c is ChatLayoutAreaContent or ChatDelegationContent))
-            .ToList();
-
-        conversationHistory.AddRange(messagesToResume);
+        // With AgentThread, we don't need to manually restore history
+        // The thread already contains the conversation state
         return Task.CompletedTask;
-    }
-
-    private string? pendingDelegationAgent;
-    private string? pendingDelegationMessage;
-
-    public string Delegate(string agentName, string message, bool askUserFeedback = false)
-    {
-        agentName = agentName.TrimStart('@');
-
-        // Check if the requested agent exists
-        if (!agents.ContainsKey(agentName))
-        {
-            return $"Agent '{agentName}' not found. Available agents: {string.Join(", ", agents.Keys)}";
-        }
-
-        // Schedule the delegation for after current agent completes
-        pendingDelegationAgent = agentName;
-        pendingDelegationMessage = message;
-
-        logger.LogInformation("Delegation scheduled to {AgentName} with message: {Message}",
-            agentName, message);
-
-        return $"Delegating to {agentName}...";
     }
 
     public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)

@@ -310,7 +310,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
             throw new NotImplementedException();
         }
 
-        public string Delegate(string agentName, string message, bool askUserFeedback = false)
+        public void SetThreadId(string threadId)
         {
             throw new NotImplementedException();
         }
