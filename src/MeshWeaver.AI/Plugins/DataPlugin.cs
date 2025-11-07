@@ -6,6 +6,8 @@ using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -14,17 +16,19 @@ namespace MeshWeaver.AI.Plugins;
 /// Supports retrieving data, listing available types, and getting schemas.
 /// </summary>
 public class DataPlugin(
-    IMessageHub hub, 
+    IMessageHub hub,
     IAgentChat chat,
-    IReadOnlyDictionary<string, TypeDescription>? typeDefinitions = null, 
+    IReadOnlyDictionary<string, TypeDescription>? typeDefinitions = null,
     Func<string, Address?>? addressMap = null)
 {
+    private readonly ILogger<DataPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<DataPlugin>>();
 
     [Description($"Get data by type name from a specific address. Valid types can be found using the {nameof(GetDataTypes)} function.")]
     public async Task<string> GetData(
         [Description($"Type for which the data should be retrieved. A list of valid data types can be found with the {nameof(GetDataTypes)} function")] string type,
         [Description("Optional entity ID. If specified, retrieves a specific entity; otherwise retrieves the entire collection")] string? entityId = null)
     {
+        logger.LogInformation("GetData called with type={Type}, entityId={EntityId}", type, entityId);
 
         var address = GetAddress(type);
 
@@ -42,6 +46,7 @@ public class DataPlugin(
     [Description($"List all data types and their descriptions available in the {nameof(GetData)} function as a json structure. The name property should be used in the GetData tool.")]
     public async Task<string> GetDataTypes()
     {
+        logger.LogInformation("GetDataTypes called");
 
         if (typeDefinitions is not null)
             // Return types from constructor
@@ -62,6 +67,8 @@ public class DataPlugin(
         [Description("Name of the type to be updated. Must be in list of available types.")] string type
     )
     {
+        logger.LogInformation("UpdateData called with type={Type}, json={Json}", type, json);
+
         var address = GetAddress(type);
 
         if (address == null)
@@ -80,6 +87,8 @@ public class DataPlugin(
         [Description("Name of the type to be deleted. Must be in list of available types.")] string type
     )
     {
+        logger.LogInformation("DeleteData called with type={Type}, json={Json}", type, json);
+
         var address = GetAddress(type);
 
         if (address == null)
@@ -101,6 +110,8 @@ public class DataPlugin(
     [Description($"Gets the JSON schema for a particular type. Use these schemas to map data to JSON or to validate edited JSON data.")]
     public async Task<string> GetSchema([Description($"Type of the schema to be generated. Use the {nameof(GetDataTypes)} function to get a list of available schemas")] string type)
     {
+        logger.LogInformation("GetSchema called with type={Type}", type);
+
         var address = GetAddress(type);
         if (address is null)
             return $"Unknown type: {type}." + (typeDefinitions is not null ? $" Valid types are: {string.Join(", ", typeDefinitions.Keys)}" : string.Empty);

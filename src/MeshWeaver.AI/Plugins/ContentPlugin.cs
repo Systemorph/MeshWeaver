@@ -10,6 +10,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using UglyToad.PdfPig;
 
 namespace MeshWeaver.AI.Plugins;
@@ -42,6 +43,7 @@ public class ContentPlugin
     private readonly IContentService contentService;
     private readonly ContentPluginConfig config;
     private readonly IAgentChat? chat;
+    private readonly ILogger<ContentPlugin> logger;
 
     /// <summary>
     /// Creates a ContentPlugin with basic functionality (no context resolution).
@@ -59,6 +61,7 @@ public class ContentPlugin
         this.hub = hub;
         this.config = config;
         this.chat = chat;
+        this.logger = hub.ServiceProvider.GetRequiredService<ILogger<ContentPlugin>>();
         contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
         // Add all configured collections to IContentService
@@ -144,7 +147,7 @@ public class ContentPlugin
         return null;
     }
 
-    [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and text files. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Gets the content of a file from a specified collection. Supports Excel, Word, PDF, and any other format.")]
     public async Task<string> GetContent(
         [Description("The path to the file within the collection. The collection name is not part of the path.")]
         string? filePath = null,
@@ -154,6 +157,9 @@ public class ContentPlugin
         int? numberOfRows = null,
         CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("GetContent called with filePath={FilePath}, collectionName={CollectionName}, numberOfRows={NumberOfRows}",
+            filePath, collectionName, numberOfRows);
+
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
@@ -396,13 +402,16 @@ public class ContentPlugin
         }
     }
 
-    [Description("Saves content as a file to a specified collection. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Saves content as a file to a specified collection.")]
     public async Task<string> SaveFile(
         [Description("The path where the file should be saved within the collection")] string filePath,
         [Description("The content to save to the file")] string content,
-        [Description("The name of the collection to save to. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+        [Description("The name of the collection to save to.")] string? collectionName = null,
         CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("SaveFile called with filePath={FilePath}, collectionName={CollectionName}, contentLength={ContentLength}",
+            filePath, collectionName, content?.Length ?? 0);
+
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
@@ -437,12 +446,14 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all files in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Lists all files in a specified collection at a given path.")]
     public async Task<string> ListFiles(
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
+        [Description("Collection name.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root).")] string? path = null,
         CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("ListFiles called with collectionName={CollectionName}, path={Path}", collectionName, path);
+
         try
         {
             var resolvedCollectionName = GetCollectionName(collectionName);
@@ -495,10 +506,10 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Lists all folders in a specified collection at a given path.")]
     public async Task<string> ListFolders(
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
+        [Description("Collection name.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root).")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -525,10 +536,10 @@ public class ContentPlugin
         }
     }
 
-    [Description("Lists all files and folders in a specified collection at a given path. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    [Description("Lists all files and folders in a specified collection at a given path.")]
     public async Task<string> ListCollectionItems(
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        [Description("Directory path (use '/' for root). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? path = null,
+        [Description("Collection name.")] string? collectionName = null,
+        [Description("Directory path (use '/' for root).")] string? path = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -559,42 +570,6 @@ public class ContentPlugin
         }
     }
 
-    [Description("Gets the content of a specific document from a collection (simple text reading). If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
-    public async Task<string> GetDocument(
-        [Description("Document path in collection. If omitted: when Area='Content'/'Collection', extracts from Id (after first '/', e.g., 'Slip.md' from 'Submissions-Microsoft-2026/Slip.md'); else null.")] string? documentPath = null,
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        CancellationToken cancellationToken = default)
-    {
-        var resolvedCollectionName = GetCollectionName(collectionName);
-        if (string.IsNullOrEmpty(resolvedCollectionName))
-            return "No collection specified and no default collection configured.";
-
-        var resolvedDocumentPath = documentPath ?? GetPathFromContext();
-        if (string.IsNullOrEmpty(resolvedDocumentPath))
-            return "No document path specified and no path found in context.";
-
-        try
-        {
-            var stream = await contentService.GetContentAsync(resolvedCollectionName, resolvedDocumentPath, cancellationToken);
-            if (stream == null)
-                return $"Document '{resolvedDocumentPath}' not found in collection '{resolvedCollectionName}'.";
-
-            await using (stream)
-            {
-                using var reader = new StreamReader(stream);
-                var content = await reader.ReadToEndAsync(cancellationToken);
-                return content;
-            }
-        }
-        catch (FileNotFoundException)
-        {
-            return $"Document '{resolvedDocumentPath}' not found in collection '{resolvedCollectionName}'.";
-        }
-        catch (Exception ex)
-        {
-            return $"Error reading document '{resolvedDocumentPath}' from collection: {ex.Message}";
-        }
-    }
 
     [Description("Deletes a file from a specified collection. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> DeleteFile(
@@ -687,86 +662,86 @@ public class ContentPlugin
         }
     }
 
-    [Description("Gets the article catalog for a collection with filtering options. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
-    public async Task<string> GetArticleCatalog(
-        [Description("Optional: Maximum number of articles to return")] int? maxResults = null,
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        CancellationToken cancellationToken = default)
-    {
-        var resolvedCollectionName = GetCollectionName(collectionName);
-        if (string.IsNullOrEmpty(resolvedCollectionName))
-            return "No collection specified and no default collection configured.";
+    //[Description("Gets the article catalog for a collection with filtering options. If collection not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    //public async Task<string> GetArticleCatalog(
+    //    [Description("Optional: Maximum number of articles to return")] int? maxResults = null,
+    //    [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+    //    CancellationToken cancellationToken = default)
+    //{
+    //    var resolvedCollectionName = GetCollectionName(collectionName);
+    //    if (string.IsNullOrEmpty(resolvedCollectionName))
+    //        return "No collection specified and no default collection configured.";
 
-        try
-        {
-            var options = new ArticleCatalogOptions
-            {
-                Collections = [resolvedCollectionName],
-                PageSize = maxResults ?? 10
-            };
+    //    try
+    //    {
+    //        var options = new ArticleCatalogOptions
+    //        {
+    //            Collections = [resolvedCollectionName],
+    //            PageSize = maxResults ?? 10
+    //        };
 
-            var articles = await contentService.GetArticleCatalogAsync(options, cancellationToken);
-            if (!articles.Any())
-                return $"No articles found in collection '{resolvedCollectionName}'.";
+    //        var articles = await contentService.GetArticleCatalogAsync(options, cancellationToken);
+    //        if (!articles.Any())
+    //            return $"No articles found in collection '{resolvedCollectionName}'.";
 
-            return string.Join("\n\n", articles.Select(a =>
-                $"Title: {a.Title}\n" +
-                $"Path: {a.Path}\n" +
-                $"Abstract: {a.Abstract ?? "No summary"}\n" +
-                $"Published: {a.Published:yyyy-MM-dd}\n" +
-                $"Last Updated: {a.LastUpdated:yyyy-MM-dd}"));
-        }
-        catch (Exception ex)
-        {
-            return $"Error getting article catalog for collection: {ex.Message}";
-        }
-    }
+    //        return string.Join("\n\n", articles.Select(a =>
+    //            $"Title: {a.Title}\n" +
+    //            $"Path: {a.Path}\n" +
+    //            $"Abstract: {a.Abstract ?? "No summary"}\n" +
+    //            $"Published: {a.Published:yyyy-MM-dd}\n" +
+    //            $"Last Updated: {a.LastUpdated:yyyy-MM-dd}"));
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        return $"Error getting article catalog for collection: {ex.Message}";
+    //    }
+    //}
 
-    [Description("Gets a specific article with its metadata and content from a collection. If collection/articleId not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
-    public async Task<string> GetArticle(
-        [Description("Article identifier (path without .md). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? articleId = null,
-        [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
-        CancellationToken cancellationToken = default)
-    {
-        var resolvedCollectionName = GetCollectionName(collectionName);
-        if (string.IsNullOrEmpty(resolvedCollectionName))
-            return "No collection specified and no default collection configured.";
+    //[Description("Gets a specific article with its metadata and content from a collection. If collection/articleId not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
+    //public async Task<string> GetArticle(
+    //    [Description("Article identifier (path without .md). If omitted: when Area='Content'/'Collection', extracts from Id (after first '/'); else null.")] string? articleId = null,
+    //    [Description("Collection name. If omitted: when Area='Content'/'Collection', extracts from Id (before '/'); else uses ContextToConfigMap/config.")] string? collectionName = null,
+    //    CancellationToken cancellationToken = default)
+    //{
+    //    var resolvedCollectionName = GetCollectionName(collectionName);
+    //    if (string.IsNullOrEmpty(resolvedCollectionName))
+    //        return "No collection specified and no default collection configured.";
 
-        var resolvedArticleId = articleId ?? GetPathFromContext();
-        if (string.IsNullOrEmpty(resolvedArticleId))
-            return "No article ID specified and no path found in context.";
+    //    var resolvedArticleId = articleId ?? GetPathFromContext();
+    //    if (string.IsNullOrEmpty(resolvedArticleId))
+    //        return "No article ID specified and no path found in context.";
 
-        try
-        {
-            var articleObservable = await contentService.GetArticleAsync(resolvedCollectionName, resolvedArticleId, cancellationToken);
+    //    try
+    //    {
+    //        var articleObservable = await contentService.GetArticleAsync(resolvedCollectionName, resolvedArticleId, cancellationToken);
 
-            // Get the current value from the observable
-            var article = await articleObservable.FirstOrDefaultAsync();
+    //        // Get the current value from the observable
+    //        var article = await articleObservable.FirstOrDefaultAsync();
 
-            if (article == null)
-                return $"Article '{resolvedArticleId}' not found in collection '{resolvedCollectionName}'.";
+    //        if (article == null)
+    //            return $"Article '{resolvedArticleId}' not found in collection '{resolvedCollectionName}'.";
 
-            // Try to get the markdown content as well
-            var documentPath = resolvedArticleId.EndsWith(".md") ? resolvedArticleId : $"{resolvedArticleId}.md";
-            var contentStream = await contentService.GetContentAsync(resolvedCollectionName, documentPath, cancellationToken);
+    //        // Try to get the markdown content as well
+    //        var documentPath = resolvedArticleId.EndsWith(".md") ? resolvedArticleId : $"{resolvedArticleId}.md";
+    //        var contentStream = await contentService.GetContentAsync(resolvedCollectionName, documentPath, cancellationToken);
 
-            string content = "Content not available";
-            if (contentStream != null)
-            {
-                await using (contentStream)
-                {
-                    using var reader = new StreamReader(contentStream);
-                    content = await reader.ReadToEndAsync(cancellationToken);
-                }
-            }
+    //        string content = "Content not available";
+    //        if (contentStream != null)
+    //        {
+    //            await using (contentStream)
+    //            {
+    //                using var reader = new StreamReader(contentStream);
+    //                content = await reader.ReadToEndAsync(cancellationToken);
+    //            }
+    //        }
 
-            return $"Article: {article}\n\n--- Content ---\n{content}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error getting article '{resolvedArticleId}' from collection: {ex.Message}";
-        }
-    }
+    //        return $"Article: {article}\n\n--- Content ---\n{content}";
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        return $"Error getting article '{resolvedArticleId}' from collection: {ex.Message}";
+    //    }
+    //}
 
     [Description("Gets the MIME content type for a file based on its extension. If collection/path not provided: when Area='Content' or 'Collection', parses from LayoutAreaReference.Id ('{collection}/{path}'); otherwise uses ContextToConfigMap or plugin config.")]
     public async Task<string> GetContentType(
@@ -846,11 +821,14 @@ public class ContentPlugin
     public async Task<string> Import(
         [Description("The path to the file to import")] string path,
         [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
-        [Description("The target address for the import (optional if default address is configured), can be a string like 'AddressType/id' or an Address object")] string? address = null,
+        [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
         CancellationToken cancellationToken = default)
     {
+        logger.LogInformation("Import called with path={Path}, collection={Collection}, address={Address}, format={Format}",
+            path, collection, address, format);
+
         try
         {
             if (string.IsNullOrWhiteSpace(collection))
@@ -876,9 +854,10 @@ public class ContentPlugin
             };
 
             // Add configuration if provided
+            JsonNode? configNode = null;
             if (!string.IsNullOrWhiteSpace(configuration))
             {
-                var configNode = JsonNode.Parse(configuration);
+                configNode = JsonNode.Parse(configuration);
                 if (configNode != null)
                 {
                     importRequestJson["configuration"] = configNode;
@@ -895,6 +874,47 @@ public class ContentPlugin
                 o => o.WithTarget(targetAddress),
                 cancellationToken
             );
+
+            // Auto-save configuration if it was provided and the import succeeded
+            if (configNode != null && responseMessage != null)
+            {
+                try
+                {
+                    // Check if this is an ExcelImportConfiguration with a name field
+                    var configObj = configNode as JsonObject;
+                    var configTypeName = configObj?["$type"]?.ToString();
+                    var configName = configObj?["name"]?.ToString();
+
+                    if (!string.IsNullOrWhiteSpace(configTypeName) &&
+                        configTypeName.Contains("ExcelImportConfiguration") &&
+                        !string.IsNullOrWhiteSpace(configName))
+                    {
+                        // Save the configuration using DataPlugin
+                        var updateRequest = new JsonObject
+                        {
+                            ["$type"] = "MeshWeaver.Data.UpdateDataRequest",
+                            ["type"] = "ExcelImportConfiguration",
+                            ["data"] = configNode
+                        };
+
+                        var updateJsonString = updateRequest.ToJsonString();
+                        var updateRequestObj = JsonSerializer.Deserialize<object>(updateJsonString, hub.JsonSerializerOptions)!;
+
+                        await hub.AwaitResponse(
+                            updateRequestObj,
+                            o => o.WithTarget(targetAddress),
+                            cancellationToken
+                        );
+
+                        logger.LogInformation("Auto-saved ExcelImportConfiguration: {ConfigName}", configName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to auto-save import configuration, but import succeeded");
+                    // Don't fail the import if configuration save fails
+                }
+            }
 
             // Serialize the response back to JSON for processing
             var responseJson = JsonSerializer.Serialize(responseMessage, hub.JsonSerializerOptions);
@@ -939,12 +959,9 @@ public class ContentPlugin
             AIFunctionFactory.Create(ListFiles),
             AIFunctionFactory.Create(ListFolders),
             AIFunctionFactory.Create(ListCollectionItems),
-            AIFunctionFactory.Create(GetDocument),
             AIFunctionFactory.Create(DeleteFile),
             AIFunctionFactory.Create(CreateFolder),
             AIFunctionFactory.Create(DeleteFolder),
-            AIFunctionFactory.Create(GetArticleCatalog),
-            AIFunctionFactory.Create(GetArticle),
             AIFunctionFactory.Create(GetContentType),
             AIFunctionFactory.Create(FileExists),
             AIFunctionFactory.Create(GenerateUniqueFileName),

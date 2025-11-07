@@ -198,7 +198,8 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
     protected virtual IEnumerable<AITool> GetStandardTools(IAgentChat chat)
     {
-        return new ChatPlugin(chat).CreateTools();
+        var logger = Hub.ServiceProvider.GetService<ILogger<ChatPlugin>>();
+        return new ChatPlugin(chat, logger).CreateTools();
     }
 
     /// <summary>

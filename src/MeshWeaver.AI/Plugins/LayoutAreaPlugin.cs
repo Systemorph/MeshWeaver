@@ -7,6 +7,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI.Plugins;
 
@@ -15,18 +17,21 @@ namespace MeshWeaver.AI.Plugins;
 /// Supports retrieving layout area definitions and listing available layout areas.
 /// </summary>
 public class LayoutAreaPlugin(
-    IMessageHub hub, 
+    IMessageHub hub,
     IAgentChat chat,
-    IReadOnlyDictionary<string, LayoutAreaDefinition>? areaDefinitions = null, 
+    IReadOnlyDictionary<string, LayoutAreaDefinition>? areaDefinitions = null,
     Func<string, Address?>? addressMap = null
     )
 {
+    private readonly ILogger<LayoutAreaPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaPlugin>>();
 
     [Description($"Displays a layout area as a visual component in the chat.")]
     public string DisplayLayoutArea(
         [Description($"Name of the layout area to retrieve. A list of valid layout areas can be found with the {nameof(GetLayoutAreas)} function")] string areaName,
         [Description($"Id of the layout area requested. Could be paramters steering the layout areas. See Layout Area Definition for details.")] string? id = null)
     {
+        logger.LogInformation("DisplayLayoutArea called with areaName={AreaName}, id={Id}", areaName, id);
+
         if (string.IsNullOrWhiteSpace(areaName))
             return "Please specify which area should be displayed.";
 
@@ -69,6 +74,7 @@ public class LayoutAreaPlugin(
     [Description($"List all layout areas and their definitions available as a json structure. The area property should be used in the {nameof(DisplayLayoutArea)} tool.")]
     public async Task<string> GetLayoutAreas()
     {
+        logger.LogInformation("GetLayoutAreas called");
 
         if (areaDefinitions is not null)
             // Return areas from constructor
