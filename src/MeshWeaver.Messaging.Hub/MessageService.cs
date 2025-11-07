@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
+using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
 
@@ -342,7 +343,8 @@ public class MessageService : IMessageService
 
                     delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
                     if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
-                                            && (delivery.Target == null || delivery.Target.Equals(hub.Address)))
+                                            && (delivery.Target == null || delivery.Target.Equals(hub.Address))
+                                            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
                         ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
                 }
                 else
