@@ -13,6 +13,7 @@ public static class ChatPersistenceExtensions
     /// </summary>
     public static IServiceCollection AddMemoryChatPersistence(this IServiceCollection services)
     {
-        return services.AddSingleton<IChatPersistenceService, InMemoryChatPersistenceService>();
+        services.AddSingleton<IChatPersistenceService, InMemoryChatPersistenceService>();
+        return services;
     }
 }

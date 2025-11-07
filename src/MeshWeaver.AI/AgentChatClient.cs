@@ -19,7 +19,7 @@ public class AgentChatClient(
 {
     private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
     private readonly ILogger<AgentChatClient> logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-    private readonly IAgentThreadService threadService = serviceProvider.GetRequiredService<IAgentThreadService>();
+    private readonly IChatPersistenceService persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string currentThreadId = "default";
@@ -44,7 +44,7 @@ public class AgentChatClient(
 
     private async Task<AgentThread> GetOrCreateThreadAsync(AIAgent agent)
     {
-        var serializedThread = await threadService.LoadThreadAsync(currentThreadId, agent.Name);
+        var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, agent.Name);
 
         if (serializedThread.HasValue)
         {
@@ -61,7 +61,7 @@ public class AgentChatClient(
     private async Task SaveThreadAsync(AIAgent agent, AgentThread thread)
     {
         var serialized = thread.Serialize(hub.JsonSerializerOptions);
-        await threadService.SaveThreadAsync(currentThreadId, agent.Name, serialized);
+        await persistenceService.SaveThreadAsync(currentThreadId, agent.Name, serialized);
         logger.LogInformation("Saved thread: {ThreadId} for agent: {AgentName}",
             currentThreadId, agent.Name);
     }
@@ -226,47 +226,6 @@ public class AgentChatClient(
                 AuthorName = currentAgentName ?? "Assistant"
             };
         }
-    }
-
-
-    private List<ChatMessage> PrepareHistoryWithContext(List<ChatMessage> conversationHistory)
-    {
-        var history = new List<ChatMessage>();
-
-        // Add context as a system message at the start if we have context
-        if (Context != null)
-        {
-            var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
-            var contextMessage = $"""
-                # Current Application Context
-
-                The user is currently viewing the following page/entity in the application:
-
-                ```json
-                {contextJson}
-                ```
-
-                Key information:
-                - Address Type: {Context.Address?.Type ?? "N/A"}
-                - Address ID: {Context.Address?.Id ?? "N/A"}
-                - Layout Area: {Context.LayoutArea?.Area ?? "N/A"}
-
-                Use this context information when answering the user's questions or performing actions.
-                For example, if the user asks about "this pricing" or "current files", they are referring to the entity specified in the context above.
-                """;
-
-            history.Add(new ChatMessage(ChatRole.System, contextMessage));
-            logger.LogDebug("Added context system message: Address={Address}, LayoutArea={LayoutArea}",
-                Context.Address, Context.LayoutArea?.Area);
-        }
-
-        // Add all conversation history
-        history.AddRange(conversationHistory);
-
-        // Update last context address for change detection
-        lastContextAddress = Context?.Address;
-
-        return history;
     }
 
     private AIAgent? SelectAgent(ChatMessage? lastMessage)

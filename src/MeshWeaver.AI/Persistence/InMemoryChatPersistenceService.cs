@@ -161,4 +161,23 @@ public class InMemoryChatPersistenceService(IAgentChatFactory agentChatFactory, 
             return conversations.Count;
         }
     }
+
+    private readonly ConcurrentDictionary<string, System.Text.Json.JsonElement> threadStorage = new();
+
+    public Task SaveThreadAsync(string threadId, string agentName, System.Text.Json.JsonElement serializedThread)
+    {
+        var key = $"{GetCurrentUserId()}:{threadId}:{agentName}";
+        threadStorage[key] = serializedThread;
+        return Task.CompletedTask;
+    }
+
+    public Task<System.Text.Json.JsonElement?> LoadThreadAsync(string threadId, string agentName)
+    {
+        var key = $"{GetCurrentUserId()}:{threadId}:{agentName}";
+        if (threadStorage.TryGetValue(key, out var thread))
+        {
+            return Task.FromResult<System.Text.Json.JsonElement?>(thread);
+        }
+        return Task.FromResult<System.Text.Json.JsonElement?>(null);
+    }
 }

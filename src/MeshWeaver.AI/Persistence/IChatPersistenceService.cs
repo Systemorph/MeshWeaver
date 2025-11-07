@@ -39,4 +39,14 @@ public interface IChatPersistenceService
     /// Updates the title of a conversation
     /// </summary>
     Task<ChatConversation?> UpdateConversationTitleAsync(string conversationId, string newTitle);
+
+    /// <summary>
+    /// Saves a serialized agent thread
+    /// </summary>
+    Task SaveThreadAsync(string threadId, string agentName, System.Text.Json.JsonElement serializedThread);
+
+    /// <summary>
+    /// Loads a serialized agent thread
+    /// </summary>
+    Task<System.Text.Json.JsonElement?> LoadThreadAsync(string threadId, string agentName);
 }
