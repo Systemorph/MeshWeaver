@@ -312,7 +312,7 @@ public class LayoutAreaPluginTest(ITestOutputHelper output) : HubTestBase(output
 
         public void SetThreadId(string threadId)
         {
-            throw new NotImplementedException();
+            // Mock implementation - no-op for tests
         }
 
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)

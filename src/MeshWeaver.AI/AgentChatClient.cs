@@ -12,25 +12,19 @@ using TextContent = Microsoft.Extensions.AI.TextContent;
 
 namespace MeshWeaver.AI;
 
-public class AgentChatClient : IAgentChat
+public class AgentChatClient(
+    IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
+    IServiceProvider serviceProvider)
+    : IAgentChat
 {
-    private readonly IMessageHub hub;
-    private readonly ILogger<AgentChatClient> logger;
+    private readonly IMessageHub hub = serviceProvider.GetRequiredService<IMessageHub>();
+    private readonly ILogger<AgentChatClient> logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
+    private readonly IAgentThreadService threadService = serviceProvider.GetRequiredService<IAgentThreadService>();
     private readonly Dictionary<string, AIAgent> agents = new();
-    private readonly IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions;
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
     private string currentThreadId = "default";
     private string? currentAgentName;
     private Address? lastContextAddress;
-
-    public AgentChatClient(
-        IReadOnlyDictionary<string, IAgentDefinition> agentDefinitions,
-        IServiceProvider serviceProvider)
-    {
-        this.agentDefinitions = agentDefinitions;
-        this.hub = serviceProvider.GetRequiredService<IMessageHub>();
-        this.logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-    }
 
     public void AddAgent(string name, AIAgent agent)
     {
@@ -38,6 +32,39 @@ public class AgentChatClient : IAgentChat
     }
 
     public AgentContext? Context { get; private set; }
+
+    public void SetThreadId(string threadId)
+    {
+        if (string.IsNullOrEmpty(threadId))
+            throw new ArgumentException("Thread ID cannot be null or empty", nameof(threadId));
+
+        currentThreadId = threadId;
+        logger.LogInformation("Switched to thread: {ThreadId}", threadId);
+    }
+
+    private async Task<AgentThread> GetOrCreateThreadAsync(AIAgent agent)
+    {
+        var serializedThread = await threadService.LoadThreadAsync(currentThreadId, agent.Name);
+
+        if (serializedThread.HasValue)
+        {
+            logger.LogInformation("Loading existing thread: {ThreadId} for agent: {AgentName}",
+                currentThreadId, agent.Name);
+            return agent.DeserializeThread(serializedThread.Value, hub.JsonSerializerOptions);
+        }
+
+        logger.LogInformation("Creating new thread: {ThreadId} for agent: {AgentName}",
+            currentThreadId, agent.Name);
+        return agent.GetNewThread();
+    }
+
+    private async Task SaveThreadAsync(AIAgent agent, AgentThread thread)
+    {
+        var serialized = thread.Serialize(hub.JsonSerializerOptions);
+        await threadService.SaveThreadAsync(currentThreadId, agent.Name, serialized);
+        logger.LogInformation("Saved thread: {ThreadId} for agent: {AgentName}",
+            currentThreadId, agent.Name);
+    }
 
     private string BuildMessageWithContext(IReadOnlyCollection<ChatMessage> messages)
     {
@@ -73,15 +100,6 @@ public class AgentChatClient : IAgentChat
         return messageText.ToString();
     }
 
-    public void SetThreadId(string threadId)
-    {
-        if (string.IsNullOrEmpty(threadId))
-            throw new ArgumentException("Thread ID cannot be null or empty", nameof(threadId));
-
-        currentThreadId = threadId;
-        logger.LogInformation("Switched to thread: {ThreadId}", threadId);
-    }
-
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -96,11 +114,17 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
+        // Get or create thread for this agent
+        var thread = await GetOrCreateThreadAsync(agent);
+
         // Build the user message with context
         var userMessage = BuildMessageWithContext(messages);
 
-        // Get response from the agent
-        var response = await agent.RunAsync(userMessage, cancellationToken: cancellationToken);
+        // Get response from the agent with thread
+        var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
+
+        // Save the updated thread
+        await SaveThreadAsync(agent, thread);
 
         foreach (var responseMsg in response.Messages)
         {
@@ -149,11 +173,14 @@ public class AgentChatClient : IAgentChat
 
         currentAgentName = agent.Name;
 
+        // Get or create thread for this agent
+        var thread = await GetOrCreateThreadAsync(agent);
+
         // Build the user message with context
         var userMessage = BuildMessageWithContext(messages);
 
-        // Get streaming response from the agent
-        await foreach (var update in agent.RunStreamingAsync(userMessage, cancellationToken: cancellationToken))
+        // Get streaming response from the agent with thread
+        await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
@@ -187,6 +214,9 @@ public class AgentChatClient : IAgentChat
             };
         }
 
+        // Save the updated thread
+        await SaveThreadAsync(agent, thread);
+
         // Check for any queued layout area content
         while (queuedLayoutAreaContent.Count > 0)
         {
@@ -197,6 +227,7 @@ public class AgentChatClient : IAgentChat
             };
         }
     }
+
 
     private List<ChatMessage> PrepareHistoryWithContext(List<ChatMessage> conversationHistory)
     {

@@ -131,7 +131,9 @@ public class DataPluginTest(ITestOutputHelper output) : HubTestBase(output)
             => throw new NotImplementedException();
 
         public void SetThreadId(string threadId)
-            => throw new NotImplementedException();
+        {
+            // Mock implementation - no-op for tests
+        }
 
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
         {
