@@ -1,6 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using MeshWeaver.AI.AzureOpenAI;
+using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
@@ -57,14 +57,14 @@ public static class SharedPortalConfiguration
         services.AddMemoryChatPersistence();
 
         // configure AzureOpenAI chat
-        services.Configure<AzureOpenAIConfiguration>(
-            builder.Configuration.GetSection("AzureOpenAIS")
-            );
-        services.AddAzureOpenAI();
+        //services.Configure<AzureOpenAIConfiguration>(
+        //    builder.Configuration.GetSection("AzureOpenAIS")
+        //    );
+        //services.AddAzureOpenAI();
 
         // configure Azure Foundry chat
-        //services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
-        //services.AddAzureAIFoundry();
+        services.Configure<AzureAIFoundryConfiguration>(builder.Configuration.GetSection("AzureAIS"));
+        services.AddAzureAIFoundry();
 
         // setting up google maps configuration
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
