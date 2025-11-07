@@ -21,6 +21,13 @@ public class LoggingTypeInfoResolver : IJsonTypeInfoResolver
     {
         var typeInfo = _innerResolver.GetTypeInfo(type, options);
 
+        // Check if the type itself has [PreventLogging] attribute
+        if (type.GetCustomAttribute<PreventLoggingAttribute>(inherit: true) != null)
+        {
+            // Return null to completely exclude this type from logging
+            return null;
+        }
+
         if (typeInfo?.Kind == JsonTypeInfoKind.Object && typeInfo.Properties.Count > 0)
         {
             // Find properties to remove (can't modify during enumeration)

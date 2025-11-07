@@ -391,8 +391,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         });
     }
 
+    [PreventLogging]
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
 
+    [PreventLogging]
     public record SetCurrentRequest(ChangeItem<TStream> Value);
 
 }
