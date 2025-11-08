@@ -204,7 +204,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
     /// <summary>
     /// Creates delegation tools for agents that can delegate to other agents.
-    /// Creates AIFunction tools that wrap the agent's RunAsync method with proper parameters.
+    /// Creates custom delegation functions that signal AgentChatClient to invoke sub-agents in streaming mode.
     /// For [DefaultAgent]: adds all agents marked with [ExposedInDefaultAgent]
     /// For IAgentWithDelegations: adds agents specified in their Delegations property
     /// </summary>
@@ -218,21 +218,21 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             .GetCustomAttributes(typeof(DefaultAgentAttribute), false)
             .Any();
 
-        IEnumerable<string> targetAgentNames;
+        IEnumerable<DelegationDescription> delegations;
 
         if (isDefaultAgent)
         {
             // Default agent gets all exposed agents
-            targetAgentNames = AgentDefinitions.Result.Values
+            var exposedAgentDefs = AgentDefinitions.Result.Values
                 .Where(a => a.GetType().GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
-                .Where(a => a.Name != agentDefinition.Name)
-                .Select(a => a.Name);
+                .Where(a => a.Name != agentDefinition.Name);
+
+            delegations = exposedAgentDefs.Select(a => new DelegationDescription(a.Name, a.Description));
         }
         else if (agentDefinition is IAgentWithDelegations delegatingAgent)
         {
             // Non-default agent with delegations gets only the agents they specify
-            targetAgentNames = delegatingAgent.Delegations
-                .Select(d => d.AgentName);
+            delegations = delegatingAgent.Delegations;
         }
         else
         {
@@ -240,20 +240,20 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
             yield break;
         }
 
-        // Create an AIFunction tool for each target agent
-        foreach (var targetAgentName in targetAgentNames)
+        // Create a delegation tool for each target agent
+        foreach (var delegation in delegations)
         {
-            // Get the agent definition
-            var targetAgentDef = allAgents
-                .GetValueOrDefault(targetAgentName);
-
-            if (targetAgentDef == null)
+            // Check if the target agent exists
+            if (!allAgents.ContainsKey(delegation.AgentName))
                 continue;
 
-            yield return targetAgentDef.AsAIFunction();
+            yield return ChatPlugin.CreateDelegationTool(
+                delegation.AgentName,
+                delegation.Instructions,
+                Logger);
 
             Logger.LogDebug("Created delegation tool {ToolName} for agent {AgentName}",
-                targetAgentDef.Name, agentDefinition.Name);
+                delegation.AgentName, agentDefinition.Name);
         }
     }
 

@@ -47,9 +47,10 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                    - Map column letters to PropertyRisk properties according to the schema provided below
                    - Consider any input from the user to modify the configuration
                    - Ensure the JSON includes "name" field set to the filename and "typeName" set to "PropertyRisk"
-                3) Call ContentPlugin's Import function with: path=filename, collection=null, address=PricingAddress, format=null, configuration=the JSON configuration
+                3) Call ContentPlugin's Import function with: path=filename, collection=null, address=PricingAddress, format=null, configuration=the JSON configuration, snapshot=true
                    - IMPORTANT: Always pass collection=null (it will be inferred from context)
                    - IMPORTANT: Always pass format=null since the configuration parameter contains all necessary import settings
+                   - IMPORTANT: Always pass snapshot=true to create a snapshot of the imported data
                    - The Import function will automatically save the configuration to the hub if it's valid, so you don't need to call UpdateData separately.
 
                 # Creating Risk Import Configuration from File Preview

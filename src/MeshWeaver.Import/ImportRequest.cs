@@ -59,10 +59,6 @@ public record ImportRequest : IRequest<ImportResponse>
     /// <summary>Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</summary>
     public Source Source { get; init; }
 
-    public void Deconstruct(out Source Source)
-    {
-        Source = this.Source;
-    }
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

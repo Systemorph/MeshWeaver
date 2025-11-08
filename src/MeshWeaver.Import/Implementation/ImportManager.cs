@@ -100,18 +100,6 @@ public class ImportManager
 
                 // Collect all objects to save
                 var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
-
-                // Check if ImportConfiguration should be saved
-                if (request.Message.Configuration != null)
-                {
-                    var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
-                    if (configToSave != null)
-                    {
-                        objectsToSave.Add(configToSave);
-                        activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
-                    }
-                }
-
                 Configuration.Workspace.RequestChange(
                     DataChangeRequest.Update(
                         objectsToSave.ToArray(),
@@ -120,6 +108,22 @@ public class ImportManager
                     activity,
                     request
                 );
+
+                // Check if ImportConfiguration should be saved
+                if (request.Message.Configuration != null)
+                {
+                    var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
+                    if (configToSave != null)
+                    {
+                        Configuration.Workspace.RequestChange(
+                            DataChangeRequest.Update([configToSave]),
+                            activity,
+                            request
+                        );
+                        activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
+                    }
+                }
+
                 activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
 
                 Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));

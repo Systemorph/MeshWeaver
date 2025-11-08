@@ -53,4 +53,35 @@ public class ChatPlugin
             AIFunctionFactory.Create(SetContext)
         ];
     }
+
+    /// <summary>
+    /// Creates a delegation tool for a specific target agent.
+    /// Instead of using AsAIFunction which doesn't stream properly, this creates a custom
+    /// delegation function that signals AgentChatClient to invoke sub-agents in streaming mode.
+    /// </summary>
+    /// <param name="targetAgentName">The name of the agent to delegate to</param>
+    /// <param name="targetAgentDescription">Description of when to use this agent</param>
+    /// <param name="logger">Optional logger for delegation events</param>
+    /// <returns>An AITool that can be used to delegate to the target agent</returns>
+    public static AITool CreateDelegationTool(
+        string targetAgentName,
+        string targetAgentDescription,
+        ILogger? logger = null)
+    {
+        string DelegateToAgent([Description("The message/instructions to send to the specialized agent")] string message)
+        {
+            logger?.LogInformation("Delegation requested to {TargetAgent} with message: {Message}",
+                targetAgentName, message);
+
+            // Return a special marker that AgentChatClient will detect
+            // Format: __DELEGATE__|{targetAgentName}|{message}
+            return $"__DELEGATE__|{targetAgentName}|{message}";
+        }
+
+        // Create the tool with a custom name and description
+        return AIFunctionFactory.Create(
+            DelegateToAgent,
+            name: targetAgentName,
+            description: targetAgentDescription);
+    }
 }

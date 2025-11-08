@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,9 +23,10 @@ public class AgentChatClient(
     private readonly IChatPersistenceService persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
     private readonly Dictionary<string, AIAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
-    private string currentThreadId = "default";
+    private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
-    private Address? lastContextAddress;
+    private readonly Address? lastContextAddress;
+    private AgentThread? sharedThread;
 
     public void AddAgent(string name, AIAgent agent)
     {
@@ -39,31 +41,44 @@ public class AgentChatClient(
             throw new ArgumentException("Thread ID cannot be null or empty", nameof(threadId));
 
         currentThreadId = threadId;
+        sharedThread = null; // Reset shared thread when switching conversations
         logger.LogInformation("Switched to thread: {ThreadId}", threadId);
     }
 
     private async Task<AgentThread> GetOrCreateThreadAsync(AIAgent agent)
     {
-        var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, agent.Name);
+        // Use shared thread across all agents in this conversation
+        if (sharedThread != null)
+        {
+            logger.LogInformation("Using existing shared thread: {ThreadId} for agent: {AgentName}",
+                currentThreadId, agent.Name);
+            return sharedThread;
+        }
+
+        // Try to load persisted thread
+        var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, "shared");
 
         if (serializedThread.HasValue)
         {
-            logger.LogInformation("Loading existing thread: {ThreadId} for agent: {AgentName}",
+            logger.LogInformation("Loading persisted thread: {ThreadId} for agent: {AgentName}",
                 currentThreadId, agent.Name);
-            return agent.DeserializeThread(serializedThread.Value, hub.JsonSerializerOptions);
+            sharedThread = agent.DeserializeThread(serializedThread.Value, hub.JsonSerializerOptions);
+            return sharedThread;
         }
 
-        logger.LogInformation("Creating new thread: {ThreadId} for agent: {AgentName}",
+        logger.LogInformation("Creating new shared thread: {ThreadId} for agent: {AgentName}",
             currentThreadId, agent.Name);
-        return agent.GetNewThread();
+        sharedThread = agent.GetNewThread();
+        return sharedThread;
     }
 
     private async Task SaveThreadAsync(AIAgent agent, AgentThread thread)
     {
+        // Save the shared thread with a common key
         var serialized = thread.Serialize(hub.JsonSerializerOptions);
-        await persistenceService.SaveThreadAsync(currentThreadId, agent.Name, serialized);
-        logger.LogInformation("Saved thread: {ThreadId} for agent: {AgentName}",
-            currentThreadId, agent.Name);
+        await persistenceService.SaveThreadAsync(currentThreadId, "shared", serialized);
+        logger.LogInformation("Saved shared thread: {ThreadId}",
+            currentThreadId);
     }
 
     private string BuildMessageWithContext(IReadOnlyCollection<ChatMessage> messages)
@@ -202,16 +217,100 @@ public class AgentChatClient(
                     {
                         logger.LogInformation("Agent {AgentName} received result from tool",
                             currentAgentName);
+
+                        // Check if this is a delegation marker
+                        var resultText = functionResult.Result?.ToString() ?? string.Empty;
+                        if (resultText.StartsWith("__DELEGATE__|"))
+                        {
+                            // Parse the delegation marker: __DELEGATE__|{targetAgentName}|{message}
+                            var parts = resultText.Split('|');
+                            if (parts.Length >= 3)
+                            {
+                                var targetAgentName = parts[1];
+                                var delegationMessage = string.Join('|', parts.Skip(2));
+
+                                logger.LogInformation("Delegation detected from {SourceAgent} to {TargetAgent}",
+                                    currentAgentName, targetAgentName);
+
+                                // Yield delegation marker to UI
+                                var delegationContent = new ChatDelegationContent(
+                                    currentAgentName ?? "Assistant",
+                                    targetAgentName,
+                                    delegationMessage);
+
+                                yield return new ChatResponseUpdate(ChatRole.Assistant, [delegationContent])
+                                {
+                                    AuthorName = currentAgentName ?? "Assistant"
+                                };
+
+                                // Invoke the target agent in streaming mode
+                                if (agents.TryGetValue(targetAgentName, out var targetAgent))
+                                {
+                                    // Use the same shared thread - it already contains the full conversation history
+                                    var targetThread = thread; // Same thread instance
+
+                                    // Build message with context for the target agent
+                                    var targetMessage = BuildMessageWithContext([new ChatMessage(ChatRole.User, delegationMessage)]);
+
+                                    // Stream the target agent's response
+                                    await foreach (var targetUpdate in targetAgent.RunStreamingAsync(
+                                        targetMessage, targetThread, cancellationToken: cancellationToken))
+                                    {
+                                        // Yield function calls from the delegated agent
+                                        if (targetUpdate.Contents.Count > 0)
+                                        {
+                                            foreach (var targetContent in targetUpdate.Contents)
+                                            {
+                                                if (targetContent is FunctionCallContent targetFunctionCall)
+                                                {
+                                                    logger.LogInformation("Delegated agent {AgentName} calling tool: {FunctionName}",
+                                                        targetAgentName, targetFunctionCall.Name);
+
+                                                    yield return new ChatResponseUpdate(ChatRole.Assistant, [targetContent])
+                                                    {
+                                                        AuthorName = targetAgentName
+                                                    };
+                                                }
+                                            }
+                                        }
+
+                                        // Yield target agent's text updates with their name
+                                        if (!string.IsNullOrEmpty(targetUpdate.Text))
+                                        {
+                                            yield return new ChatResponseUpdate(ChatRole.Assistant, targetUpdate.Text)
+                                            {
+                                                AuthorName = targetAgentName
+                                            };
+                                        }
+                                    }
+
+                                    // Thread is already saved at the end of the outer streaming loop
+                                }
+                                else
+                                {
+                                    logger.LogWarning("Target agent {TargetAgent} not found for delegation",
+                                        targetAgentName);
+                                    yield return new ChatResponseUpdate(ChatRole.Assistant,
+                                        $"Error: Agent '{targetAgentName}' not found")
+                                    {
+                                        AuthorName = currentAgentName ?? "Assistant"
+                                    };
+                                }
+                            }
+                        }
                         // Don't yield function results to the UI
                     }
                 }
             }
 
-            // Convert from agent updates to chat response updates
-            yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
+            // Convert from agent updates to chat response updates - only yield if there's text
+            if (!string.IsNullOrEmpty(update.Text))
             {
-                AuthorName = currentAgentName ?? "Assistant"
-            };
+                yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
+                {
+                    AuthorName = currentAgentName ?? "Assistant"
+                };
+            }
         }
 
         // Save the updated thread

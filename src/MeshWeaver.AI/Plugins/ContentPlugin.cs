@@ -411,7 +411,8 @@ public class ContentPlugin
     {
         logger.LogInformation("SaveFile called with filePath={FilePath}, collectionName={CollectionName}, contentLength={ContentLength}",
             filePath, collectionName, content?.Length ?? 0);
-
+        if (content is null)
+            return "No content supplied";
         var resolvedCollectionName = GetCollectionName(collectionName);
         if (string.IsNullOrEmpty(resolvedCollectionName))
             return "No collection specified and no default collection configured.";
@@ -824,6 +825,7 @@ public class ContentPlugin
         [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
+        [Description("Whether to override any other instances as snapshot import. Default is false.")] bool snapshot = false,
         CancellationToken cancellationToken = default)
     {
         logger.LogInformation("Import called with path={Path}, collection={Collection}, address={Address}, format={Format}",
@@ -862,6 +864,11 @@ public class ContentPlugin
                 {
                     importRequestJson["configuration"] = configNode;
                 }
+            }
+
+            if (snapshot)
+            {
+                importRequestJson["snapshot"] = JsonNode.Parse("{\"snapshot\": true}");
             }
 
             // Serialize and deserialize through hub's serializer to get proper type
