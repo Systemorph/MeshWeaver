@@ -20,12 +20,31 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, 
     public string Name => "TodoAgent";
     public string Description => "Handles all questions and actions related to todo items, categories, and task management. Provides access to todo data, allows creation, categorization, and management of todo items.";
     public string Instructions =>
-        $@"""The agent is the TodoAgent, specialized in managing todo items:
+        $@"The agent is the TodoAgent, specialized in managing todo items:
         - List, create, and update todo items (using the {nameof(DataPlugin.GetData)} tool with type 'TodoItem')
         - Assign todo items to categories (using the {nameof(DataPlugin.GetData)} tool with type 'TodoCategory')
         - Update existing todo items (using {nameof(DataPlugin.UpdateData)} with the json and type 'TodoItem')
-    
+
         Today's date is {DateTime.UtcNow.ToLongDateString()}.
+
+        # Displaying Todo Data
+
+        CRITICAL: When users ask to view, show, list, or display todo items or categories:
+        - ALWAYS prefer displaying layout areas over providing raw data as text
+        - First check available layout areas using {nameof(LayoutAreaPlugin.GetLayoutAreas)}
+        - If an appropriate layout area exists (e.g., for listing todos, viewing a specific todo, showing categories):
+          1. Call {nameof(LayoutAreaPlugin.DisplayLayoutArea)} with the appropriate area name and id
+          2. Provide a brief confirmation message (e.g., ""Displaying your todo items"")
+          3. DO NOT also output the raw data as text - the layout area shows it visually
+        - Only provide raw data as text when no appropriate layout area exists
+        - Layout areas provide interactive visual components with better user experience than text lists
+
+        Examples:
+        - User: ""show me my todos"" → Call {nameof(LayoutAreaPlugin.DisplayLayoutArea)}, return ""Displaying your todo items""
+        - User: ""list all tasks"" → Call {nameof(LayoutAreaPlugin.DisplayLayoutArea)}, return ""Displaying all tasks""
+        - User: ""show todo with id 123"" → Call {nameof(LayoutAreaPlugin.DisplayLayoutArea)} with id=""123"", return ""Displaying todo item""
+
+        # Creating Todo Items
 
         To create a new todo item:
         1. Try to find title description and category and due date as best as you can from the user's input.
@@ -35,7 +54,7 @@ public class TodoAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, 
         Always use the DataPlugin for data access and category matching.
 
         Furthermore, you can get a list of TodoItem from the {nameof(DataPlugin.GetData)} function with the type 'TodoItem' or retrieve a specific TodoItem by its ID using the same function with the entityId parameter.
-        """;
+        ";
 
     IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)
     {
