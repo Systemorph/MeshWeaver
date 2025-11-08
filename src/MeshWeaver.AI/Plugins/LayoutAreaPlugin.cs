@@ -15,6 +15,14 @@ namespace MeshWeaver.AI.Plugins;
 /// <summary>
 /// Plugin that provides access to layout areas from a specified address.
 /// Supports retrieving layout area definitions and listing available layout areas.
+///
+/// IMPORTANT USAGE GUIDELINES:
+/// - When a user asks to view, show, display, or see data/entities, ALWAYS prioritize displaying a layout area over text responses
+/// - If a layout area exists for the requested data, call DisplayLayoutArea and provide minimal text (just confirm what was displayed)
+/// - DO NOT provide lengthy text explanations when a visual layout area can show the data
+/// - Layout areas are interactive visual components that provide a better user experience than text
+/// - Example: User asks "show me the pricing" → Call DisplayLayoutArea with appropriate area, then return brief confirmation like "Displaying pricing details"
+/// - Only use text responses when no appropriate layout area exists
 /// </summary>
 public class LayoutAreaPlugin(
     IMessageHub hub,
@@ -25,7 +33,9 @@ public class LayoutAreaPlugin(
 {
     private readonly ILogger<LayoutAreaPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<LayoutAreaPlugin>>();
 
-    [Description($"Displays a layout area as a visual component in the chat.")]
+    [Description($"Displays a layout area as a visual component in the chat. " +
+        $"IMPORTANT: When a user asks to view/show/display data, prefer calling this function over providing text responses. " +
+        $"After displaying a layout area, keep your text response minimal (just confirm what was displayed).")]
     public string DisplayLayoutArea(
         [Description($"Name of the layout area to retrieve. A list of valid layout areas can be found with the {nameof(GetLayoutAreas)} function")] string areaName,
         [Description($"Id of the layout area requested. Could be paramters steering the layout areas. See Layout Area Definition for details.")] string? id = null)

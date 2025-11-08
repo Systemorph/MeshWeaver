@@ -821,7 +821,7 @@ public class ContentPlugin
     [Description("Imports data from a file in a collection to a specified address.")]
     public async Task<string> Import(
         [Description("The path to the file to import")] string path,
-        [Description("The name of the collection containing the file (optional if default collection is configured)")] string? collection = null,
+        [Description("The name of the collection containing the file. Pass null if unsure, then it will be inferred.")] string? collection = null,
         [Description("The target address for the import (optional if default address is configured). Format: '{AddressType}/{AddressId}'.")] string? address = null,
         [Description("The import format to use (optional, defaults to 'Default')")] string? format = null,
         [Description("Optional import configuration as JSON string. When provided, this will be used instead of the format parameter.")] string? configuration = null,
@@ -831,10 +831,12 @@ public class ContentPlugin
         logger.LogInformation("Import called with path={Path}, collection={Collection}, address={Address}, format={Format}",
             path, collection, address, format);
 
+        var resolvedCollectionName = GetCollectionName(collection);
+        if (string.IsNullOrEmpty(resolvedCollectionName))
+            return "No collection specified and no default collection configured.";
+
         try
         {
-            if (string.IsNullOrWhiteSpace(collection))
-                return "Collection name is required.";
 
             if (address == null)
                 return "Target address is required.";
@@ -849,7 +851,7 @@ public class ContentPlugin
                 ["source"] = new JsonObject
                 {
                     ["$type"] = "MeshWeaver.Import.CollectionSource",
-                    ["collection"] = collection,
+                    ["collection"] = resolvedCollectionName,
                     ["path"] = path
                 },
                 ["format"] = format ?? "Default"
@@ -896,12 +898,15 @@ public class ContentPlugin
                         configTypeName.Contains("ExcelImportConfiguration") &&
                         !string.IsNullOrWhiteSpace(configName))
                     {
+                        // Clone the configuration node to avoid "node already has a parent" error
+                        var configClone = JsonNode.Parse(configNode.ToJsonString());
+
                         // Save the configuration using DataPlugin
                         var updateRequest = new JsonObject
                         {
                             ["$type"] = "MeshWeaver.Data.UpdateDataRequest",
                             ["type"] = "ExcelImportConfiguration",
-                            ["data"] = configNode
+                            ["data"] = configClone
                         };
 
                         var updateJsonString = updateRequest.ToJsonString();
@@ -950,7 +955,7 @@ public class ContentPlugin
         }
         catch (Exception ex)
         {
-            return $"Error importing file '{path}' from collection '{collection}' to address '{address}': {ex.Message}";
+            return $"Error importing file '{path}' from collection '{resolvedCollectionName}' to address '{address}': {ex.Message}";
         }
     }
 
