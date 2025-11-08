@@ -101,6 +101,7 @@ public class AgentChatClient(
             messageText.AppendLine($"- Address Type: {Context.Address?.Type ?? "N/A"}");
             messageText.AppendLine($"- Address ID: {Context.Address?.Id ?? "N/A"}");
             messageText.AppendLine($"- Layout Area: {Context.LayoutArea?.Area ?? "N/A"}");
+            messageText.AppendLine($"- Layout ID: {Context.LayoutArea?.Id ?? "N/A"}");
             messageText.AppendLine();
             messageText.AppendLine("Use this context information when answering the user's questions or performing actions.");
             messageText.AppendLine();

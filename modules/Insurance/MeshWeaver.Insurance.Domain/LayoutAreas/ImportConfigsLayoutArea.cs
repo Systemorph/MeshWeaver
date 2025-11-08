@@ -13,15 +13,11 @@ public static class ImportConfigsLayoutArea
     {
         _ = ctx;
         var pricingId = host.Hub.Address.Id;
-        var pricingStream = host.Workspace.GetStream<Pricing>()!;
         var cfgStream = host.Workspace.GetStream<ExcelImportConfiguration>()!;
 
-        return cfgStream.CombineLatest(pricingStream, (cfgs, pricings) =>
+        return cfgStream.Select(cfgs =>
         {
-            var pricing = pricings?.FirstOrDefault();
-
             var list = cfgs?
-                .Where(c => string.Equals(c.EntityId, pricingId, StringComparison.OrdinalIgnoreCase))
                 .ToList() ?? new List<ExcelImportConfiguration>();
 
             if (list.Count == 0)

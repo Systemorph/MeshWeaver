@@ -269,7 +269,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent);
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
