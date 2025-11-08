@@ -31,18 +31,26 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         {
             yield return new DelegationDescription(
                 nameof(RiskImportAgent),
-                "Delegate to RiskImportAgent when the user wants to import property risks from Excel files, " +
-                "or when working with risk data files (.xlsx, .xls) that contain property information like " +
-                "location, TSI (Total Sum Insured), address, country, currency, building values, etc. " +
-                "Common file names include: risks.xlsx, exposure.xlsx, property schedule, location schedule, etc."
+                "Delegate to RiskImportAgent when the user wants to import property risks from Excel files. " +
+                "When delegating, provide a clear message that includes: " +
+                "(1) the exact file path with '/' prefix (e.g., '/Microsoft.xlsx'), " +
+                "(2) mention it's for the 'current pricing context', " +
+                "(3) any observed file structure details from the preview. " +
+                "Example: 'Import property risks from the file \\'/Microsoft.xlsx\\' for the current pricing context'. " +
+                "Handles files with columns like Location, TSI, Address, Country, Currency, Building Value, etc. " +
+                "Common file names: risks.xlsx, exposure.xlsx, property schedule, location schedule."
             );
 
             yield return new DelegationDescription(
                 nameof(SlipImportAgent),
-                "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF documents, " +
-                "or when working with slip files (.pdf) that contain insurance submission information like " +
-                "insured details, coverage terms, premium information, reinsurance structure layers, limits, rates, etc. " +
-                "Common file names include: slip.pdf, submission.pdf, placement.pdf, quote.pdf, etc."
+                "Delegate to SlipImportAgent when the user wants to import insurance slips from PDF/Word documents. " +
+                "When delegating, provide a clear message that includes: " +
+                "(1) the exact file path with '/' prefix (e.g., '/slip.pdf'), " +
+                "(2) mention it's for the 'current pricing context', " +
+                "(3) any observed document structure from the preview. " +
+                "Example: 'Import slip data from the file \\'/submission.pdf\\' for the current pricing context'. " +
+                "Handles files with content about Insured, Coverage, Premium, Reinsurance Layers, Limits, Rates, etc. " +
+                "Common file names: slip.pdf, submission.pdf, placement.pdf, quote.pdf."
             );
         }
     }
@@ -80,26 +88,34 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
 
         When users want to import data from files (e.g., "import Microsoft.xlsx" or "import slip.pdf"):
 
-        **Step 1: Preview the file**
+        **Step 1: Preview the file and show it to the user**
         - Call {{{nameof(ContentPlugin.GetContent)}}}(filePath="/filename", collectionName=null, numberOfRows=20)
         - For Excel files: numberOfRows=20 gives you the first 20 rows to see column structure
         - For PDF/Word files: Omit numberOfRows to get the full content
         - Example: {{{nameof(ContentPlugin.GetContent)}}}(filePath="/Microsoft.xlsx", collectionName=null, numberOfRows=20)
         - If the file doesn't exist, the tool will return an error - tell the user
+        - CRITICAL: Show the file content to the user EXACTLY as returned - do NOT summarize or paraphrase
+        - Output the raw data in a code block so the user can see the actual file structure
+        - For Excel: Show the column headers and all sample rows without modification
+        - For PDF/Word: Show the actual text content without summarization
 
-        **Step 2: Analyze the content to determine file type**
-        Look at the preview content:
-        - **Risk data (Excel)**: Has columns like Location, Address, TSI, Country, Currency, Building Value, Property Damage
-          → Delegate to RiskImportAgent
-        - **Slip document (PDF/Word)**: Has content about Insured, Coverage, Premium, Reinsurance Layers, Limits
-          → Delegate to SlipImportAgent
-
-        **Step 3: Delegate to the appropriate agent**
+        **Step 2: Immediately delegate to the appropriate agent**
+        - DO NOT analyze or describe the content in detail - just delegate
+        - Determine file type based on columns/content:
+          - **Risk data (Excel)**: Has columns like Location, Address, TSI, Country, Currency, Building Value, Property Damage
+            → Delegate to RiskImportAgent
+          - **Slip document (PDF/Word)**: Has content about Insured, Coverage, Premium, Reinsurance Layers, Limits
+            → Delegate to SlipImportAgent
         - The file content preview is already in the chat history
         - The specialized agent will see it automatically - no need to reload
+        - CRITICAL: Pass the exact file path (with "/" prefix) and mention the current pricing context
         - Examples:
-          - {{{nameof(RiskImportAgent)}}}("Import property risks from /Microsoft.xlsx")
-          - {{{nameof(SlipImportAgent)}}}("Import slip data from /submission.pdf")
+          - {{{nameof(RiskImportAgent)}}}("Import property risks from the file '/Microsoft.xlsx' for the current pricing context")
+          - {{{nameof(SlipImportAgent)}}}("Import slip data from the file '/submission.pdf' for the current pricing context")
+        - When delegating, explicitly mention:
+          1. The exact file path with "/" prefix (e.g., "/Microsoft.xlsx")
+          2. That it's for the "current pricing context" (the agent will see the context automatically)
+          3. Keep the delegation message brief - the agent sees the file content in history
 
         CRITICAL Rules:
         - Always use file paths with "/" prefix (e.g., "/Microsoft.xlsx" not "Microsoft.xlsx")

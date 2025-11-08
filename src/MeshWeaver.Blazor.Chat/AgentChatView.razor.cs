@@ -2,6 +2,7 @@
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -32,15 +33,15 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private bool isGeneratingResponse;
 
     // Bound context from the control
-    private AgentContext? boundContext;
+    private readonly AgentContext? boundContext;
 
     // Bound title from the control
-    private string chatTitle = "AI Chat";
+    private readonly string chatTitle = "AI Chat";
 
     [Parameter] public bool UseStreaming { get; set; } = true;
     // Chat history panel state
     private bool showChatHistory;
-    
+
     // Chat position state
     private ChatPosition currentPosition = ChatPosition.Right;
     private bool positionMenuVisible = false;
@@ -125,6 +126,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         messages.Clear();
         lazyChat = GetLazyChat();
 
+        // Set a new thread ID for the new conversation
+        var chat = await lazyChat.Value;
+        chat.SetThreadId(Guid.NewGuid().AsString());
+
         if (chatInput != null)
         {
             await chatInput.FocusAsync();
@@ -185,6 +190,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                     messages.Add(persistedMessage);
                 } // Restore AgentChat with proper conversation history using the new persistence method
                 var restoredChat = await ChatPersistenceService.RestoreAgentChatAsync(conversationId);
+
+                // Set the thread ID to match the conversation ID
+                restoredChat.SetThreadId(conversationId);
+
                 lazyChat = new Lazy<Task<IAgentChat>>(() => Task.FromResult(restoredChat));
 
                 StateHasChanged();
@@ -371,7 +380,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         // Stream and display a new response from the IChatClient
         await foreach (var update in chat.GetResponseAsync([userMessage], currentResponseCancellation.Token))
         {
-            
+
 
             if (lastRole == update.AuthorName)
             {
@@ -430,7 +439,7 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
 
             StateHasChanged();
         }
-        
+
         // Delegation messages are now added immediately during streaming, no need to defer them
     }
 
@@ -540,12 +549,12 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
     private async Task ChangeChatPosition(ChatPosition newPosition)
     {
         positionMenuVisible = false;
-        
+
         if (currentPosition != newPosition)
         {
             currentPosition = newPosition;
             StateHasChanged(); // Update UI immediately
-            
+
             if (OnPositionChanged.HasDelegate)
             {
                 await OnPositionChanged.InvokeAsync(currentPosition);
