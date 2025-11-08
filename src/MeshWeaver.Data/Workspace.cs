@@ -43,6 +43,7 @@ public class Workspace : IWorkspace
         if (collection == null)
             return null;
         return GetStream(typeof(T))
+            .Synchronize()
             .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
