@@ -101,6 +101,12 @@ public abstract class ArticleHeaderBase : ComponentBase
     [Parameter]
     public EventCallback<ArticleDisplayMode> DisplayModeChanged { get; set; }
 
+    [Parameter]
+    public bool IsPresentationMode { get; set; }
+
+    [Parameter]
+    public EventCallback OnTogglePresentationMode { get; set; }
+
     protected Task SwitchModeAsync(ArticleDisplayMode mode)
         => DisplayModeChanged.InvokeAsync(mode);
 }

@@ -3,7 +3,7 @@
 @inherits BlazorView<MeshWeaver.ContentCollections.ArticleControl, ArticleView>
 
 
-<div class="article-container">
+<div class="article-container @(IsPresentationMode ? "presentation-mode" : "")">
     @switch (DisplayMode)
     {
         case ArticleDisplayMode.EditHeading:
@@ -14,11 +14,14 @@
             </AuthorizeView>
             break;
         default:
-            <ArticleHeaderDisplay Model="@ArticleModel" DisplayModeChanged="ChangeDisplayMode"></ArticleHeaderDisplay>
+            <ArticleHeaderDisplay Model="@ArticleModel"
+                                  DisplayModeChanged="ChangeDisplayMode"
+                                  IsPresentationMode="@IsPresentationMode"
+                                  OnTogglePresentationMode="TogglePresentationMode"></ArticleHeaderDisplay>
             break;
     }
 </div>
-<div class="article-content markdown-body">
+<div class="article-content markdown-body @(IsPresentationMode ? "presentation-mode" : "")">
     <MarkdownView ViewModel="@MarkdownControl" />
 </div>
 

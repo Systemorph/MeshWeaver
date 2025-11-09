@@ -100,4 +100,11 @@ public partial class ArticleView
         DisplayMode = mode;
         return InvokeAsync(StateHasChanged);
     }
+
+    private bool IsPresentationMode { get; set; }
+    private Task TogglePresentationMode()
+    {
+        IsPresentationMode = !IsPresentationMode;
+        return InvokeAsync(StateHasChanged);
+    }
 }

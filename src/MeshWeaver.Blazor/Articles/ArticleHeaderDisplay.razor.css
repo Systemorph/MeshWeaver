@@ -137,6 +137,7 @@
         border: 1px solid currentColor;
     }
 }
+
 @media (max-width: 768px) {
     .article-header {
         width: 85%; /* Slightly wider on medium screens */

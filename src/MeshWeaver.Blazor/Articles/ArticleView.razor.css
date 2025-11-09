@@ -5,6 +5,13 @@
     width: 100%;
 }
 
+.presentation-controls {
+    display: flex;
+    justify-content: center;
+    margin: 16px auto;
+    width: 100%;
+}
+
 .article-content {
     width: 75%; /* Decrease the width to 75% */
     margin: 32px auto 16px; /* Increase top margin to separate from media */
@@ -13,6 +20,125 @@
     background-color: var(--color-canvas-default);
     color: var(--color-fg-default);
     font-size: 16pt; /* Increase the font size */
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+}
+
+/* Presentation mode styles using ::deep to target child component */
+.article-content.presentation-mode ::deep .markdown-body {
+    font-size: 32pt !important;
+    line-height: 1.7 !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body h1 {
+    font-size: 72pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body h2 {
+    font-size: 56pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body h3 {
+    font-size: 48pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body h4 {
+    font-size: 40pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body h5,
+.article-content.presentation-mode ::deep .markdown-body h6 {
+    font-size: 36pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body p,
+.article-content.presentation-mode ::deep .markdown-body li,
+.article-content.presentation-mode ::deep .markdown-body ul,
+.article-content.presentation-mode ::deep .markdown-body ol {
+    font-size: 32pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body code {
+    font-size: 28pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body pre {
+    font-size: 24pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body pre code {
+    font-size: 24pt !important;
+}
+
+.article-content.presentation-mode ::deep .markdown-body table,
+.article-content.presentation-mode ::deep .markdown-body td,
+.article-content.presentation-mode ::deep .markdown-body th {
+    font-size: 32pt !important;
+}
+
+/* PowerPoint-style presentation mode for header */
+.article-container.presentation-mode ::deep .article-header {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    min-height: 85vh;
+    padding: 64px;
+    width: 90% !important;
+    position: relative;
+}
+
+.article-container.presentation-mode ::deep .article-header .media {
+    position: relative;
+    width: 70%;
+    height: auto;
+    padding-top: 39.375%; /* 70% × 56.25% for 16:9 */
+    margin: 0 auto 64px auto;
+    order: 1;
+}
+
+.article-container.presentation-mode ::deep .article-header .header-content {
+    order: 2;
+    text-align: center;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.article-container.presentation-mode ::deep .article-header .title {
+    font-size: 72pt !important;
+    margin: 0 0 48px 0;
+    font-weight: bold;
+    order: 1;
+    line-height: 1.2;
+}
+
+.article-container.presentation-mode ::deep .article-header .meta-info {
+    justify-content: center;
+    font-size: 24pt;
+    margin: 0;
+    order: 2;
+}
+
+.article-container.presentation-mode ::deep .article-header .abstract {
+    display: none !important;
+}
+
+.article-container.presentation-mode ::deep .article-header .author-info {
+    font-size: 28pt;
+}
+
+.article-container.presentation-mode ::deep .article-header .published-date {
+    font-size: 24pt;
+}
+
+/* Position presentation button over the image */
+.article-container.presentation-mode ::deep .article-header .meta-info fluent-button {
+    position: absolute;
+    top: 80px;
+    right: 80px;
+    z-index: 10;
 }
 
 @media (max-width: 768px) {
@@ -26,5 +152,4 @@
         width: 95%; /* Nearly full width on small devices */
         padding: 12px; /* Slightly smaller padding */
     }
-
 }

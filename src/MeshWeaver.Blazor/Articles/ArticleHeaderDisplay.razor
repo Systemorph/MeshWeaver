@@ -22,11 +22,19 @@
                 </div>
                 <FluentSpacer></FluentSpacer>
                 <span class="published-date">@Published?.ToString("MMMM dd, yyyy")</span>
+                <!-- Presentation Mode Button -->
+                <FluentButton Appearance="@(IsPresentationMode ? Appearance.Accent : Appearance.Outline)"
+                              IconStart="@(new Icons.Regular.Size20.Presenter())"
+                              @onclick="OnTogglePresentationMode"
+                              Title="@(IsPresentationMode ? "Exit Presentation Mode" : "Enter Presentation Mode")"
+                              class="@(IsPresentationMode ? "presentation-button-active" : "")">
+                    @(IsPresentationMode ? "" : "Presentation")
+                </FluentButton>
                 <!-- Edit Menu -->
                 <AuthorizeView Roles="@Roles.PortalAdmin">
                     <Authorized>
-                        <FluentButton id="editMenuButton" 
-                                      IconStart="@(new Icons.Regular.Size20.Edit())" 
+                        <FluentButton id="editMenuButton"
+                                      IconStart="@(new Icons.Regular.Size20.Edit())"
                                       Appearance="Appearance.Lightweight"
                                       Title="Edit Options"
                                   @onclick="@(() => IsEditMenuOpen = !IsEditMenuOpen)">
