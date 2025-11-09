@@ -2,6 +2,8 @@
 using MeshWeaver.Documentation.LayoutAreas;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Documentation;
 
@@ -18,11 +20,13 @@ public static class DocumentationApplicationExtensions
     /// </summary>
     /// <param name="config"></param>
     /// <returns></returns>
-    public static MessageHubConfiguration AddDocumentation(MessageHubConfiguration config)
+    public static MessageHubConfiguration ConfigureDocumentation(MessageHubConfiguration config)
         => config
             .AddArticles()
-            .AddEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly,
-                "Markdown")
+            .AddEmbeddedResourceContentCollection("Documentation", typeof(DocumentationApplicationAttribute).Assembly, "Markdown")
+            .AddFileSystemContentCollection("Blog", sp =>
+                sp.GetRequiredService<IConfiguration>().GetSection("Blog")["BasePath"]
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "Blog"))
             .AddLayout(layout => layout
                 .AddCounter()
                 .AddCalculator()

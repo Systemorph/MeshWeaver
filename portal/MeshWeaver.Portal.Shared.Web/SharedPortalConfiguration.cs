@@ -123,8 +123,8 @@ public static class SharedPortalConfiguration
     }
 
     public static TBuilder ConfigureWebPortal<TBuilder>(this TBuilder builder, IConfiguration configuration)
-            where TBuilder : MeshBuilder
-            =>
+        where TBuilder : MeshBuilder
+        =>
             (TBuilder)builder
                 .ConfigureHub(mesh => mesh
                     .WithType(typeof(PricingAddress), PricingAddress.TypeName)
@@ -134,21 +134,28 @@ public static class SharedPortalConfiguration
                     .AddGoogleMaps()
                 )
                 .AddBlazor(layoutClient => layoutClient
-                        .WithPortalConfiguration(c =>
-                            c.AddArticles(new ContentCollectionConfig()
+                    .WithPortalConfiguration(c =>
+                        c.AddArticles(
+                            new ContentCollectionConfig()
+                            {
+                                SourceType = HubStreamProviderFactory.SourceType,
+                                Name = "Blog",
+                                Address = new ApplicationAddress("Documentation")
+                            },
+                            new ContentCollectionConfig()
                             {
                                 SourceType = HubStreamProviderFactory.SourceType,
                                 Name = "Documentation",
                                 Address = new ApplicationAddress("Documentation")
                             },
-                                new ContentCollectionConfig()
-                                {
-                                    SourceType = HubStreamProviderFactory.SourceType,
-                                    Name = "Todo",
-                                    Address = new ApplicationAddress("Todo")
-                                }
-                            )
+                            new ContentCollectionConfig()
+                            {
+                                SourceType = HubStreamProviderFactory.SourceType,
+                                Name = "Todo",
+                                Address = new ApplicationAddress("Todo")
+                            }
                         )
+                    )
                 )
                 .AddSignalRHubs();
 

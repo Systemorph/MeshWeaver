@@ -22,6 +22,6 @@ public class DocumentationApplicationAttribute : MeshNodeAttribute
     public MeshNode Documentation => CreateFromHubConfiguration(
         new ApplicationAddress(nameof(Documentation)),
         nameof(Documentation),
-        DocumentationApplicationExtensions.AddDocumentation
+        DocumentationApplicationExtensions.ConfigureDocumentation
     );
 }

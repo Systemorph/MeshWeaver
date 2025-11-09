@@ -1,0 +1,177 @@
+<svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+  <!-- Background gradient -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e1b4b;stop-opacity:1" />
+    </linearGradient>
+
+    <linearGradient id="humanGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+    </linearGradient>
+
+    <linearGradient id="robotGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- Glow filter -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="strongGlow">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#1e3a8a" stroke-width="0.5" opacity="0.2"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1920" height="1080" fill="url(#bgGradient)"/>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+
+  <!-- Central human figure (larger for 16:9) -->
+  <g transform="translate(960, 540)">
+    <!-- Human head -->
+    <circle cx="0" cy="-90" r="45" fill="url(#humanGradient)" filter="url(#strongGlow)"/>
+    <!-- Human body -->
+    <rect x="-27" y="-45" width="54" height="90" rx="14" fill="url(#humanGradient)" filter="url(#glow)"/>
+    <!-- Human arms -->
+    <rect x="-72" y="-35" width="45" height="20" rx="10" fill="url(#humanGradient)" transform="rotate(-30 -49 -25)" filter="url(#glow)"/>
+    <rect x="27" y="-35" width="45" height="20" rx="10" fill="url(#humanGradient)" transform="rotate(30 49 -25)" filter="url(#glow)"/>
+    <!-- Human legs -->
+    <rect x="-27" y="45" width="20" height="50" rx="10" fill="url(#humanGradient)" filter="url(#glow)"/>
+    <rect x="7" y="45" width="20" height="50" rx="10" fill="url(#humanGradient)" filter="url(#glow)"/>
+
+    <!-- Glowing aura around human -->
+    <circle cx="0" cy="0" r="110" fill="none" stroke="#fbbf24" stroke-width="3" opacity="0.3" filter="url(#glow)"/>
+    <circle cx="0" cy="0" r="130" fill="none" stroke="#fbbf24" stroke-width="2" opacity="0.2" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 1 (Left) -->
+  <g transform="translate(480, 340)">
+    <rect x="-30" y="-40" width="60" height="80" rx="8" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-75" r="28" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-11" cy="-80" r="6" fill="#ffffff"/>
+    <circle cx="11" cy="-80" r="6" fill="#ffffff"/>
+    <rect x="-15" y="-65" width="30" height="5" rx="2.5" fill="#34d399"/>
+    <rect x="-40" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="25" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 2 (Right) -->
+  <g transform="translate(1440, 340)">
+    <rect x="-30" y="-40" width="60" height="80" rx="8" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-75" r="28" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-11" cy="-80" r="6" fill="#ffffff"/>
+    <circle cx="11" cy="-80" r="6" fill="#ffffff"/>
+    <rect x="-15" y="-65" width="30" height="5" rx="2.5" fill="#a78bfa"/>
+    <rect x="-40" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="25" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 3 (Left Bottom) -->
+  <g transform="translate(480, 740)">
+    <rect x="-30" y="-40" width="60" height="80" rx="8" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-75" r="28" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-11" cy="-80" r="6" fill="#ffffff"/>
+    <circle cx="11" cy="-80" r="6" fill="#ffffff"/>
+    <rect x="-15" y="-65" width="30" height="5" rx="2.5" fill="#f472b6"/>
+    <rect x="-40" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="25" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 4 (Right Bottom) -->
+  <g transform="translate(1440, 740)">
+    <rect x="-30" y="-40" width="60" height="80" rx="8" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-75" r="28" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-11" cy="-80" r="6" fill="#ffffff"/>
+    <circle cx="11" cy="-80" r="6" fill="#ffffff"/>
+    <rect x="-15" y="-65" width="30" height="5" rx="2.5" fill="#fbbf24"/>
+    <rect x="-40" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="25" y="-15" width="15" height="12" rx="6" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 5 (Top Left) -->
+  <g transform="translate(640, 200)">
+    <rect x="-27" y="-35" width="54" height="70" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-65" r="25" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-10" cy="-70" r="5" fill="#ffffff"/>
+    <circle cx="10" cy="-70" r="5" fill="#ffffff"/>
+    <rect x="-13" y="-57" width="26" height="4" rx="2" fill="#34d399"/>
+    <rect x="-35" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="22" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 6 (Top Right) -->
+  <g transform="translate(1280, 200)">
+    <rect x="-27" y="-35" width="54" height="70" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-65" r="25" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-10" cy="-70" r="5" fill="#ffffff"/>
+    <circle cx="10" cy="-70" r="5" fill="#ffffff"/>
+    <rect x="-13" y="-57" width="26" height="4" rx="2" fill="#a78bfa"/>
+    <rect x="-35" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="22" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 7 (Bottom Left) -->
+  <g transform="translate(640, 880)">
+    <rect x="-27" y="-35" width="54" height="70" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-65" r="25" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-10" cy="-70" r="5" fill="#ffffff"/>
+    <circle cx="10" cy="-70" r="5" fill="#ffffff"/>
+    <rect x="-13" y="-57" width="26" height="4" rx="2" fill="#f472b6"/>
+    <rect x="-35" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="22" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot Agent 8 (Bottom Right) -->
+  <g transform="translate(1280, 880)">
+    <rect x="-27" y="-35" width="54" height="70" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="0" cy="-65" r="25" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <circle cx="-10" cy="-70" r="5" fill="#ffffff"/>
+    <circle cx="10" cy="-70" r="5" fill="#ffffff"/>
+    <rect x="-13" y="-57" width="26" height="4" rx="2" fill="#fbbf24"/>
+    <rect x="-35" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="22" y="-12" width="13" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Connection lines from human to robots -->
+  <line x1="960" y1="540" x2="480" y2="340" stroke="#60a5fa" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="1440" y2="340" stroke="#a78bfa" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="480" y2="740" stroke="#f472b6" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="1440" y2="740" stroke="#fbbf24" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="640" y2="200" stroke="#34d399" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="1280" y2="200" stroke="#a78bfa" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="640" y2="880" stroke="#f472b6" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+  <line x1="960" y1="540" x2="1280" y2="880" stroke="#fbbf24" stroke-width="3" opacity="0.4" stroke-dasharray="8,8"/>
+
+  <!-- Data particles flowing on connections -->
+  <circle cx="720" cy="440" r="5" fill="#60a5fa" filter="url(#glow)"/>
+  <circle cx="1200" cy="440" r="5" fill="#a78bfa" filter="url(#glow)"/>
+  <circle cx="720" cy="640" r="5" fill="#f472b6" filter="url(#glow)"/>
+  <circle cx="1200" cy="640" r="5" fill="#fbbf24" filter="url(#glow)"/>
+  <circle cx="800" cy="370" r="5" fill="#34d399" filter="url(#glow)"/>
+  <circle cx="1120" cy="370" r="5" fill="#a78bfa" filter="url(#glow)"/>
+  <circle cx="800" cy="710" r="5" fill="#f472b6" filter="url(#glow)"/>
+  <circle cx="1120" cy="710" r="5" fill="#fbbf24" filter="url(#glow)"/>
+
+  <!-- Additional data particles for richness -->
+  <circle cx="600" cy="500" r="4" fill="#60a5fa" filter="url(#glow)" opacity="0.7"/>
+  <circle cx="1320" cy="500" r="4" fill="#a78bfa" filter="url(#glow)" opacity="0.7"/>
+  <circle cx="850" cy="280" r="4" fill="#34d399" filter="url(#glow)" opacity="0.7"/>
+  <circle cx="1070" cy="800" r="4" fill="#fbbf24" filter="url(#glow)" opacity="0.7"/>
+</svg>

@@ -1,0 +1,113 @@
+<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f172a;stop-opacity:1" />
+    </linearGradient>
+
+    <linearGradient id="humanGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fbbf24;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f59e0b;stop-opacity:1" />
+    </linearGradient>
+
+    <linearGradient id="robotGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+    </linearGradient>
+
+    <linearGradient id="mirrorGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#cbd5e1;stop-opacity:0.2" />
+      <stop offset="50%" style="stop-color:#e2e8f0;stop-opacity:0.4" />
+      <stop offset="100%" style="stop-color:#cbd5e1;stop-opacity:0.2" />
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="strongGlow">
+      <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="600" fill="url(#bgGradient)"/>
+
+  <!-- Floor line -->
+  <line x1="0" y1="520" x2="800" y2="520" stroke="#475569" stroke-width="2" opacity="0.5"/>
+
+  <!-- Mirror frame -->
+  <rect x="380" y="150" width="280" height="370" rx="10" fill="#1e293b" stroke="#475569" stroke-width="8"/>
+
+  <!-- Mirror surface with gradient -->
+  <rect x="400" y="170" width="240" height="330" rx="5" fill="url(#mirrorGradient)" opacity="0.3"/>
+
+  <!-- Mirror shine effects -->
+  <rect x="405" y="175" width="40" height="200" rx="3" fill="#ffffff" opacity="0.1"/>
+
+  <!-- Human figure (left side, looking at mirror) -->
+  <g transform="translate(250, 350)">
+    <!-- Human head -->
+    <circle cx="0" cy="-80" r="35" fill="url(#humanGradient)" filter="url(#strongGlow)"/>
+
+    <!-- Human body -->
+    <rect x="-22" y="-45" width="44" height="70" rx="10" fill="url(#humanGradient)" filter="url(#glow)"/>
+
+    <!-- Human arms - right arm pointing toward mirror -->
+    <rect x="22" y="-30" width="35" height="15" rx="7" fill="url(#humanGradient)" transform="rotate(15 40 -23)" filter="url(#glow)"/>
+    <!-- Left arm -->
+    <rect x="-57" y="-25" width="35" height="15" rx="7" fill="url(#humanGradient)" transform="rotate(-20 -40 -18)" filter="url(#glow)"/>
+
+    <!-- Human legs -->
+    <rect x="-20" y="25" width="16" height="45" rx="8" fill="url(#humanGradient)" filter="url(#glow)"/>
+    <rect x="4" y="25" width="16" height="45" rx="8" fill="url(#humanGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Robot reflection in mirror -->
+  <g transform="translate(520, 340)">
+    <!-- Robot head -->
+    <circle cx="0" cy="-70" r="30" fill="url(#robotGradient)" filter="url(#strongGlow)"/>
+
+    <!-- Robot eyes -->
+    <circle cx="-12" cy="-75" r="5" fill="#ffffff"/>
+    <circle cx="12" cy="-75" r="5" fill="#ffffff"/>
+
+    <!-- Robot mouth/status line -->
+    <rect x="-15" y="-60" width="30" height="4" rx="2" fill="#34d399"/>
+
+    <!-- Robot body -->
+    <rect x="-25" y="-40" width="50" height="65" rx="8" fill="url(#robotGradient)" filter="url(#glow)"/>
+
+    <!-- Robot chest panel -->
+    <rect x="-15" y="-25" width="30" height="35" rx="3" fill="#1e293b" opacity="0.3"/>
+    <circle cx="0" cy="-15" r="4" fill="#34d399" opacity="0.8"/>
+    <rect x="-10" y="-5" width="20" height="2" rx="1" fill="#60a5fa" opacity="0.6"/>
+    <rect x="-10" y="0" width="20" height="2" rx="1" fill="#60a5fa" opacity="0.6"/>
+    <rect x="-10" y="5" width="20" height="2" rx="1" fill="#60a5fa" opacity="0.6"/>
+
+    <!-- Robot arms -->
+    <rect x="-35" y="-20" width="14" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="21" y="-20" width="14" height="10" rx="5" fill="url(#robotGradient)" filter="url(#glow)"/>
+
+    <!-- Robot legs -->
+    <rect x="-18" y="25" width="14" height="40" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+    <rect x="4" y="25" width="14" height="40" rx="7" fill="url(#robotGradient)" filter="url(#glow)"/>
+  </g>
+
+  <!-- Question marks floating between human and mirror -->
+  <text x="350" y="250" font-family="Arial, sans-serif" font-size="40" fill="#94a3b8" opacity="0.6" filter="url(#glow)">?</text>
+  <text x="340" y="320" font-family="Arial, sans-serif" font-size="30" fill="#94a3b8" opacity="0.5" filter="url(#glow)">?</text>
+  <text x="360" y="400" font-family="Arial, sans-serif" font-size="35" fill="#94a3b8" opacity="0.55" filter="url(#glow)">?</text>
+
+  <!-- Reflection visual effect lines -->
+  <line x1="290" y1="280" x2="400" y2="280" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+  <line x1="290" y1="350" x2="400" y2="340" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3" opacity="0.3"/>
+</svg>
