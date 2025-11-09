@@ -70,14 +70,16 @@ Finding the right work distribution between humans and agents is critical. When 
 **Common Anti-Pattern:**
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'14px'}}}%%
+%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 graph LR
-    A["👤 Human prompts"] --> B["🤖 Agent creates text"]
-    B --> C["👤 Human copy/paste & format"]
+    A["👤Human<br/>prompts"] --> B["🤖Agent<br/>creates text"]
+    B --> C["👤 Human<br/>copy/pastes & formats"]
 
     style A fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
     style C fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
     style B fill:#60a5fa,stroke:#3b82f6,stroke-width:3px
+
+    linkStyle 0,1 stroke-width:2px
 ```
 
 *Problem: Human does mechanical work, Agent does creative work*
@@ -85,36 +87,94 @@ graph LR
 **Better Pattern:**
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'14px'}}}%%
+%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 graph LR
-    A["👤 Human provides strategy"] --> B["🤖 Agent drafts + formats + publishes"]
-    B --> C["👤 Human reviews quality"]
+    A["👤Human<br/>provides strategy"] --> B["🤖Agent<br/>drafts & formats"]
+    B --> C["👤Human<br/>reviews quality"]
     C -->|"iterate"| A
 
     style A fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
     style C fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
     style B fill:#60a5fa,stroke:#3b82f6,stroke-width:3px
+
+    linkStyle 0,1,2 stroke-width:2px
 ```
 
 *Solution: Agent handles all repetitive tasks, Human focuses on strategy and quality judgment*
 
-## Applications
+## Agentic AI in Applications
 
-Agentic AI is already transforming various domains:
+### Data Ingestion
 
-- **Software Development** - AI agents that can write, test, and debug code autonomously
-- **Customer Service** - Intelligent agents that handle complex customer inquiries end-to-end
-- **Research and Analysis** - Systems that can gather information, synthesize insights, and generate reports
-- **Process Automation** - Agents that can orchestrate complex workflows across multiple systems
+Understanding file content used to be extremely difficult for automated systems. The fundamental challenge is that humans and agents have opposite strengths:
 
-## Challenges and Considerations
+- **Human-readable formats are machine-hostile** - Documents designed for human comprehension (PDFs, spreadsheets with merged or additional cells, narrative reports) are notoriously difficult for machines to parse
+- **Agents struggle with "easy" operations** - While agents excel at understanding context and meaning, they can stumble on simple tasks like reliably adding up numbers or maintaining exact precision
+- **Hybrid approach required** - We need to combine new AI capabilities (content discovery, semantic understanding) with traditional methods (structured imports when we know data location)
 
-While agentic AI offers tremendous potential, it also presents important challenges:
+**The Key to Effective Data Ingestion:**
 
-- **Safety and Control** - Ensuring agents operate within acceptable boundaries
-- **Reliability** - Building systems that make consistent, trustworthy decisions
-- **Transparency** - Understanding and explaining agent reasoning and actions
-- **Ethics** - Addressing questions of responsibility and accountability
+Success requires many small, focused pieces of text that work together to map data accurately:
+
+- **Data model descriptions** - Clear documentation of your data structures
+- **Dimension value descriptions** - For categorical data (Line of Business, Product Category, etc.), provide descriptions for each possible value
+- **System prompt instructions** - Explicit guidance on how to map and transform data
+
+**Agent Specialization:**
+
+For complex ingestion tasks, create dedicated agents for each partial aspect rather than one monolithic system. Each specialized agent becomes an expert in its domain.
+
+### Reporting
+
+Traditional reporting faces fundamental limitations that AI can address:
+
+**The Dashboard Paradox:**
+
+- Dashboards represent a well-intentioned but often futile attempt to compress business complexity onto a single screen
+- In practice, they rarely deliver the promised "single pane of glass" experience
+- Menu organization becomes unwieldy as report counts grow
+
+**The Information Bottleneck:**
+
+- C-suite executives traditionally couldn't retrieve information themselves
+- Required intermediary layers to create PowerPoint presentations
+- Created delays and potential for miscommunication
+
+**LLM-Enabled Reporting:**
+
+- Chat interfaces allow natural language queries: "Show me Q3 revenue by region"
+- Executives can explore data directly without technical barriers
+- Important: Agents retrieve and present reports, but **don't execute business logic**
+- The agent is an interface layer, not a decision-making system
+
+### New Forms of User Interaction
+
+Current business applications reflect historical constraints, not ideal design:
+
+**Legacy of Limitation:**
+
+- Traditional UIs were designed by humans, for humans, within tight constraints
+- Menu hierarchies and information architecture were necessary compromises
+- Limited navigation options led to uninspiring but functional designs
+- We built what was possible, not what was ideal
+
+**The Chat Revolution:**
+
+- Conversational interfaces provide more natural ways to interact with business systems
+- Users can express intent directly rather than navigating complex menu trees
+- Information can be dynamically assembled based on context rather than pre-defined views
+
+**The Hybrid Future:**
+
+The future isn't pure chat or pure traditional UI—it's an intelligent blend:
+
+- **Chat for discovery and exploration** - Natural language for open-ended queries
+- **Traditional UI for precision and repeatability** - Forms and controls for exact input
+- **Context-aware presentation** - Systems that choose the right interface for the task
+- **Collaborative design** - Applications that adapt to how users actually work
+
+This evolution represents not just new technology, but a fundamental rethinking of how humans and systems collaborate in business contexts.
+
 
 ## The Future
 

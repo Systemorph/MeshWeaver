@@ -14,12 +14,17 @@ public partial class ArticleView
     private readonly ModelParameter<Article> data = null!;
     private ActivityLog Log { get; set; } = null!;
     [Inject] private IToastService ToastService { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
     protected override void BindData()
     {
         DataBind(
             ViewModel.Article,
             x => x.data,
             (jsonObject, _) => Convert(jsonObject as Article)
+        );
+        DataBind(
+            ViewModel.IsPresentationMode,
+            x => x.IsPresentationMode
         );
     }
 
@@ -102,9 +107,27 @@ public partial class ArticleView
     }
 
     private bool IsPresentationMode { get; set; }
-    private Task TogglePresentationMode()
+
+    private void TogglePresentationMode()
     {
+        // Toggle presentation mode by navigating with query parameter
+        var uri = new Uri(NavigationManager.Uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+        if (IsPresentationMode)
+        {
+            query.Remove("presentation");
+        }
+        else
+        {
+            query["presentation"] = "true";
+        }
+
+        var newQuery = query.ToString();
+        var newUrl = uri.GetLeftPart(UriPartial.Path) + (string.IsNullOrEmpty(newQuery) ? "" : "?" + newQuery);
+        NavigationManager.NavigateTo(newUrl);
+
         IsPresentationMode = !IsPresentationMode;
-        return InvokeAsync(StateHasChanged);
+        StateHasChanged();
     }
 }

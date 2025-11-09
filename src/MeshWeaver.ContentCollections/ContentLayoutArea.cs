@@ -7,16 +7,16 @@ namespace MeshWeaver.ContentCollections;
 
 public static class ContentLayoutArea
 {
-    private static UiControl RenderContent(string path, object content)
+    private static UiControl RenderContent(string path, object content, bool isPresentationMode = false)
     {
-        return Template.Bind(content, a => GetControl(path, content));
+        return Template.Bind(content, a => GetControl(path, content, isPresentationMode));
     }
 
-    private static UiControl GetControl(string path, object content)
+    private static UiControl GetControl(string path, object content, bool isPresentationMode = false)
     {
         if (content is Article article)
         {
-            return new ArticleControl(article);
+            return new ArticleControl(article) { IsPresentationMode = isPresentationMode };
         }
         if (content is MarkdownElement md)
             return new MarkdownControl(md.Content) { Html = md.PrerenderedHtml };
@@ -42,11 +42,19 @@ public static class ContentLayoutArea
         return new MarkdownControl($"Unknown content type {content.GetType().Name}");
     }
 
-    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext _, CancellationToken ct)
+    public static async Task<IObservable<UiControl?>> Content(LayoutAreaHost host, RenderingContext context, CancellationToken ct)
     {
-        var split = host.Reference.Id?.ToString()!.Split("/");
+        // First split by ? to separate path from query parameters, then split path by /
+        var idString = host.Reference.Id?.ToString() ?? "";
+        var pathPart = idString.Split('?')[0];
+        var split = pathPart.Split('/');
+
         if (split is null || split.Length < 2)
             return Observable.Return(new MarkdownControl("Path must be specified in the form of /collection/article"));
+
+        // Parse query parameters from LayoutAreaReference
+        var isPresentationMode = host.Reference.HasParameter("presentation") &&
+                                 host.Reference.GetParameterValue("presentation")?.ToLower() == "true";
 
         var articleService = host.Hub.GetContentService();
         var collection = await articleService.GetCollectionAsync(split[0], ct);
@@ -60,7 +68,7 @@ public static class ContentLayoutArea
 
         return contentStream.Select(a => a is null ?
             new MarkdownControl($"{path} found not in collection {collection}")
-            : RenderContent(path, a));
+            : RenderContent(path, a, isPresentationMode));
     }
 
     public static async Task<IObservable<UiControl?>> RenderArticle(this IMessageHub hub, string collection, string id, CancellationToken ct)
