@@ -11,7 +11,7 @@
 
         @if (InProgressMessage is not null)
         {
-            <MessageWrapper Message="@InProgressMessage" InProgress="true" />
+            <MessageWrapper @key="@InProgressMessage.GetHashCode()" Message="@InProgressMessage" InProgress="true" />
             <FluentProgressRing />
         }
         else if (IsEmpty)
