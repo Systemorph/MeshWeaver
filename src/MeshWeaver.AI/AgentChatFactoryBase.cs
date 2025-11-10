@@ -101,14 +101,14 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     {
         var agentList = agents.ToList();
 
-        // 1. Non-delegating agents (no IAgentWithDelegations, no [DefaultAgent])
+        // 1. Non-delegating agents (no IAgentWithHandoffs, no [DefaultAgent])
         var nonDelegating = agentList
-            .Where(a => a is not IAgentWithDelegations
+            .Where(a => a is not IAgentWithHandoffs
                      && !a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
 
-        // 2. Delegating agents (IAgentWithDelegations but not [DefaultAgent])
+        // 2. Delegating agents (IAgentWithHandoffs but not [DefaultAgent])
         var delegating = agentList
-            .Where(a => a is IAgentWithDelegations
+            .Where(a => a is IAgentWithHandoffs
                      && !a.GetType().GetCustomAttributes(typeof(DefaultAgentAttribute), false).Any());
 
         // 3. Default agent (has [DefaultAgent])
@@ -123,7 +123,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// </summary>
     private IEnumerable<IAgentDefinition> FindCyclicDelegations(IEnumerable<IAgentDefinition> agents)
     {
-        var delegatingAgents = agents.OfType<IAgentWithDelegations>().ToList();
+        var delegatingAgents = agents.OfType<IAgentWithHandoffs>().ToList();
         var cyclicAgents = new HashSet<string>();
 
         foreach (var agent in delegatingAgents)
@@ -206,7 +206,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
     /// Creates delegation tools for agents that can delegate to other agents.
     /// Creates custom delegation functions that signal AgentChatClient to invoke sub-agents in streaming mode.
     /// For [DefaultAgent]: adds all agents marked with [ExposedInDefaultAgent]
-    /// For IAgentWithDelegations: adds agents specified in their Delegations property
+    /// For IAgentWithHandoffs: adds agents specified in their Delegations property
     /// </summary>
     protected virtual IEnumerable<AITool> GetAgentTools(
         IAgentDefinition agentDefinition,
@@ -229,7 +229,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
 
             delegations = exposedAgentDefs.Select(a => new DelegationDescription(a.Name, a.Description));
         }
-        else if (agentDefinition is IAgentWithDelegations delegatingAgent)
+        else if (agentDefinition is IAgentWithHandoffs delegatingAgent)
         {
             // Non-default agent with delegations gets only the agents they specify
             delegations = delegatingAgent.Delegations;
@@ -273,7 +273,7 @@ public abstract class AgentChatFactoryBase : IAgentChatFactory
         var baseInstructions = agentDefinition.Instructions;
 
         // Check if this agent supports delegations
-        if (agentDefinition is IAgentWithDelegations delegatingAgent)
+        if (agentDefinition is IAgentWithHandoffs delegatingAgent)
         {
             var delegationAgents = delegatingAgent.Delegations.ToList();
 

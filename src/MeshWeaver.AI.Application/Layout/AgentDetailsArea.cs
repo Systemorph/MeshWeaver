@@ -97,7 +97,7 @@ public static class AgentDetailsArea
         if (type.GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
-        if (agent is IAgentWithDelegations)
+        if (agent is IAgentWithHandoffs)
         {
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(255, 193, 7, 0.2); color: #ffc107; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟡 With Delegations</span>");
         }
@@ -195,10 +195,10 @@ public static class AgentDetailsArea
         if (type.GetCustomAttributes(typeof(ExposedInDefaultAgentAttribute), false).Any())
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>🔵 Exposed in Navigator</span>");
 
-        if (agent is IAgentWithDelegations)
+        if (agent is IAgentWithHandoffs)
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(255, 193, 7, 0.2); color: #ffc107; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟡 With Delegation</span>");
 
-        if (agent is IAgentWithDelegations)
+        if (agent is IAgentWithHandoffs)
             attributes.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(253, 126, 20, 0.2); color: #fd7e14; border-radius: 16px; font-size: 13px; font-weight: 600;'>🟠 With Delegations</span>");
 
         return attributes.Any() ? string.Join("", attributes) : "<span style='color: var(--neutral-foreground-rest, #6a737d); opacity: 0.7; font-style: italic;'>No special attributes</span>";
@@ -208,7 +208,7 @@ public static class AgentDetailsArea
         var sections = new List<string>();
 
         // Section: Can delegate to
-        if (agent is IAgentWithDelegations agentWithDelegation)
+        if (agent is IAgentWithHandoffs agentWithDelegation)
         {
             var delegationsList = agentWithDelegation.Delegations.ToList();
             if (delegationsList.Any())
@@ -236,7 +236,7 @@ public static class AgentDetailsArea
         }
 
         // Section: Exposes agents
-        if (agent is IAgentWithDelegations agentWithDelegations)
+        if (agent is IAgentWithHandoffs agentWithDelegations)
         {
             var exposedAgents = agentWithDelegations.Delegations.ToList();
             if (exposedAgents.Any())
@@ -263,8 +263,8 @@ public static class AgentDetailsArea
         // Section: Delegations from (agents that delegate TO this agent)
         var delegationsFromList = new List<(IAgentDefinition sourceAgent, string reason)>();
 
-        // Direct delegations from agents with IAgentWithDelegations
-        var directDelegationsFrom = agents.Values.OfType<IAgentWithDelegations>()
+        // Direct delegations from agents with IAgentWithHandoffs
+        var directDelegationsFrom = agents.Values.OfType<IAgentWithHandoffs>()
             .Where(a => a != agent && a.Delegations.Any(d => d.AgentName == agent.Name))
             .Select(a => ((IAgentDefinition)a, a.Delegations.First(d => d.AgentName == agent.Name).Instructions))
             .ToList();

@@ -5,7 +5,7 @@ namespace MeshWeaver.Documentation.AI
     /// <summary>
     /// Base class for TicTacToe players
     /// </summary>
-    public abstract class TicTacToePlayerBase : IAgentWithDelegations
+    public abstract class TicTacToePlayerBase : IAgentWithHandoffs
     {
         /// <summary>
         /// The name of the agent

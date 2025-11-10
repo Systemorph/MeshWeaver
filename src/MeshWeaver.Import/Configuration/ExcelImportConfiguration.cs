@@ -1,5 +1,4 @@
-using System.ComponentModel.DataAnnotations;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 
 namespace MeshWeaver.Import.Configuration;
 
@@ -13,10 +12,10 @@ public class ExcelImportConfiguration : ImportConfiguration
     }
 
     [SetsRequiredMembers]
-    public ExcelImportConfiguration(string name, string entityId, string worksheetName, int dataStartRow, HashSet<string> totalRowMarkers, bool totalRowScanAllCells, bool totalRowMatchExact, List<string> ignoreRowExpressions)
+    public ExcelImportConfiguration(string name, string address, string worksheetName, int dataStartRow, HashSet<string> totalRowMarkers, bool totalRowScanAllCells, bool totalRowMatchExact, List<string> ignoreRowExpressions)
     {
         Name = name;
-        EntityId = entityId;
+        Address = address;
         WorksheetName = worksheetName;
         DataStartRow = dataStartRow;
         TotalRowMarkers = totalRowMarkers;

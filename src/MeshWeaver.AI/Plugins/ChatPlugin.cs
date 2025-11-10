@@ -68,7 +68,10 @@ public class ChatPlugin
         string targetAgentDescription,
         ILogger? logger = null)
     {
-        string DelegateToAgent([Description("The message/instructions to send to the specialized agent")] string message)
+        string DelegateToAgent([Description("The message/instructions to send to the specialized agent. " +
+            "CRITICAL: After calling this function, DO NOT output any additional text. " +
+            "The specialized agent will handle the request and provide all necessary output to the user. " +
+            "Your job is complete once you call this delegation function.")] string message)
         {
             logger?.LogInformation("Delegation requested to {TargetAgent} with message: {Message}",
                 targetAgentName, message);
@@ -79,9 +82,14 @@ public class ChatPlugin
         }
 
         // Create the tool with a custom name and description
+        // Add instruction to not continue after delegation
+        var enhancedDescription = targetAgentDescription +
+            " IMPORTANT: After delegating to this agent, you should not provide any additional output. " +
+            "The specialist agent will handle everything and communicate directly with the user.";
+
         return AIFunctionFactory.Create(
             DelegateToAgent,
             name: targetAgentName,
-            description: targetAgentDescription);
+            description: enhancedDescription);
     }
 }

@@ -37,7 +37,7 @@ public class MicrosoftImportTests(ITestOutputHelper output) : InsuranceTestBase(
     private static readonly ExcelImportConfiguration Config = new()
     {
         Name = "Microsoft.xlsx",
-        EntityId = MicrosoftPricingId,
+        Address = $"pricing/{MicrosoftPricingId}",
         TypeName = nameof(PropertyRisk), // Auto-generate entity builder for PropertyRisk
         //WorksheetName = "Locations", // Adjust based on actual worksheet name
         DataStartRow = 7, // Assuming row 1 is headers

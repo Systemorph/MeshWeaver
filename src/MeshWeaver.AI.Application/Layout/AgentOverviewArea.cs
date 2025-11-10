@@ -85,7 +85,7 @@ public class AgentOverviewViewModel
             var defaultNodeId = GetNodeId(defaultAgent.Name);
 
             // Add delegations from default agent to explicitly configured delegations
-            if (defaultAgent is IAgentWithDelegations defaultDelegating)
+            if (defaultAgent is IAgentWithHandoffs defaultDelegating)
             {
                 foreach (var delegation in defaultDelegating.Delegations)
                 {
@@ -124,7 +124,7 @@ public class AgentOverviewViewModel
         // Add delegations from other agents
         foreach (var agent in agents)
         {
-            if (agent is IAgentWithDelegations delegating && agent != defaultAgent)
+            if (agent is IAgentWithHandoffs delegating && agent != defaultAgent)
             {
                 var sourceNodeId = GetNodeId(agent.Name);
 
@@ -207,7 +207,7 @@ public class AgentOverviewViewModel
 
     private static bool IsDirectlyReachableViaDelegation(IAgentDefinition agent, IAgentDefinition? defaultAgent)
     {
-        if (defaultAgent is not IAgentWithDelegations delegatingAgent)
+        if (defaultAgent is not IAgentWithHandoffs delegatingAgent)
             return false;
 
         return delegatingAgent.Delegations.Any(d => d.AgentName == agent.Name);

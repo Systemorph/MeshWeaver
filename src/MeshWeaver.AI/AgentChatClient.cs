@@ -285,6 +285,8 @@ public class AgentChatClient(
                                         }
                                     }
 
+                                    // NOTE: After target agent completes, the original agent's stream will continue
+                                    // and any remaining updates from the original agent will be yielded below
                                     // Thread is already saved at the end of the outer streaming loop
                                 }
                                 else

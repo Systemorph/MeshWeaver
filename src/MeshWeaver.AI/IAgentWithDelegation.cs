@@ -3,7 +3,7 @@
 /// <summary>
 /// Interface for agents that can delegate to other agents
 /// </summary>
-public interface IAgentWithDelegations : IAgentDefinition
+public interface IAgentWithHandoffs : IAgentDefinition
 {
     IEnumerable<DelegationDescription> Delegations { get; }
 }

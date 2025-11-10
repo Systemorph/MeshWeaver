@@ -5,7 +5,7 @@
 /// </summary>
 [DefaultAgent]
 public class MeshNavigator(Lazy<IEnumerable<IAgentDefinition>> agentDefinitions)
-    : IAgentDefinition, IAgentWithDelegations
+    : IAgentDefinition, IAgentWithHandoffs
 {
     public string Name => "MeshNavigator";
 

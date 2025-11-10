@@ -9,13 +9,13 @@ namespace MeshWeaver.Import.Configuration;
 public class ImportConfiguration
 {
     /// <summary>
-    /// Unique identifier for this configuration (e.g., file name).
+    /// Unique identifier for this configuration (e.g., file name). Don't start with /.
     /// </summary>
     [Key]
     public required string Name { get; init; }
 
     /// <summary>
-    /// Entity identifier that this configuration applies to (e.g., PricingId, ProjectId, etc.).
+    /// Address to which this configuration applies (e.g., pricing/{pricingId}, project/{projectId}, etc.).
     /// </summary>
-    public required string EntityId { get; init; }
+    public required string Address { get; init; }
 }

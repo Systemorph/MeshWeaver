@@ -13,7 +13,7 @@ namespace MeshWeaver.Insurance.AI;
 /// Main Insurance agent that provides access to insurance pricing data and collections.
 /// </summary>
 [ExposedInDefaultAgent]
-public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithDelegations
+public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext, IAgentWithHandoffs
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private Dictionary<string, LayoutAreaDefinition>? layoutAreaMap;
