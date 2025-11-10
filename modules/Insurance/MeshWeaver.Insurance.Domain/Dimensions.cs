@@ -1,4 +1,5 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Insurance.Domain;
 
@@ -6,7 +7,7 @@ namespace MeshWeaver.Insurance.Domain;
 /// Line of business dimension for insurance classification.
 /// </summary>
 [Display(GroupName = "Reference Data")]
-public record LineOfBusiness
+public record LineOfBusiness : INamed
 {
     /// <summary>
     /// Line of business code.
@@ -17,19 +18,22 @@ public record LineOfBusiness
     /// <summary>
     /// Display name for the line of business.
     /// </summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     /// <summary>
     /// Description of the line of business.
     /// </summary>
     public string? Description { get; init; }
+
+    string INamed.DisplayName => Name;
+
 }
 
 /// <summary>
 /// Country dimension for geographic classification.
 /// </summary>
 [Display(GroupName = "Reference Data")]
-public record Country
+public record Country : INamed
 {
     /// <summary>
     /// Country code (typically ISO 3166-1 alpha-2).
@@ -40,7 +44,7 @@ public record Country
     /// <summary>
     /// Full country name.
     /// </summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     /// <summary>
     /// ISO 3166-1 alpha-3 code.
@@ -51,13 +55,16 @@ public record Country
     /// Geographic region.
     /// </summary>
     public string? Region { get; init; }
+
+    string INamed.DisplayName => Name;
+
 }
 
 /// <summary>
 /// Legal entity dimension for organizational structure.
 /// </summary>
 [Display(GroupName = "Reference Data")]
-public record LegalEntity
+public record LegalEntity : INamed
 {
     /// <summary>
     /// Legal entity identifier.
@@ -68,7 +75,7 @@ public record LegalEntity
     /// <summary>
     /// Full legal name of the entity.
     /// </summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     /// <summary>
     /// Country of incorporation.
@@ -79,13 +86,16 @@ public record LegalEntity
     /// Entity type (e.g., Corporation, LLC, Partnership).
     /// </summary>
     public string? EntityType { get; init; }
+
+    string INamed.DisplayName => Name;
+
 }
 
 /// <summary>
 /// Currency dimension for monetary values.
 /// </summary>
 [Display(GroupName = "Reference Data")]
-public record Currency
+public record Currency : INamed
 {
     /// <summary>
     /// Currency code (ISO 4217).
@@ -96,7 +106,7 @@ public record Currency
     /// <summary>
     /// Full currency name.
     /// </summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     /// <summary>
     /// Currency symbol.
@@ -107,4 +117,7 @@ public record Currency
     /// Number of decimal places typically used.
     /// </summary>
     public int? DecimalPlaces { get; init; }
+
+    string INamed.DisplayName => Name;
+
 }

@@ -73,6 +73,10 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - Use null or default values for missing data points
                 - Ensure all monetary values are properly formatted as numbers
                 - Convert percentages to decimal format (e.g., 25% → 0.25)
+                - **Reference Data Matching**: When you extract Country, LineOfBusiness, or LegalEntity from the document:
+                  - Use DataPlugin's GetData function to retrieve available reference data (see # Reference Data Lookup section below)
+                  - Match the extracted text to the appropriate reference data Id
+                  - Use the exact Id value from the reference data when populating Pricing fields
                 - Provide clear feedback on what data was successfully extracted
                 - If data is ambiguous or unclear, note it in your response
 
@@ -120,6 +124,19 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - When updating data, ensure each JSON object has the correct $type field and required ID fields (id, pricingId, acceptanceId, etc.)
                 - Remove null-valued properties from JSON before calling UpdateData
                 - DO NOT ask for user confirmation before importing - proceed directly with the import
+
+                # Reference Data Lookup
+                When populating LineOfBusiness, Country, or LegalEntity fields in the Pricing data:
+                1. First, use DataPlugin's GetData function to retrieve the available reference data:
+                   - For LineOfBusiness: call GetData with type="LineOfBusiness"
+                   - For Country: call GetData with type="Country"
+                   - For LegalEntity: call GetData with type="LegalEntity"
+                2. Review the available options (Id, Name, Description fields)
+                3. Match the extracted text from the document to the appropriate reference data Id
+                   - Example: If document says "United States", find the matching Country Id (e.g., "US")
+                   - Example: If document says "Property", find the matching LineOfBusiness Id
+                4. Use the exact Id value when populating the Pricing fields
+                5. If no exact match exists, choose the closest match or leave the field null
                 """;
 
             if (pricingSchema is not null)
