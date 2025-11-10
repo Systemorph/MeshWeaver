@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using MeshWeaver.Import.Configuration;
 
 namespace MeshWeaver.Insurance.Domain.Services;
@@ -84,14 +84,12 @@ public class InMemoryPricingService : IPricingService
 
     public void UpsertImportConfiguration(ExcelImportConfiguration configuration)
     {
-        if (configuration.EntityId == null) return;
-
-        if (!_importConfigs.ContainsKey(configuration.EntityId))
+        if (!_importConfigs.ContainsKey(configuration.Address))
         {
-            _importConfigs[configuration.EntityId] = new List<ExcelImportConfiguration>();
+            _importConfigs[configuration.Address] = new List<ExcelImportConfiguration>();
         }
 
-        var configList = _importConfigs[configuration.EntityId];
+        var configList = _importConfigs[configuration.Address];
         var existing = configList.FirstOrDefault(c => c.Name == configuration.Name);
         if (existing != null)
         {
