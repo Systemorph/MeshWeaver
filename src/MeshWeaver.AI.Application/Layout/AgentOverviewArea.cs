@@ -1,5 +1,4 @@
-﻿#nullable enable
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,7 +57,7 @@ public class AgentOverviewViewModel
         {
             var nodeId = GetNodeId(agent.Name);
             var name = EscapeForMermaid(agent.Name.Wordify());
-            var description = EscapeForMermaid(agent.Description ?? string.Empty);
+            var description = EscapeForMermaid(agent.Description);
             var isDefault = agent == defaultAgent;
             var isDirectlyReachable = IsDirectlyReachableFromDefault(agent, defaultAgent);
 

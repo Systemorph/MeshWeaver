@@ -54,7 +54,6 @@ public static class PricingOverviewLayoutArea
             "### Classification",
             $"- **Line of Business:** {pricing.LineOfBusiness ?? "N/A"}",
             $"- **Country:** {pricing.Country ?? "N/A"}",
-            $"- **Legal Entity:** {pricing.LegalEntity ?? "N/A"}",
             "",
             "### Parties",
             $"- **Broker:** {pricing.BrokerName ?? "N/A"}",

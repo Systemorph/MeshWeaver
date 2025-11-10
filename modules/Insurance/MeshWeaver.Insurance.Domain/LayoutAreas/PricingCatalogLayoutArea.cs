@@ -41,7 +41,7 @@ public static class PricingCatalogLayoutArea
                 var link = $"[{p.InsuredName}](/pricing/{p.Id}/Overview)";
                 var inception = p.InceptionDate?.ToString("yyyy-MM-dd") ?? "-";
                 var expiration = p.ExpirationDate?.ToString("yyyy-MM-dd") ?? "-";
-                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {p.LegalEntity ?? "-"} | {inception} | {expiration} |  {p.Status ?? "-"} |";
+                return $"| {link} | {p.LineOfBusiness ?? "-"} | {p.Country ?? "-"} | {inception} | {expiration} |  {p.Status ?? "-"} |";
             }));
 
         return string.Join("\n", lines);
