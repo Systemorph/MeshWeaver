@@ -46,13 +46,36 @@ public class SlipImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                       - Show a brief summary of the document to the user so they know what you're working with
                    2) Review the extracted document text and identify data that matches the domain schemas
                    3) Create JSON objects for each entity type following the schemas below
-                   4) Proceed with the import immediately - DO NOT ask for user confirmation
-                      - Import the data using DataPlugin's UpdateData function:
-                      - First, retrieve existing Pricing data using DataPlugin's GetData with type="Pricing" and entityId=pricingId
-                      - Merge new pricing fields with existing data and call DataPlugin's UpdateData with type="Pricing"
-                      - For each ReinsuranceAcceptance (layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceAcceptance"
-                      - For each ReinsuranceSection (coverage within layer), create JSON and call DataPlugin's UpdateData with type="ReinsuranceSection"
-                   5) After the import completes, provide a summary of what data was successfully imported (pricing details, number of layers/sections, any issues encountered)
+                   4) Proceed with the import immediately - DO NOT ask for user confirmation. Import in this specific order:
+
+                      **Step 4a: Update Pricing Entity**
+                      - First, retrieve existing Pricing data: call DataPlugin's GetData with type="Pricing" and entityId=pricingId
+                      - Extract the existing Pricing JSON and parse it
+                      - Create a new Pricing JSON object by merging:
+                        * Keep the existing "id" field
+                        * Add/update extracted fields: InsuredName, BrokerName, PrimaryInsurance, InceptionDate, ExpirationDate, LineOfBusiness, Country, LegalEntity, Currency
+                      - Call DataPlugin's UpdateData with type="Pricing" and the complete merged JSON
+
+                      **Step 4b: Load Existing Reinsurance Data**
+                      - Before creating new ReinsuranceAcceptance and ReinsuranceSection records, load existing data to understand what's already there:
+                        * Call DataPlugin's GetData with type="ReinsuranceAcceptance" (no entityId) to get all existing layers
+                        * Call DataPlugin's GetData with type="ReinsuranceSection" (no entityId) to get all existing sections
+                      - Review existing records to avoid duplicate IDs and understand current structure
+                      - You can either:
+                        * Update existing records if they match the slip data (use same IDs)
+                        * Create new records with unique IDs if they're additional layers/sections
+
+                      **Step 4c: Create/Update ReinsuranceAcceptance Records (Layers)**
+                      - For each layer (Layer 1, Layer 2, Layer 3), create a JSON object with required fields:
+                        * id, pricingId, name, epi, brokerage (and other financial terms)
+                      - Call DataPlugin's UpdateData with type="ReinsuranceAcceptance" for each layer
+
+                      **Step 4d: Create/Update ReinsuranceSection Records (Coverage Types)**
+                      - For each coverage type within each layer, create a JSON object with required fields:
+                        * id, acceptanceId, name, lineOfBusiness, attach, limit, aggAttach, aggLimit
+                      - Call DataPlugin's UpdateData with type="ReinsuranceSection" for each section
+
+                   5) After ALL import steps complete (Pricing update + loading existing data + all layers + all sections), provide a summary of what data was successfully imported
 
                    # Data Mapping Guidelines
                    Based on the extracted document text, create JSON objects that match the schemas provided below:
