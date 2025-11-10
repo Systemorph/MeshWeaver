@@ -238,7 +238,6 @@ public static class SampleDataProvider
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "US",
-                LegalEntity = "MW-US",
                 Currency = "USD",
                 Status = "Bound"
             },
@@ -251,7 +250,6 @@ public static class SampleDataProvider
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "GB",
-                LegalEntity = "MW-UK",
                 Currency = "GBP",
                 Status = "Quoted"
             },
@@ -264,7 +262,6 @@ public static class SampleDataProvider
                 UnderwritingYear = 2024,
                 LineOfBusiness = "PROP",
                 Country = "DE",
-                LegalEntity = "MW-EU",
                 Currency = "EUR",
                 Status = "Draft"
             },
@@ -275,7 +272,6 @@ public static class SampleDataProvider
                 UnderwritingYear = 2026,
                 LineOfBusiness = "PROP",
                 Country = "US",
-                LegalEntity = "MW-US",
                 Currency = "USD",
                 Status = "Bound"
             }

@@ -43,12 +43,6 @@ public record Pricing
     public string? Country { get; init; }
 
     /// <summary>
-    /// Legal entity identifier (dimension).
-    /// </summary>
-    [Dimension<LegalEntity>]
-    public string? LegalEntity { get; init; }
-
-    /// <summary>
     /// Name of the insured party.
     /// </summary>
     public string? InsuredName { get; init; }
