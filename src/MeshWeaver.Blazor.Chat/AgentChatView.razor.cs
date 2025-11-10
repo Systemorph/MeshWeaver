@@ -333,9 +333,6 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
         isGeneratingResponse = true;
         StateHasChanged(); // Ensure the UI updates to show the loading indicator
 
-
-
-
         try
         {
             if (UseStreaming)
@@ -397,10 +394,11 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
             }
 
+            StateHasChanged();
+
             if (currentResponseMessage != null)
                 ChatMessageItem.NotifyChanged(currentResponseMessage);
 
-            StateHasChanged();
         }
 
     }
@@ -431,7 +429,10 @@ public partial class AgentChatView : BlazorView<AgentChatControl, AgentChatView>
                 // Start new message with new author
                 lastRole = currentAuthor;
                 responseText = new TextContent(update.Text);
-                currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
+                currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText])
+                {
+                    AuthorName = currentAuthor
+                };
             }
 
             if (currentResponseMessage != null)
