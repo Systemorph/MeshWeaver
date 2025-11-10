@@ -9,7 +9,7 @@ using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.Insurance.AI;
 
-public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools, IAgentWithContext
+public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTools
 {
     private Dictionary<string, TypeDescription>? typeDefinitionMap;
     private string? propertyRiskSchema;
@@ -116,11 +116,6 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
 
             return baseText;
         }
-    }
-
-    public bool Matches(AgentContext? context)
-    {
-        return context?.Address?.Type == PricingAddress.TypeName;
     }
 
     IEnumerable<AITool> IAgentWithTools.GetTools(IAgentChat chat)

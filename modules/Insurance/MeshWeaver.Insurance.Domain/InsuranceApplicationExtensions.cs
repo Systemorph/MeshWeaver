@@ -114,11 +114,16 @@ public static class InsuranceApplicationExtensions
                         return pricing is null ? [] : [pricing];
                     }))
                     .WithType<PropertyRisk>(t => t.WithInitialData(async ct =>
-                        (IEnumerable<PropertyRisk>)await svc.GetRisksAsync(pricingId, ct)))
+                        await svc.GetRisksAsync(pricingId, ct)))
                     .WithType<ReinsuranceAcceptance>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceAcceptance>())))
                     .WithType<ReinsuranceSection>(t => t.WithInitialData(_ => Task.FromResult(Enumerable.Empty<ReinsuranceSection>())))
                     .WithType<ExcelImportConfiguration>(t => t.WithInitialData(async ct =>
                         await svc.GetImportConfigurationsAsync(pricingId).ToArrayAsync(ct)))
+                    // Add dimension data mappings
+                    .WithType<LineOfBusiness>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLinesOfBusiness())))
+                    .WithType<Country>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCountries())))
+                    .WithType<LegalEntity>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetLegalEntities())))
+                    .WithType<Currency>(t => t.WithInitialData(_ => Task.FromResult(SampleDataProvider.GetCurrencies())))
                 );
             })
             .AddLayout(l => l

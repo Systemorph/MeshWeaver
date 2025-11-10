@@ -151,10 +151,29 @@ public class InsuranceAgent(IMessageHub hub) : IInitializableAgent, IAgentWithTo
         ## Working with Pricing Data
 
         When users ask about pricing entities, risks, or dimensions (NOT files):
-        1. Use the DataPlugin to get available data (function: {{{nameof(DataPlugin.GetData)}}}) with the appropriate type:
-            {{{nameof(Pricing)}}}, {{{nameof(PropertyRisk)}}}, {{{nameof(LineOfBusiness)}}}, {{{nameof(Country)}}}, {{{nameof(LegalEntity)}}}, {{{nameof(Currency)}}}
-        2. When asked to modify an entity, load it using {{{nameof(DataPlugin.GetData)}}} with the entityId parameter,
-           modify it, and save it back using {{{nameof(DataPlugin.UpdateData)}}}.
+        1. Use the DataPlugin to get available data with the {{{nameof(DataPlugin.GetData)}}} function:
+           - **Syntax**: {{{nameof(DataPlugin.GetData)}}}(type: nameof(EntityType), entityId: null)
+           - **Available types**:
+             - nameof({{{nameof(Pricing)}}}) - Get pricing header information
+             - nameof({{{nameof(PropertyRisk)}}}) - Get property risks for the current pricing
+             - nameof({{{nameof(LineOfBusiness)}}}) - Get available lines of business (dimensions)
+             - nameof({{{nameof(Country)}}}) - Get available countries (dimensions)
+             - nameof({{{nameof(LegalEntity)}}}) - Get available legal entities (dimensions)
+             - nameof({{{nameof(Currency)}}}) - Get available currencies (dimensions)
+           - **Examples**:
+             - Get all property risks: {{{nameof(DataPlugin.GetData)}}}(type: "nameof(PropertyRisk)", entityId: null)
+             - Get all countries: {{{nameof(DataPlugin.GetData)}}}(type: "nameof(Country)", entityId: null)
+             - Get specific pricing: {{{nameof(DataPlugin.GetData)}}}(type: "nameof(Pricing)", entityId: "reinsurer-2025")
+
+        2. When asked to modify an entity:
+           - Load it using {{{nameof(DataPlugin.GetData)}}} with the entityId parameter
+           - Modify the entity as needed
+           - Save it back using {{{nameof(DataPlugin.UpdateData)}}}
+
+        3. **IMPORTANT**: The agent has direct access to dimension data (countries, currencies, legal entities, lines of business)
+           - You do NOT need to wrap geocoding requests or other operations
+           - Simply use {{{nameof(DataPlugin.GetData)}}} to retrieve dimension data when needed
+           - The data is already available in the current pricing context
 
         ## Displaying Layout Areas
 
