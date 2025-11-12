@@ -53,11 +53,12 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                    - Identify the header row and extract the table start row
                    - Map column letters to PropertyRisk properties according to the schema provided below
                    - Ensure the JSON includes "name" field set to the filename and "typeName" set to "PropertyRisk"
-                4) Proceed with the import immediately - DO NOT ask for user confirmation
+                4) IMMEDIATELY proceed with the import - NEVER ask for user confirmation or approval
                    - Call ContentPlugin's Import function with: path=filename, collection=null, address=PricingAddress, format=null, configuration=the JSON configuration, snapshot=true
                    - IMPORTANT: Always pass collection=null (it will be inferred from context)
                    - IMPORTANT: Always pass format=null since the configuration parameter contains all necessary import settings
                    - IMPORTANT: Always pass snapshot=true to create a snapshot of the imported data
+                   - CRITICAL: DO NOT present the configuration to the user and ask "Would you like me to proceed?" - just proceed directly with calling the Import function
                    - The Import function will automatically save the configuration to the hub if it's valid, so you don't need to call UpdateData separately.
                    - After the import completes, provide a summary of what was imported (number of risks, any issues encountered)
 
@@ -68,13 +69,16 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - Identify what the user wants to change (e.g., "map column F to TotalSumInsured", "change tableStartRow to 3", "add column G to tsiContent")
                 - Make ONLY the requested changes to the existing configuration
                 - Keep all other mappings and settings unchanged
+                - IMMEDIATELY call ContentPlugin's Import function with the updated configuration - DO NOT ask for confirmation
                 - Example scenarios:
                   - User: "map column F to TotalSumInsured instead of column E"
-                    → Load existing config, find the TotalSumInsured mapping, change sourceColumn from "E" to "F", keep everything else
+                    → Load existing config, find the TotalSumInsured mapping, change sourceColumn from "E" to "F", keep everything else, IMMEDIATELY import
                   - User: "add column G to tsiContent"
-                    → Load existing config, find the tsiContent mapping, add "G" to the sourceColumns list, keep everything else
+                    → Load existing config, find the tsiContent mapping, add "G" to the sourceColumns list, keep everything else, IMMEDIATELY import
                   - User: "remove the Id mapping"
-                    → Load existing config, remove the mapping with targetProperty="Id", keep everything else
+                    → Load existing config, remove the mapping with targetProperty="Id", keep everything else, IMMEDIATELY import
+                  - User: "for tsiBI, take cell C3 and allocate with column Q"
+                    → Load existing config, add or update the allocation for tsiBi with totalCell="C3" and weightColumns=["Q"], IMMEDIATELY import
 
                 # Creating Risk Import Configuration from File Preview
 
@@ -104,9 +108,11 @@ public class RiskImportAgent(IMessageHub hub) : IInitializableAgent, IAgentWithT
                 - Provide only the file name (e.g., "risks.xlsx"); it is resolved relative to the pricing's content collection.
 
                 IMPORTANT OUTPUT RULES:
-                - do not output JSON to the user.
-                - When the user asks you to import, your job is not finished by creating the risk import configuration. You will actually have to call ContentPlugin's Import function.
-                - DO NOT ask for user confirmation before importing - proceed directly with the import after creating the configuration.
+                - Do not output JSON configuration to the user unless specifically asked to show the configuration.
+                - When the user asks you to import or make changes to an import, your job is NOT finished by creating or updating the configuration. You MUST call ContentPlugin's Import function.
+                - CRITICAL: DO NOT ask "Would you like me to proceed with the import?" or any similar confirmation question.
+                - CRITICAL: DO NOT present the configuration and wait for approval. Just proceed directly with calling the Import function.
+                - After making ANY changes to an import configuration (whether initial import or corrections), IMMEDIATELY call the Import function without asking.
                 """;
 
             if (excelImportConfigSchema is not null)
