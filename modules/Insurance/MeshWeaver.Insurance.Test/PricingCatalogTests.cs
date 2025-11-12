@@ -8,7 +8,6 @@ using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
-using Xunit;
 
 namespace MeshWeaver.Insurance.Test;
 
@@ -56,14 +55,12 @@ public class PricingCatalogTests(ITestOutputHelper output) : InsuranceTestBase(o
 
         pricings.All(p => !string.IsNullOrWhiteSpace(p.LineOfBusiness)).Should().BeTrue("all pricings should have a LineOfBusiness");
         pricings.All(p => !string.IsNullOrWhiteSpace(p.Country)).Should().BeTrue("all pricings should have a Country");
-        pricings.All(p => !string.IsNullOrWhiteSpace(p.LegalEntity)).Should().BeTrue("all pricings should have a LegalEntity");
         pricings.All(p => !string.IsNullOrWhiteSpace(p.Currency)).Should().BeTrue("all pricings should have a Currency");
 
         // Output dimension information
         Output.WriteLine("Pricing dimensions:");
         Output.WriteLine($"  Lines of Business: {string.Join(", ", pricings.Select(p => p.LineOfBusiness).Distinct())}");
         Output.WriteLine($"  Countries: {string.Join(", ", pricings.Select(p => p.Country).Distinct())}");
-        Output.WriteLine($"  Legal Entities: {string.Join(", ", pricings.Select(p => p.LegalEntity).Distinct())}");
         Output.WriteLine($"  Currencies: {string.Join(", ", pricings.Select(p => p.Currency).Distinct())}");
     }
 

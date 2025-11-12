@@ -56,7 +56,7 @@ Agentic AI refers to AI systems that can:
 ## Who is the Human, Who is the Agent?
 
 <div style="text-align: center; overflow: hidden; max-width: 800px; margin: 0 auto;">
-  <img src="static/Documentation/images/Human_vs_bot.png" alt="Human looking in mirror sees robot" style="width: 100%; height: 450px; object-fit: cover; object-position: center top;" />
+  <img src="app/Documentation/static/Blog/images/Human_vs_bot.png" alt="Human looking in mirror sees robot" style="width: 100%; height: 450px; object-fit: cover; object-position: center top;" />
 </div>
 
 Finding the right work distribution between humans and agents is critical. When misaligned, we risk reversing roles—with humans doing the repetitive work while agents handle creative tasks.
