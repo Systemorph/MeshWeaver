@@ -18,6 +18,8 @@
       <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" />
       <PackageReference Include="Azure.Identity" />
       <PackageReference Include="Aspire.Npgsql" />
+      <PackageReference Include="Microsoft.EntityFrameworkCore" />
+      <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
       <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
       <PackageReference Include="Serilog.Sinks.PostgreSQL" />
   </ItemGroup>
