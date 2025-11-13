@@ -22,6 +22,5 @@
   <ItemGroup>
       <PackageReference Include="Microsoft.Playwright" />
       <PackageReference Include="System.CommandLine" />
-      <PackageReference Include="System.CommandLine.NamingConventionBinder" />
   </ItemGroup>
 </Project>

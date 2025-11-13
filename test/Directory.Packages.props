@@ -4,11 +4,10 @@
     <!-- Test-specific packages not in root Directory.Packages.props -->
     <PackageVersion Include="FluentAssertions.Json" Version="8.0.0" />
     <PackageVersion Include="JsonDiffPatch.Net" Version="2.3.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="9.0.9" />
+    <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Orleans.TestingHost" Version="9.2.1" />
-    <PackageVersion Include="Testcontainers" Version="4.7.0" />
-    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.7.0" />
-    <PackageVersion Include="Verify.XunitV3" Version="30.19.1" />
+    <PackageVersion Include="Testcontainers" Version="4.8.1" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.8.1" />
   </ItemGroup>
 </Project>
