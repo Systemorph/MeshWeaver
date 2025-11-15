@@ -49,106 +49,95 @@ public static class SupplierSummaryArea
         public string Display { get; init; } = Table;
     }
 
-    /// <summary>
-    /// Renders supplier performance analysis with toolbar controls for year filtering and view switching.
-    /// Features radio buttons to toggle between "Table" and "Chart" views, plus year selection dropdown.
-    /// Table view shows detailed supplier data in a grid format, while Chart view displays the same data
-    /// as a horizontal bar chart. Both views show monthly revenue breakdown by supplier with year filtering.
-    /// </summary>
     /// <param name="layoutArea">The layout area host.</param>
-    /// <param name="context">The rendering context.</param>
-    /// <returns>A toolbar interface with either a data grid or bar chart showing supplier performance.</returns>
-    public static UiControl? SupplierSummary(
-        this LayoutAreaHost layoutArea,
-        RenderingContext context
-    )
+    extension(LayoutAreaHost layoutArea)
     {
-        layoutArea.SubscribeToDataStream(SupplierSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
-        return layoutArea.Toolbar(new SupplierSummaryToolbar(),
-            (toolbar, area, _) => toolbar.Display
+        /// <summary>
+        /// Renders supplier performance analysis with toolbar controls for year filtering and view switching.
+        /// Features radio buttons to toggle between "Table" and "Chart" views, plus year selection dropdown.
+        /// Table view shows detailed supplier data in a grid format, while Chart view displays the same data
+        /// as a horizontal bar chart. Both views show monthly revenue breakdown by supplier with year filtering.
+        /// </summary>
+        /// <returns>A toolbar interface with either a data grid or bar chart showing supplier performance.</returns>
+        public UiControl SupplierSummary(RenderingContext _)
+        {
+            layoutArea.SubscribeToDataStream(SupplierSummaryToolbar.Years, layoutArea.GetAllYearsOfOrders());
+            return layoutArea.Toolbar(new SupplierSummaryToolbar(),
+                (toolbar, area, _) => toolbar.Display
                     switch
                     {
                         SupplierSummaryToolbar.Chart => area.SupplierSummaryChart(toolbar),
                         _ => area.SupplierSummaryGrid(toolbar)
                     }
             );
+        }
+
+        /// <summary>
+        /// Generates the grid view for the supplier summary.
+        /// </summary>
+        /// <param name="toolbar">The toolbar .</param>
+        /// <returns>An observable object representing the supplier summary grid.</returns>
+        private IObservable<UiControl> SupplierSummaryGrid(SupplierSummaryToolbar toolbar
+        ) =>
+            layoutArea.GetPivotBuilder(toolbar)
+                .SelectMany(builder => builder.ToGrid());
+
+        /// <summary>
+        /// Generates the grid view for the supplier summary.
+        /// </summary>
+        /// <param name="toolbar">The toolbar for this area.</param>
+        /// <returns>An observable object representing the supplier summary grid.</returns>
+        private IObservable<UiControl> SupplierSummaryChart(SupplierSummaryToolbar toolbar
+        ) =>
+            layoutArea.GetPivotBuilder(toolbar)
+                .SelectMany(builder => builder.ToBarChart()).Select(x => x.ToControl());
+
+        private IObservable<DataCubePivotBuilder<IDataCube<NorthwindDataCube>, NorthwindDataCube, NorthwindDataCube, NorthwindDataCube>>
+            GetPivotBuilder(SupplierSummaryToolbar toolbar)
+        {
+            return layoutArea.GetDataCube()
+                .Select(cube =>
+                    layoutArea.Workspace.Pivot(
+                            toolbar.Year == 0
+                                ? cube
+                                : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
+                        )
+                        .SliceRowsBy(nameof(NorthwindDataCube.Supplier))
+                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth)));
+        }
+
+        private IObservable<IDataCube<NorthwindDataCube>> GetDataCube() => layoutArea.GetOrAddVariable("dataCube",
+            () => layoutArea
+                .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
+                .DistinctUntilChanged()
+                .Select(x =>
+                    x.Value!.GetData<Order>()
+                        .Join(
+                            x.Value!.GetData<OrderDetails>(),
+                            o => o.OrderId,
+                            d => d.OrderId,
+                            (order, detail) => (order, detail)
+                        )
+                        .Join(
+                            x.Value!.GetData<Product>(),
+                            od => od.detail.ProductId,
+                            p => p.ProductId,
+                            (od, product) => (od.order, od.detail, product)
+                        )
+                        .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
+                        .ToDataCube()
+                )
+        )!;
+
+        private IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube() => GetDataCube(layoutArea)
+            .CombineLatest(
+                layoutArea.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
+                (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter!, dataCube)) // todo apply DataCubeFilter from stream
+            );
     }
 
-
-    /// <summary>
-    /// Generates the grid view for the supplier summary.
-    /// </summary>
-    /// <param name="area">The layout area host.</param>
-    /// <param name="toolbar">The toolbar .</param>
-    /// <returns>An observable object representing the supplier summary grid.</returns>
-    private static IObservable<UiControl> SupplierSummaryGrid(
-        this LayoutAreaHost area,
-        SupplierSummaryToolbar toolbar
-    ) =>
-        area.GetPivotBuilder(toolbar)
-            .SelectMany(builder => builder.ToGrid());
-
-    /// <summary>
-    /// Generates the grid view for the supplier summary.
-    /// </summary>
-    /// <param name="area">The layout area host.</param>
-    /// <param name="toolbar">The toolbar for this area.</param>
-    /// <returns>An observable object representing the supplier summary grid.</returns>
-    private static IObservable<UiControl> SupplierSummaryChart(
-        this LayoutAreaHost area,
-        SupplierSummaryToolbar toolbar
-    ) => 
-        area.GetPivotBuilder(toolbar)
-            .SelectMany(builder => builder.ToBarChart()).Select(x => x.ToControl());
-
-    private static IObservable<DataCubePivotBuilder<IDataCube<NorthwindDataCube>, NorthwindDataCube, NorthwindDataCube, NorthwindDataCube>> 
-        GetPivotBuilder(this LayoutAreaHost host, SupplierSummaryToolbar toolbar)
-    {
-        return host.GetDataCube()
-            .Select(cube => 
-                host.Workspace.Pivot(
-                toolbar.Year == 0
-                    ? cube
-                    : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
-            )
-            .SliceRowsBy(nameof(NorthwindDataCube.Supplier))
-            .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth)));
-    }
-
-
-    private static IObservable<IDataCube<NorthwindDataCube>> GetDataCube(
-        this LayoutAreaHost host
-    ) => host.GetOrAddVariable("dataCube",
-        () => host
-            .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
-            .DistinctUntilChanged()
-            .Select(x =>
-                x.Value!.GetData<Order>()
-                    .Join(
-                        x.Value!.GetData<OrderDetails>(),
-                        o => o.OrderId,
-                        d => d.OrderId,
-                        (order, detail) => (order, detail)
-                    )
-                    .Join(
-                        x.Value!.GetData<Product>(),
-                        od => od.detail.ProductId,
-                        p => p.ProductId,
-                        (od, product) => (od.order, od.detail, product)
-                    )
-                    .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
-                    .ToDataCube()
-            )
-    )!;
 
     // high level idea of how to do filtered data-cube (12.07.2024, Alexander Kravets)
-    private static IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube(
-        this LayoutAreaHost area
-    ) => GetDataCube(area)
-        .CombineLatest(
-            area.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
-            (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter!, dataCube)) // todo apply DataCubeFilter from stream
-        );
 
     private static (string filter, object value)[] BuildFilterTuples(DataCubeFilter filter, IDataCube dataCube)
     {

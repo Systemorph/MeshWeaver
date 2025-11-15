@@ -295,8 +295,6 @@ public class TemplateGenerator
             "MeshWeaver.AI.AzureFoundry",
             "MeshWeaver.AI.AzureOpenAI",
             "MeshWeaver.Blazor",
-            "MeshWeaver.Blazor.AgGrid",
-            "MeshWeaver.Blazor.ChartJs", 
             "MeshWeaver.Blazor.Chat",
             "MeshWeaver.ContentCollections",
             "MeshWeaver.Data",
