@@ -10,7 +10,7 @@
       <Content Include="properties\launchSettings.json" />
     </ItemGroup>
     <ItemGroup>
-        <ProjectReference Include="..\..\..\src\MeshWeaver.Blazor.AgGrid\MeshWeaver.Blazor.AgGrid.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Connection.Orleans\MeshWeaver.Connection.Orleans.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />

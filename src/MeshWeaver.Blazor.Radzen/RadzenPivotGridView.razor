@@ -1,0 +1,51 @@
+@inherits BlazorView<PivotGridControl, RadzenPivotGridView>
+
+<CascadingValue Value="@themeService">
+    @if (Configuration != null && RawData != null)
+    {
+        <div>
+            <RadzenPivotDataGrid  
+                                 TItem="IDictionary<string, object>"
+                                 Data="@RawData"
+                                 AllowPaging="@ShowPager"
+                                 PageSize="@PageSize"
+                                 ShowColumnsTotals="@Configuration.ShowColumnTotals"
+                                 ShowRowsTotals="@Configuration.ShowRowTotals"
+                                 AllowDrillDown="true"
+                                 AllowSorting="true"
+                                 AllowFiltering="true"
+                                 Style="@Style">
+                <Columns>
+                    @foreach (var dim in Configuration.ColumnDimensions)
+                    {
+                        <RadzenPivotColumn @key="@dim.Field"
+                                          Title="@dim.DisplayName"
+                                          Type="@typeof(object)"
+                                          Property="@PropertyAccess.GetDynamicPropertyExpression(dim.Field, typeof(object))" />
+                    }
+                </Columns>
+                <Rows>
+                    @foreach (var dim in Configuration.RowDimensions)
+                    {
+                        <RadzenPivotRow @key="@dim.Field"
+                                       Title="@dim.DisplayName"
+                                       Type="@typeof(object)"
+                                       Property="@PropertyAccess.GetDynamicPropertyExpression(dim.Field, typeof(object))" />
+                    }
+                </Rows>
+                <Aggregates>
+                    @foreach (var agg in Configuration.Aggregates)
+                    {
+                        <RadzenPivotAggregate @key="@agg.Field"
+                                            Title="@agg.DisplayName"
+                                            Type="@typeof(object)"
+                                            Property="@PropertyAccess.GetDynamicPropertyExpression(agg.Field, typeof(object))"
+                                            Aggregate="@GetAggregateFunction(agg.Function)"
+                                            FormatString="@agg.Format"
+                                            TextAlign="@TextAlign.Right" />
+                    }
+                </Aggregates>
+            </RadzenPivotDataGrid>
+        </div>
+    }
+</CascadingValue>

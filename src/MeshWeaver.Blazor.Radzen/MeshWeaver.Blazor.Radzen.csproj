@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <ProjectGuid>{7f8e3b5d-2c9a-4e6f-8b3d-9a1c5e7f2b4d}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Radzen.Blazor" />
+  </ItemGroup>
+</Project>

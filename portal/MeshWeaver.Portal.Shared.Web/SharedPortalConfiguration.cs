@@ -2,9 +2,9 @@
 using System.Security.Claims;
 using MeshWeaver.AI.AzureFoundry;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.AgGrid;
 using MeshWeaver.Blazor.ChartJs;
 using MeshWeaver.Blazor.GoogleMaps;
+using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.ContentCollections;
@@ -53,6 +53,9 @@ public static class SharedPortalConfiguration
             {
                 opt.DisableImplicitFromServicesParameters = true;
             });
+
+        // Configure Radzen
+        services.AddRadzenServices();
         services.AddPortalAI();
         services.AddMemoryChatPersistence();
 
@@ -129,7 +132,7 @@ public static class SharedPortalConfiguration
                 .ConfigureHub(mesh => mesh
                     .WithType(typeof(PricingAddress), PricingAddress.TypeName)
                     .AddContentCollections()
-                    .AddAgGrid()
+                    .AddRadzenDataGrid()
                     .AddChartJs()
                     .AddGoogleMaps()
                 )
@@ -195,7 +198,10 @@ public static class SharedPortalConfiguration
         app.MapStaticAssets();
         app.MapControllers();
         app.MapRazorComponents<App>()
-            .AddAdditionalAssemblies(typeof(ApplicationPage).Assembly, typeof(Blazor.Chat.AgentChatView).Assembly)
+            .AddAdditionalAssemblies(
+                typeof(ApplicationPage).Assembly,
+                typeof(Blazor.Chat.AgentChatView).Assembly,
+                typeof(RadzenPivotGridView).Assembly)
             .AddInteractiveServerRenderMode();
 
         app.Run();

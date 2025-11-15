@@ -65,8 +65,8 @@
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Arithmetics.Abstractions/MeshWeaver.Arithmetics.Abstractions.csproj" />
     <Project Path="src/MeshWeaver.Arithmetics/MeshWeaver.Arithmetics.csproj" />
-    <Project Path="src/MeshWeaver.Blazor.AgGrid/MeshWeaver.Blazor.AgGrid.csproj" />
     <Project Path="src/MeshWeaver.Blazor.ChartJs/MeshWeaver.Blazor.ChartJs.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Chat/MeshWeaver.Blazor.Chat.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
