@@ -46,14 +46,14 @@ public static class NorthwindDashboardArea
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Sales by category"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SalesOverviewArea.SalesByCategory))), 
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SalesOverviewArea.SalesByCategory))),
                 skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
                     .WithView(Controls.PaneHeader("Supplier Summary"))
-                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SupplierSummaryArea.SupplierSummary))),
-                    skin=>skin.WithXs(12).WithSm(6)
+                    .WithView(Controls.LayoutArea(layoutArea.Hub.Address, nameof(SupplierSummaryArea.SupplierSummary)).WithStyle(s => s.WithWidth("100%"))),
+                    skin => skin.WithXs(12).WithSm(6)
             )
             .WithView(
                 Controls.Stack
