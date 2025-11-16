@@ -7,6 +7,11 @@ public record PivotConfiguration
     public IReadOnlyCollection<PivotAggregate> Aggregates { get; init; } = [];
     public bool ShowRowTotals { get; init; } = true;
     public bool ShowColumnTotals { get; init; } = true;
+    public bool AllowSorting { get; init; } = true;
+    public bool AllowFiltering { get; init; } = true;
+    public bool AllowDrillDown { get; init; } = true;
+    public bool AllowPaging { get; init; } = true;
+    public int PageSize { get; init; } = 50;
 }
 
 public record PivotDimension
@@ -16,6 +21,8 @@ public record PivotDimension
     public required string PropertyPath { get; init; }
     public required string TypeName { get; init; }
     public string? Width { get; init; }
+    public bool Filterable { get; init; } = true;
+    public bool Sortable { get; init; } = true;
 }
 
 public record PivotAggregate
@@ -27,6 +34,7 @@ public record PivotAggregate
     public AggregateFunction Function { get; init; } = AggregateFunction.Sum;
     public string? Format { get; init; }
     public TextAlign TextAlign { get; init; } = TextAlign.Right;
+    public SortOrder? SortOrder { get; init; }
 }
 
 public enum AggregateFunction
@@ -44,4 +52,10 @@ public enum TextAlign
     Center,
     Right,
     Justify
+}
+
+public enum SortOrder
+{
+    Ascending,
+    Descending
 }

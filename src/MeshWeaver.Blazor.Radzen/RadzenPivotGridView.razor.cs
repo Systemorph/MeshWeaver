@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+﻿using System.Linq;
+using System.Text.Json;
 using MeshWeaver.GridModel;
 using Microsoft.AspNetCore.Components;
 using Radzen;
@@ -12,8 +13,8 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
     private PivotConfiguration? Configuration { get; set; }
     private object? RawData { get; set; }
     private Type? DataItemType { get; set; }
-    private bool ShowPager { get; set; } = true;
-    private int PageSize { get; set; } = 50;
+    private bool ShowPager { get; set; }
+    private int PageSize { get; set; }
     private bool _isDarkMode;
 
     protected override async Task OnInitializedAsync()
@@ -53,7 +54,19 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
                 .MakeGenericMethod(listType);
 
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            return deserializeMethod.Invoke(null, new object?[] { jsonElement, options });
+            var deserializedList = deserializeMethod.Invoke(null, new object?[] { jsonElement, options });
+
+            // Convert to IQueryable for Radzen PivotDataGrid
+            if (deserializedList != null)
+            {
+                var asQueryableMethod = typeof(Queryable).GetMethods()
+                    .Where(m => m.Name == nameof(Queryable.AsQueryable) && m.IsGenericMethodDefinition)
+                    .First()
+                    .MakeGenericMethod(DataItemType);
+                return asQueryableMethod.Invoke(null, new[] { deserializedList });
+            }
+
+            return null;
         });
         DataBind(ViewModel.ShowPager, x => x.ShowPager, defaultValue: true);
         DataBind(ViewModel.PageSize, x => x.PageSize, defaultValue: 50);
@@ -95,6 +108,16 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
             GridModel.TextAlign.Right => global::Radzen.TextAlign.Right,
             GridModel.TextAlign.Justify => global::Radzen.TextAlign.Justify,
             _ => global::Radzen.TextAlign.Right
+        };
+    }
+
+    private global::Radzen.SortOrder MapSortOrder(GridModel.SortOrder sortOrder)
+    {
+        return sortOrder switch
+        {
+            GridModel.SortOrder.Ascending => global::Radzen.SortOrder.Ascending,
+            GridModel.SortOrder.Descending => global::Radzen.SortOrder.Descending,
+            _ => global::Radzen.SortOrder.Descending
         };
     }
 

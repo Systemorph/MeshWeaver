@@ -20,11 +20,11 @@
         builder.AddAttribute(1, "Data", RawData);
         builder.AddAttribute(2, "AllowPaging", ShowPager);
         builder.AddAttribute(3, "PageSize", PageSize);
-        builder.AddAttribute(4, "ShowColumnsTotals", Configuration!.ShowColumnTotals);
+        builder.AddAttribute(4, "ShowColumnsTotals", Configuration.ShowColumnTotals);
         builder.AddAttribute(5, "ShowRowsTotals", Configuration.ShowRowTotals);
-        builder.AddAttribute(6, "AllowDrillDown", true);
-        builder.AddAttribute(7, "AllowSorting", true);
-        builder.AddAttribute(8, "AllowFiltering", true);
+        builder.AddAttribute(6, "AllowDrillDown", Configuration.AllowDrillDown);
+        builder.AddAttribute(7, "AllowSorting", Configuration.AllowSorting);
+        builder.AddAttribute(8, "AllowFiltering", Configuration.AllowFiltering);
         builder.AddAttribute(9, "Style", Style);
 
         // Add Columns
@@ -37,6 +37,8 @@
                 columnsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
                 columnsBuilder.AddAttribute(index++, "Width", dim.Width);
                 columnsBuilder.AddAttribute(index++, "Property", dim.Field);
+                columnsBuilder.AddAttribute(index++, "Filterable", dim.Filterable);
+                columnsBuilder.AddAttribute(index++, "Sortable", dim.Sortable);
                 columnsBuilder.CloseComponent();
             }
         }));
@@ -50,6 +52,8 @@
                 rowsBuilder.OpenComponent(index++, typeof(RadzenPivotRow<>).MakeGenericType(DataItemType!));
                 rowsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
                 rowsBuilder.AddAttribute(index++, "Property", dim.Field);
+                rowsBuilder.AddAttribute(index++, "Filterable", dim.Filterable);
+                rowsBuilder.AddAttribute(index++, "Sortable", dim.Sortable);
                 rowsBuilder.CloseComponent();
             }
         }));
@@ -66,6 +70,10 @@
                 aggregatesBuilder.AddAttribute(index++, "Aggregate", GetAggregateFunction(agg.Function));
                 aggregatesBuilder.AddAttribute(index++, "FormatString", agg.Format);
                 aggregatesBuilder.AddAttribute(index++, "TextAlign", MapTextAlign(agg.TextAlign));
+                if (agg.SortOrder.HasValue)
+                {
+                    aggregatesBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(agg.SortOrder.Value));
+                }
                 aggregatesBuilder.CloseComponent();
             }
         }));
