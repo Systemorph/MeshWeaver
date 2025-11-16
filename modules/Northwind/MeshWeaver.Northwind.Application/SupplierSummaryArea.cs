@@ -4,6 +4,7 @@ using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Data;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
+using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
@@ -49,6 +50,16 @@ public static class SupplierSummaryArea
         public string Display { get; init; } = Table;
     }
 
+    /// <summary>
+    /// Simple class to hold pivot data with actual properties for Radzen access
+    /// </summary>
+    private class PivotDataRow
+    {
+        public int Supplier { get; set; }
+        public string OrderMonth { get; set; } = string.Empty;
+        public double Amount { get; set; }
+    }
+
     /// <param name="layoutArea">The layout area host.</param>
     extension(LayoutAreaHost layoutArea)
     {
@@ -77,34 +88,87 @@ public static class SupplierSummaryArea
         /// </summary>
         /// <param name="toolbar">The toolbar .</param>
         /// <returns>An observable object representing the supplier summary grid.</returns>
-        private IObservable<UiControl> SupplierSummaryGrid(SupplierSummaryToolbar toolbar
-        ) =>
-            layoutArea.GetPivotBuilder(toolbar)
-                .SelectMany(builder => builder.ToGrid());
+        private IObservable<UiControl> SupplierSummaryGrid(SupplierSummaryToolbar toolbar) =>
+            layoutArea.GetDataCube()
+                .Select(cube =>
+                {
+                    // Filter by year if specified
+                    var filteredCube = toolbar.Year == 0
+                        ? cube
+                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
+
+                    // Convert data cube to objects with actual properties
+                    var rawData = filteredCube
+                        .Select(item => new PivotDataRow
+                        {
+                            Supplier = item.Supplier,
+                            OrderMonth = item.OrderMonth,
+                            Amount = item.Amount
+                        })
+                        .ToArray();
+
+                    // Create pivot configuration using actual property names
+                    var configuration = new PivotConfiguration
+                    {
+                        RowDimensions = new List<PivotDimension>
+                        {
+                            new PivotDimension
+                            {
+                                Field = nameof(PivotDataRow.Supplier),
+                                DisplayName = "Supplier",
+                                PropertyPath = nameof(PivotDataRow.Supplier),
+                                TypeName = typeof(int).FullName!
+                            }
+                        },
+                        ColumnDimensions = new List<PivotDimension>
+                        {
+                            new PivotDimension
+                            {
+                                Field = nameof(PivotDataRow.OrderMonth),
+                                DisplayName = "Month",
+                                PropertyPath = nameof(PivotDataRow.OrderMonth),
+                                TypeName = typeof(string).FullName!
+                            }
+                        },
+                        Aggregates = new List<PivotAggregate>
+                        {
+                            new PivotAggregate
+                            {
+                                Field = nameof(PivotDataRow.Amount),
+                                DisplayName = "Amount",
+                                PropertyPath = nameof(PivotDataRow.Amount),
+                                TypeName = typeof(double).FullName!,
+                                Function = AggregateFunction.Sum,
+                                Format = "{0:C}",
+                                TextAlign = TextAlign.Right
+                            }
+                        },
+                        ShowRowTotals = true,
+                        ShowColumnTotals = true
+                    };
+
+                    return (UiControl)new PivotGridControl(rawData, configuration);
+                });
 
         /// <summary>
         /// Generates the grid view for the supplier summary.
         /// </summary>
         /// <param name="toolbar">The toolbar for this area.</param>
         /// <returns>An observable object representing the supplier summary grid.</returns>
-        private IObservable<UiControl> SupplierSummaryChart(SupplierSummaryToolbar toolbar
-        ) =>
-            layoutArea.GetPivotBuilder(toolbar)
-                .SelectMany(builder => builder.ToBarChart()).Select(x => x.ToControl());
-
-        private IObservable<DataCubePivotBuilder<IDataCube<NorthwindDataCube>, NorthwindDataCube, NorthwindDataCube, NorthwindDataCube>>
-            GetPivotBuilder(SupplierSummaryToolbar toolbar)
-        {
-            return layoutArea.GetDataCube()
+        private IObservable<UiControl> SupplierSummaryChart(SupplierSummaryToolbar toolbar) =>
+            layoutArea.GetDataCube()
                 .Select(cube =>
-                    layoutArea.Workspace.Pivot(
-                            toolbar.Year == 0
-                                ? cube
-                                : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year))
-                        )
+                {
+                    var filteredCube = toolbar.Year == 0
+                        ? cube
+                        : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
+
+                    return layoutArea.Workspace.Pivot(filteredCube)
                         .SliceRowsBy(nameof(NorthwindDataCube.Supplier))
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth)));
-        }
+                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth));
+                })
+                .SelectMany(builder => builder.ToBarChart())
+                .Select(x => x.ToControl());
 
         private IObservable<IDataCube<NorthwindDataCube>> GetDataCube() => layoutArea.GetOrAddVariable("dataCube",
             () => layoutArea
