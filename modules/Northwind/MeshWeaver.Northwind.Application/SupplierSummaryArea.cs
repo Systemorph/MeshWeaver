@@ -10,7 +10,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
-using MeshWeaver.Reporting.Models;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -112,8 +111,7 @@ public static class SupplierSummaryArea
                     {
                         RowDimensions = new List<PivotDimension>
                         {
-                            new PivotDimension
-                            {
+                            new() {
                                 Field = nameof(PivotDataRow.Supplier),
                                 DisplayName = "Supplier",
                                 PropertyPath = nameof(PivotDataRow.Supplier),
@@ -123,8 +121,7 @@ public static class SupplierSummaryArea
                         },
                         ColumnDimensions = new List<PivotDimension>
                         {
-                            new PivotDimension
-                            {
+                            new() {
                                 Field = nameof(PivotDataRow.OrderMonth),
                                 DisplayName = "Month",
                                 PropertyPath = nameof(PivotDataRow.OrderMonth),
@@ -134,8 +131,7 @@ public static class SupplierSummaryArea
                         },
                         Aggregates = new List<PivotAggregate>
                         {
-                            new PivotAggregate
-                            {
+                            new() {
                                 Field = nameof(PivotDataRow.Amount),
                                 DisplayName = "Amount",
                                 PropertyPath = nameof(PivotDataRow.Amount),
@@ -150,7 +146,8 @@ public static class SupplierSummaryArea
                         ShowColumnTotals = true
                     };
 
-                    return (UiControl)new PivotGridControl(rawData, configuration);
+                    return (UiControl)new PivotGridControl(rawData, configuration)
+                    { Style = "width: 100%;" };
                 });
 
         /// <summary>

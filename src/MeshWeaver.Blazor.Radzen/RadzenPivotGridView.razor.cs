@@ -14,13 +14,13 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
     private Type? DataItemType { get; set; }
     private bool ShowPager { get; set; }
     private int PageSize { get; set; }
-    private bool _isDarkMode;
+    private bool isDarkMode;
 
     protected override async Task OnInitializedAsync()
     {
         await base.OnInitializedAsync();
         var oldTheme = themeService.Theme;
-        _isDarkMode = await IsDarkModeAsync();
+        isDarkMode = await IsDarkModeAsync();
         var newTheme = GetRadzenTheme();
         if (oldTheme != newTheme)
         {
@@ -122,20 +122,21 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
 
     private string GetRadzenTheme()
     {
-        var baseTheme = themeService.Theme ?? "material";
+        return isDarkMode ? "standard-dark" : "standard";
+        //var baseTheme = themeService.Theme ?? "material";
 
-        // Use cached dark mode value from IsDarkModeAsync
-        if (_isDarkMode && !baseTheme.EndsWith("-dark"))
-        {
-            return baseTheme + "-dark";
-        }
+        //// Use cached dark mode value from IsDarkModeAsync
+        //if (isDarkMode && !baseTheme.EndsWith("-dark"))
+        //{
+        //    return baseTheme + "-dark";
+        //}
 
-        // If not in dark mode and theme ends with "-dark", remove it
-        if (!_isDarkMode && baseTheme.EndsWith("-dark"))
-        {
-            return baseTheme.Substring(0, baseTheme.Length - 5);
-        }
+        //// If not in dark mode and theme ends with "-dark", remove it
+        //if (!isDarkMode && baseTheme.EndsWith("-dark"))
+        //{
+        //    return baseTheme.Substring(0, baseTheme.Length - 5);
+        //}
 
-        return baseTheme;
+        //return baseTheme;
     }
 }
