@@ -1,12 +1,14 @@
 @inherits BlazorView<PivotGridControl, RadzenPivotGridView>
 @using System.Collections
 
+<HeadContent>
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/@(GetRadzenTheme()).css" />
+</HeadContent>
+
 <CascadingValue Value="@themeService">
     @if (Configuration != null && RawData != null && DataItemType != null)
     {
-        <div>
-            @RenderPivotGrid()
-        </div>
+        @RenderPivotGrid()
     }
 </CascadingValue>
 
@@ -26,7 +28,7 @@
         builder.AddAttribute(9, "Style", Style);
 
         // Add Columns
-        builder.AddAttribute(10, "Columns", (RenderFragment)(columnsBuilder =>
+        builder.AddAttribute(12, "Columns", (RenderFragment)(columnsBuilder =>
         {
             var index = 0;
             foreach (var dim in Configuration.ColumnDimensions)
@@ -40,7 +42,7 @@
         }));
 
         // Add Rows
-        builder.AddAttribute(11, "Rows", (RenderFragment)(rowsBuilder =>
+        builder.AddAttribute(13, "Rows", (RenderFragment)(rowsBuilder =>
         {
             var index = 0;
             foreach (var dim in Configuration.RowDimensions)
@@ -53,7 +55,7 @@
         }));
 
         // Add Aggregates
-        builder.AddAttribute(12, "Aggregates", (RenderFragment)(aggregatesBuilder =>
+        builder.AddAttribute(14, "Aggregates", (RenderFragment)(aggregatesBuilder =>
         {
             var index = 0;
             foreach (var agg in Configuration.Aggregates)

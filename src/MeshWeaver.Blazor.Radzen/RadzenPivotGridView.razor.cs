@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Text.Json.Nodes;
 using MeshWeaver.GridModel;
 using Microsoft.AspNetCore.Components;
 using Radzen;
@@ -8,19 +7,28 @@ namespace MeshWeaver.Blazor.Radzen;
 
 public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPivotGridView>
 {
-    [Inject] private ThemeService? themeService { get; set; }
+    [Inject] private ThemeService themeService { get; set; } = null!;
 
     private PivotConfiguration? Configuration { get; set; }
     private object? RawData { get; set; }
     private Type? DataItemType { get; set; }
     private bool ShowPager { get; set; } = true;
     private int PageSize { get; set; } = 50;
+    private bool _isDarkMode;
 
-    protected override void OnParametersSet()
+    protected override async Task OnInitializedAsync()
     {
-        base.OnParametersSet();
-        StateHasChanged();
+        await base.OnInitializedAsync();
+        var oldTheme = themeService.Theme;
+        _isDarkMode = await IsDarkModeAsync();
+        var newTheme = GetRadzenTheme();
+        if (oldTheme != newTheme)
+        {
+            themeService.SetTheme(GetRadzenTheme());
+            StateHasChanged();
+        }
     }
+
 
     protected override void BindData()
     {
@@ -88,5 +96,24 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
             GridModel.TextAlign.Justify => global::Radzen.TextAlign.Justify,
             _ => global::Radzen.TextAlign.Right
         };
+    }
+
+    private string GetRadzenTheme()
+    {
+        var baseTheme = themeService.Theme ?? "material";
+
+        // Use cached dark mode value from IsDarkModeAsync
+        if (_isDarkMode && !baseTheme.EndsWith("-dark"))
+        {
+            return baseTheme + "-dark";
+        }
+
+        // If not in dark mode and theme ends with "-dark", remove it
+        if (!_isDarkMode && baseTheme.EndsWith("-dark"))
+        {
+            return baseTheme.Substring(0, baseTheme.Length - 5);
+        }
+
+        return baseTheme;
     }
 }
