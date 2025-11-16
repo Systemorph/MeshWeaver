@@ -94,6 +94,7 @@ namespace MeshWeaver.Northwind.Application
         public int OrderId { get; init; }
 
         [property: Key]
+        [Display(Name = "Count")]
         public int OrderDetailsId { get; init; }
 
         /// <summary>

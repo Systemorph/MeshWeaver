@@ -89,7 +89,7 @@ public static class SupplierSummaryArea
                         : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
 
                     // Use the full NorthwindDataCube with the pivot extension
-                    return (UiControl)filteredCube.ToPivotGrid<NorthwindDataCube>(pivot => pivot
+                    return (UiControl)filteredCube.ToPivotGrid(pivot => pivot
                         .WithRowDimension(nameof(NorthwindDataCube.SupplierName), "Supplier", "200px")
                         .WithColumnDimension(nameof(NorthwindDataCube.OrderMonth), "Month")
                         .WithAggregate(
@@ -101,7 +101,8 @@ public static class SupplierSummaryArea
                         )
                         .WithRowTotals()
                         .WithColumnTotals()
-                    ) with { Style = "width: 100%;" };
+                    ) with
+                    { Style = "width: 100%;" };
                 });
 
         /// <summary>
