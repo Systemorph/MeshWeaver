@@ -14,6 +14,8 @@ public record PivotDimension
     public required string Field { get; init; }
     public required string DisplayName { get; init; }
     public required string PropertyPath { get; init; }
+    public required string TypeName { get; init; }
+    public string? Width { get; init; }
 }
 
 public record PivotAggregate
@@ -21,8 +23,10 @@ public record PivotAggregate
     public required string Field { get; init; }
     public required string DisplayName { get; init; }
     public required string PropertyPath { get; init; }
+    public required string TypeName { get; init; }
     public AggregateFunction Function { get; init; } = AggregateFunction.Sum;
     public string? Format { get; init; }
+    public TextAlign TextAlign { get; init; } = TextAlign.Right;
 }
 
 public enum AggregateFunction
@@ -32,4 +36,12 @@ public enum AggregateFunction
     Count,
     Min,
     Max
+}
+
+public enum TextAlign
+{
+    Left,
+    Center,
+    Right,
+    Justify
 }

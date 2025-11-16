@@ -22,10 +22,10 @@ namespace MeshWeaver.Reporting.Models
 
                 if (hasColumnGroups)
                 {
-                    // Use the aggregated data from PivotModel.Rows, unpivoted for RadzenPivotDataGrid
-                    var aggregatedData = MapToDictionaries(pivotModel);
-                    var configuration = MapToPivotConfiguration(pivotModel, pivotBuilder);
-                    return new PivotGridControl(aggregatedData, configuration);
+                    // Get raw data from pivot builder and let Radzen do the pivoting
+                    var rawData = GetRawDataFromPivotBuilder(pivotBuilder);
+                    var configuration = BuildPivotConfigurationFromBuilder(pivotBuilder, pivotModel);
+                    return new PivotGridControl(rawData, configuration);
                 }
 
                 // Use DataGridControl for grids without column groups
@@ -67,18 +67,78 @@ namespace MeshWeaver.Reporting.Models
         {
             return pivotBuilder.Execute().Select(pivotModel =>
             {
-                // Use the aggregated data from PivotModel.Rows, unpivoted for RadzenPivotDataGrid
-                var aggregatedData = MapToDictionaries(pivotModel);
-                var configuration = MapToPivotConfiguration(pivotModel, pivotBuilder);
-                return new PivotGridControl(aggregatedData, configuration);
+                // Get raw data from pivot builder and let Radzen do the pivoting
+                var rawData = GetRawDataFromPivotBuilder(pivotBuilder);
+                var configuration = BuildPivotConfigurationFromBuilder(pivotBuilder, pivotModel);
+                return new PivotGridControl(rawData, configuration);
             });
         }
 
-        private static PivotConfiguration MapToPivotConfiguration(PivotModel pivotModel, IPivotBuilder _)
+        private static object GetRawDataFromPivotBuilder(IPivotBuilder pivotBuilder)
         {
-            var rowDimensions = ExtractDimensionsFromModel(pivotModel.Rows);
-            var columnDimensions = ExtractDimensionsFromModel(pivotModel.Columns);
-            var aggregates = ExtractAggregatesFromModel(pivotModel);
+            // Access the raw Objects from the pivot builder using reflection
+            var builderType = pivotBuilder.GetType();
+            var objectsProperty = builderType.GetProperty("Objects");
+            if (objectsProperty == null)
+                return Array.Empty<object>();
+
+            var objects = objectsProperty.GetValue(pivotBuilder);
+
+            // Convert to array of objects
+            if (objects is System.Collections.IEnumerable enumerable and not string)
+            {
+                return enumerable.Cast<object>().ToArray();
+            }
+
+            // Return as array
+            return objects ?? Array.Empty<object>();
+        }
+
+        private static PivotConfiguration BuildPivotConfigurationFromBuilder(IPivotBuilder pivotBuilder, PivotModel pivotModel)
+        {
+            // Extract row and column slice information from the pivot model
+            var rowGrouper = pivotModel.Rows.FirstOrDefault()?.RowGroup?.GrouperName;
+            var columnGrouper = pivotModel.Columns.OfType<ColumnGroup>().FirstOrDefault()?.GrouperName;
+
+            var rowDimensions = new List<PivotDimension>();
+            var columnDimensions = new List<PivotDimension>();
+            var aggregates = new List<PivotAggregate>();
+
+            // Add row dimension if present
+            if (!string.IsNullOrEmpty(rowGrouper))
+            {
+                rowDimensions.Add(new PivotDimension
+                {
+                    Field = rowGrouper,
+                    DisplayName = rowGrouper,
+                    PropertyPath = rowGrouper,
+                    TypeName = "System.Object"
+                });
+            }
+
+            // Add column dimension if present
+            if (!string.IsNullOrEmpty(columnGrouper))
+            {
+                columnDimensions.Add(new PivotDimension
+                {
+                    Field = columnGrouper,
+                    DisplayName = columnGrouper,
+                    PropertyPath = columnGrouper,
+                    TypeName = "System.Object"
+                });
+            }
+
+            // Add default aggregate (Amount)
+            aggregates.Add(new PivotAggregate
+            {
+                Field = "Amount",
+                DisplayName = "Amount",
+                PropertyPath = "Amount",
+                TypeName = "System.Double",
+                Function = AggregateFunction.Sum,
+                Format = "{0:C}",
+                TextAlign = GridModel.TextAlign.Right
+            });
 
             return new PivotConfiguration
             {
@@ -88,76 +148,6 @@ namespace MeshWeaver.Reporting.Models
                 ShowRowTotals = true,
                 ShowColumnTotals = true
             };
-        }
-
-        private static IReadOnlyCollection<PivotDimension> ExtractDimensionsFromModel(IReadOnlyCollection<Row> rows)
-        {
-            // Extract dimension names from the first row's RowGroup hierarchy
-            var dimensions = new List<PivotDimension>();
-
-            if (!rows.Any())
-                return dimensions;
-
-            var firstRow = rows.First();
-            if (firstRow.RowGroup != null)
-            {
-                // Use the grouper name as the field name if available
-                var grouperName = firstRow.RowGroup.GrouperName ?? "RowDimension";
-
-                dimensions.Add(new PivotDimension
-                {
-                    Field = grouperName,
-                    DisplayName = grouperName,
-                    PropertyPath = grouperName
-                });
-            }
-
-            return dimensions;
-        }
-
-        private static IReadOnlyCollection<PivotDimension> ExtractDimensionsFromModel(IReadOnlyCollection<Column> columns)
-        {
-            // Extract column dimensions from column hierarchy
-            var dimensions = new List<PivotDimension>();
-
-            var columnGroups = columns.OfType<ColumnGroup>().ToList();
-            if (!columnGroups.Any())
-                return dimensions;
-
-            var firstGroup = columnGroups.First();
-
-            // Use the grouper name as the field name if available
-            var grouperName = firstGroup.GrouperName ?? "ColumnDimension";
-
-            dimensions.Add(new PivotDimension
-            {
-                Field = grouperName,
-                DisplayName = grouperName,
-                PropertyPath = grouperName
-            });
-
-            return dimensions;
-        }
-
-        private static IReadOnlyCollection<PivotAggregate> ExtractAggregatesFromModel(PivotModel pivotModel)
-        {
-            // Extract aggregates from the data columns
-            var aggregates = new List<PivotAggregate>();
-
-            var dataColumns = pivotModel.Columns.Where(c => c is not ColumnGroup).ToList();
-            foreach (var column in dataColumns)
-            {
-                aggregates.Add(new PivotAggregate
-                {
-                    Field = column.Id?.ToString() ?? "Value",
-                    DisplayName = column.DisplayName ?? "Value",
-                    PropertyPath = column.Id?.ToString() ?? "Value",
-                    Function = AggregateFunction.Sum,
-                    Format = "{0:N2}"
-                });
-            }
-
-            return aggregates;
         }
 
         public static DataGridControl MapToDataGridControl(PivotModel pivotModel)

@@ -1,51 +1,73 @@
 @inherits BlazorView<PivotGridControl, RadzenPivotGridView>
+@using System.Collections
 
 <CascadingValue Value="@themeService">
-    @if (Configuration != null && RawData != null)
+    @if (Configuration != null && RawData != null && DataItemType != null)
     {
         <div>
-            <RadzenPivotDataGrid  
-                                 TItem="IDictionary<string, object>"
-                                 Data="@RawData"
-                                 AllowPaging="@ShowPager"
-                                 PageSize="@PageSize"
-                                 ShowColumnsTotals="@Configuration.ShowColumnTotals"
-                                 ShowRowsTotals="@Configuration.ShowRowTotals"
-                                 AllowDrillDown="true"
-                                 AllowSorting="true"
-                                 AllowFiltering="true"
-                                 Style="@Style">
-                <Columns>
-                    @foreach (var dim in Configuration.ColumnDimensions)
-                    {
-                        <RadzenPivotColumn @key="@dim.Field"
-                                          Title="@dim.DisplayName"
-                                          Type="@typeof(object)"
-                                          Property="@PropertyAccess.GetDynamicPropertyExpression(dim.Field, typeof(object))" />
-                    }
-                </Columns>
-                <Rows>
-                    @foreach (var dim in Configuration.RowDimensions)
-                    {
-                        <RadzenPivotRow @key="@dim.Field"
-                                       Title="@dim.DisplayName"
-                                       Type="@typeof(object)"
-                                       Property="@PropertyAccess.GetDynamicPropertyExpression(dim.Field, typeof(object))" />
-                    }
-                </Rows>
-                <Aggregates>
-                    @foreach (var agg in Configuration.Aggregates)
-                    {
-                        <RadzenPivotAggregate @key="@agg.Field"
-                                            Title="@agg.DisplayName"
-                                            Type="@typeof(object)"
-                                            Property="@PropertyAccess.GetDynamicPropertyExpression(agg.Field, typeof(object))"
-                                            Aggregate="@GetAggregateFunction(agg.Function)"
-                                            FormatString="@agg.Format"
-                                            TextAlign="@TextAlign.Right" />
-                    }
-                </Aggregates>
-            </RadzenPivotDataGrid>
+            @RenderPivotGrid()
         </div>
     }
 </CascadingValue>
+
+@code {
+    private RenderFragment RenderPivotGrid() => builder =>
+    {
+        var componentType = typeof(RadzenPivotDataGrid<>).MakeGenericType(DataItemType!);
+        builder.OpenComponent(0, componentType);
+        builder.AddAttribute(1, "Data", RawData);
+        builder.AddAttribute(2, "AllowPaging", ShowPager);
+        builder.AddAttribute(3, "PageSize", PageSize);
+        builder.AddAttribute(4, "ShowColumnsTotals", Configuration!.ShowColumnTotals);
+        builder.AddAttribute(5, "ShowRowsTotals", Configuration.ShowRowTotals);
+        builder.AddAttribute(6, "AllowDrillDown", true);
+        builder.AddAttribute(7, "AllowSorting", true);
+        builder.AddAttribute(8, "AllowFiltering", true);
+        builder.AddAttribute(9, "Style", Style);
+
+        // Add Columns
+        builder.AddAttribute(10, "Columns", (RenderFragment)(columnsBuilder =>
+        {
+            var index = 0;
+            foreach (var dim in Configuration.ColumnDimensions)
+            {
+                columnsBuilder.OpenComponent(index++, typeof(RadzenPivotColumn<>).MakeGenericType(DataItemType!));
+                columnsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
+                columnsBuilder.AddAttribute(index++, "Width", dim.Width);
+                columnsBuilder.AddAttribute(index++, "Property", dim.Field);
+                columnsBuilder.CloseComponent();
+            }
+        }));
+
+        // Add Rows
+        builder.AddAttribute(11, "Rows", (RenderFragment)(rowsBuilder =>
+        {
+            var index = 0;
+            foreach (var dim in Configuration.RowDimensions)
+            {
+                rowsBuilder.OpenComponent(index++, typeof(RadzenPivotRow<>).MakeGenericType(DataItemType!));
+                rowsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
+                rowsBuilder.AddAttribute(index++, "Property", dim.Field);
+                rowsBuilder.CloseComponent();
+            }
+        }));
+
+        // Add Aggregates
+        builder.AddAttribute(12, "Aggregates", (RenderFragment)(aggregatesBuilder =>
+        {
+            var index = 0;
+            foreach (var agg in Configuration.Aggregates)
+            {
+                aggregatesBuilder.OpenComponent(index++, typeof(RadzenPivotAggregate<>).MakeGenericType(DataItemType!));
+                aggregatesBuilder.AddAttribute(index++, "Title", agg.DisplayName);
+                aggregatesBuilder.AddAttribute(index++, "Property", agg.Field);
+                aggregatesBuilder.AddAttribute(index++, "Aggregate", GetAggregateFunction(agg.Function));
+                aggregatesBuilder.AddAttribute(index++, "FormatString", agg.Format);
+                aggregatesBuilder.AddAttribute(index++, "TextAlign", MapTextAlign(agg.TextAlign));
+                aggregatesBuilder.CloseComponent();
+            }
+        }));
+
+        builder.CloseComponent();
+    };
+}

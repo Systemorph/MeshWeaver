@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.GridModel;
 using Microsoft.AspNetCore.Components;
 using Radzen;
@@ -10,7 +11,8 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
     [Inject] private ThemeService? themeService { get; set; }
 
     private PivotConfiguration? Configuration { get; set; }
-    private IEnumerable<IDictionary<string, object>>? RawData { get; set; }
+    private object? RawData { get; set; }
+    private Type? DataItemType { get; set; }
     private bool ShowPager { get; set; } = true;
     private int PageSize { get; set; } = 50;
 
@@ -27,17 +29,40 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
         DataBind(ViewModel.Configuration, x => x.Configuration);
         DataBind(ViewModel.Data, x => x.RawData, (data, _) =>
         {
-            if (data == null)
+            if (data == null || Configuration == null)
                 return null;
 
-            // Data is already IEnumerable<Dictionary<string, object>> - just cast it
-            if (data is IEnumerable<Dictionary<string, object>> dictionaries)
-                return dictionaries.Cast<IDictionary<string, object>>();
+            var jsonElement = (JsonElement)data;
 
-            return Enumerable.Empty<IDictionary<string, object>>();
+            // Generate a type based on the configuration using DynamicTypeGenerator
+            var properties = GetPropertiesFromConfiguration(Configuration);
+            DataItemType = DynamicTypeGenerator.GenerateType(properties);
+
+            // Deserialize to the generated type
+            var listType = typeof(List<>).MakeGenericType(DataItemType);
+            var deserializeMethod = typeof(JsonSerializer).GetMethod(nameof(JsonSerializer.Deserialize),
+                new[] { typeof(JsonElement), typeof(JsonSerializerOptions) })!
+                .MakeGenericMethod(listType);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return deserializeMethod.Invoke(null, new object?[] { jsonElement, options });
         });
         DataBind(ViewModel.ShowPager, x => x.ShowPager, defaultValue: true);
         DataBind(ViewModel.PageSize, x => x.PageSize, defaultValue: 50);
+    }
+
+    private static List<(string Name, string TypeName)> GetPropertiesFromConfiguration(PivotConfiguration config)
+    {
+        var properties = new List<(string Name, string TypeName)>();
+
+        foreach (var dim in config.RowDimensions)
+            properties.Add((dim.Field, dim.TypeName));
+        foreach (var dim in config.ColumnDimensions)
+            properties.Add((dim.Field, dim.TypeName));
+        foreach (var agg in config.Aggregates)
+            properties.Add((agg.Field, agg.TypeName));
+
+        return properties;
     }
 
     private global::Radzen.AggregateFunction GetAggregateFunction(GridModel.AggregateFunction function)
@@ -50,6 +75,18 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
             GridModel.AggregateFunction.Min => global::Radzen.AggregateFunction.Min,
             GridModel.AggregateFunction.Max => global::Radzen.AggregateFunction.Max,
             _ => global::Radzen.AggregateFunction.Sum
+        };
+    }
+
+    private global::Radzen.TextAlign MapTextAlign(GridModel.TextAlign textAlign)
+    {
+        return textAlign switch
+        {
+            GridModel.TextAlign.Left => global::Radzen.TextAlign.Left,
+            GridModel.TextAlign.Center => global::Radzen.TextAlign.Center,
+            GridModel.TextAlign.Right => global::Radzen.TextAlign.Right,
+            GridModel.TextAlign.Justify => global::Radzen.TextAlign.Justify,
+            _ => global::Radzen.TextAlign.Right
         };
     }
 }
