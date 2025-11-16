@@ -134,8 +134,31 @@ public sealed record DataContext : IDisposable
 
     public string? GetCollectionName(Type type)
         => TypeSourcesByType.GetValueOrDefault(type)?.CollectionName;
+}
 
-
-
-
+/// <summary>
+/// Extensions for DataContext to support virtual data sources
+/// </summary>
+public static class DataContextExtensions
+{
+    /// <summary>
+    /// Adds a virtual data source to the data context.
+    /// Virtual data sources compute their data from streams rather than storing it directly.
+    /// </summary>
+    /// <param name="dataContext">The data context to extend</param>
+    /// <param name="id">Unique identifier for the virtual data source</param>
+    /// <param name="configure">Configuration function to set up the virtual data source</param>
+    /// <returns>Updated data context</returns>
+    public static DataContext WithVirtualDataSource(
+        this DataContext dataContext,
+        object id,
+        Func<VirtualDataSource, VirtualDataSource> configure
+    )
+    {
+        return dataContext.WithDataSource(_ =>
+        {
+            var virtualDataSource = new VirtualDataSource(id, dataContext.Workspace);
+            return configure(virtualDataSource);
+        });
+    }
 }

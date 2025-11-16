@@ -7,7 +7,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
 
@@ -54,8 +53,8 @@ public static class SupplierSummaryArea
     /// </summary>
     private class PivotDataRow
     {
-        public int Supplier { get; set; }
-        public string OrderMonth { get; set; } = string.Empty;
+        public string? SupplierName { get; set; }
+        public string? OrderMonth { get; set; }
         public double Amount { get; set; }
     }
 
@@ -89,8 +88,10 @@ public static class SupplierSummaryArea
         /// <returns>An observable object representing the supplier summary grid.</returns>
         private IObservable<UiControl> SupplierSummaryGrid(SupplierSummaryToolbar toolbar) =>
             layoutArea.GetDataCube()
-                .Select(cube =>
+                .Select(collection =>
                 {
+                    var cube = collection.ToDataCube();
+
                     // Filter by year if specified
                     var filteredCube = toolbar.Year == 0
                         ? cube
@@ -100,7 +101,7 @@ public static class SupplierSummaryArea
                     var rawData = filteredCube
                         .Select(item => new PivotDataRow
                         {
-                            Supplier = item.Supplier,
+                            SupplierName = item.SupplierName,
                             OrderMonth = item.OrderMonth,
                             Amount = item.Amount
                         })
@@ -112,11 +113,11 @@ public static class SupplierSummaryArea
                         RowDimensions = new List<PivotDimension>
                         {
                             new() {
-                                Field = nameof(PivotDataRow.Supplier),
+                                Field = nameof(PivotDataRow.SupplierName),
                                 DisplayName = "Supplier",
-                                PropertyPath = nameof(PivotDataRow.Supplier),
-                                TypeName = typeof(int).FullName!,
-                                Width = "150px"
+                                PropertyPath = nameof(PivotDataRow.SupplierName),
+                                TypeName = typeof(string).FullName!,
+                                Width = "200px"
                             }
                         },
                         ColumnDimensions = new List<PivotDimension>
@@ -157,46 +158,36 @@ public static class SupplierSummaryArea
         /// <returns>An observable object representing the supplier summary grid.</returns>
         private IObservable<UiControl> SupplierSummaryChart(SupplierSummaryToolbar toolbar) =>
             layoutArea.GetDataCube()
-                .Select(cube =>
+                .Select(collection =>
                 {
+                    var cube = collection.ToDataCube();
+
                     var filteredCube = toolbar.Year == 0
                         ? cube
                         : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
 
                     return layoutArea.Workspace.Pivot(filteredCube)
-                        .SliceRowsBy(nameof(NorthwindDataCube.Supplier))
+                        .SliceRowsBy(nameof(NorthwindDataCube.SupplierName))
                         .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth));
                 })
                 .SelectMany(builder => builder.ToBarChart())
                 .Select(x => x.ToControl());
 
-        private IObservable<IDataCube<NorthwindDataCube>> GetDataCube() => layoutArea.GetOrAddVariable("dataCube",
+        private IObservable<IReadOnlyCollection<NorthwindDataCube>> GetDataCube() => layoutArea.GetOrAddVariable("dataCube",
             () => layoutArea
-                .Workspace.GetStream(typeof(Order), typeof(OrderDetails), typeof(Product))
+                .Workspace.GetStream(typeof(NorthwindDataCube))
                 .DistinctUntilChanged()
-                .Select(x =>
-                    x.Value!.GetData<Order>()
-                        .Join(
-                            x.Value!.GetData<OrderDetails>(),
-                            o => o.OrderId,
-                            d => d.OrderId,
-                            (order, detail) => (order, detail)
-                        )
-                        .Join(
-                            x.Value!.GetData<Product>(),
-                            od => od.detail.ProductId,
-                            p => p.ProductId,
-                            (od, product) => (od.order, od.detail, product)
-                        )
-                        .Select(data => new NorthwindDataCube(data.order, data.detail, data.product))
-                        .ToDataCube()
-                )
+                .Select(x => x.Value!.GetData<NorthwindDataCube>())
         )!;
 
-        private IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube() => GetDataCube(layoutArea)
+        private IObservable<IDataCube<NorthwindDataCube>> FilteredDataCube() => layoutArea.GetDataCube()
             .CombineLatest(
                 layoutArea.GetDataStream<DataCubeFilter>(DataCubeLayoutExtensions.DataCubeFilterId),
-                (dataCube, filter) => dataCube.Filter(BuildFilterTuples(filter!, dataCube)) // todo apply DataCubeFilter from stream
+                (collection, filter) =>
+                {
+                    var dataCube = collection.ToDataCube();
+                    return dataCube.Filter(BuildFilterTuples(filter!, dataCube)); // todo apply DataCubeFilter from stream
+                }
             );
     }
 
