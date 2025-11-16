@@ -19,6 +19,7 @@ namespace MeshWeaver.Northwind.Application
             : this()
         {
             OrderId = order.OrderId;
+            OrderDetailsId = details.Id;
             Customer = order.CustomerId;
             Employee = order.EmployeeId;
             OrderDate = order.OrderDate;
@@ -53,8 +54,11 @@ namespace MeshWeaver.Northwind.Application
         protected NorthwindDataCube(NorthwindDataCube original)
         {
             OrderId = original.OrderId;
+            OrderDetailsId = original.OrderDetailsId;
             Customer = original.Customer;
+            CustomerName = original.CustomerName;
             Employee = original.Employee;
+            EmployeeName = original.EmployeeName;
             OrderDate = original.OrderDate;
             OrderMonth = original.OrderMonth;
             OrderYear = original.OrderYear;
@@ -69,9 +73,12 @@ namespace MeshWeaver.Northwind.Application
             Quantity = original.Quantity;
             Discount = original.Discount;
             Region = original.Region;
+            RegionName = original.RegionName;
             Supplier = original.Supplier;
+            SupplierName = original.SupplierName;
             ShipCountry = original.ShipCountry;
             Category = original.Category;
+            CategoryName = original.CategoryName;
             QuantityPerUnit = original.QuantityPerUnit;
             UnitsInStock = original.UnitsInStock;
             UnitsOnOrder = original.UnitsOnOrder;
@@ -83,40 +90,72 @@ namespace MeshWeaver.Northwind.Application
         /// <summary>
         /// Gets the unique identifier for the order.
         /// </summary>
-        [property: Key]
         [Dimension(typeof(Order))]
         public int OrderId { get; init; }
-    
+
+        [property: Key]
+        public int OrderDetailsId { get; init; }
+
         /// <summary>
         /// Gets the identifier of the customer who placed the order.
         /// </summary>
-        [property: Dimension(typeof(Customer))]
+        [NotVisible]
         public string? Customer { get; init; }
-    
+
+        /// <summary>
+        /// Gets the display name of the customer who placed the order.
+        /// </summary>
+        [property: Dimension(typeof(string), nameof(CustomerName))]
+        public string? CustomerName { get; init; }
+
         /// <summary>
         /// Gets the identifier of the employee who processed the order.
         /// </summary>
-        [property: Dimension(typeof(Employee))]
+        [NotVisible]
         public int Employee { get; init; }
-    
+
+        /// <summary>
+        /// Gets the display name of the employee who processed the order.
+        /// </summary>
+        [property: Dimension(typeof(string), nameof(EmployeeName))]
+        public string? EmployeeName { get; init; }
+
         /// <summary>
         /// Gets the identifier of the supplier of the product.
         /// </summary>
-        [Dimension(typeof(Supplier))]
+        [NotVisible]
         public int Supplier { get; init; }
-    
+
+        /// <summary>
+        /// Gets the display name of the supplier of the product.
+        /// </summary>
+        [property: Dimension(typeof(string), nameof(SupplierName))]
+        public string? SupplierName { get; init; }
+
         /// <summary>
         /// Gets the identifier of the category of the product.
         /// </summary>
-        [Dimension(typeof(Category))]
+        [NotVisible]
         public int Category { get; init; }
-    
+
+        /// <summary>
+        /// Gets the display name of the category of the product.
+        /// </summary>
+        [property: Dimension(typeof(string), nameof(CategoryName))]
+        public string? CategoryName { get; init; }
+
         /// <summary>
         /// Gets the shipping region for the order.
         /// </summary>
-        [property: Dimension(typeof(Region))]
+        [NotVisible]
         public string? Region { get; init; }
-    
+
+        /// <summary>
+        /// Gets the display name of the shipping region for the order.
+        /// </summary>
+        [property: Dimension(typeof(string), nameof(RegionName))]
+        public string? RegionName { get; init; }
+
         /// <summary>
         /// Gets the date when the order was placed.
         /// </summary>
@@ -142,25 +181,25 @@ namespace MeshWeaver.Northwind.Application
         /// </summary>
         [NotVisible]
         public DateTime RequiredDate { get; init; }
-    
+
         /// <summary>
         /// Gets the date when the order was shipped.
         /// </summary>
         [NotVisible]
         public DateTime ShippedDate { get; init; }
-    
+
         /// <summary>
         /// Gets the identifier of the shipper used for the order.
         /// </summary>
         [NotVisible]
         public int ShipVia { get; init; }
-    
+
         /// <summary>
         /// Gets the country to which the order was shipped.
         /// </summary>
         [NotVisible]
         public string? ShipCountry { get; init; }
-    
+
         /// <summary>
         /// Gets the freight charge for the order.
         /// </summary>
@@ -178,55 +217,55 @@ namespace MeshWeaver.Northwind.Application
         /// </summary>
         [NotVisible]
         public string? ProductName { get; init; }
-    
+
         /// <summary>
         /// Calculates the total amount for the order detail, considering unit price, quantity, and discount.
         /// </summary>
         public double Amount { get; init; }
-    
+
         /// <summary>
         /// Gets the price per unit of the product.
         /// </summary>
         [NotVisible]
         public double UnitPrice { get; init; }
-    
+
         /// <summary>
         /// Gets the quantity of the product ordered.
         /// </summary>
         [NotVisible]
         public int Quantity { get; init; }
-    
+
         /// <summary>
         /// Gets the discount applied to the order.
         /// </summary>
         [NotVisible]
         [Dimension(typeof(double), nameof(Discount))]
         public double Discount { get; init; }
-    
+
         /// <summary>
         /// Gets the quantity per unit for the product.
         /// </summary>
         [NotVisible]
         public string? QuantityPerUnit { get; init; }
-    
+
         /// <summary>
         /// Gets the number of units in stock for the product.
         /// </summary>
         [NotVisible]
         public short UnitsInStock { get; init; }
-    
+
         /// <summary>
         /// Gets the number of units on order for the product.
         /// </summary>
         [NotVisible]
         public short UnitsOnOrder { get; init; }
-    
+
         /// <summary>
         /// Gets the reorder level for the product.
         /// </summary>
         [NotVisible]
         public short ReorderLevel { get; init; }
-    
+
         /// <summary>
         /// Indicates whether the product is discontinued.
         /// </summary>
