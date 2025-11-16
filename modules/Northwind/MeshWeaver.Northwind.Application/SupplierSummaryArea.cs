@@ -117,7 +117,8 @@ public static class SupplierSummaryArea
                                 Field = nameof(PivotDataRow.Supplier),
                                 DisplayName = "Supplier",
                                 PropertyPath = nameof(PivotDataRow.Supplier),
-                                TypeName = typeof(int).FullName!
+                                TypeName = typeof(int).FullName!,
+                                Width = "150px"
                             }
                         },
                         ColumnDimensions = new List<PivotDimension>
@@ -127,7 +128,8 @@ public static class SupplierSummaryArea
                                 Field = nameof(PivotDataRow.OrderMonth),
                                 DisplayName = "Month",
                                 PropertyPath = nameof(PivotDataRow.OrderMonth),
-                                TypeName = typeof(string).FullName!
+                                TypeName = typeof(string).FullName!,
+                                Width = "120px"
                             }
                         },
                         Aggregates = new List<PivotAggregate>
