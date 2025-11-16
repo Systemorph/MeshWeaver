@@ -48,15 +48,6 @@ public static class SupplierSummaryArea
         public string Display { get; init; } = Table;
     }
 
-    /// <summary>
-    /// Simple class to hold pivot data with actual properties for Radzen access
-    /// </summary>
-    private class PivotDataRow
-    {
-        public string? SupplierName { get; set; }
-        public string? OrderMonth { get; set; }
-        public double Amount { get; set; }
-    }
 
     /// <param name="layoutArea">The layout area host.</param>
     extension(LayoutAreaHost layoutArea)
@@ -97,58 +88,20 @@ public static class SupplierSummaryArea
                         ? cube
                         : cube.Filter((nameof(NorthwindDataCube.OrderYear), toolbar.Year));
 
-                    // Convert data cube to objects with actual properties
-                    var rawData = filteredCube
-                        .Select(item => new PivotDataRow
-                        {
-                            SupplierName = item.SupplierName,
-                            OrderMonth = item.OrderMonth,
-                            Amount = item.Amount
-                        })
-                        .ToArray();
-
-                    // Create pivot configuration using actual property names
-                    var configuration = new PivotConfiguration
-                    {
-                        RowDimensions = new List<PivotDimension>
-                        {
-                            new() {
-                                Field = nameof(PivotDataRow.SupplierName),
-                                DisplayName = "Supplier",
-                                PropertyPath = nameof(PivotDataRow.SupplierName),
-                                TypeName = typeof(string).FullName!,
-                                Width = "200px"
-                            }
-                        },
-                        ColumnDimensions = new List<PivotDimension>
-                        {
-                            new() {
-                                Field = nameof(PivotDataRow.OrderMonth),
-                                DisplayName = "Month",
-                                PropertyPath = nameof(PivotDataRow.OrderMonth),
-                                TypeName = typeof(string).FullName!,
-                                Width = "120px"
-                            }
-                        },
-                        Aggregates = new List<PivotAggregate>
-                        {
-                            new() {
-                                Field = nameof(PivotDataRow.Amount),
-                                DisplayName = "Amount",
-                                PropertyPath = nameof(PivotDataRow.Amount),
-                                TypeName = typeof(double).FullName!,
-                                Function = AggregateFunction.Sum,
-                                Format = "{0:C}",
-                                TextAlign = TextAlign.Right,
-                                SortOrder = GridModel.SortOrder.Descending
-                            }
-                        },
-                        ShowRowTotals = true,
-                        ShowColumnTotals = true
-                    };
-
-                    return (UiControl)new PivotGridControl(rawData, configuration)
-                    { Style = "width: 100%;" };
+                    // Use the full NorthwindDataCube with the pivot extension
+                    return (UiControl)filteredCube.ToPivotGrid<NorthwindDataCube>(pivot => pivot
+                        .WithRowDimension(nameof(NorthwindDataCube.SupplierName), "Supplier", "200px")
+                        .WithColumnDimension(nameof(NorthwindDataCube.OrderMonth), "Month")
+                        .WithAggregate(
+                            nameof(NorthwindDataCube.Amount),
+                            AggregateFunction.Sum,
+                            "Amount",
+                            "{0:C}",
+                            GridModel.SortOrder.Descending
+                        )
+                        .WithRowTotals()
+                        .WithColumnTotals()
+                    ) with { Style = "width: 100%;" };
                 });
 
         /// <summary>
