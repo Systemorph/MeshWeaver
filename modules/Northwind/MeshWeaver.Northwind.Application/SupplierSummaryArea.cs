@@ -140,7 +140,8 @@ public static class SupplierSummaryArea
                                 TypeName = typeof(double).FullName!,
                                 Function = AggregateFunction.Sum,
                                 Format = "{0:C}",
-                                TextAlign = TextAlign.Right
+                                TextAlign = TextAlign.Right,
+                                SortOrder = GridModel.SortOrder.Descending
                             }
                         },
                         ShowRowTotals = true,
