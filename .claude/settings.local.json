@@ -45,7 +45,8 @@
       "Bash(python3:*)",
       "Bash(test:*)",
       "Bash(Select-Object -Last 20)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "WebFetch(domain:blazor.radzen.com)"
     ],
     "deny": []
   }

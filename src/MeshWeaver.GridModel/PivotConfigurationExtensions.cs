@@ -44,14 +44,15 @@ public static class PivotConfigurationExtensions
 /// </summary>
 public class PivotConfigurationBuilder<T> where T : class
 {
-    private readonly List<string> rowDimensionFields = new();
-    private readonly List<string> columnDimensionFields = new();
+    private readonly List<(string Field, SortOrder? SortOrder)> rowDimensionFields = new();
+    private readonly List<(string Field, SortOrder? SortOrder)> columnDimensionFields = new();
     private readonly List<(string Field, AggregateFunction Function, string? Format, SortOrder? SortOrder)> aggregateFields = new();
     private readonly Dictionary<string, AvailableDimension> availableDimensions = new();
     private readonly Dictionary<string, AvailableAggregate> availableAggregates = new();
 
     private bool showRowTotals = true;
     private bool showColumnTotals = true;
+    private bool allowFieldsPicking = true;
 
     public PivotConfigurationBuilder()
     {
@@ -65,16 +66,13 @@ public class PivotConfigurationBuilder<T> where T : class
 
         foreach (var property in properties)
         {
-            // Skip properties marked as NotVisible
-            if (property.GetCustomAttribute<NotVisibleAttribute>() != null)
-                continue;
-
             var propertyType = property.PropertyType;
             var underlyingType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+            var notVisible = property.GetCustomAttribute<NotVisibleAttribute>() != null;
 
             // Check if it's a dimension (has DimensionAttribute or is a string/value type that could be a dimension)
             var dimensionAttr = property.GetCustomAttributes<DimensionAttribute>().FirstOrDefault();
-            if (dimensionAttr != null || IsValidDimensionType(underlyingType))
+            if (dimensionAttr != null || (!notVisible && IsValidDimensionType(underlyingType)))
             {
                 var displayName = property.GetCustomAttribute<DisplayAttribute>()?.Name
                     ?? property.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
@@ -91,7 +89,8 @@ public class PivotConfigurationBuilder<T> where T : class
             }
 
             // Check if it's a numeric type that could be aggregated
-            if (IsNumericType(underlyingType) && dimensionAttr == null)
+            // Include if: has no dimension attribute AND (is not NotVisible OR is explicitly numeric)
+            if (IsNumericType(underlyingType) && dimensionAttr == null && !notVisible)
             {
                 var displayName = property.GetCustomAttribute<DisplayAttribute>()?.Name
                     ?? property.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
@@ -162,9 +161,9 @@ public class PivotConfigurationBuilder<T> where T : class
     /// <summary>
     /// Adds a row dimension to the pivot configuration
     /// </summary>
-    public PivotConfigurationBuilder<T> WithRowDimension(string fieldName, string? displayName = null, string? width = null)
+    public PivotConfigurationBuilder<T> WithRowDimension(string fieldName, string? displayName = null, string? width = null, SortOrder? sortOrder = null)
     {
-        rowDimensionFields.Add(fieldName);
+        rowDimensionFields.Add((fieldName, sortOrder));
 
         if (availableDimensions.TryGetValue(fieldName, out var dimension))
         {
@@ -180,9 +179,9 @@ public class PivotConfigurationBuilder<T> where T : class
     /// <summary>
     /// Adds a column dimension to the pivot configuration
     /// </summary>
-    public PivotConfigurationBuilder<T> WithColumnDimension(string fieldName, string? displayName = null, string? width = null)
+    public PivotConfigurationBuilder<T> WithColumnDimension(string fieldName, string? displayName = null, string? width = null, SortOrder? sortOrder = null)
     {
-        columnDimensionFields.Add(fieldName);
+        columnDimensionFields.Add((fieldName, sortOrder));
 
         if (availableDimensions.TryGetValue(fieldName, out var dimension))
         {
@@ -237,47 +236,60 @@ public class PivotConfigurationBuilder<T> where T : class
     }
 
     /// <summary>
+    /// Sets whether to allow fields picking
+    /// </summary>
+    public PivotConfigurationBuilder<T> WithFieldsPicking(bool allow = true)
+    {
+        allowFieldsPicking = allow;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the final PivotConfiguration
     /// </summary>
     public PivotConfiguration Build()
     {
         var rowDimensions = rowDimensionFields
-            .Select(field => availableDimensions.TryGetValue(field, out var dim)
+            .Select(fieldInfo => availableDimensions.TryGetValue(fieldInfo.Field, out var dim)
                 ? new PivotDimension
                 {
                     Field = dim.Field,
                     DisplayName = dim.DisplayName,
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
-                    Width = dim.Width
+                    Width = dim.Width,
+                    SortOrder = fieldInfo.SortOrder
                 }
                 : new PivotDimension
                 {
-                    Field = field,
-                    DisplayName = SplitCamelCase(field),
-                    PropertyPath = field,
+                    Field = fieldInfo.Field,
+                    DisplayName = SplitCamelCase(fieldInfo.Field),
+                    PropertyPath = fieldInfo.Field,
                     TypeName = "System.String",
-                    Width = "120px"
+                    Width = "120px",
+                    SortOrder = fieldInfo.SortOrder
                 })
             .ToList();
 
         var columnDimensions = columnDimensionFields
-            .Select(field => availableDimensions.TryGetValue(field, out var dim)
+            .Select(fieldInfo => availableDimensions.TryGetValue(fieldInfo.Field, out var dim)
                 ? new PivotDimension
                 {
                     Field = dim.Field,
                     DisplayName = dim.DisplayName,
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
-                    Width = dim.Width
+                    Width = dim.Width,
+                    SortOrder = fieldInfo.SortOrder
                 }
                 : new PivotDimension
                 {
-                    Field = field,
-                    DisplayName = SplitCamelCase(field),
-                    PropertyPath = field,
+                    Field = fieldInfo.Field,
+                    DisplayName = SplitCamelCase(fieldInfo.Field),
+                    PropertyPath = fieldInfo.Field,
                     TypeName = "System.String",
-                    Width = "120px"
+                    Width = "120px",
+                    SortOrder = fieldInfo.SortOrder
                 })
             .ToList();
 
@@ -307,13 +319,41 @@ public class PivotConfigurationBuilder<T> where T : class
                 })
             .ToList();
 
+        // Convert available dimensions and aggregates to PivotDimension/PivotAggregate collections
+        var allAvailableDimensions = availableDimensions.Values
+            .Select(dim => new PivotDimension
+            {
+                Field = dim.Field,
+                DisplayName = dim.DisplayName,
+                PropertyPath = dim.PropertyPath,
+                TypeName = dim.TypeName,
+                Width = dim.Width
+            })
+            .ToList();
+
+        var allAvailableAggregates = availableAggregates.Values
+            .Select(agg => new PivotAggregate
+            {
+                Field = agg.Field,
+                DisplayName = agg.DisplayName,
+                PropertyPath = agg.PropertyPath,
+                TypeName = agg.TypeName,
+                Function = AggregateFunction.Sum, // Default function
+                Format = agg.DefaultFormat,
+                TextAlign = TextAlign.Right
+            })
+            .ToList();
+
         return new PivotConfiguration
         {
             RowDimensions = rowDimensions,
             ColumnDimensions = columnDimensions,
             Aggregates = aggregates,
+            AvailableDimensions = allAvailableDimensions,
+            AvailableAggregates = allAvailableAggregates,
             ShowRowTotals = showRowTotals,
-            ShowColumnTotals = showColumnTotals
+            ShowColumnTotals = showColumnTotals,
+            AllowFieldsPicking = allowFieldsPicking
         };
     }
 

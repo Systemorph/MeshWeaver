@@ -25,55 +25,87 @@
         builder.AddAttribute(6, "AllowDrillDown", Configuration.AllowDrillDown);
         builder.AddAttribute(7, "AllowSorting", Configuration.AllowSorting);
         builder.AddAttribute(8, "AllowFiltering", Configuration.AllowFiltering);
-        builder.AddAttribute(9, "Style", Style);
+        builder.AddAttribute(9, "AllowFieldsPicking", Configuration.AllowFieldsPicking);
+        builder.AddAttribute(10, "Style", Style);
 
-        // Add Columns
+        // Add Columns - only dimensions selected for columns
         builder.AddAttribute(12, "Columns", (RenderFragment)(columnsBuilder =>
         {
             var index = 0;
+
             foreach (var dim in Configuration.ColumnDimensions)
             {
+                var availableDim = Configuration.AvailableDimensions.FirstOrDefault(d => d.Field == dim.Field);
+                if (availableDim == null) continue;
+
                 columnsBuilder.OpenComponent(index++, typeof(RadzenPivotColumn<>).MakeGenericType(DataItemType!));
-                columnsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
-                columnsBuilder.AddAttribute(index++, "Width", dim.Width);
-                columnsBuilder.AddAttribute(index++, "Property", dim.Field);
-                columnsBuilder.AddAttribute(index++, "Filterable", dim.Filterable);
-                columnsBuilder.AddAttribute(index++, "Sortable", dim.Sortable);
+                columnsBuilder.AddAttribute(index++, "Title", availableDim.DisplayName);
+                columnsBuilder.AddAttribute(index++, "Width", availableDim.Width);
+                columnsBuilder.AddAttribute(index++, "Property", availableDim.Field);
+                columnsBuilder.AddAttribute(index++, "Filterable", availableDim.Filterable);
+                columnsBuilder.AddAttribute(index++, "Sortable", availableDim.Sortable);
+
+                // Data-bind to the actual SortOrder from the dimension
+                if (dim.SortOrder.HasValue)
+                {
+                    columnsBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(dim.SortOrder.Value));
+                }
+
                 columnsBuilder.CloseComponent();
             }
         }));
 
-        // Add Rows
+        // Add Rows - all available dimensions with SortOrder for selected ones
         builder.AddAttribute(13, "Rows", (RenderFragment)(rowsBuilder =>
         {
             var index = 0;
-            foreach (var dim in Configuration.RowDimensions)
+
+            foreach (var dim in Configuration.AvailableDimensions)
             {
                 rowsBuilder.OpenComponent(index++, typeof(RadzenPivotRow<>).MakeGenericType(DataItemType!));
                 rowsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
                 rowsBuilder.AddAttribute(index++, "Property", dim.Field);
                 rowsBuilder.AddAttribute(index++, "Filterable", dim.Filterable);
                 rowsBuilder.AddAttribute(index++, "Sortable", dim.Sortable);
+
+                // Data-bind to the actual SortOrder from the selected dimension
+                var selectedDim = Configuration.RowDimensions.FirstOrDefault(rd => rd.Field == dim.Field);
+                if (selectedDim?.SortOrder.HasValue == true)
+                {
+                    rowsBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(selectedDim.SortOrder.Value));
+                }
+
                 rowsBuilder.CloseComponent();
             }
         }));
 
-        // Add Aggregates
+        // Add Aggregates - all available aggregates with proper selection
         builder.AddAttribute(14, "Aggregates", (RenderFragment)(aggregatesBuilder =>
         {
             var index = 0;
-            foreach (var agg in Configuration.Aggregates)
+            foreach (var agg in Configuration.AvailableAggregates)
             {
                 aggregatesBuilder.OpenComponent(index++, typeof(RadzenPivotAggregate<>).MakeGenericType(DataItemType!));
                 aggregatesBuilder.AddAttribute(index++, "Title", agg.DisplayName);
                 aggregatesBuilder.AddAttribute(index++, "Property", agg.Field);
-                aggregatesBuilder.AddAttribute(index++, "Aggregate", GetAggregateFunction(agg.Function));
-                aggregatesBuilder.AddAttribute(index++, "FormatString", agg.Format);
-                aggregatesBuilder.AddAttribute(index++, "TextAlign", MapTextAlign(agg.TextAlign));
-                if (agg.SortOrder.HasValue)
+
+                // Get configuration from selected aggregates if it exists
+                var selectedAgg = Configuration.Aggregates.FirstOrDefault(a => a.Field == agg.Field);
+                var function = selectedAgg?.Function ?? agg.Function;
+                var format = selectedAgg?.Format ?? agg.Format;
+                var textAlign = selectedAgg?.TextAlign ?? agg.TextAlign;
+
+                aggregatesBuilder.AddAttribute(index++, "Aggregate", GetAggregateFunction(function));
+                aggregatesBuilder.AddAttribute(index++, "FormatString", format);
+                aggregatesBuilder.AddAttribute(index++, "TextAlign", MapTextAlign(textAlign));
+
+                // Set SortOrder for selected aggregates
+                if (selectedAgg != null)
                 {
-                    aggregatesBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(agg.SortOrder.Value));
+                    var sortOrder = selectedAgg.SortOrder ?? GridModel.SortOrder.Ascending;
+                    aggregatesBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(sortOrder));
                 }
+
                 aggregatesBuilder.CloseComponent();
             }
         }));

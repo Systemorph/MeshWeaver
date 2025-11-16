@@ -286,4 +286,60 @@ public class PivotConfigurationExtensionsTest
         // Assert
         config.RowDimensions.First().Width.Should().Be("300px");
     }
+
+    [Fact]
+    public void PivotConfigurationBuilder_PopulatesAvailableDimensionsAndAggregates()
+    {
+        // Arrange & Act
+        var config = PivotConfigurationExtensions.ForType<SalesData>()
+            .WithRowDimension(nameof(SalesData.Region))
+            .WithAggregate(nameof(SalesData.TotalSales))
+            .Build();
+
+        // Assert - Should have all discovered dimensions available
+        config.AvailableDimensions.Should().NotBeEmpty();
+        config.AvailableDimensions.Should().Contain(d => d.Field == nameof(SalesData.Region));
+        config.AvailableDimensions.Should().Contain(d => d.Field == nameof(SalesData.ProductCategory));
+        config.AvailableDimensions.Should().Contain(d => d.Field == nameof(SalesData.OrderMonth));
+
+        // Should NOT include NotVisible properties
+        config.AvailableDimensions.Should().NotContain(d => d.Field == nameof(SalesData.InternalNotes));
+
+        // Assert - Should have all discovered aggregates available
+        config.AvailableAggregates.Should().NotBeEmpty();
+        config.AvailableAggregates.Should().Contain(a => a.Field == nameof(SalesData.TotalSales));
+        config.AvailableAggregates.Should().Contain(a => a.Field == nameof(SalesData.Quantity));
+
+        // Verify available dimensions have proper metadata
+        var regionDimension = config.AvailableDimensions.First(d => d.Field == nameof(SalesData.Region));
+        regionDimension.DisplayName.Should().Be("Sales Region");
+        regionDimension.Width.Should().Be("200px");
+    }
+
+    [Fact]
+    public void PivotConfigurationBuilder_DefaultsToAllowFieldsPicking()
+    {
+        // Arrange & Act
+        var config = PivotConfigurationExtensions.ForType<SalesData>()
+            .WithRowDimension(nameof(SalesData.Region))
+            .WithAggregate(nameof(SalesData.TotalSales))
+            .Build();
+
+        // Assert
+        config.AllowFieldsPicking.Should().BeTrue();
+    }
+
+    [Fact]
+    public void PivotConfigurationBuilder_ConfiguresFieldsPicking()
+    {
+        // Arrange & Act
+        var config = PivotConfigurationExtensions.ForType<SalesData>()
+            .WithRowDimension(nameof(SalesData.Region))
+            .WithAggregate(nameof(SalesData.TotalSales))
+            .WithFieldsPicking(false)
+            .Build();
+
+        // Assert
+        config.AllowFieldsPicking.Should().BeFalse();
+    }
 }

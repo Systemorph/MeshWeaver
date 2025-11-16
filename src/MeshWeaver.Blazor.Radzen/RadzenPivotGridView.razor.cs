@@ -75,6 +75,13 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
     {
         var properties = new List<(string Name, string TypeName)>();
 
+        // Include all available dimensions and aggregates for field picking
+        foreach (var dim in config.AvailableDimensions)
+            properties.Add((dim.Field, dim.TypeName));
+        foreach (var agg in config.AvailableAggregates)
+            properties.Add((agg.Field, agg.TypeName));
+
+        // Also ensure selected fields are included (in case they're not in available collections)
         foreach (var dim in config.RowDimensions)
             properties.Add((dim.Field, dim.TypeName));
         foreach (var dim in config.ColumnDimensions)
@@ -82,7 +89,7 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
         foreach (var agg in config.Aggregates)
             properties.Add((agg.Field, agg.TypeName));
 
-        return properties;
+        return properties.DistinctBy(p => p.Name).ToList();
     }
 
     private global::Radzen.AggregateFunction GetAggregateFunction(GridModel.AggregateFunction function)
