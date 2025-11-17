@@ -88,15 +88,9 @@ public static class SupplierSummaryArea
 
                     // Use the full NorthwindDataCube with the pivot extension
                     return (UiControl)filteredData.ToPivotGrid(pivot => pivot
-                        .WithRowDimension(nameof(NorthwindDataCube.SupplierName), "Supplier", "200px")
-                        .WithColumnDimension(nameof(NorthwindDataCube.OrderMonth), "Month")
-                        .WithAggregate(
-                            nameof(NorthwindDataCube.Amount),
-                            AggregateFunction.Sum,
-                            "Amount",
-                            "{0:C}",
-                            GridModel.SortOrder.Descending
-                        )
+                        .GroupRowsBy(x => x.SupplierName, dim => dim.WithWidth("200px"))
+                        .GroupColumnsBy(x => x.OrderMonth)
+                        .Aggregate(x => x.Amount, agg => agg.WithFunction(AggregateFunction.Sum))
                         .WithRowTotals()
                         .WithColumnTotals()
                     ) with
