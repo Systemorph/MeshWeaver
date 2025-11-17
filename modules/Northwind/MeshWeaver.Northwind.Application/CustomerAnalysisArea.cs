@@ -189,6 +189,9 @@ public static class CustomerAnalysisArea
         => layoutArea.GetDataCube()
             .Select(data =>
             {
+                // Define the order of frequency brackets
+                var bracketOrder = new[] { "1 Order", "2 Orders", "3-5 Orders", "6-10 Orders", "11-20 Orders", "20+ Orders" };
+
                 var frequencyData = data.GroupBy(x => x.Customer)
                     .Select(g => new
                     {
@@ -204,10 +207,14 @@ public static class CustomerAnalysisArea
                         _ => "20+ Orders"
                     })
                     .Select(g => new { FrequencyBracket = g.Key, CustomerCount = g.Count() })
+                    .OrderBy(x => Array.IndexOf(bracketOrder, x.FrequencyBracket))
                     .ToArray();
 
                 return (UiControl)Charts.Pie(frequencyData.Select(x => x.CustomerCount), frequencyData.Select(x => x.FrequencyBracket))
-                    .WithTitle("Customer Order Frequency");
+                    .WithTitle("Customer Order Frequency")
+                    .WithLegendPosition(MeshWeaver.Layout.Chart.LegendPosition.Right)
+                    .WithWidth("800px")
+                    .WithHeight("500px");
             });
 
     /// <summary>

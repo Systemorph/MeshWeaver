@@ -101,6 +101,15 @@
                 builder.AddAttribute(3, "ValueProperty", "Value");
                 if (hasTitle)
                     builder.AddAttribute(4, "Title", title);
+
+                // Add data labels for pie charts
+                builder.AddAttribute(5, "ChildContent", (RenderFragment)(dataLabelBuilder =>
+                {
+                    dataLabelBuilder.OpenComponent<global::Radzen.Blazor.RadzenSeriesDataLabels>(0);
+                    dataLabelBuilder.AddAttribute(1, "Visible", true);
+                    dataLabelBuilder.CloseComponent();
+                }));
+
                 builder.CloseComponent();
             }
             else if (seriesType == typeof(RadarSeries))
@@ -231,11 +240,40 @@
 
     private global::Radzen.Blazor.LegendPosition GetLegendPosition()
     {
+        // For pie/doughnut charts, default to bottom position for better space usage
+        var isPieChart = SeriesList?.Any(s => s is PieSeries or DoughnutSeries) ?? false;
+
         // Map legend position if provided
-        return LegendPosition switch
+        if (LegendPosition is MeshWeaver.Layout.Chart.LegendPosition position)
         {
-            _ => global::Radzen.Blazor.LegendPosition.Right
-        };
+            return position switch
+            {
+                MeshWeaver.Layout.Chart.LegendPosition.Top => global::Radzen.Blazor.LegendPosition.Top,
+                MeshWeaver.Layout.Chart.LegendPosition.Bottom => global::Radzen.Blazor.LegendPosition.Bottom,
+                MeshWeaver.Layout.Chart.LegendPosition.Left => global::Radzen.Blazor.LegendPosition.Left,
+                MeshWeaver.Layout.Chart.LegendPosition.Right => global::Radzen.Blazor.LegendPosition.Right,
+                _ => global::Radzen.Blazor.LegendPosition.Right
+            };
+        }
+
+        // Handle string or numeric representations of the enum
+        if (LegendPosition != null)
+        {
+            var positionStr = LegendPosition.ToString();
+            if (Enum.TryParse<MeshWeaver.Layout.Chart.LegendPosition>(positionStr, true, out var parsedPosition))
+            {
+                return parsedPosition switch
+                {
+                    MeshWeaver.Layout.Chart.LegendPosition.Top => global::Radzen.Blazor.LegendPosition.Top,
+                    MeshWeaver.Layout.Chart.LegendPosition.Bottom => global::Radzen.Blazor.LegendPosition.Bottom,
+                    MeshWeaver.Layout.Chart.LegendPosition.Left => global::Radzen.Blazor.LegendPosition.Left,
+                    MeshWeaver.Layout.Chart.LegendPosition.Right => global::Radzen.Blazor.LegendPosition.Right,
+                    _ => global::Radzen.Blazor.LegendPosition.Right
+                };
+            }
+        }
+
+        return isPieChart ? global::Radzen.Blazor.LegendPosition.Bottom : global::Radzen.Blazor.LegendPosition.Right;
     }
 
     private string GetContainerStyle()
