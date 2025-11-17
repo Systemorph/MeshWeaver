@@ -1,7 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting.Pivot;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 
@@ -63,8 +63,7 @@ public static class TopProductsByCategoryArea
                 }
 
                 // Create horizontal bar chart
-                var chart = (UiControl)Charting.Chart.Bar(topProducts.Select(p => p.TotalSales), "Sales Amount (USD)")
-                    .WithLabels(topProducts.Select(p => p.ProductName));
+                var chart = (UiControl)Charts.Bar(topProducts.Select(p => p.TotalSales), topProducts.Select(p => p.ProductName));
 
                 return (UiControl)Controls.Stack
                     .WithView(Controls.H2($"Top 10 Products by Sales ({currentYear})"))

@@ -1,10 +1,6 @@
 ﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting;
-using MeshWeaver.Charting.Models.Options;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
@@ -45,15 +41,12 @@ public static class SalesOverviewArea
         return layoutArea.YearlyNorthwindData()
             .Select(data =>
             {
-                var chart = data.ToBarChart(
+                return (UiControl)data.ToBarChart(
                     keySelector: x => x.CategoryName ?? "Unknown",
                     valueSelector: g => g.Sum(x => x.Amount),
                     orderByValueDescending: true
-                ).WithTitle("Sales by Category");
-
-                return (UiControl)Controls.Stack
-                    .WithView(Controls.H2("Sales by Category"))
-                    .WithView(chart.WithClass("chart sales-by-category-chart"));
+                ).WithTitle("Sales by Category")
+                .WithClass("chart sales-by-category-chart");
             });
     }
 

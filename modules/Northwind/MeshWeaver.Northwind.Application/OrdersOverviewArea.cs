@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Domain;
 
@@ -48,8 +49,7 @@ public static class OrdersOverviewArea
                         .OrderBy(x => x.Month)
                         .ToArray();
 
-                    var chart = (UiControl)Charting.Chart.Line(monthlyOrders.Select(m => m.OrderCount), "Order Count")
-                        .WithLabels(monthlyOrders.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
+                    var chart = (UiControl)Charts.Line(monthlyOrders.Select(m => m.OrderCount), monthlyOrders.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
 
                     return Controls.Stack
                         .WithView(Controls.H2("Monthly Orders Count"))
@@ -81,8 +81,7 @@ public static class OrdersOverviewArea
                     .OrderBy(x => x.Month)
                     .ToArray();
 
-                var chart = (UiControl)Charting.Chart.Line(monthlyAvgValues.Select(m => m.AvgOrderValue), "Average Order Value")
-                    .WithLabels(monthlyAvgValues.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
+                var chart = (UiControl)Charts.Line(monthlyAvgValues.Select(m => m.AvgOrderValue), monthlyAvgValues.Select(m => DateTime.ParseExact(m.Month + "-01", "yyyy-MM-dd", null).ToString("MMM yyyy")));
 
                 return Controls.Stack
                     .WithView(Controls.H2("Average Order Value Trends"))

@@ -1,12 +1,11 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Domain;
-using MeshWeaver.Charting.Models.Bar;
 
 namespace MeshWeaver.Northwind.Application;
 
@@ -51,23 +50,21 @@ public static class SalesGeographyArea
                     // Get unique years and countries
                     var years = countryYearGroups.Keys.Select(k => k.OrderYear).Distinct().OrderBy(y => y).ToArray();
                     var countries = countryYearGroups.Keys.Select(k => k.ShipCountry ?? string.Empty).Distinct().OrderBy(c => c).ToArray();
-                    
-                    // Create a dataset for each year
-                    var dataSets = years.Select(year =>
+
+                    // Create chart with series for each year
+                    var chart = Charts.Create();
+                    foreach (var year in years)
                     {
-                        var yearData = countries.Select(country => 
-                            countryYearGroups.GetValueOrDefault((country,  year), 0.0))
+                        var yearData = countries.Select(country =>
+                            countryYearGroups.GetValueOrDefault((country, year), 0.0))
                             .ToArray();
-                        return new BarDataSet(yearData).WithLabel(year.ToString());
-                    }).ToArray();
-                    
-                    var chart = Chart.Create(dataSets)
-                        .Stacked()
-                        .WithLabels(countries);
+                        chart = chart.WithSeries(new BarSeries(yearData, year.ToString()));
+                    }
+                    chart = chart.Stacked().WithLabels(countries);
                     
                     return Observable.Return((UiControl)Controls.Stack
                         .WithView(Controls.H2("Sales by Country (Stacked by Year)"))
-                        .WithView(chart.ToControl()));
+                        .WithView(chart));
                 }));
     }
 

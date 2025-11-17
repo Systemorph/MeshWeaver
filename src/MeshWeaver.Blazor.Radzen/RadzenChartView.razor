@@ -249,10 +249,10 @@
     private string GetChartStyle()
     {
         var style = "";
+        if (Width != null)
+            style += $"width: {Width}; ";
         if (Height != null)
             style += $"height: {Height};";
-        else
-            style += "height: 400px;";
         return style;
     }
 

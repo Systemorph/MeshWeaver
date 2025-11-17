@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Northwind.Domain;
@@ -64,12 +65,8 @@ public static class CustomerAnalysisArea
                         .Take(15)
                         .ToArray();
 
-                    var chart = (UiControl)Charting.Chart.Bar(topCustomers.Select(c => c.Revenue), "Revenue")
-                        .WithLabels(topCustomers.Select(c => c.Customer ?? "Unknown"));
-
-                    return Controls.Stack
-                        .WithView(Controls.H2("Top 15 Customers by Revenue"))
-                        .WithView(chart);
+                    return (UiControl)Charts.Bar(topCustomers.Select(c => c.Revenue), topCustomers.Select(c => c.Customer ?? "Unknown"))
+                        .WithTitle("Top 15 Customers by Revenue");
                 }));
     }
 
@@ -174,12 +171,8 @@ public static class CustomerAnalysisArea
                     .Take(10)
                     .ToArray();
 
-                var chart = (UiControl)Charting.Chart.Bar(customerMetrics.Select(c => c.MonthlyValue), "MonthlyValue")
-                    .WithLabels(customerMetrics.Select(c => c.Customer ?? "Unknown"));
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Customer Lifetime Value Analysis"))
-                    .WithView(chart);
+                return (UiControl)Charts.Bar(customerMetrics.Select(c => c.MonthlyValue), customerMetrics.Select(c => c.Customer ?? "Unknown"))
+                    .WithTitle("Customer Lifetime Value Analysis");
             });
 
     /// <summary>
@@ -192,35 +185,30 @@ public static class CustomerAnalysisArea
     /// <param name="context">The rendering context.</param>
     /// <returns>A pie chart with customer frequency segments and a header title.</returns>
     [Display(Name = "Customer Order Frequency", GroupName = "Customers", Order = 3)]
-    public static UiControl CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
-        =>
-            Controls.Stack.WithView(Controls.H2("Customer Order Frequency"))
-                .WithView(
-                    layoutArea.GetDataCube()
-                        .Select(data =>
-                        {
-                            var frequencyData = data.GroupBy(x => x.Customer)
-                                .Select(g => new
-                                {
-                                    Customer = g.Key, OrderCount = g.DistinctBy(x => x.OrderId).Count()
-                                })
-                                .GroupBy(x => x.OrderCount switch
-                                {
-                                    1 => "1 Order",
-                                    2 => "2 Orders",
-                                    >= 3 and <= 5 => "3-5 Orders",
-                                    >= 6 and <= 10 => "6-10 Orders",
-                                    >= 11 and <= 20 => "11-20 Orders",
-                                    _ => "20+ Orders"
-                                })
-                                .Select(g => new { FrequencyBracket = g.Key, CustomerCount = g.Count() })
-                                .ToArray();
+    public static IObservable<UiControl> CustomerOrderFrequency(this LayoutAreaHost layoutArea, RenderingContext context)
+        => layoutArea.GetDataCube()
+            .Select(data =>
+            {
+                var frequencyData = data.GroupBy(x => x.Customer)
+                    .Select(g => new
+                    {
+                        Customer = g.Key, OrderCount = g.DistinctBy(x => x.OrderId).Count()
+                    })
+                    .GroupBy(x => x.OrderCount switch
+                    {
+                        1 => "1 Order",
+                        2 => "2 Orders",
+                        >= 3 and <= 5 => "3-5 Orders",
+                        >= 6 and <= 10 => "6-10 Orders",
+                        >= 11 and <= 20 => "11-20 Orders",
+                        _ => "20+ Orders"
+                    })
+                    .Select(g => new { FrequencyBracket = g.Key, CustomerCount = g.Count() })
+                    .ToArray();
 
-                            return Charting.Chart.Pie(frequencyData.Select(x => x.CustomerCount), "CustomerCount")
-                                .WithLabels(frequencyData.Select(x => x.FrequencyBracket))
-                                .ToControl();
-                        })
-                );
+                return (UiControl)Charts.Pie(frequencyData.Select(x => x.CustomerCount), frequencyData.Select(x => x.FrequencyBracket))
+                    .WithTitle("Customer Order Frequency");
+            });
 
     /// <summary>
     /// Shows customer segmentation analysis with customers categorized into VIP, High Value, Regular, Occasional, and New segments.
@@ -336,12 +324,8 @@ public static class CustomerAnalysisArea
                         yearData.TryGetValue(year, out var count) ? count : 0).ToArray()
                 }).ToArray();
 
-                var chart = (UiControl)Charting.Chart.Line(datasets.First().Data, "Customer Count")
-                    .WithLabels(orderedPeriods);
-
-                return Controls.Stack
-                    .WithView(Controls.H2("Customer Retention Analysis by Year"))
-                    .WithView(chart);
+                return (UiControl)Charts.Line(datasets.First().Data, orderedPeriods)
+                    .WithTitle("Customer Retention Analysis by Year");
             });
 
     /// <summary>

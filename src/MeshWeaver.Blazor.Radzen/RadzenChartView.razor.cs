@@ -80,7 +80,7 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
         DataBind(ViewModel.LegendPosition, x => x.LegendPosition);
         DataBind(ViewModel.IsStacked, x => x.IsStacked);
         DataBind(ViewModel.DisableAnimation, x => x.DisableAnimation);
-        DataBind(ViewModel.Width, x => x.Width);
-        DataBind(ViewModel.Height, x => x.Height);
+        DataBind(ViewModel.Width, x => x.Width, defaultValue: "100%");
+        DataBind(ViewModel.Height, x => x.Height, defaultValue: "400px");
     }
 }

@@ -1,8 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Pivot.Aggregations;
@@ -58,12 +57,8 @@ public static class EmployeePerformanceArea
                         .OrderByDescending(x => x.Revenue)
                         .ToArray();
 
-                    var chart = (UiControl)Charting.Chart.Bar(employeeData.Select(e => e.Revenue), "Revenue")
-                        .WithLabels(employeeData.Select(e => e.Employee));
-
-                    return Controls.Stack
-                        .WithView(Controls.H2("Top Employees by Revenue"))
-                        .WithView(chart);
+                    return (UiControl)Charts.Bar(employeeData.Select(e => e.Revenue), employeeData.Select(e => e.Employee))
+                        .WithTitle("Top Employees by Revenue");
                 }));
     }
 

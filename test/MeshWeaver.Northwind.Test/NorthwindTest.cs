@@ -5,7 +5,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Charting;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.GridModel;

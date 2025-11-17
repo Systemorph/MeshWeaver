@@ -1,7 +1,6 @@
 ﻿using System.Reactive.Linq;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Domain;

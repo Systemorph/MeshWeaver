@@ -1,9 +1,6 @@
 ﻿using System.Collections;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Charting;
-using MeshWeaver.Charting.Pivot;
-using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
@@ -44,9 +41,9 @@ public static class ProductAnalysisArea
         /// Each bar is color-coded and includes data labels for easy comparison of product performance.
         /// Helps identify best-selling products and their revenue contribution to the business.
         /// </summary>
-        /// <param name="context">The rendering context.</param>
+        /// <param name="_">The rendering context.</param>
         /// <returns>A horizontal bar chart with product names and revenue amounts, plus year filter controls.</returns>
-        public UiControl? TopProductsByRevenue(RenderingContext context)
+        public UiControl? TopProductsByRevenue(RenderingContext _)
         {
             layoutArea.SubscribeToDataStream(ProductToolbar.Years, layoutArea.GetAllYearsOfOrders());
             return layoutArea.Toolbar(new ProductToolbar(), (tb, area, _) =>
@@ -60,8 +57,7 @@ public static class ProductAnalysisArea
                             .Take(10)
                             .ToArray();
 
-                        var chart = (UiControl)Chart.Bar((IEnumerable)topProducts.Select(p => p.Revenue), "Revenue")
-                            .WithLabels(topProducts.Select(p => p.Product));
+                        var chart = (UiControl)Charts.Bar(topProducts.Select(p => p.Revenue), topProducts.Select(p => p.Product));
 
                         return Controls.Stack
                             .WithView(Controls.H2("Top 10 Products by Revenue"))
@@ -72,9 +68,9 @@ public static class ProductAnalysisArea
         /// <summary>
         /// Gets the product performance trends over time.
         /// </summary>
-        /// <param name="context">The rendering context.</param>
+        /// <param name="_">The rendering context.</param>
         /// <returns>An observable sequence of UI controls representing product performance trends.</returns>
-        public IObservable<UiControl> ProductPerformanceTrends(RenderingContext context)
+        public IObservable<UiControl> ProductPerformanceTrends(RenderingContext _)
             => layoutArea.GetDataCube()
                 .Select(data =>
                 {
@@ -102,9 +98,9 @@ public static class ProductAnalysisArea
         /// <summary>
         /// Gets the product category analysis.
         /// </summary>
-        /// <param name="context">The rendering context.</param>
+        /// <param name="_">The rendering context.</param>
         /// <returns>An observable sequence of UI controls representing product category analysis.</returns>
-        public IObservable<UiControl> ProductCategoryAnalysis(RenderingContext context)
+        public IObservable<UiControl> ProductCategoryAnalysis(RenderingContext _)
             => layoutArea.GetDataCube()
                 .CombineLatest(layoutArea.Workspace.GetStream<Category>()!)
                 .Select(tuple =>
@@ -121,8 +117,7 @@ public static class ProductAnalysisArea
                         .OrderByDescending(x => x.Revenue)
                         .ToArray();
 
-                    var chart = (UiControl)Chart.Pie((IEnumerable)categoryData.Select(c => c.Revenue), "Revenue")
-                        .WithLabels(categoryData.Select(c => c.Category));
+                    var chart = (UiControl)Charts.Pie(categoryData.Select(c => c.Revenue), categoryData.Select(c => c.Category));
 
                     return Controls.Stack
                         .WithView(Controls.H2("Revenue by Product Category"))
@@ -132,9 +127,9 @@ public static class ProductAnalysisArea
         /// <summary>
         /// Gets the product discount impact analysis.
         /// </summary>
-        /// <param name="context">The rendering context.</param>
+        /// <param name="_">The rendering context.</param>
         /// <returns>An observable sequence of UI controls representing discount impact on products.</returns>
-        public IObservable<UiControl> ProductDiscountImpact(RenderingContext context)
+        public IObservable<UiControl> ProductDiscountImpact(RenderingContext _)
             => layoutArea.GetDataCube()
                 .CombineLatest(layoutArea.Workspace.GetStream<Category>()!)
                 .Select(tuple =>
@@ -163,18 +158,16 @@ public static class ProductAnalysisArea
                     var categoryNames = discountData.Select(x => x.CategoryName).Distinct().OrderBy(x => x).ToArray();
                     var discountBrackets = new[] { "No Discount", "1-5%", "6-10%", "11-15%", "16-20%", "20%+" };
 
-                    // Create data sets for each discount bracket
-                    var dataSets = discountBrackets.Select(bracket =>
+                    // Create chart with series for each discount bracket
+                    var chartControl = Charts.Create();
+                    foreach (var bracket in discountBrackets)
                     {
                         var amounts = categoryNames.Select(category =>
                             discountData.FirstOrDefault(x => x.CategoryName == category && x.DiscountBracket == bracket)?.Amount ?? 0
                         ).ToArray();
-
-                        return new Charting.Models.Bar.BarDataSet(amounts).WithLabel(bracket);
-                    }).ToArray();
-
-                    var chart = (UiControl)Charting.Chart
-                        .Create(dataSets)
+                        chartControl = chartControl.WithSeries(new BarSeries(amounts, bracket));
+                    }
+                    var chart = (UiControl)chartControl
                         .Stacked()
                         .WithLabels(categoryNames)
                         .WithTitle("Product Discount Impact by Category");
@@ -187,9 +180,9 @@ public static class ProductAnalysisArea
         /// <summary>
         /// Gets the product sales velocity analysis.
         /// </summary>
-        /// <param name="context">The rendering context.</param>
+        /// <param name="_">The rendering context.</param>
         /// <returns>An observable sequence of UI controls representing product sales velocity.</returns>
-        public IObservable<UiControl> ProductSalesVelocity(RenderingContext context)
+        public IObservable<UiControl> ProductSalesVelocity(RenderingContext _)
             => layoutArea.GetDataCube()
                 .SelectMany(data =>
                 {
