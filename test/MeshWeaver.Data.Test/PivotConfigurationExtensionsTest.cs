@@ -56,9 +56,9 @@ public class PivotConfigurationExtensionsTest
         // Arrange & Act
         var builder = PivotConfigurationExtensions.ForType<SalesData>();
         var config = builder
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithColumnDimension(nameof(SalesData.ProductCategory))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .GroupColumnsBy(nameof(SalesData.ProductCategory))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert
@@ -80,8 +80,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.OrderMonth))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.OrderMonth))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert
@@ -94,9 +94,9 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region), "Geographic Region")
-            .WithColumnDimension(nameof(SalesData.ProductCategory), "Category")
-            .WithAggregate(nameof(SalesData.TotalSales), displayName: "Revenue")
+            .GroupRowsBy(nameof(SalesData.Region), dim => dim.WithDisplayName("Geographic Region"))
+            .GroupColumnsBy(nameof(SalesData.ProductCategory), dim => dim.WithDisplayName("Category"))
+            .Aggregate(nameof(SalesData.TotalSales), agg => agg.WithDisplayName("Revenue"))
             .Build();
 
         // Assert
@@ -110,8 +110,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.Quantity), AggregateFunction.Average)
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.Quantity), agg => agg.WithFunction(AggregateFunction.Average))
             .Build();
 
         // Assert
@@ -123,8 +123,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales), format: "{0:C}")
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales), agg => agg.WithFormat("{0:C}"))
             .Build();
 
         // Assert
@@ -136,8 +136,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales), sortOrder: SortOrder.Descending)
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales), agg => agg.WithSortOrder(SortOrder.Descending))
             .Build();
 
         // Assert
@@ -149,8 +149,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
             .WithRowTotals(false)
             .WithColumnTotals(false)
             .Build();
@@ -165,8 +165,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert
@@ -179,8 +179,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.InternalNotes))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.InternalNotes))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert - NotVisible properties can be used but get default values
@@ -196,9 +196,9 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var pivotGrid = TestData.ToPivotGrid<SalesData>(pivot => pivot
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithColumnDimension(nameof(SalesData.ProductCategory))
-            .WithAggregate(nameof(SalesData.TotalSales), AggregateFunction.Sum, format: "{0:C}")
+            .GroupRowsBy(nameof(SalesData.Region))
+            .GroupColumnsBy(nameof(SalesData.ProductCategory))
+            .Aggregate(nameof(SalesData.TotalSales), agg => agg.WithFunction(AggregateFunction.Sum).WithFormat("{0:C}"))
         );
 
         // Assert
@@ -215,8 +215,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var pivotGrid = TestData.ToPivotGrid<SalesData>(pivot => pivot
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
         );
 
         // Assert
@@ -231,10 +231,10 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithRowDimension(nameof(SalesData.ProductCategory))
-            .WithColumnDimension(nameof(SalesData.OrderMonth))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .GroupRowsBy(nameof(SalesData.ProductCategory))
+            .GroupColumnsBy(nameof(SalesData.OrderMonth))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert
@@ -250,9 +250,9 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales), AggregateFunction.Sum)
-            .WithAggregate(nameof(SalesData.Quantity), AggregateFunction.Sum)
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales), agg => agg.WithFunction(AggregateFunction.Sum))
+            .Aggregate(nameof(SalesData.Quantity), agg => agg.WithFunction(AggregateFunction.Sum))
             .Build();
 
         // Assert
@@ -268,7 +268,7 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
+            .GroupRowsBy(nameof(SalesData.Region))
             .Build();
 
         // Assert
@@ -280,7 +280,7 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region), width: "300px")
+            .GroupRowsBy(nameof(SalesData.Region), dim => dim.WithWidth("300px"))
             .Build();
 
         // Assert
@@ -292,8 +292,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert - Should have all discovered dimensions available
@@ -321,8 +321,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
             .Build();
 
         // Assert
@@ -334,8 +334,8 @@ public class PivotConfigurationExtensionsTest
     {
         // Arrange & Act
         var config = PivotConfigurationExtensions.ForType<SalesData>()
-            .WithRowDimension(nameof(SalesData.Region))
-            .WithAggregate(nameof(SalesData.TotalSales))
+            .GroupRowsBy(nameof(SalesData.Region))
+            .Aggregate(nameof(SalesData.TotalSales))
             .WithFieldsPicking(false)
             .Build();
 

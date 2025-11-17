@@ -1,5 +1,6 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Domain;
 
@@ -40,13 +41,97 @@ public static class PivotConfigurationExtensions
 }
 
 /// <summary>
+/// Builder for configuring dimension properties
+/// </summary>
+public class DimensionBuilder
+{
+    internal string? DisplayName { get; private set; }
+    internal string? Width { get; private set; }
+    internal SortOrder? SortOrder { get; private set; }
+
+    /// <summary>
+    /// Sets the display name for the dimension
+    /// </summary>
+    public DimensionBuilder WithDisplayName(string displayName)
+    {
+        DisplayName = displayName;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the width for the dimension
+    /// </summary>
+    public DimensionBuilder WithWidth(string width)
+    {
+        Width = width;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the sort order for the dimension
+    /// </summary>
+    public DimensionBuilder WithSortOrder(SortOrder sortOrder)
+    {
+        SortOrder = sortOrder;
+        return this;
+    }
+}
+
+/// <summary>
+/// Builder for configuring aggregate properties
+/// </summary>
+public class AggregateBuilder
+{
+    internal AggregateFunction Function { get; private set; } = AggregateFunction.Sum;
+    internal string? DisplayName { get; private set; }
+    internal string? Format { get; private set; }
+    internal SortOrder? SortOrder { get; private set; }
+
+    /// <summary>
+    /// Sets the aggregate function
+    /// </summary>
+    public AggregateBuilder WithFunction(AggregateFunction function)
+    {
+        Function = function;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the display name for the aggregate
+    /// </summary>
+    public AggregateBuilder WithDisplayName(string displayName)
+    {
+        DisplayName = displayName;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the format for the aggregate
+    /// </summary>
+    public AggregateBuilder WithFormat(string format)
+    {
+        Format = format;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the sort order for the aggregate
+    /// </summary>
+    public AggregateBuilder WithSortOrder(SortOrder sortOrder)
+    {
+        SortOrder = sortOrder;
+        return this;
+    }
+}
+
+/// <summary>
 /// Builder for creating PivotConfiguration from type metadata
 /// </summary>
 public class PivotConfigurationBuilder<T> where T : class
 {
-    private readonly List<(string Field, SortOrder? SortOrder)> rowDimensionFields = new();
-    private readonly List<(string Field, SortOrder? SortOrder)> columnDimensionFields = new();
-    private readonly List<(string Field, AggregateFunction Function, string? Format, SortOrder? SortOrder)> aggregateFields = new();
+    private readonly List<(string Field, DimensionBuilder Builder)> rowDimensionFields = new();
+    private readonly List<(string Field, DimensionBuilder Builder)> columnDimensionFields = new();
+    private readonly List<(string Field, AggregateBuilder Builder)> aggregateFields = new();
     private readonly Dictionary<string, AvailableDimension> availableDimensions = new();
     private readonly Dictionary<string, AvailableAggregate> availableAggregates = new();
 
@@ -99,13 +184,19 @@ public class PivotConfigurationBuilder<T> where T : class
                     ?? property.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? SplitCamelCase(property.Name);
 
+                var formatAttr = property.GetCustomAttribute<DisplayFormatAttribute>();
+                var defaultFormat = formatAttr?.DataFormatString ?? GetDefaultFormat(underlyingType);
+
+                var defaultSortOrderAttr = property.GetCustomAttribute<DefaultSortOrderAttribute>();
+
                 availableAggregates[property.Name] = new AvailableAggregate
                 {
                     Field = property.Name,
                     DisplayName = displayName,
                     PropertyPath = property.Name,
                     TypeName = underlyingType.FullName ?? underlyingType.Name,
-                    DefaultFormat = GetDefaultFormat(underlyingType)
+                    DefaultFormat = defaultFormat,
+                    DefaultSortOrder = defaultSortOrderAttr?.SortOrder
                 };
             }
         }
@@ -133,7 +224,7 @@ public class PivotConfigurationBuilder<T> where T : class
             || type == typeof(byte);
     }
 
-    private static string? GetDefaultWidth(Type type)
+    private static string GetDefaultWidth(Type type)
     {
         if (type == typeof(string))
             return "200px";
@@ -161,37 +252,94 @@ public class PivotConfigurationBuilder<T> where T : class
         );
     }
 
-    /// <summary>
-    /// Adds a row dimension to the pivot configuration
-    /// </summary>
-    public PivotConfigurationBuilder<T> WithRowDimension(string fieldName, string? displayName = null, string? width = null, SortOrder? sortOrder = null)
+    private static string GetPropertyName<TProp>(Expression<Func<T, TProp>> propertyExpression)
     {
-        rowDimensionFields.Add((fieldName, sortOrder));
+        if (propertyExpression.Body is MemberExpression memberExpression)
+        {
+            return memberExpression.Member.Name;
+        }
 
+        if (propertyExpression.Body is UnaryExpression { Operand: MemberExpression unaryMember })
+        {
+            return unaryMember.Member.Name;
+        }
+
+        throw new ArgumentException("Expression must be a property accessor", nameof(propertyExpression));
+    }
+
+    /// <summary>
+    /// Groups rows by the specified dimension
+    /// </summary>
+    /// <param name="propertyExpression">Expression selecting the property to group by</param>
+    /// <param name="configure">Optional configuration action for the dimension</param>
+    public PivotConfigurationBuilder<T> GroupRowsBy<TProp>(
+        Expression<Func<T, TProp>> propertyExpression,
+        Action<DimensionBuilder>? configure = null)
+    {
+        var fieldName = GetPropertyName(propertyExpression);
+        return GroupRowsBy(fieldName, configure);
+    }
+
+    /// <summary>
+    /// Groups rows by the specified dimension
+    /// </summary>
+    /// <param name="fieldName">Name of the field to group by</param>
+    /// <param name="configure">Optional configuration action for the dimension</param>
+    public PivotConfigurationBuilder<T> GroupRowsBy(
+        string fieldName,
+        Action<DimensionBuilder>? configure = null)
+    {
+        var builder = new DimensionBuilder();
+        configure?.Invoke(builder);
+
+        rowDimensionFields.Add((fieldName, builder));
+
+        // Apply any overrides to the available dimension
         if (availableDimensions.TryGetValue(fieldName, out var dimension))
         {
-            if (displayName != null)
-                dimension.DisplayName = displayName;
-            if (width != null)
-                dimension.Width = width;
+            if (builder.DisplayName != null)
+                dimension.DisplayName = builder.DisplayName;
+            if (builder.Width != null)
+                dimension.Width = builder.Width;
         }
 
         return this;
     }
 
     /// <summary>
-    /// Adds a column dimension to the pivot configuration
+    /// Groups columns by the specified dimension
     /// </summary>
-    public PivotConfigurationBuilder<T> WithColumnDimension(string fieldName, string? displayName = null, string? width = null, SortOrder? sortOrder = null)
+    /// <param name="propertyExpression">Expression selecting the property to group by</param>
+    /// <param name="configure">Optional configuration action for the dimension</param>
+    public PivotConfigurationBuilder<T> GroupColumnsBy<TProp>(
+        Expression<Func<T, TProp>> propertyExpression,
+        Action<DimensionBuilder>? configure = null)
     {
-        columnDimensionFields.Add((fieldName, sortOrder));
+        var fieldName = GetPropertyName(propertyExpression);
+        return GroupColumnsBy(fieldName, configure);
+    }
 
+    /// <summary>
+    /// Groups columns by the specified dimension
+    /// </summary>
+    /// <param name="fieldName">Name of the field to group by</param>
+    /// <param name="configure">Optional configuration action for the dimension</param>
+    public PivotConfigurationBuilder<T> GroupColumnsBy(
+        string fieldName,
+        Action<DimensionBuilder>? configure = null)
+    {
+        var builder = new DimensionBuilder();
+        configure?.Invoke(builder);
+
+        columnDimensionFields.Add((fieldName, builder));
+
+        // Apply any overrides to the available dimension
         if (availableDimensions.TryGetValue(fieldName, out var dimension))
         {
-            if (displayName != null)
-                dimension.DisplayName = displayName;
-            if (width != null)
-                dimension.Width = width;
+            if (builder.DisplayName != null)
+                dimension.DisplayName = builder.DisplayName;
+            if (builder.Width != null)
+                dimension.Width = builder.Width;
         }
 
         return this;
@@ -200,21 +348,37 @@ public class PivotConfigurationBuilder<T> where T : class
     /// <summary>
     /// Adds an aggregate to the pivot configuration
     /// </summary>
-    public PivotConfigurationBuilder<T> WithAggregate(
-        string fieldName,
-        AggregateFunction function = AggregateFunction.Sum,
-        string? displayName = null,
-        string? format = null,
-        SortOrder? sortOrder = null)
+    /// <param name="propertyExpression">Expression selecting the property to aggregate</param>
+    /// <param name="configure">Optional configuration action for the aggregate</param>
+    public PivotConfigurationBuilder<T> Aggregate<TProp>(
+        Expression<Func<T, TProp>> propertyExpression,
+        Action<AggregateBuilder>? configure = null)
     {
-        aggregateFields.Add((fieldName, function, format, sortOrder));
+        var fieldName = GetPropertyName(propertyExpression);
+        return Aggregate(fieldName, configure);
+    }
 
+    /// <summary>
+    /// Adds an aggregate to the pivot configuration
+    /// </summary>
+    /// <param name="fieldName">Name of the field to aggregate</param>
+    /// <param name="configure">Optional configuration action for the aggregate</param>
+    public PivotConfigurationBuilder<T> Aggregate(
+        string fieldName,
+        Action<AggregateBuilder>? configure = null)
+    {
+        var builder = new AggregateBuilder();
+        configure?.Invoke(builder);
+
+        aggregateFields.Add((fieldName, builder));
+
+        // Apply any overrides to the available aggregate
         if (availableAggregates.TryGetValue(fieldName, out var aggregate))
         {
-            if (displayName != null)
-                aggregate.DisplayName = displayName;
-            if (format != null)
-                aggregate.DefaultFormat = format;
+            if (builder.DisplayName != null)
+                aggregate.DisplayName = builder.DisplayName;
+            if (builder.Format != null)
+                aggregate.DefaultFormat = builder.Format;
         }
 
         return this;
@@ -257,20 +421,20 @@ public class PivotConfigurationBuilder<T> where T : class
                 ? new PivotDimension
                 {
                     Field = dim.Field,
-                    DisplayName = dim.DisplayName,
+                    DisplayName = fieldInfo.Builder.DisplayName ?? dim.DisplayName,
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
-                    Width = dim.Width,
-                    SortOrder = fieldInfo.SortOrder ?? dim.DefaultSortOrder
+                    Width = fieldInfo.Builder.Width ?? dim.Width,
+                    SortOrder = fieldInfo.Builder.SortOrder ?? dim.DefaultSortOrder
                 }
                 : new PivotDimension
                 {
                     Field = fieldInfo.Field,
-                    DisplayName = SplitCamelCase(fieldInfo.Field),
+                    DisplayName = fieldInfo.Builder.DisplayName ?? SplitCamelCase(fieldInfo.Field),
                     PropertyPath = fieldInfo.Field,
                     TypeName = "System.String",
-                    Width = "120px",
-                    SortOrder = fieldInfo.SortOrder
+                    Width = fieldInfo.Builder.Width ?? "120px",
+                    SortOrder = fieldInfo.Builder.SortOrder
                 })
             .ToList();
 
@@ -279,20 +443,20 @@ public class PivotConfigurationBuilder<T> where T : class
                 ? new PivotDimension
                 {
                     Field = dim.Field,
-                    DisplayName = dim.DisplayName,
+                    DisplayName = fieldInfo.Builder.DisplayName ?? dim.DisplayName,
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
-                    Width = dim.Width,
-                    SortOrder = fieldInfo.SortOrder ?? dim.DefaultSortOrder
+                    Width = fieldInfo.Builder.Width ?? dim.Width,
+                    SortOrder = fieldInfo.Builder.SortOrder ?? dim.DefaultSortOrder
                 }
                 : new PivotDimension
                 {
                     Field = fieldInfo.Field,
-                    DisplayName = SplitCamelCase(fieldInfo.Field),
+                    DisplayName = fieldInfo.Builder.DisplayName ?? SplitCamelCase(fieldInfo.Field),
                     PropertyPath = fieldInfo.Field,
                     TypeName = "System.String",
-                    Width = "120px",
-                    SortOrder = fieldInfo.SortOrder
+                    Width = fieldInfo.Builder.Width ?? "120px",
+                    SortOrder = fieldInfo.Builder.SortOrder
                 })
             .ToList();
 
@@ -301,24 +465,24 @@ public class PivotConfigurationBuilder<T> where T : class
                 ? new PivotAggregate
                 {
                     Field = aggDef.Field,
-                    DisplayName = aggDef.DisplayName,
+                    DisplayName = agg.Builder.DisplayName ?? aggDef.DisplayName,
                     PropertyPath = aggDef.PropertyPath,
                     TypeName = aggDef.TypeName,
-                    Function = agg.Function,
-                    Format = agg.Format ?? aggDef.DefaultFormat,
+                    Function = agg.Builder.Function,
+                    Format = agg.Builder.Format ?? aggDef.DefaultFormat,
                     TextAlign = TextAlign.Right,
-                    SortOrder = agg.SortOrder
+                    SortOrder = agg.Builder.SortOrder ?? aggDef.DefaultSortOrder
                 }
                 : new PivotAggregate
                 {
                     Field = agg.Field,
-                    DisplayName = SplitCamelCase(agg.Field),
+                    DisplayName = agg.Builder.DisplayName ?? SplitCamelCase(agg.Field),
                     PropertyPath = agg.Field,
                     TypeName = "System.Double",
-                    Function = agg.Function,
-                    Format = agg.Format,
+                    Function = agg.Builder.Function,
+                    Format = agg.Builder.Format,
                     TextAlign = TextAlign.Right,
-                    SortOrder = agg.SortOrder
+                    SortOrder = agg.Builder.SortOrder
                 })
             .ToList();
 
@@ -377,5 +541,6 @@ public class PivotConfigurationBuilder<T> where T : class
         public required string PropertyPath { get; init; }
         public required string TypeName { get; init; }
         public string? DefaultFormat { get; set; }
+        public SortOrder? DefaultSortOrder { get; set; }
     }
 }

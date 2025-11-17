@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.GridModel;
 using MeshWeaver.Northwind.Domain;
 
 namespace MeshWeaver.Northwind.Application
@@ -134,6 +135,7 @@ namespace MeshWeaver.Northwind.Application
         /// Gets the display name of the supplier of the product.
         /// </summary>
         [property: Dimension(typeof(string), nameof(SupplierName))]
+        [Display(Name = "Supplier")]
         public string? SupplierName { get; init; }
 
         /// <summary>
@@ -169,8 +171,8 @@ namespace MeshWeaver.Northwind.Application
         /// <summary>
         /// Gets the month when the order was placed.
         /// </summary>
-        [NotVisible]
         [Dimension(typeof(string), nameof(OrderMonth))]
+        [Display(Name = "Month")]
         //[DefaultSortOrder(SortOrder.Ascending)]
         public string? OrderMonth { get; init; }
 
@@ -226,6 +228,9 @@ namespace MeshWeaver.Northwind.Application
         /// <summary>
         /// Calculates the total amount for the order detail, considering unit price, quantity, and discount.
         /// </summary>
+        [Display(Name = "Amount")]
+        [DisplayFormat(DataFormatString = "{0:C}")]
+        [DefaultSortOrder(SortOrder.Descending)]
         public double Amount { get; init; }
 
         /// <summary>
