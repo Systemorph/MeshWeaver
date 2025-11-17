@@ -5,6 +5,7 @@ using MeshWeaver.Charting.Models.Options;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Aggregations;
 using MeshWeaver.Pivot.Builder;
@@ -42,23 +43,18 @@ public static class DiscountSummaryArea
     [Display(Name = "Monthly Discount Summary", GroupName = "Discounting", Order = 1)]
     public static IObservable<UiControl> DiscountSummary(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .WithAggregation(a => a.Sum(x => x.UnitPrice * x.Quantity * x.Discount))
-                    .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth))
-                    .ToBarChart(
-                        builder => builder
-                            .WithChartBuilder(o =>
-                                o.WithDataLabels(d =>
-                                    d.WithAnchor(DataLabelsAnchor.End)
-                                        .WithAlign(DataLabelsAlign.End)
-                                )
-                            )
-                    ).Select(chart => (UiControl)Controls.Stack
-                        .WithView(Controls.H2("Monthly Discount Summary"))
-                        .WithView(chart.ToControl()))
-            );
+            .Select(data =>
+            {
+                var chart = data.ToBarChart(
+                    keySelector: x => x.OrderMonth ?? "Unknown",
+                    valueSelector: g => g.Sum(x => x.UnitPrice * x.Quantity * x.Discount),
+                    orderByValueDescending: false
+                ).WithTitle("Monthly Discount Summary");
+
+                return (UiControl)Controls.Stack
+                    .WithView(Controls.H2("Monthly Discount Summary"))
+                    .WithView(chart);
+            });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()

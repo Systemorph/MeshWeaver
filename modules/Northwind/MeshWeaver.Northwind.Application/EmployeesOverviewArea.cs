@@ -5,6 +5,7 @@ using MeshWeaver.Charting.Models;
 using MeshWeaver.Charting.Pivot;
 using MeshWeaver.DataCubes;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Pivot.Builder;
@@ -38,18 +39,24 @@ public static class EmployeesOverviewArea
     /// <returns>A horizontal bar chart control showing top 5 employee performers with data labels.</returns>
     public static IObservable<UiControl> TopEmployees(this LayoutAreaHost layoutArea, RenderingContext context)
         => layoutArea.GetDataCube()
-            .SelectMany(data =>
-                layoutArea.Workspace
-                    .Pivot(data.ToDataCube())
-                    .SliceColumnsBy(nameof(Employee))
-                    .ToBarChart(builder => builder
-                        .WithOptions(o => o.OrderByValueDescending().TopValues(5))
-                        .WithChartBuilder(o => o
-                            .AsHorizontal()
-                            .WithDataLabels()
-                        )
-                    ).Select(x => x.ToControl())
-            );
+            .Select(data =>
+            {
+                // Get top 5 employees by revenue
+                var topEmployees = data.GroupBy(x => x.Employee)
+                    .Select(g => new { Employee = g.Key, Revenue = g.Sum(x => x.Amount) })
+                    .OrderByDescending(x => x.Revenue)
+                    .Take(5)
+                    .Select(x => x.Employee)
+                    .ToHashSet();
+
+                var filteredData = data.Where(x => topEmployees.Contains(x.Employee));
+
+                return (UiControl)filteredData.ToBarChart(
+                    keySelector: x => x.EmployeeName ?? x.Employee.ToString(),
+                    valueSelector: g => g.Sum(x => x.Amount),
+                    orderByValueDescending: true
+                ).WithTitle("Top 5 Employees");
+            });
 
     private static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(this LayoutAreaHost area)
         => area.GetNorthwindDataCubeData()

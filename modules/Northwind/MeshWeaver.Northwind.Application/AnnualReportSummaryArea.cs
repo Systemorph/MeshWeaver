@@ -19,7 +19,7 @@ public static class AnnualReportSummaryArea
     /// <param name="layout">The layout definition.</param>
     /// <returns>The updated layout definition with the annual report summary view.</returns>
     public static LayoutDefinition AddAnnualReportSummary(this LayoutDefinition layout)
-        => 
+        =>
             layout
                 .WithView(nameof(AnnualReportSummary), AnnualReportSummary, area => area.WithGroup("Dashboards"))
             ;
@@ -73,7 +73,7 @@ public static class AnnualReportSummaryArea
     public static UiControl SummaryCharts(LayoutAreaHost layoutArea, RenderingContext context)
         => Controls.LayoutGrid
             .WithView(
-                Controls.Stack.WithView(Controls.H2("Top Clients")).WithView(ClientsOverviewArea.TopClients)
+                Controls.Stack.WithView(Controls.H2("Top Clients")).WithView(TopClientsArea.TopClients)
                     .WithVerticalGap(10),
                 skin => skin.WithXs(12).WithSm(6))
             .WithView(
@@ -84,7 +84,7 @@ public static class AnnualReportSummaryArea
 
     private static IObservable<IReadOnlyCollection<SummaryItem>> SummaryItems(this LayoutAreaHost layoutArea)
         => layoutArea.GetNorthwindDataCubeData()
-            .Select(d => 
+            .Select(d =>
                 d.GroupBy(x => x.OrderYear)
                     .Select(g => new SummaryItem
                     {
@@ -140,7 +140,7 @@ public record SummaryItem
     /// Gets the year of the summary item.
     /// </summary>
     public int Year { get; init; }
-     /// <summary>
+    /// <summary>
     /// Gets the number of customers in the summary item.
     /// </summary>
     public int Customers { get; init; }

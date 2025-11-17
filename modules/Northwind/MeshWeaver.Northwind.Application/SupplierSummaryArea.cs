@@ -6,6 +6,7 @@ using MeshWeaver.DataCubes;
 using MeshWeaver.Domain;
 using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Pivot.Builder;
 using MeshWeaver.Reporting.DataCubes;
@@ -111,12 +112,14 @@ public static class SupplierSummaryArea
                         ? collection
                         : collection.Where(x => x.OrderYear == toolbar.Year);
 
-                    return layoutArea.Workspace.Pivot(filteredData.ToDataCube())
-                        .SliceRowsBy(nameof(NorthwindDataCube.SupplierName))
-                        .SliceColumnsBy(nameof(NorthwindDataCube.OrderMonth));
-                })
-                .SelectMany(builder => builder.ToBarChart())
-                .Select(x => x.ToControl());
+                    return (UiControl)filteredData.ToLineChart(
+                        rowKeySelector: x => x.SupplierName ?? "Unknown",
+                        colKeySelector: x => x.OrderMonth ?? "Unknown",
+                        valueSelector: g => g.Sum(x => x.Amount),
+                        rowLabelSelector: supplier => supplier,
+                        colLabelSelector: month => month
+                    ).WithTitle("Supplier Revenue by Month");
+                });
 
         private IObservable<IReadOnlyCollection<NorthwindDataCube>> GetDataCube() => layoutArea.GetOrAddVariable("dataCube",
             () => layoutArea
