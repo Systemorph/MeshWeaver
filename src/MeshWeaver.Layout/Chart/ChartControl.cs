@@ -109,6 +109,12 @@ public record ChartControl()
     /// <summary>
     /// Sets the legend position.
     /// </summary>
+    public ChartControl WithLegendPosition(LegendPosition position) =>
+        this with { ShowLegend = true, LegendPosition = position };
+
+    /// <summary>
+    /// Sets the legend position.
+    /// </summary>
     public ChartControl WithLegendPosition(object position) =>
         this with { ShowLegend = true, LegendPosition = position };
 
