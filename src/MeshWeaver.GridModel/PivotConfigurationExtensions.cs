@@ -78,13 +78,16 @@ public class PivotConfigurationBuilder<T> where T : class
                     ?? property.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName
                     ?? SplitCamelCase(property.Name);
 
+                var defaultSortOrderAttr = property.GetCustomAttribute<DefaultSortOrderAttribute>();
+
                 availableDimensions[property.Name] = new AvailableDimension
                 {
                     Field = property.Name,
                     DisplayName = displayName,
                     PropertyPath = property.Name,
                     TypeName = underlyingType.FullName ?? underlyingType.Name,
-                    Width = GetDefaultWidth(underlyingType)
+                    Width = GetDefaultWidth(underlyingType),
+                    DefaultSortOrder = defaultSortOrderAttr?.SortOrder
                 };
             }
 
@@ -258,7 +261,7 @@ public class PivotConfigurationBuilder<T> where T : class
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
                     Width = dim.Width,
-                    SortOrder = fieldInfo.SortOrder
+                    SortOrder = fieldInfo.SortOrder ?? dim.DefaultSortOrder
                 }
                 : new PivotDimension
                 {
@@ -280,7 +283,7 @@ public class PivotConfigurationBuilder<T> where T : class
                     PropertyPath = dim.PropertyPath,
                     TypeName = dim.TypeName,
                     Width = dim.Width,
-                    SortOrder = fieldInfo.SortOrder
+                    SortOrder = fieldInfo.SortOrder ?? dim.DefaultSortOrder
                 }
                 : new PivotDimension
                 {
@@ -364,6 +367,7 @@ public class PivotConfigurationBuilder<T> where T : class
         public required string PropertyPath { get; init; }
         public required string TypeName { get; init; }
         public string? Width { get; set; }
+        public SortOrder? DefaultSortOrder { get; set; }
     }
 
     private class AvailableAggregate

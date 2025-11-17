@@ -93,6 +93,9 @@ namespace MeshWeaver.Northwind.Application
         [Dimension(typeof(Order))]
         public int OrderId { get; init; }
 
+        /// <summary>
+        /// Primary key of the order details ==> primary key of the data cube.
+        /// </summary>
         [property: Key]
         [Display(Name = "Count")]
         public int OrderDetailsId { get; init; }
@@ -168,6 +171,7 @@ namespace MeshWeaver.Northwind.Application
         /// </summary>
         [NotVisible]
         [Dimension(typeof(string), nameof(OrderMonth))]
+        //[DefaultSortOrder(SortOrder.Ascending)]
         public string? OrderMonth { get; init; }
 
         /// <summary>

@@ -53,7 +53,7 @@ public partial class RadzenPivotGridView : BlazorView<PivotGridControl, RadzenPi
                 .MakeGenericMethod(listType);
 
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-            var deserializedList = deserializeMethod.Invoke(null, new object?[] { jsonElement, options });
+            var deserializedList = deserializeMethod.Invoke(null, [jsonElement, options]);
 
             // Convert to IQueryable for Radzen PivotDataGrid
             if (deserializedList != null)
